@@ -26,6 +26,11 @@ type Credentials struct {
 	// akun cabang), dan admin sudah diaktivasi. Repository yang menghitungnya
 	// dari skema, bukan handler.
 	Active bool
+	// IsActive adalah flag `is_active` akun apa adanya (tanpa syarat aktivasi).
+	// Dipakai untuk membedakan admin UNDANGAN (is_active true, belum punya
+	// kata sandi) dari admin NONAKTIF (is_active false): hanya yang pertama
+	// boleh memakai tautan undangan untuk mengaktifkan akun (PRD AP-USR-02).
+	IsActive bool
 }
 
 // ErrNoUser dikembalikan store bila akun tidak ditemukan.
@@ -40,6 +45,10 @@ type UserStore interface {
 	TouchLogin(ctx context.Context, kind Kind, id string) error
 	// UpdatePassword menyimpan hash Argon2id baru untuk satu akun.
 	UpdatePassword(ctx context.Context, kind Kind, id, passwordHash string) error
+	// ActivateAdmin menyimpan hash Argon2id DAN activated_at sekaligus untuk
+	// admin hasil undangan. Keduanya wajib terisi bersamaan: aturan
+	// boleh_login di SQL menolak akun yang salah satunya NULL.
+	ActivateAdmin(ctx context.Context, id, passwordHash string) error
 }
 
 // Service menyatukan login, pemuatan aktor dari sesi, logout, dan siklus
@@ -286,16 +295,128 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string, 
 	if err != nil {
 		return ErrResetInvalid
 	}
-	if !creds.Active {
-		return ErrInactiveAccount
-	}
-	if err := s.users.UpdatePassword(ctx, rt.Kind, rt.UserID, hash); err != nil {
-		return err
+	// Admin hasil undangan memakai tautan yang sama untuk AKTIVASI: akunnya
+	// masih is_active=true tetapi password_hash dan activated_at NULL. Yang
+	// boleh memakai jalur ini hanya akun yang masih aktif; admin yang sudah
+	// dinonaktifkan tetap ditolak (PRD AP-USR-02).
+	if rt.Kind == KindAdmin {
+		if !creds.IsActive {
+			return ErrInactiveAccount
+		}
+		// Aktivasi mengisi password_hash DAN activated_at bersamaan
+		// (kewajiban turunan F1-04); untuk admin yang sudah aktif ini sama
+		// dengan mengganti kata sandi.
+		if err := s.users.ActivateAdmin(ctx, rt.UserID, hash); err != nil {
+			return err
+		}
+	} else {
+		if !creds.Active {
+			return ErrInactiveAccount
+		}
+		if err := s.users.UpdatePassword(ctx, rt.Kind, rt.UserID, hash); err != nil {
+			return err
+		}
 	}
 	if err := s.sessions.RevokeForUser(ctx, rt.UserID); err != nil {
 		return err
 	}
 	return nil
+}
+
+// IssuedReset adalah tautan atur ulang yang sudah dibuat tetapi BELUM dikirim.
+type IssuedReset struct {
+	// Token adalah nilai mentah satu-satunya; yang tersimpan di database
+	// hanya SHA-256-nya.
+	Token     string
+	ExpiresAt time.Time
+}
+
+// IssuePasswordResetFor membuat tautan atur ulang sekali pakai untuk satu akun
+// TANPA mengirim email apa pun. Dipakai admin saat mengundang admin baru:
+// tautan aktivasi dikirim lewat outbox undangan (F1-16), bukan mailer reset.
+//
+// Aturan penerima sama dengan pengiriman tautan: akun cabang harus boleh
+// login, admin harus masih aktif (undangan boleh, nonaktif tidak).
+func (s *Service) IssuePasswordResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration) (IssuedReset, error) {
+	creds, rt, err := s.issueResetFor(ctx, kind, userID, ttl)
+	if err != nil {
+		return IssuedReset{}, err
+	}
+	_ = creds
+	return IssuedReset{Token: rt.token, ExpiresAt: rt.expiresAt}, nil
+}
+
+// SendPasswordResetFor membuat tautan atur ulang untuk satu akun lalu
+// mengirimkannya lewat ResetMailer. Dipakai admin saat mengirim ulang tautan
+// reset akun cabang (PRD §4.8) — jalur email yang sama dengan lupa kata sandi,
+// sehingga pemindahan ke email_outbox (F1-16) cukup di satu tempat.
+func (s *Service) SendPasswordResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration) error {
+	creds, rt, err := s.issueResetFor(ctx, kind, userID, ttl)
+	if err != nil {
+		return err
+	}
+	if s.mailer == nil {
+		slog.Warn("pengirim email atur ulang belum dipasang; tautan tidak dikirim",
+			"kind", kind, "user_id", userID)
+		return nil
+	}
+	if err := s.mailer.SendPasswordReset(ctx, ResetMessage{
+		To:        creds.Email,
+		Nama:      creds.Nama,
+		Kind:      creds.Kind,
+		Token:     rt.token,
+		ExpiresAt: rt.expiresAt,
+		TTL:       rt.ttl,
+	}); err != nil {
+		slog.Error("gagal mengirim email atur ulang kata sandi", "err", err, "kind", kind)
+		return fmt.Errorf("kirim email atur ulang: %w", err)
+	}
+	return nil
+}
+
+type issuedReset struct {
+	token     string
+	expiresAt time.Time
+	ttl       time.Duration
+}
+
+// issueResetFor adalah inti bersama: validasi akun, batalkan tautan lama,
+// lalu simpan tautan baru.
+func (s *Service) issueResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration) (Credentials, issuedReset, error) {
+	if ttl <= 0 {
+		ttl = DefaultResetTTL
+	}
+	creds, err := s.findByID(ctx, kind, userID)
+	if err != nil {
+		return Credentials{}, issuedReset{}, err
+	}
+	if !s.mayHoldResetLink(creds) {
+		return Credentials{}, issuedReset{}, ErrInactiveAccount
+	}
+	token, hash, err := NewToken()
+	if err != nil {
+		return Credentials{}, issuedReset{}, err
+	}
+	expiresAt := s.clock.Now().Add(ttl)
+	if err := s.resets.CreateResetToken(ctx, ResetToken{
+		Kind:      creds.Kind,
+		UserID:    creds.UserID,
+		ExpiresAt: expiresAt,
+	}, hash); err != nil {
+		return Credentials{}, issuedReset{}, fmt.Errorf("simpan token atur ulang: %w", err)
+	}
+	return creds, issuedReset{token: token, expiresAt: expiresAt, ttl: ttl}, nil
+}
+
+// mayHoldResetLink melaporkan apakah akun boleh memegang tautan atur ulang /
+// aktivasi: akun cabang harus boleh login (akun & cabang aktif), sedangkan
+// admin harus is_active — undangan yang belum diaktivasi boleh, admin
+// nonaktif tidak (PRD AP-USR-02).
+func (s *Service) mayHoldResetLink(creds Credentials) bool {
+	if creds.Kind == KindAdmin {
+		return creds.IsActive
+	}
+	return creds.Active
 }
 
 // ChangePassword mengganti kata sandi pengguna yang sedang login setelah

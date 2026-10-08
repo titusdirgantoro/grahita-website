@@ -464,36 +464,6 @@ export function ReportingPage() {
   );
 }
 
-/** pPengguna — /pengguna: user cabang & user admin. */
-export function PenggunaPage() {
-  const [tab, setTab] = useState<"cabang" | "admin">("cabang");
-  return (
-    <>
-      <PageHead title="User management" sub="Akun cabang dan akun admin" />
-      <Card>
-        <CardHead
-          title={tab === "cabang" ? "User cabang" : "User admin"}
-          tools={
-            <Segmented
-              label="Jenis pengguna"
-              options={[
-                { value: "cabang", label: "User cabang" },
-                { value: "admin", label: "User admin" },
-              ]}
-              value={tab}
-              onChange={setTab}
-            />
-          }
-        />
-        <EmptyState icon="users-three">
-          Daftar {tab === "cabang" ? "akun cabang" : "akun admin"} beserta aksi aktif/nonaktif dan
-          undangan menyusul pada kartu fitur.
-        </EmptyState>
-      </Card>
-    </>
-  );
-}
-
 /** pPengaturan — /pengaturan (Superadmin): nilai pengaturan sistem. */
 export function PengaturanPage() {
   const { data, memuat, galat } = useApi<Record<string, unknown>>("/admin/settings");

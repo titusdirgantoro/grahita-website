@@ -44,3 +44,125 @@ UPDATE admin_users SET password_hash = $2, updated_at = now() WHERE id = $1;
 
 -- name: UpdateBranchPassword :exec
 UPDATE branch_users SET password_hash = $2, updated_at = now() WHERE id = $1;
+
+-- name: ActivateAdminUser :exec
+-- Aktivasi admin hasil undangan: password_hash DAN activated_at WAJIB terisi
+-- bersamaan, karena aturan boleh_login menolak akun bila salah satunya NULL
+-- (kewajiban turunan F1-04). activated_at tidak pernah ditimpa bila sudah ada.
+UPDATE admin_users
+   SET password_hash = $2,
+       activated_at  = COALESCE(activated_at, now()),
+       updated_at    = now()
+ WHERE id = $1;
+
+-- ---------- User management (PRD §4.8) ----------
+
+-- name: ListBranchAccountRows :many
+-- Satu baris per CABANG (bukan per akun) supaya cabang yang belum registrasi
+-- tetap tampil dengan status "belum registrasi" (PRD §4.8).
+SELECT b.id::text                                          AS branch_id,
+       b.nama,
+       b.nama_kepala,
+       b.email::text                                       AS email,
+       b.is_active                                         AS branch_active,
+       COALESCE(bu.id::text, '')::text                      AS user_id,
+       COALESCE(bu.telepon, '')                            AS telepon,
+       COALESCE(bu.is_active, false)::boolean              AS user_active,
+       bu.last_login_at,
+       COALESCE(t.token_prefix, '')                        AS token_prefix,
+       t.expires_at                                        AS token_expires_at
+  FROM branches b
+  LEFT JOIN branch_users bu ON bu.branch_id = b.id
+  LEFT JOIN registration_tokens t
+         ON t.branch_id = b.id
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+ ORDER BY b.nama;
+
+-- name: GetBranchAccountRow :one
+-- Satu baris akun cabang berdasarkan id branch_users (dipakai setelah mutasi).
+SELECT b.id::text                                          AS branch_id,
+       b.nama,
+       b.nama_kepala,
+       b.email::text                                       AS email,
+       b.is_active                                         AS branch_active,
+       COALESCE(bu.id::text, '')::text                      AS user_id,
+       COALESCE(bu.telepon, '')                            AS telepon,
+       COALESCE(bu.is_active, false)::boolean              AS user_active,
+       bu.last_login_at,
+       COALESCE(t.token_prefix, '')                        AS token_prefix,
+       t.expires_at                                        AS token_expires_at
+  FROM branch_users bu
+  JOIN branches b ON b.id = bu.branch_id
+  LEFT JOIN registration_tokens t
+         ON t.branch_id = b.id
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+ WHERE bu.id = $1;
+
+-- name: GetBranchUserBrief :one
+SELECT id, branch_id, email::text AS email, COALESCE(telepon, '') AS telepon, is_active
+  FROM branch_users
+ WHERE id = $1;
+
+-- name: SetBranchUserActive :exec
+UPDATE branch_users SET is_active = $2, updated_at = now() WHERE id = $1;
+
+-- name: ListAdminUsers :many
+SELECT id, nama, email::text AS email, role::text AS role,
+       notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+  FROM admin_users
+ ORDER BY nama;
+
+-- name: GetAdminUserRow :one
+SELECT id, nama, email::text AS email, role::text AS role,
+       notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+  FROM admin_users
+ WHERE id = $1;
+
+-- name: GetAdminUserRowByEmail :one
+SELECT id, nama, email::text AS email, role::text AS role,
+       notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+  FROM admin_users
+ WHERE email = $1;
+
+-- name: CreateAdminInvitation :one
+-- Admin undangan: password_hash dan activated_at dibiarkan NULL sehingga tidak
+-- bisa login dan tidak menerima email dokumen (PRD AP-USR-02).
+INSERT INTO admin_users (nama, email, role, notif_invoice, notif_surat_jalan, is_active, invited_at)
+VALUES (sqlc.arg(nama), sqlc.arg(email), sqlc.arg(role)::admin_role,
+        sqlc.arg(notif_invoice), sqlc.arg(notif_surat_jalan), true, now())
+RETURNING id, nama, email::text AS email, role::text AS role,
+          notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at;
+
+-- name: UpdateAdminUserRow :one
+UPDATE admin_users
+   SET nama              = sqlc.arg(nama),
+       role              = sqlc.arg(role)::admin_role,
+       notif_invoice     = sqlc.arg(notif_invoice),
+       notif_surat_jalan = sqlc.arg(notif_surat_jalan),
+       is_active         = sqlc.arg(is_active),
+       updated_at        = now()
+ WHERE id = sqlc.arg(id)
+RETURNING id, nama, email::text AS email, role::text AS role,
+          notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at;
+
+-- name: ListInvoiceRecipients :many
+-- Penerima salinan invoice: HANYA admin aktif, sudah diaktivasi, dan
+-- flag-nya menyala (PRD AP-USR-01/AP-USR-02). Alamat tidak pernah di-hardcode.
+SELECT email::text AS email
+  FROM admin_users
+ WHERE is_active
+   AND password_hash IS NOT NULL
+   AND activated_at IS NOT NULL
+   AND notif_invoice
+ ORDER BY email;
+
+-- name: ListSuratJalanRecipients :many
+SELECT email::text AS email
+  FROM admin_users
+ WHERE is_active
+   AND password_hash IS NOT NULL
+   AND activated_at IS NOT NULL
+   AND notif_surat_jalan
+ ORDER BY email;

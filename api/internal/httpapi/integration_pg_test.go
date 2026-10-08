@@ -33,6 +33,8 @@ import (
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/settings"
 	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
+	"github.com/grahita/portal/api/internal/users"
+	userspg "github.com/grahita/portal/api/internal/users/postgres"
 )
 
 // pgFixture adalah satu dunia uji lengkap di atas database nyata.
@@ -40,6 +42,11 @@ type pgFixture struct {
 	srv  *httptest.Server
 	pool *database.Pool
 	mail *fakeResetMailer
+
+	// users adalah service pengelolaan akun (F1-05); queue menangkap email
+	// undangan admin yang diantre.
+	users *users.Service
+	queue *fakeUsersQueue
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -172,6 +179,18 @@ func newPGFixture(t *testing.T) *pgFixture {
 	svc := auth.NewService(authRepo, authRepo, authRepo, clock.System(), 8*time.Hour, 30*24*time.Hour)
 	svc.SetResetMailer(f.mail)
 
+	// Pengelolaan akun pengguna (F1-05): repository nyata di atas PostgreSQL,
+	// email undangan diantre lewat queue palsu, tautan diarahkan ke portal admin.
+	queue := &fakeUsersQueue{}
+	usersSvc := users.NewService(userspg.New(pool), svc, svc,
+		users.WithEmailQueue(queue),
+		users.WithResetURLBuilder(func(kind auth.Kind, token string) string {
+			return "https://grahita-admin.tiusclaw.com/lupa?token=" + token
+		}),
+	)
+	f.queue = queue
+	f.users = usersSvc
+
 	deps := Deps{
 		Config:        testConfig(),
 		Version:       "test-pg",
@@ -179,6 +198,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Auth:          svc,
 		Settings:      settings.NewService(settingspg.New(pool)),
 		Catalog:       catalog.NewService(catalogpg.New(pool)),
+		Users:         usersSvc,
 		LoginLimiter:  httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),
 	}

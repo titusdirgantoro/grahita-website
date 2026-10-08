@@ -46,6 +46,11 @@ func (m *Memory) PutAdmin(c Credentials) {
 	if c.Kind == "" {
 		c.Kind = KindAdmin
 	}
+	// Default yang aman untuk pengujian lama: akun yang boleh login pasti
+	// aktif. Varian undangan (Active=false, IsActive=true) diisi eksplisit.
+	if !c.IsActive && c.Active {
+		c.IsActive = true
+	}
 	m.admins[c.UserID] = c
 }
 
@@ -128,6 +133,23 @@ func (m *Memory) UpdatePassword(_ context.Context, kind Kind, id, passwordHash s
 	}
 	c.PasswordHash = passwordHash
 	m.branches[id] = c
+	return nil
+}
+
+// ActivateAdmin menyimpan kata sandi DAN menandai admin sudah diaktivasi —
+// padanan memory dari password_hash + activated_at (kewajiban F1-04).
+func (m *Memory) ActivateAdmin(_ context.Context, id, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.admins[id]
+	if !ok {
+		return ErrNoUser
+	}
+	c.PasswordHash = passwordHash
+	if c.IsActive {
+		c.Active = true
+	}
+	m.admins[id] = c
 	return nil
 }
 

@@ -36,6 +36,8 @@ import (
 	"github.com/grahita/portal/api/internal/seed"
 	"github.com/grahita/portal/api/internal/settings"
 	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
+	"github.com/grahita/portal/api/internal/users"
+	userspg "github.com/grahita/portal/api/internal/users/postgres"
 	"github.com/grahita/portal/api/internal/worker"
 )
 
@@ -135,6 +137,7 @@ func (h health) MigrationVersion(ctx context.Context) (int64, error) {
 	return database.Version(ctx, h.dsn)
 }
 
+// runAPI menyusun seluruh dependensi dan menjalankan HTTP API.
 func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger *slog.Logger) error {
 	authRepo := authpg.New(pool)
 	authSvc := auth.NewService(authRepo, authRepo, authRepo, clock.System(), cfg.SessionIdle, cfg.SessionAbsolute)
@@ -157,7 +160,16 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	}
 	// Tautan atur ulang menunjuk portal asal akun: cabang ke portal cabang,
 	// admin ke portal admin (keduanya same-origin dengan API-nya).
+	resetURL := auth.NewResetURLBuilder(cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath)
 	authSvc.SetResetMailer(auth.NewEmailResetMailer(mail, cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath))
+
+	// Pengelolaan akun pengguna. Undangan admin TIDAK dikirim langsung: ia
+	// diantre lewat EmailQueue yang penulis email_outbox-nya menyusul di F1-16
+	// (users.LogQueue hanya mencatat antrean).
+	usersSvc := users.NewService(userspg.New(pool), authSvc, authSvc,
+		users.WithEmailQueue(users.LogQueue{}),
+		users.WithResetURLBuilder(resetURL),
+	)
 
 	// Pembatas percobaan login selalu aktif dan tidak digantungkan pada
 	// CSRF_ENABLED: keduanya tidak berhubungan (PRD CP-AUT-05).
@@ -173,6 +185,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Auth:          authSvc,
 		Settings:      settings.NewService(settingspg.New(pool)),
 		Catalog:       catalog.NewService(catalogpg.New(pool)),
+		Users:         usersSvc,
 		Storage:       store,
 		Gotenberg:     renderer,
 		Mailer:        mail,

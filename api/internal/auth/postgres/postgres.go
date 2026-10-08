@@ -41,6 +41,7 @@ func (r *Repo) AdminByEmail(ctx context.Context, email string) (auth.Credentials
 		Email:        row.Email,
 		PasswordHash: pgtypes.TextOr(row.PasswordHash),
 		Active:       row.BolehLogin,
+		IsActive:     row.IsActive,
 	}, nil
 }
 
@@ -61,6 +62,7 @@ func (r *Repo) AdminByID(ctx context.Context, id string) (auth.Credentials, erro
 		Email:        row.Email,
 		PasswordHash: pgtypes.TextOr(row.PasswordHash),
 		Active:       row.BolehLogin,
+		IsActive:     row.IsActive,
 	}, nil
 }
 
@@ -183,6 +185,15 @@ func (r *Repo) UpdatePassword(ctx context.Context, kind auth.Kind, id, passwordH
 	}
 	if err := r.q.UpdateBranchPassword(ctx, sqlc.UpdateBranchPasswordParams{ID: id, PasswordHash: passwordHash}); err != nil {
 		return fmt.Errorf("query UpdateBranchPassword: %w", err)
+	}
+	return nil
+}
+
+// ActivateAdmin menyimpan kata sandi baru DAN menandai admin sudah diaktivasi
+// (password_hash + activated_at). Keduanya wajib terisi bersamaan.
+func (r *Repo) ActivateAdmin(ctx context.Context, id, passwordHash string) error {
+	if err := r.q.ActivateAdminUser(ctx, sqlc.ActivateAdminUserParams{ID: id, PasswordHash: pgtypes.Text(passwordHash)}); err != nil {
+		return fmt.Errorf("query ActivateAdminUser: %w", err)
 	}
 	return nil
 }

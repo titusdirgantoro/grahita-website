@@ -69,32 +69,43 @@ type ResetMailer interface {
 // DefaultResetPath adalah rute halaman atur ulang pada kedua portal.
 const DefaultResetPath = "/lupa"
 
+// ResetURLBuilder menyusun tautan halaman atur ulang untuk satu token.
+// Dipakai pengirim email reset maupun pemanggil yang hanya butuh tautannya
+// (mis. email undangan admin yang diantre lewat outbox F1-16).
+type ResetURLBuilder func(kind Kind, token string) string
+
+// NewResetURLBuilder membuat penyusun tautan dari basis kedua portal. path
+// kosong berarti DefaultResetPath.
+func NewResetURLBuilder(customerBase, adminBase, path string) ResetURLBuilder {
+	if path == "" {
+		path = DefaultResetPath
+	}
+	return func(kind Kind, token string) string {
+		base := customerBase
+		if kind == KindAdmin {
+			base = adminBase
+		}
+		return base + path + "?token=" + url.QueryEscape(token)
+	}
+}
+
 // EmailResetMailer membangun tautan atur ulang lalu mengirimkannya lewat
 // mailer.Mailer. Portal tujuan dipilih dari jenis akun: cabang ke portal
 // cabang, admin ke portal admin — keduanya memakai rute DefaultResetPath.
 type EmailResetMailer struct {
-	mail         mailer.Mailer
-	path         string
-	customerBase string
-	adminBase    string
+	mail  mailer.Mailer
+	build ResetURLBuilder
 }
 
 // NewEmailResetMailer membuat pengirim tautan atur ulang. path kosong berarti
 // DefaultResetPath.
 func NewEmailResetMailer(m mailer.Mailer, customerBase, adminBase, path string) *EmailResetMailer {
-	if path == "" {
-		path = DefaultResetPath
-	}
-	return &EmailResetMailer{mail: m, path: path, customerBase: customerBase, adminBase: adminBase}
+	return &EmailResetMailer{mail: m, build: NewResetURLBuilder(customerBase, adminBase, path)}
 }
 
 // ResetURL menyusun tautan atur ulang untuk satu token.
 func (e *EmailResetMailer) ResetURL(kind Kind, token string) string {
-	base := e.customerBase
-	if kind == KindAdmin {
-		base = e.adminBase
-	}
-	return base + e.path + "?token=" + url.QueryEscape(token)
+	return e.build(kind, token)
 }
 
 // SendPasswordReset mengirim email berisi tautan atur ulang.

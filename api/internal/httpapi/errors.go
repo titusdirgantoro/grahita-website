@@ -9,6 +9,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/settings"
+	"github.com/grahita/portal/api/internal/users"
 )
 
 // httpErr menuliskan error apa pun lewat bentuk seragam (dipakai middleware
@@ -54,6 +55,20 @@ func mapDomainErr(err error) error {
 		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
 	case errors.Is(err, catalog.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
+	case errors.Is(err, users.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
+	case errors.Is(err, users.ErrNotFound):
+		return apierr.NotFound("Akun yang diminta tidak ditemukan.")
+	case errors.Is(err, users.ErrEmailTaken):
+		return apierr.Conflict("EMAIL_TAKEN", "Email tersebut sudah dipakai akun lain.")
+	case errors.Is(err, users.ErrLastSuperadmin):
+		return apierr.Conflict("LAST_SUPERADMIN",
+			"Superadmin aktif terakhir tidak boleh dinonaktifkan atau diturunkan menjadi Manager.")
+	case errors.Is(err, users.ErrNoAccount):
+		return apierr.Conflict("NO_ACCOUNT",
+			"Cabang ini belum punya akun. Buat token registrasi lebih dahulu di halaman Cabang.")
+	case errors.Is(err, users.ErrInvalidData):
+		return apierr.Validation("Data pengguna tidak valid.", nil)
 	default:
 		return err
 	}

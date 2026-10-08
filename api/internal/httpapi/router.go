@@ -65,6 +65,20 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/branches", a.adapt(a.adminBranches))
 					r.Get("/branches/{id}", a.adapt(a.adminBranch))
 				})
+				// User management akun CABANG: Manager & Superadmin (PRD §2.1).
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminUsersBranch))
+					r.Get("/users/branch", a.adapt(a.adminBranchUsers))
+					r.Put("/users/branch/{id}", a.adapt(a.adminBranchUserUpdate))
+					r.Post("/users/branch/{id}/reset", a.adapt(a.adminBranchUserReset))
+				})
+				// User management akun ADMIN: khusus Superadmin (PRD §2.1).
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminUsersAdmin))
+					r.Get("/users/admin", a.adapt(a.adminUsers))
+					r.Post("/users/admin", a.adapt(a.adminUserCreate))
+					r.Put("/users/admin/{id}", a.adapt(a.adminUserUpdate))
+				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminCatalog))
 					r.Get("/products", a.adapt(a.adminProducts))

@@ -490,6 +490,228 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/admin/users/branch:
+    get:
+      tags: [admin]
+      operationId: listBranchUsers
+      summary: Daftar akun cabang (Manager & Superadmin)
+      description: |
+        Satu baris per CABANG (1 cabang = 1 akun, PRD BR-01), termasuk cabang
+        yang belum registrasi. `status` bernilai `aktif`, `belum_registrasi`,
+        atau `nonaktif`; `nonaktif` juga dipakai bila CABANG-nya dinonaktifkan
+        karena keadaan itu sama-sama membuat akun tidak bisa login.
+      responses:
+        "200":
+          description: Daftar akun cabang beserta status dan login terakhir
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/BranchUser" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/users/branch/{id}:
+    put:
+      tags: [admin]
+      operationId: setBranchUserActive
+      summary: Aktifkan/nonaktifkan akun cabang (Manager & Superadmin)
+      description: |
+        `id` adalah id AKUN (`branch_users.id`), bukan id cabang. Menonaktifkan
+        akun langsung mencabut seluruh sesi akun tersebut sehingga akses
+        berhenti saat itu juga (PRD AP-CAB-03).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_active]
+              additionalProperties: false
+              properties:
+                is_active: { type: boolean }
+      responses:
+        "200":
+          description: Akun cabang setelah perubahan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/BranchUser" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/admin/users/branch/{id}/reset:
+    post:
+      tags: [admin]
+      operationId: resendBranchUserReset
+      summary: Kirim ulang tautan atur ulang kata sandi akun cabang
+      description: |
+        Memakai jalur email yang sama dengan lupa kata sandi; tautan berlaku
+        `reset_menit` (default 60 menit) dan hanya bisa dipakai sekali. Email
+        dialihkan ke email_outbox pada kartu F1-16 tanpa mengubah handler ini.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Permintaan pengiriman ulang diterima
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [pesan]
+                    properties:
+                      pesan: { type: string }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Cabang belum punya akun (`NO_ACCOUNT`) atau akun/cabangnya sedang
+            nonaktif (`ACCOUNT_INACTIVE`) sehingga tidak boleh memegang tautan.
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/users/admin:
+    get:
+      tags: [admin]
+      operationId: listAdminUsers
+      summary: Daftar akun admin (Superadmin)
+      description: |
+        `status` bernilai `undangan` (belum mengaktivasi akun), `aktif`, atau
+        `nonaktif`. Admin undangan tidak bisa login dan tidak menerima email
+        dokumen (PRD AP-USR-02).
+      responses:
+        "200":
+          description: Daftar akun admin
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUser" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [admin]
+      operationId: inviteAdmin
+      summary: Undang admin baru (Superadmin)
+      description: |
+        Akun dibuat TANPA kata sandi sehingga belum bisa login dan belum
+        menerima email dokumen. Email undangan berisi tautan aktivasi sekali
+        pakai dan diantre lewat email_outbox (F1-16) — tautan aslinya tidak
+        pernah dikembalikan endpoint ini. Tautan berlaku `token_hari` (default
+        14 hari).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nama, email, role]
+              additionalProperties: false
+              properties:
+                nama: { type: string, maxLength: 120 }
+                email: { type: string, format: email, maxLength: 254 }
+                role: { type: string, enum: [manager, superadmin] }
+                notif_invoice: { type: boolean, default: false }
+                notif_surat_jalan: { type: boolean, default: false }
+      responses:
+        "201":
+          description: Undangan dibuat; email diantre ke outbox
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AdminUser" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/users/admin/{id}:
+    put:
+      tags: [admin]
+      operationId: updateAdminUser
+      summary: Ubah role, flag email dokumen, atau status admin (Superadmin)
+      description: |
+        Field yang tidak dikirim tidak diubah. Superadmin aktif TERAKHIR tidak
+        boleh dinonaktifkan atau diturunkan menjadi Manager, termasuk bila dua
+        permintaan datang bersamaan (`409 LAST_SUPERADMIN`, PRD AP-USR-03).
+        Menonaktifkan admin mencabut seluruh sesinya.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                nama: { type: string, maxLength: 120 }
+                role: { type: string, enum: [manager, superadmin] }
+                notif_invoice: { type: boolean }
+                notif_surat_jalan: { type: boolean }
+                is_active: { type: boolean }
+      responses:
+        "200":
+          description: Akun admin setelah perubahan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AdminUser" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -556,6 +778,32 @@ components:
             error:
               code: RATE_LIMITED
               message: Terlalu banyak percobaan masuk. Coba lagi beberapa saat lagi.
+    Conflict:
+      description: Permintaan bertentangan dengan aturan data
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            emailTaken:
+              value:
+                error:
+                  code: EMAIL_TAKEN
+                  message: Email tersebut sudah dipakai akun lain.
+            lastSuperadmin:
+              value:
+                error:
+                  code: LAST_SUPERADMIN
+                  message: Superadmin aktif terakhir tidak boleh dinonaktifkan atau diturunkan menjadi Manager.
+            noAccount:
+              value:
+                error:
+                  code: NO_ACCOUNT
+                  message: Cabang ini belum punya akun. Buat token registrasi lebih dahulu di halaman Cabang.
+            accountInactive:
+              value:
+                error:
+                  code: ACCOUNT_INACTIVE
+                  message: Akun cabang ini sedang nonaktif; aktifkan dulu sebelum mengirim tautan atur ulang.
 
   schemas:
     ErrorEnvelope:
@@ -581,6 +829,10 @@ components:
                   RATE_LIMITED,
                   CSRF_INVALID,
                   RESET_INVALID,
+                  EMAIL_TAKEN,
+                  LAST_SUPERADMIN,
+                  NO_ACCOUNT,
+                  ACCOUNT_INACTIVE,
                   TIMEOUT,
                   METHOD_NOT_ALLOWED,
                   BRANCH_MISSING,
@@ -670,6 +922,49 @@ components:
         is_special: { type: boolean }
         pajak_in: { type: boolean }
         is_active: { type: boolean }
+
+    BranchUser:
+      type: object
+      description: |
+        Satu baris tab "User cabang": data cabang beserta akunnya. `user_id`
+        kosong berarti cabang belum registrasi (belum punya akun).
+      required: [branch_id, nama, nama_kepala, email, has_account, is_active, branch_active, status]
+      properties:
+        branch_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        nama: { type: string }
+        nama_kepala: { type: string }
+        email: { type: string, format: email }
+        telepon: { type: string }
+        has_account: { type: boolean }
+        is_active: { type: boolean }
+        branch_active: { type: boolean }
+        status: { type: string, enum: [aktif, belum_registrasi, nonaktif] }
+        last_login_at: { type: string, format: date-time }
+        token_prefix:
+          type: string
+          description: 8 karakter pertama token registrasi yang masih berlaku (bila ada).
+        token_expires_at: { type: string, format: date-time }
+
+    AdminUser:
+      type: object
+      description: |
+        Akun admin Pusat. `status` = undangan | aktif | nonaktif; admin
+        undangan belum punya kata sandi sehingga tidak bisa login dan tidak
+        menerima email dokumen.
+      required: [id, nama, email, role, notif_invoice, notif_surat_jalan, is_active, status]
+      properties:
+        id: { type: string, format: uuid }
+        nama: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [manager, superadmin] }
+        notif_invoice: { type: boolean }
+        notif_surat_jalan: { type: boolean }
+        is_active: { type: boolean }
+        status: { type: string, enum: [undangan, aktif, nonaktif] }
+        invited_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time }
+        last_login_at: { type: string, format: date-time }
 
 security:
   - cookieAuth: []

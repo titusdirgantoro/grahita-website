@@ -22,6 +22,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/settings"
+	"github.com/grahita/portal/api/internal/users"
 )
 
 // HealthChecker adalah dependensi yang diperiksa /readyz. Implementasinya
@@ -40,6 +41,7 @@ type Deps struct {
 	Auth     *auth.Service
 	Settings *settings.Service
 	Catalog  *catalog.Service
+	Users    *users.Service
 
 	Storage   storage.Store
 	Gotenberg pdf.Renderer

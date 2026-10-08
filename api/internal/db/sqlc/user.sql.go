@@ -7,9 +7,86 @@ package sqlc
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const activateAdminUser = `-- name: ActivateAdminUser :exec
+UPDATE admin_users
+   SET password_hash = $2,
+       activated_at  = COALESCE(activated_at, now()),
+       updated_at    = now()
+ WHERE id = $1
+`
+
+type ActivateAdminUserParams struct {
+	ID           string      `json:"id"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+}
+
+// Aktivasi admin hasil undangan: password_hash DAN activated_at WAJIB terisi
+// bersamaan, karena aturan boleh_login menolak akun bila salah satunya NULL
+// (kewajiban turunan F1-04). activated_at tidak pernah ditimpa bila sudah ada.
+func (q *Queries) ActivateAdminUser(ctx context.Context, arg ActivateAdminUserParams) error {
+	_, err := q.db.Exec(ctx, activateAdminUser, arg.ID, arg.PasswordHash)
+	return err
+}
+
+const createAdminInvitation = `-- name: CreateAdminInvitation :one
+INSERT INTO admin_users (nama, email, role, notif_invoice, notif_surat_jalan, is_active, invited_at)
+VALUES ($1, $2, $3::admin_role,
+        $4, $5, true, now())
+RETURNING id, nama, email::text AS email, role::text AS role,
+          notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+`
+
+type CreateAdminInvitationParams struct {
+	Nama            string    `json:"nama"`
+	Email           string    `json:"email"`
+	Role            AdminRole `json:"role"`
+	NotifInvoice    bool      `json:"notif_invoice"`
+	NotifSuratJalan bool      `json:"notif_surat_jalan"`
+}
+
+type CreateAdminInvitationRow struct {
+	ID              string     `json:"id"`
+	Nama            string     `json:"nama"`
+	Email           string     `json:"email"`
+	Role            string     `json:"role"`
+	NotifInvoice    bool       `json:"notif_invoice"`
+	NotifSuratJalan bool       `json:"notif_surat_jalan"`
+	IsActive        bool       `json:"is_active"`
+	InvitedAt       *time.Time `json:"invited_at"`
+	ActivatedAt     *time.Time `json:"activated_at"`
+	LastLoginAt     *time.Time `json:"last_login_at"`
+}
+
+// Admin undangan: password_hash dan activated_at dibiarkan NULL sehingga tidak
+// bisa login dan tidak menerima email dokumen (PRD AP-USR-02).
+func (q *Queries) CreateAdminInvitation(ctx context.Context, arg CreateAdminInvitationParams) (CreateAdminInvitationRow, error) {
+	row := q.db.QueryRow(ctx, createAdminInvitation,
+		arg.Nama,
+		arg.Email,
+		arg.Role,
+		arg.NotifInvoice,
+		arg.NotifSuratJalan,
+	)
+	var i CreateAdminInvitationRow
+	err := row.Scan(
+		&i.ID,
+		&i.Nama,
+		&i.Email,
+		&i.Role,
+		&i.NotifInvoice,
+		&i.NotifSuratJalan,
+		&i.IsActive,
+		&i.InvitedAt,
+		&i.ActivatedAt,
+		&i.LastLoginAt,
+	)
+	return i, err
+}
 
 const getAdminUserByEmail = `-- name: GetAdminUserByEmail :one
 
@@ -82,6 +159,164 @@ func (q *Queries) GetAdminUserByID(ctx context.Context, id string) (GetAdminUser
 	return i, err
 }
 
+const getAdminUserRow = `-- name: GetAdminUserRow :one
+SELECT id, nama, email::text AS email, role::text AS role,
+       notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+  FROM admin_users
+ WHERE id = $1
+`
+
+type GetAdminUserRowRow struct {
+	ID              string     `json:"id"`
+	Nama            string     `json:"nama"`
+	Email           string     `json:"email"`
+	Role            string     `json:"role"`
+	NotifInvoice    bool       `json:"notif_invoice"`
+	NotifSuratJalan bool       `json:"notif_surat_jalan"`
+	IsActive        bool       `json:"is_active"`
+	InvitedAt       *time.Time `json:"invited_at"`
+	ActivatedAt     *time.Time `json:"activated_at"`
+	LastLoginAt     *time.Time `json:"last_login_at"`
+}
+
+func (q *Queries) GetAdminUserRow(ctx context.Context, id string) (GetAdminUserRowRow, error) {
+	row := q.db.QueryRow(ctx, getAdminUserRow, id)
+	var i GetAdminUserRowRow
+	err := row.Scan(
+		&i.ID,
+		&i.Nama,
+		&i.Email,
+		&i.Role,
+		&i.NotifInvoice,
+		&i.NotifSuratJalan,
+		&i.IsActive,
+		&i.InvitedAt,
+		&i.ActivatedAt,
+		&i.LastLoginAt,
+	)
+	return i, err
+}
+
+const getAdminUserRowByEmail = `-- name: GetAdminUserRowByEmail :one
+SELECT id, nama, email::text AS email, role::text AS role,
+       notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+  FROM admin_users
+ WHERE email = $1
+`
+
+type GetAdminUserRowByEmailRow struct {
+	ID              string     `json:"id"`
+	Nama            string     `json:"nama"`
+	Email           string     `json:"email"`
+	Role            string     `json:"role"`
+	NotifInvoice    bool       `json:"notif_invoice"`
+	NotifSuratJalan bool       `json:"notif_surat_jalan"`
+	IsActive        bool       `json:"is_active"`
+	InvitedAt       *time.Time `json:"invited_at"`
+	ActivatedAt     *time.Time `json:"activated_at"`
+	LastLoginAt     *time.Time `json:"last_login_at"`
+}
+
+func (q *Queries) GetAdminUserRowByEmail(ctx context.Context, email string) (GetAdminUserRowByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getAdminUserRowByEmail, email)
+	var i GetAdminUserRowByEmailRow
+	err := row.Scan(
+		&i.ID,
+		&i.Nama,
+		&i.Email,
+		&i.Role,
+		&i.NotifInvoice,
+		&i.NotifSuratJalan,
+		&i.IsActive,
+		&i.InvitedAt,
+		&i.ActivatedAt,
+		&i.LastLoginAt,
+	)
+	return i, err
+}
+
+const getBranchAccountRow = `-- name: GetBranchAccountRow :one
+SELECT b.id::text                                          AS branch_id,
+       b.nama,
+       b.nama_kepala,
+       b.email::text                                       AS email,
+       b.is_active                                         AS branch_active,
+       COALESCE(bu.id::text, '')::text                      AS user_id,
+       COALESCE(bu.telepon, '')                            AS telepon,
+       COALESCE(bu.is_active, false)::boolean              AS user_active,
+       bu.last_login_at,
+       COALESCE(t.token_prefix, '')                        AS token_prefix,
+       t.expires_at                                        AS token_expires_at
+  FROM branch_users bu
+  JOIN branches b ON b.id = bu.branch_id
+  LEFT JOIN registration_tokens t
+         ON t.branch_id = b.id
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+ WHERE bu.id = $1
+`
+
+type GetBranchAccountRowRow struct {
+	BranchID       string     `json:"branch_id"`
+	Nama           string     `json:"nama"`
+	NamaKepala     string     `json:"nama_kepala"`
+	Email          string     `json:"email"`
+	BranchActive   bool       `json:"branch_active"`
+	UserID         string     `json:"user_id"`
+	Telepon        string     `json:"telepon"`
+	UserActive     bool       `json:"user_active"`
+	LastLoginAt    *time.Time `json:"last_login_at"`
+	TokenPrefix    string     `json:"token_prefix"`
+	TokenExpiresAt *time.Time `json:"token_expires_at"`
+}
+
+// Satu baris akun cabang berdasarkan id branch_users (dipakai setelah mutasi).
+func (q *Queries) GetBranchAccountRow(ctx context.Context, id string) (GetBranchAccountRowRow, error) {
+	row := q.db.QueryRow(ctx, getBranchAccountRow, id)
+	var i GetBranchAccountRowRow
+	err := row.Scan(
+		&i.BranchID,
+		&i.Nama,
+		&i.NamaKepala,
+		&i.Email,
+		&i.BranchActive,
+		&i.UserID,
+		&i.Telepon,
+		&i.UserActive,
+		&i.LastLoginAt,
+		&i.TokenPrefix,
+		&i.TokenExpiresAt,
+	)
+	return i, err
+}
+
+const getBranchUserBrief = `-- name: GetBranchUserBrief :one
+SELECT id, branch_id, email::text AS email, COALESCE(telepon, '') AS telepon, is_active
+  FROM branch_users
+ WHERE id = $1
+`
+
+type GetBranchUserBriefRow struct {
+	ID       string `json:"id"`
+	BranchID string `json:"branch_id"`
+	Email    string `json:"email"`
+	Telepon  string `json:"telepon"`
+	IsActive bool   `json:"is_active"`
+}
+
+func (q *Queries) GetBranchUserBrief(ctx context.Context, id string) (GetBranchUserBriefRow, error) {
+	row := q.db.QueryRow(ctx, getBranchUserBrief, id)
+	var i GetBranchUserBriefRow
+	err := row.Scan(
+		&i.ID,
+		&i.BranchID,
+		&i.Email,
+		&i.Telepon,
+		&i.IsActive,
+	)
+	return i, err
+}
+
 const getBranchUserByEmail = `-- name: GetBranchUserByEmail :one
 SELECT bu.id, bu.email::text AS email, bu.password_hash, bu.is_active, bu.branch_id,
        b.nama AS branch_nama,
@@ -150,6 +385,204 @@ func (q *Queries) GetBranchUserByID(ctx context.Context, id string) (GetBranchUs
 	return i, err
 }
 
+const listAdminUsers = `-- name: ListAdminUsers :many
+SELECT id, nama, email::text AS email, role::text AS role,
+       notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+  FROM admin_users
+ ORDER BY nama
+`
+
+type ListAdminUsersRow struct {
+	ID              string     `json:"id"`
+	Nama            string     `json:"nama"`
+	Email           string     `json:"email"`
+	Role            string     `json:"role"`
+	NotifInvoice    bool       `json:"notif_invoice"`
+	NotifSuratJalan bool       `json:"notif_surat_jalan"`
+	IsActive        bool       `json:"is_active"`
+	InvitedAt       *time.Time `json:"invited_at"`
+	ActivatedAt     *time.Time `json:"activated_at"`
+	LastLoginAt     *time.Time `json:"last_login_at"`
+}
+
+func (q *Queries) ListAdminUsers(ctx context.Context) ([]ListAdminUsersRow, error) {
+	rows, err := q.db.Query(ctx, listAdminUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAdminUsersRow{}
+	for rows.Next() {
+		var i ListAdminUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Nama,
+			&i.Email,
+			&i.Role,
+			&i.NotifInvoice,
+			&i.NotifSuratJalan,
+			&i.IsActive,
+			&i.InvitedAt,
+			&i.ActivatedAt,
+			&i.LastLoginAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBranchAccountRows = `-- name: ListBranchAccountRows :many
+
+SELECT b.id::text                                          AS branch_id,
+       b.nama,
+       b.nama_kepala,
+       b.email::text                                       AS email,
+       b.is_active                                         AS branch_active,
+       COALESCE(bu.id::text, '')::text                      AS user_id,
+       COALESCE(bu.telepon, '')                            AS telepon,
+       COALESCE(bu.is_active, false)::boolean              AS user_active,
+       bu.last_login_at,
+       COALESCE(t.token_prefix, '')                        AS token_prefix,
+       t.expires_at                                        AS token_expires_at
+  FROM branches b
+  LEFT JOIN branch_users bu ON bu.branch_id = b.id
+  LEFT JOIN registration_tokens t
+         ON t.branch_id = b.id
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+ ORDER BY b.nama
+`
+
+type ListBranchAccountRowsRow struct {
+	BranchID       string     `json:"branch_id"`
+	Nama           string     `json:"nama"`
+	NamaKepala     string     `json:"nama_kepala"`
+	Email          string     `json:"email"`
+	BranchActive   bool       `json:"branch_active"`
+	UserID         string     `json:"user_id"`
+	Telepon        string     `json:"telepon"`
+	UserActive     bool       `json:"user_active"`
+	LastLoginAt    *time.Time `json:"last_login_at"`
+	TokenPrefix    string     `json:"token_prefix"`
+	TokenExpiresAt *time.Time `json:"token_expires_at"`
+}
+
+// ---------- User management (PRD §4.8) ----------
+// Satu baris per CABANG (bukan per akun) supaya cabang yang belum registrasi
+// tetap tampil dengan status "belum registrasi" (PRD §4.8).
+func (q *Queries) ListBranchAccountRows(ctx context.Context) ([]ListBranchAccountRowsRow, error) {
+	rows, err := q.db.Query(ctx, listBranchAccountRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBranchAccountRowsRow{}
+	for rows.Next() {
+		var i ListBranchAccountRowsRow
+		if err := rows.Scan(
+			&i.BranchID,
+			&i.Nama,
+			&i.NamaKepala,
+			&i.Email,
+			&i.BranchActive,
+			&i.UserID,
+			&i.Telepon,
+			&i.UserActive,
+			&i.LastLoginAt,
+			&i.TokenPrefix,
+			&i.TokenExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInvoiceRecipients = `-- name: ListInvoiceRecipients :many
+SELECT email::text AS email
+  FROM admin_users
+ WHERE is_active
+   AND password_hash IS NOT NULL
+   AND activated_at IS NOT NULL
+   AND notif_invoice
+ ORDER BY email
+`
+
+// Penerima salinan invoice: HANYA admin aktif, sudah diaktivasi, dan
+// flag-nya menyala (PRD AP-USR-01/AP-USR-02). Alamat tidak pernah di-hardcode.
+func (q *Queries) ListInvoiceRecipients(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listInvoiceRecipients)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		items = append(items, email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSuratJalanRecipients = `-- name: ListSuratJalanRecipients :many
+SELECT email::text AS email
+  FROM admin_users
+ WHERE is_active
+   AND password_hash IS NOT NULL
+   AND activated_at IS NOT NULL
+   AND notif_surat_jalan
+ ORDER BY email
+`
+
+func (q *Queries) ListSuratJalanRecipients(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSuratJalanRecipients)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		items = append(items, email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setBranchUserActive = `-- name: SetBranchUserActive :exec
+UPDATE branch_users SET is_active = $2, updated_at = now() WHERE id = $1
+`
+
+type SetBranchUserActiveParams struct {
+	ID       string `json:"id"`
+	IsActive bool   `json:"is_active"`
+}
+
+func (q *Queries) SetBranchUserActive(ctx context.Context, arg SetBranchUserActiveParams) error {
+	_, err := q.db.Exec(ctx, setBranchUserActive, arg.ID, arg.IsActive)
+	return err
+}
+
 const touchAdminLogin = `-- name: TouchAdminLogin :exec
 UPDATE admin_users SET last_login_at = now() WHERE id = $1
 `
@@ -180,6 +613,66 @@ type UpdateAdminPasswordParams struct {
 func (q *Queries) UpdateAdminPassword(ctx context.Context, arg UpdateAdminPasswordParams) error {
 	_, err := q.db.Exec(ctx, updateAdminPassword, arg.ID, arg.PasswordHash)
 	return err
+}
+
+const updateAdminUserRow = `-- name: UpdateAdminUserRow :one
+UPDATE admin_users
+   SET nama              = $1,
+       role              = $2::admin_role,
+       notif_invoice     = $3,
+       notif_surat_jalan = $4,
+       is_active         = $5,
+       updated_at        = now()
+ WHERE id = $6
+RETURNING id, nama, email::text AS email, role::text AS role,
+          notif_invoice, notif_surat_jalan, is_active, invited_at, activated_at, last_login_at
+`
+
+type UpdateAdminUserRowParams struct {
+	Nama            string    `json:"nama"`
+	Role            AdminRole `json:"role"`
+	NotifInvoice    bool      `json:"notif_invoice"`
+	NotifSuratJalan bool      `json:"notif_surat_jalan"`
+	IsActive        bool      `json:"is_active"`
+	ID              string    `json:"id"`
+}
+
+type UpdateAdminUserRowRow struct {
+	ID              string     `json:"id"`
+	Nama            string     `json:"nama"`
+	Email           string     `json:"email"`
+	Role            string     `json:"role"`
+	NotifInvoice    bool       `json:"notif_invoice"`
+	NotifSuratJalan bool       `json:"notif_surat_jalan"`
+	IsActive        bool       `json:"is_active"`
+	InvitedAt       *time.Time `json:"invited_at"`
+	ActivatedAt     *time.Time `json:"activated_at"`
+	LastLoginAt     *time.Time `json:"last_login_at"`
+}
+
+func (q *Queries) UpdateAdminUserRow(ctx context.Context, arg UpdateAdminUserRowParams) (UpdateAdminUserRowRow, error) {
+	row := q.db.QueryRow(ctx, updateAdminUserRow,
+		arg.Nama,
+		arg.Role,
+		arg.NotifInvoice,
+		arg.NotifSuratJalan,
+		arg.IsActive,
+		arg.ID,
+	)
+	var i UpdateAdminUserRowRow
+	err := row.Scan(
+		&i.ID,
+		&i.Nama,
+		&i.Email,
+		&i.Role,
+		&i.NotifInvoice,
+		&i.NotifSuratJalan,
+		&i.IsActive,
+		&i.InvitedAt,
+		&i.ActivatedAt,
+		&i.LastLoginAt,
+	)
+	return i, err
 }
 
 const updateBranchPassword = `-- name: UpdateBranchPassword :exec

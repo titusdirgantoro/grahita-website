@@ -18,13 +18,13 @@ import {
   CabangPage,
   DashboardPage,
   KatalogAdminPage,
-  PenggunaPage,
   PengaturanPage,
   PesananAdminPage,
   ProfilAdminPage,
   RekeningPage,
   ReportingPage,
 } from "./pages/shell-pages";
+import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
 
 /** RouterLink menyambungkan shell (yang lepas router) ke <Link> TanStack. */
