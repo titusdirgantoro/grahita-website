@@ -283,6 +283,110 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/auth/registration/validate:
+    post:
+      tags: [auth]
+      operationId: validateRegistrationToken
+      summary: Langkah 1 pendaftaran — validasi token registrasi cabang
+      security: []
+      description: |
+        Endpoint publik, dikecualikan dari CSRF dan dibatasi per IP. Memeriksa
+        token registrasi (format, ada, belum dipakai, belum kedaluwarsa, cabang
+        aktif, cabang belum punya akun) lalu mengembalikan data cabang yang akan
+        tampil terisi dan READ-ONLY pada langkah 2 (PRD CP-REG-02/CP-REG-03).
+        Setiap keadaan salah dijawab dengan kode yang spesifik
+        (`TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_USED`, `BRANCH_INACTIVE`,
+        `BRANCH_HAS_ACCOUNT`) supaya pengguna tahu harus berbuat apa
+        (PRD CP-REG-07).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              additionalProperties: false
+              properties:
+                token: { type: string, maxLength: 64 }
+      responses:
+        "200":
+          description: Token sah; data cabang untuk langkah 2
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [nama_cabang, nama_kepala, email]
+                    additionalProperties: false
+                    properties:
+                      nama_cabang: { type: string }
+                      nama_kepala: { type: string }
+                      email: { type: string, format: email }
+        "400":
+          description: Token tidak valid atau kedaluwarsa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "409":
+          description: Token sudah dipakai, cabang nonaktif, atau cabang sudah punya akun
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      operationId: registerBranch
+      summary: Langkah 2 pendaftaran — buat akun cabang dengan token registrasi
+      security: []
+      description: |
+        Endpoint publik, dikecualikan dari CSRF dan dibatasi per IP. Memakai
+        token registrasi TEPAT sekali lalu membuat akun cabang: nomor telepon
+        dan kata sandi (minimal 8 karakter, harus sama dengan konfirmasinya)
+        diisi pengguna, sedangkan nama cabang, nama kepala cabang, dan email
+        diambil server dari data cabang — field tak dikenal ditolak, jadi data
+        itu tidak bisa dipalsukan lewat payload (PRD CP-REG-03/04/05/06).
+        Token dikunci dan diperiksa ULANG di dalam transaksi sehingga dua
+        permintaan bersamaan hanya satu yang berhasil. Akun yang terbentuk
+        langsung bisa dipakai login dengan email cabang.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, telepon, password, password_konfirmasi]
+              additionalProperties: false
+              properties:
+                token: { type: string, maxLength: 64 }
+                telepon: { type: string, maxLength: 40 }
+                password: { type: string, minLength: 8, maxLength: 200 }
+                password_konfirmasi: { type: string, maxLength: 200 }
+      responses:
+        "201":
+          description: Akun cabang terbentuk; token ditandai terpakai
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserEnvelope"
+        "400":
+          description: Token tidak valid/kedaluwarsa, data tidak valid, atau kata sandi tidak memenuhi syarat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "409":
+          description: Token sudah dipakai, cabang nonaktif, atau cabang sudah punya akun
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/v1/settings:
     get:
       tags: [customer, admin]
@@ -1155,6 +1259,9 @@ components:
                   RATE_LIMITED,
                   CSRF_INVALID,
                   RESET_INVALID,
+                  TOKEN_INVALID,
+                  TOKEN_EXPIRED,
+                  TOKEN_USED,
                   EMAIL_TAKEN,
                   LAST_SUPERADMIN,
                   NO_ACCOUNT,

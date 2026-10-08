@@ -35,6 +35,8 @@ import (
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/registration"
+	registrationpg "github.com/grahita/portal/api/internal/registration/postgres"
 	"github.com/grahita/portal/api/internal/settings"
 	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
 	"github.com/grahita/portal/api/internal/users"
@@ -49,11 +51,13 @@ type pgFixture struct {
 
 	// users adalah service pengelolaan akun (F1-05); queue menangkap email
 	// undangan admin yang diantre. branches adalah service master cabang
-	// (F1-06). bank adalah service rekening bank (F1-09).
-	users    *users.Service
-	queue    *fakeUsersQueue
-	branches *branch.Service
-	bank     *bank.Service
+	// (F1-06). bank adalah service rekening bank (F1-09). registration adalah
+	// service pendaftaran akun cabang lewat token (F1-07).
+	users        *users.Service
+	queue        *fakeUsersQueue
+	branches     *branch.Service
+	bank         *bank.Service
+	registration *registration.Service
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -204,18 +208,24 @@ func newPGFixture(t *testing.T) *pgFixture {
 	bankSvc := bank.NewService(bankpg.New(pool))
 	f.bank = bankSvc
 
+	// Pendaftaran akun cabang lewat token registrasi (F1-07).
+	registrationSvc := registration.NewService(registrationpg.New(pool), clock.System())
+	f.registration = registrationSvc
+
 	deps := Deps{
-		Config:        testConfig(),
-		Version:       "test-pg",
-		Health:        fakeHealth{migrasi: 9},
-		Auth:          svc,
-		Settings:      settings.NewService(settingspg.New(pool)),
-		Catalog:       catalog.NewService(catalogpg.New(pool)),
-		Users:         usersSvc,
-		Branches:      branchSvc,
-		Bank:          bankSvc,
-		LoginLimiter:  httpx.NewRateLimiter(5, 15*time.Minute),
-		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),
+		Config:              testConfig(),
+		Version:             "test-pg",
+		Health:              fakeHealth{migrasi: 9},
+		Auth:                svc,
+		Settings:            settings.NewService(settingspg.New(pool)),
+		Catalog:             catalog.NewService(catalogpg.New(pool)),
+		Users:               usersSvc,
+		Branches:            branchSvc,
+		Bank:                bankSvc,
+		Registration:        registrationSvc,
+		LoginLimiter:        httpx.NewRateLimiter(5, 15*time.Minute),
+		ForgotLimiter:       httpx.NewRateLimiter(5, 15*time.Minute),
+		RegistrationLimiter: httpx.NewRateLimiter(50, 15*time.Minute),
 	}
 	f.srv = httptest.NewServer(NewRouter(deps))
 	t.Cleanup(f.srv.Close)

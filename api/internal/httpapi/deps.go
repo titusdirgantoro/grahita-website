@@ -23,6 +23,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/mailer"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
+	"github.com/grahita/portal/api/internal/registration"
 	"github.com/grahita/portal/api/internal/settings"
 	"github.com/grahita/portal/api/internal/users"
 )
@@ -47,6 +48,10 @@ type Deps struct {
 	Branches *branch.Service
 	Bank     *bank.Service
 
+	// Registration melayani pendaftaran akun cabang dua langkah lewat token
+	// registrasi sekali pakai (F1-07).
+	Registration *registration.Service
+
 	Storage   storage.Store
 	Gotenberg pdf.Renderer
 	Mailer    mailer.Mailer
@@ -58,6 +63,10 @@ type Deps struct {
 	// ForgotLimiter membatasi permintaan tautan atur ulang per IP, baik untuk
 	// forgot maupun reset (Architecture.md §6: lupa password dibatasi).
 	ForgotLimiter *httpx.RateLimiter
+
+	// RegistrationLimiter membatasi permintaan validasi token registrasi dan
+	// pendaftaran akun per IP; keduanya endpoint publik (Architecture.md §6).
+	RegistrationLimiter *httpx.RateLimiter
 }
 
 // API memegang dependensi untuk handler.

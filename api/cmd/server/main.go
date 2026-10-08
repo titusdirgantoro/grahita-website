@@ -37,6 +37,8 @@ import (
 	"github.com/grahita/portal/api/internal/platform/mailer"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
+	"github.com/grahita/portal/api/internal/registration"
+	registrationpg "github.com/grahita/portal/api/internal/registration/postgres"
 	"github.com/grahita/portal/api/internal/seed"
 	"github.com/grahita/portal/api/internal/settings"
 	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
@@ -178,6 +180,9 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// Master cabang + token registrasi sekali pakai (F1-06).
 	branchSvc := branch.NewService(branchpg.New(pool), clock.System())
 
+	// Pendaftaran akun cabang lewat token registrasi (F1-07).
+	registrationSvc := registration.NewService(registrationpg.New(pool), clock.System())
+
 	// Rekening bank tujuan transfer (F1-09).
 	bankSvc := bank.NewService(bankpg.New(pool))
 
@@ -187,22 +192,27 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	loginLimiter := httpx.NewRateLimiter(5, 15*time.Minute)
 	// Permintaan tautan atur ulang dibatasi per IP (Architecture.md §6).
 	forgotLimiter := httpx.NewRateLimiter(5, 15*time.Minute)
+	// Validasi token registrasi & pendaftaran akun juga endpoint publik:
+	// keduanya dibatasi per IP (Architecture.md §6).
+	registrationLimiter := httpx.NewRateLimiter(10, 15*time.Minute)
 
 	handler := httpapi.NewRouter(httpapi.Deps{
-		Config:        cfg,
-		Version:       version,
-		Health:        health{pool: pool, dsn: cfg.DatabaseURL},
-		Auth:          authSvc,
-		Settings:      settings.NewService(settingspg.New(pool)),
-		Catalog:       catalog.NewService(catalogpg.New(pool)),
-		Users:         usersSvc,
-		Branches:      branchSvc,
-		Bank:          bankSvc,
-		Storage:       store,
-		Gotenberg:     renderer,
-		Mailer:        mail,
-		LoginLimiter:  loginLimiter,
-		ForgotLimiter: forgotLimiter,
+		Config:              cfg,
+		Version:             version,
+		Health:              health{pool: pool, dsn: cfg.DatabaseURL},
+		Auth:                authSvc,
+		Settings:            settings.NewService(settingspg.New(pool)),
+		Catalog:             catalog.NewService(catalogpg.New(pool)),
+		Users:               usersSvc,
+		Branches:            branchSvc,
+		Bank:                bankSvc,
+		Registration:        registrationSvc,
+		Storage:             store,
+		Gotenberg:           renderer,
+		Mailer:              mail,
+		LoginLimiter:        loginLimiter,
+		ForgotLimiter:       forgotLimiter,
+		RegistrationLimiter: registrationLimiter,
 	})
 
 	srv := &http.Server{

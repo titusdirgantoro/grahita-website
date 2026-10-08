@@ -52,6 +52,10 @@ func NewRouter(d Deps) http.Handler {
 		// bisa masuk justru yang memakainya (PRD §3.2).
 		r.Post("/auth/password/forgot", a.adapt(a.forgotPassword))
 		r.Post("/auth/password/reset", a.adapt(a.resetPassword))
+		// Pendaftaran akun cabang lewat token registrasi: dua langkah, juga
+		// tanpa sesi karena pemakainya belum punya akun (PRD §3.1).
+		r.Post("/auth/registration/validate", a.adapt(a.registrationValidate))
+		r.Post("/auth/register", a.adapt(a.registrationRegister))
 
 		r.Group(func(r chi.Router) {
 			r.Use(a.requireAuth)
@@ -121,12 +125,15 @@ func NewRouter(d Deps) http.Handler {
 }
 
 // csrfExempt adalah endpoint yang memang belum punya sesi/CSRF cookie:
-// login serta lupa/atur ulang kata sandi dipanggil dari halaman publik, dan
-// permintaannya tidak mengubah data apa pun atas nama sesi yang ada.
+// login, lupa/atur ulang kata sandi, serta pendaftaran akun cabang. Semuanya
+// dipanggil dari halaman publik, dan permintaannya tidak mengubah data apa pun
+// atas nama sesi yang ada.
 func csrfExempt() map[string]bool {
 	return map[string]bool{
-		"/api/v1/auth/login":           true,
-		"/api/v1/auth/password/forgot": true,
-		"/api/v1/auth/password/reset":  true,
+		"/api/v1/auth/login":                 true,
+		"/api/v1/auth/password/forgot":       true,
+		"/api/v1/auth/password/reset":        true,
+		"/api/v1/auth/registration/validate": true,
+		"/api/v1/auth/register":              true,
 	}
 }

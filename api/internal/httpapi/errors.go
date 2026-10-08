@@ -10,6 +10,7 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/registration"
 	"github.com/grahita/portal/api/internal/settings"
 	"github.com/grahita/portal/api/internal/users"
 )
@@ -102,6 +103,32 @@ func mapDomainErr(err error) error {
 			"Cabang ini belum punya akun. Buat token registrasi lebih dahulu di halaman Cabang.")
 	case errors.Is(err, users.ErrInvalidData):
 		return apierr.Validation("Data pengguna tidak valid.", nil)
+	// Pendaftaran akun cabang lewat token (F1-07). Pesan sengaja spesifik per
+	// keadaan supaya pengguna tahu harus berbuat apa (PRD CP-REG-07).
+	case errors.Is(err, registration.ErrTokenInvalid):
+		return apierr.New(http.StatusBadRequest, "TOKEN_INVALID",
+			"Token registrasi tidak valid. Periksa kembali penulisannya, atau minta token baru ke admin Pusat.")
+	case errors.Is(err, registration.ErrTokenExpired):
+		return apierr.New(http.StatusBadRequest, "TOKEN_EXPIRED",
+			"Token registrasi sudah kedaluwarsa. Minta token baru ke admin Pusat.")
+	case errors.Is(err, registration.ErrTokenUsed):
+		return apierr.Conflict("TOKEN_USED",
+			"Token registrasi sudah dipakai. Satu cabang hanya boleh punya satu akun; gunakan lupa kata sandi bila perlu masuk kembali.")
+	case errors.Is(err, registration.ErrBranchInactive):
+		return apierr.Conflict("BRANCH_INACTIVE",
+			"Cabang ini sedang nonaktif. Hubungi admin Pusat untuk mengaktifkannya kembali.")
+	case errors.Is(err, registration.ErrBranchHasAccount):
+		return apierr.Conflict("BRANCH_HAS_ACCOUNT",
+			"Cabang ini sudah punya akun. Gunakan lupa kata sandi bila perlu masuk kembali.")
+	case errors.Is(err, registration.ErrEmailTaken):
+		return apierr.Conflict("EMAIL_TAKEN",
+			"Email cabang sudah dipakai akun lain. Hubungi admin Pusat.")
+	case errors.Is(err, registration.ErrTeleponInvalid):
+		return apierr.Validation("Nomor telepon belum benar.",
+			map[string]string{"telepon": err.Error()})
+	case errors.Is(err, registration.ErrPasswordMismatch):
+		return apierr.Validation("Konfirmasi kata sandi tidak sama.",
+			map[string]string{"password_konfirmasi": "konfirmasi kata sandi harus sama dengan kata sandi"})
 	default:
 		return err
 	}

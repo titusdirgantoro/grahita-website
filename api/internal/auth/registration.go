@@ -73,3 +73,24 @@ func NormalizeRegistrationToken(raw string) string {
 func HashRegistrationToken(raw string) []byte {
 	return HashToken(NormalizeRegistrationToken(raw))
 }
+
+// RegistrationTokenPanjang adalah panjang token registrasi SETELAH
+// dinormalkan: awalan "GRH" diikuti 16 karakter alfabet token.
+const RegistrationTokenPanjang = len(RegistrationTokenPrefix) + registrationGroupLen*registrationGroups
+
+// ValidRegistrationTokenFormat melaporkan apakah token yang SUDAH
+// dinormalkan berbentuk token registrasi yang sah. Pemeriksaan ini hanya soal
+// bentuk — keabsahan tokennya tetap ditentukan pencocokan hash di database —
+// tetapi membuat token yang jelas salah ketik ditolak tanpa menyentuh DB dan
+// memberi pesan yang konsisten (PRD CP-REG-02: validasi format).
+func ValidRegistrationTokenFormat(normalized string) bool {
+	if len(normalized) != RegistrationTokenPanjang || !strings.HasPrefix(normalized, RegistrationTokenPrefix) {
+		return false
+	}
+	for _, r := range normalized[len(RegistrationTokenPrefix):] {
+		if !strings.ContainsRune(registrationAlphabet, r) {
+			return false
+		}
+	}
+	return true
+}

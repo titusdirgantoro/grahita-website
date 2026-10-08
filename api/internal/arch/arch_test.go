@@ -94,7 +94,7 @@ func TestAturanLapisan(t *testing.T) {
 		},
 		{
 			nama:    "service tidak mengimpor transport maupun net/http",
-			matches: exact(modulePath+"/internal/auth", modulePath+"/internal/audit", modulePath+"/internal/bank", modulePath+"/internal/branch", modulePath+"/internal/catalog", modulePath+"/internal/settings"),
+			matches: exact(modulePath+"/internal/auth", modulePath+"/internal/audit", modulePath+"/internal/bank", modulePath+"/internal/branch", modulePath+"/internal/catalog", modulePath+"/internal/registration", modulePath+"/internal/settings"),
 			terlarang: anyOf(
 				has("net/http"),
 				exact(modulePath+"/internal/httpapi"),

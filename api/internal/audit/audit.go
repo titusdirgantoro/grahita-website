@@ -16,6 +16,7 @@ import (
 // Entitas yang dicatat (kolom audit_logs.entity).
 const (
 	EntityBranch      = "branch"
+	EntityBranchUser  = "branch_user"
 	EntityBankAccount = "bank_account"
 	EntitySetting     = "setting"
 )
@@ -26,6 +27,9 @@ const (
 	ActionUpdate        = "update"
 	ActionDelete        = "delete"
 	ActionTokenGenerate = "token_generate"
+	// ActionRegister mencatat akun cabang yang lahir dari pendaftaran mandiri
+	// lewat token registrasi (F1-07); aktornya akun cabang itu sendiri.
+	ActionRegister = "register"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.
