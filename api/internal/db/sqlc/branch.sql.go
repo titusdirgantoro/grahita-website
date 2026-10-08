@@ -188,26 +188,28 @@ func (q *Queries) DeleteBranchUsers(ctx context.Context, branchID string) error 
 
 const getBranch = `-- name: GetBranch :one
 
-SELECT id, nama, nama_kepala, email::text AS email, telepon,
+SELECT id, nama, nama_kepala, email::text AS email, COALESCE(telepon, '') AS telepon,
        is_cnc, is_special, pajak_in, is_active
   FROM branches
  WHERE id = $1
 `
 
 type GetBranchRow struct {
-	ID         string      `json:"id"`
-	Nama       string      `json:"nama"`
-	NamaKepala string      `json:"nama_kepala"`
-	Email      string      `json:"email"`
-	Telepon    pgtype.Text `json:"telepon"`
-	IsCnc      bool        `json:"is_cnc"`
-	IsSpecial  bool        `json:"is_special"`
-	PajakIn    bool        `json:"pajak_in"`
-	IsActive   bool        `json:"is_active"`
+	ID         string `json:"id"`
+	Nama       string `json:"nama"`
+	NamaKepala string `json:"nama_kepala"`
+	Email      string `json:"email"`
+	Telepon    string `json:"telepon"`
+	IsCnc      bool   `json:"is_cnc"`
+	IsSpecial  bool   `json:"is_special"`
+	PajakIn    bool   `json:"pajak_in"`
+	IsActive   bool   `json:"is_active"`
 }
 
 // Master cabang (SystemDesign §6, PRD §4.4).
-// Dipakai portal cabang untuk /me/branch (data cabang milik sesi).
+// Dipakai portal cabang untuk /me/branch (data cabang milik sesi). `telepon`
+// selalu dikembalikan sebagai string (kosong bila belum diisi) supaya bentuk
+// respons profil cabang stabil untuk UI (PRD §3.8).
 func (q *Queries) GetBranch(ctx context.Context, id string) (GetBranchRow, error) {
 	row := q.db.QueryRow(ctx, getBranch, id)
 	var i GetBranchRow

@@ -198,6 +198,18 @@ func (r *Repo) ActivateAdmin(ctx context.Context, id, passwordHash string) error
 	return nil
 }
 
+// UpdateName menyimpan nama tampilan akun ADMIN. Akun cabang ditolak karena
+// namanya berasal dari master cabang (PRD §3.8).
+func (r *Repo) UpdateName(ctx context.Context, kind auth.Kind, id, nama string) error {
+	if kind != auth.KindAdmin {
+		return auth.ErrProfileNotEditable
+	}
+	if err := r.q.UpdateAdminNama(ctx, sqlc.UpdateAdminNamaParams{ID: id, Nama: nama}); err != nil {
+		return fmt.Errorf("query UpdateAdminNama: %w", err)
+	}
+	return nil
+}
+
 // CreateResetToken membatalkan token atur ulang lama milik pengguna lalu
 // menyimpan yang baru — hanya satu tautan berlaku pada satu waktu.
 func (r *Repo) CreateResetToken(ctx context.Context, t auth.ResetToken, tokenHash []byte) error {

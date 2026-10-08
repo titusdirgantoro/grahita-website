@@ -153,6 +153,23 @@ func (m *Memory) ActivateAdmin(_ context.Context, id, passwordHash string) error
 	return nil
 }
 
+// UpdateName menyimpan nama tampilan akun ADMIN. Akun cabang ditolak karena
+// namanya berasal dari master cabang (PRD §3.8).
+func (m *Memory) UpdateName(_ context.Context, kind Kind, id, nama string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if kind != KindAdmin {
+		return ErrProfileNotEditable
+	}
+	c, ok := m.admins[id]
+	if !ok {
+		return ErrNoUser
+	}
+	c.Nama = nama
+	m.admins[id] = c
+	return nil
+}
+
 // CreateResetToken menyimpan token atur ulang dan membatalkan token aktif
 // sebelumnya milik pengguna yang sama (hanya satu tautan berlaku).
 func (m *Memory) CreateResetToken(_ context.Context, t ResetToken, tokenHash []byte) error {

@@ -77,7 +77,22 @@ const rootRoute = createRootRoute({
 
 const masRoute = createRoute({ getParentRoute: () => rootRoute, path: "/masuk", component: HalamanMasuk });
 const daftarRoute = createRoute({ getParentRoute: () => rootRoute, path: "/daftar", component: HalamanDaftar });
-const lupaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/lupa", component: HalamanLupa });
+/**
+ * /lupa melayani dua keadaan: minta tautan (tanpa query) dan membuat kata sandi
+ * baru dari tautan email (`?token=…`). Token dibaca dari search param router
+ * supaya rute ini tetap dapat diuji tanpa menyentuh window.location.
+ */
+const lupaRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/lupa",
+  validateSearch: (search: Record<string, unknown>): { token?: string } => ({
+    token: typeof search.token === "string" ? search.token : undefined,
+  }),
+  component: function HalamanLupaRoute() {
+    const { token } = lupaRoute.useSearch();
+    return <HalamanLupa token={token} />;
+  },
+});
 const gayaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gaya", component: GayaPage });
 
 const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "shell", component: ShellLayout });

@@ -61,6 +61,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Use(a.requireAuth)
 
 			r.Get("/auth/me", a.adapt(a.me))
+			// Profil sendiri (PRD §4.10): hanya nama tampilan admin yang bisa
+			// diubah pemiliknya; email/role read-only.
+			r.Put("/auth/me", a.adapt(a.meUpdate))
 			r.Post("/auth/password/change", a.adapt(a.changePassword))
 			r.Get("/catalog", a.adapt(a.catalog))
 			r.Get("/me/branch", a.adapt(a.myBranch))

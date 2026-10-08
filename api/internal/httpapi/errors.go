@@ -52,6 +52,10 @@ func mapDomainErr(err error) error {
 			map[string]string{"password": err.Error()})
 	case errors.Is(err, auth.ErrBranchForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke data cabang ini.")
+	case errors.Is(err, auth.ErrProfileNotEditable):
+		return apierr.Forbidden("Profil ini dikelola admin Pusat dan tidak dapat diubah sendiri.")
+	case errors.Is(err, auth.ErrNamaInvalid):
+		return apierr.Validation("Nama belum benar.", map[string]string{"nama": err.Error()})
 	case errors.Is(err, settings.ErrNotFound), errors.Is(err, catalog.ErrNotFound):
 		return apierr.NotFound("Data yang diminta tidak ditemukan.")
 	case errors.Is(err, settings.ErrInvalidValue):

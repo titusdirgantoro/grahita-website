@@ -125,6 +125,34 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// updateMeRequest adalah body PUT /api/v1/auth/me — profil sendiri (PRD §4.10).
+//
+// Hanya `nama` yang diterima: email dan role read-only, dan field asing
+// ditolak oleh DecodeJSON (DisallowUnknownFields) sehingga percobaan mengubah
+// `email`/`role` lewat endpoint ini dijawab 400, bukan diabaikan diam-diam.
+type updateMeRequest struct {
+	Nama string `json:"nama" validate:"required,min=2,max=120"`
+}
+
+// meUpdate menangani PUT /api/v1/auth/me.
+//
+// Kebijakan per jenis akun ditegakkan di service: hanya akun ADMIN yang boleh
+// mengganti nama tampilannya; akun cabang dijawab 403 karena nama/kepala/email/
+// telepon cabang adalah data master Pusat yang read-only di portal cabang
+// (PRD §3.8, §4.10).
+func (a *API) meUpdate(w http.ResponseWriter, r *http.Request) error {
+	var req updateMeRequest
+	if err := httpx.DecodeJSON(r, &req); err != nil {
+		return err
+	}
+	baru, err := a.d.Auth.UpdateOwnProfile(r.Context(), auth.ActorFrom(r.Context()), req.Nama)
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.OK(w, data(map[string]any{"user": actorDTO(baru)}))
+	return nil
+}
+
 // forgotPassword menangani POST /api/v1/auth/password/forgot.
 //
 // Respons SELALU sama — akun ada atau tidak, aktif atau tidak — supaya

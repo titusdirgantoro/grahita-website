@@ -171,6 +171,42 @@ paths:
                 $ref: "#/components/schemas/UserEnvelope"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+    put:
+      tags: [auth]
+      operationId: updateCurrentUser
+      summary: Ubah nama tampilan profil sendiri (PRD §4.10)
+      description: |
+        Hanya `nama` yang bisa diubah pemiliknya. `email` dan `role` read-only:
+        mengirimnya (atau field asing lain) ditolak `400` karena skema
+        `additionalProperties: false`, dan role hanya bisa diubah Superadmin
+        lewat user management. Akun cabang dijawab `403` — nama, kepala cabang,
+        email, dan telepon cabang adalah data master Pusat yang read-only di
+        portal cabang (PRD §3.8).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nama]
+              additionalProperties: false
+              properties:
+                nama: { type: string, minLength: 2, maxLength: 120 }
+      responses:
+        "200":
+          description: Nama tersimpan; sesi lain memakai nama yang sama pada request berikutnya
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserEnvelope"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/v1/auth/password/forgot:
     post:
@@ -419,6 +455,11 @@ paths:
       tags: [customer]
       operationId: getMyBranch
       summary: Data cabang milik akun yang sedang masuk
+      description: |
+        Cabang diambil dari SESI, bukan dari parameter klien — akun cabang
+        tidak bisa membaca profil cabang lain. Akun admin dijawab `403`; hanya
+        akun cabang yang punya endpoint ini (PRD §3.8). Tidak ada rute tulis:
+        data cabang read-only di portal cabang.
       responses:
         "200":
           description: Data cabang
@@ -1736,7 +1777,12 @@ components:
 
     Branch:
       type: object
-      required: [id, nama, nama_kepala, email, is_cnc, is_special, pajak_in, is_active]
+      description: |
+        Data cabang milik sesi (profil cabang). Seluruh field READ-ONLY di
+        portal cabang: nama, kepala cabang, email, dan telepon adalah data
+        master yang dikelola admin Pusat (PRD §3.8), dan API tidak menyediakan
+        rute tulis untuknya.
+      required: [id, nama, nama_kepala, email, telepon, is_cnc, is_special, pajak_in, is_active]
       properties:
         id: { type: string, format: uuid }
         nama: { type: string }

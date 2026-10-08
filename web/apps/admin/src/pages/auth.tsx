@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 
-import { ApiClientError } from "@grahita/api-client";
-import { AuthLayout, Button, Field, Form, Input, Notice } from "@grahita/ui";
+import { ApiClientError, api } from "@grahita/api-client";
+import { AuthLayout, AuthLinks, Button, Field, Form, Input, Notice, PasswordResetPage } from "@grahita/ui";
 
 import { useSesi } from "../session";
 
@@ -45,7 +45,37 @@ export function HalamanMasuk() {
         <Button type="submit" variant="primary" block disabled={sibuk}>
           {sibuk ? "Memproses…" : "Masuk"}
         </Button>
+        <AuthLinks>
+          <Link to="/lupa">Lupa password</Link>
+        </AuthLinks>
       </Form>
     </AuthLayout>
+  );
+}
+
+/**
+ * pLupa admin — /lupa: rute yang sama dengan portal cabang, tetapi dipakai
+ * akun admin. Satu rute melayani dua keadaan (PRD §3.2 CP-AUT-03/04, §4.10):
+ *
+ *  - tanpa `?token=`: minta tautan atur ulang lewat email (respons seragam);
+ *  - dengan `?token=…`: buat kata sandi baru dari tautan email.
+ *
+ * Tautan email diarahkan ke host admin (`PASSWORD_RESET_PATH` + ADMIN_HOST,
+ * lihat auth.NewResetURLBuilder), jadi tidak ada cookie yang dibagi antar
+ * subdomain.
+ */
+export function HalamanLupa({ token }: { token?: string }) {
+  return (
+    <PasswordResetPage
+      token={token}
+      namaPortal="admin portal"
+      onKirimTautan={async (email) => {
+        await api.post("/auth/password/forgot", { email });
+      }}
+      onSimpanKataSandi={async (tokenReset, password) => {
+        await api.post("/auth/password/reset", { token: tokenReset, password });
+      }}
+      tautanMasuk={<Link to="/masuk">Kembali ke halaman masuk</Link>}
+    />
   );
 }

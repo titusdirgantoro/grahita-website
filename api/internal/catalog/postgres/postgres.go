@@ -91,7 +91,7 @@ func (r *Repo) GetBranch(ctx context.Context, id string) (catalog.Branch, error)
 	}
 	return catalog.Branch{
 		ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
-		Telepon: pgtypes.TextOr(row.Telepon), IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
+		Telepon: row.Telepon, IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
 		PajakIn: row.PajakIn, IsActive: row.IsActive,
 	}, nil
 }

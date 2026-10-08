@@ -13,18 +13,7 @@
   color: #fff;
 }
 
-.mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: var(--brand-accent);
-  color: var(--ink);
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-  font-size: 15px;
-  flex: none;
-}
+/* Lambang memakai aset resmi (Logo.module.css), bukan kotak huruf "G" lagi. */
 
 .center {
   justify-content: center;

@@ -1,15 +1,19 @@
 import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 
+import { api } from "@grahita/api-client";
 import {
   Accordion,
   Badge,
   Button,
   Card,
   CardHead,
+  ChangePasswordForm,
   EmptyState,
   Field,
   Form,
   Input,
+  Logo,
   Modal,
   Notice,
   PageHead,
@@ -20,6 +24,7 @@ import {
   useToast,
 } from "@grahita/ui";
 
+import { useSesi } from "../session";
 import { useApi } from "../useApi";
 import styles from "./customer-pages.module.css";
 
@@ -43,8 +48,10 @@ interface Cabang {
   nama: string;
   nama_kepala: string;
   email: string;
-  telepon?: string;
+  telepon: string;
   is_cnc: boolean;
+  is_special?: boolean;
+  pajak_in?: boolean;
   is_active: boolean;
 }
 
@@ -293,16 +300,30 @@ export function InvoicePage() {
   );
 }
 
-/** pProfil — /profil: data cabang read-only + ganti password. */
+/**
+ * pProfil — /profil: data cabang READ-ONLY + ganti password (PRD §3.8, §4.10).
+ *
+ * Sumber data adalah GET /api/v1/me/branch (cabang dari sesi, bukan parameter
+ * klien), jadi akun cabang tidak mungkin membaca profil cabang lain. Tidak ada
+ * satu pun field di sini yang dikirim balik ke API: nama, kepala cabang, email,
+ * dan telepon dikelola admin Pusat.
+ */
 export function ProfilPage() {
   const { data, memuat, galat } = useApi<Cabang>("/me/branch");
+  const { keluar } = useSesi();
+  const navigate = useNavigate();
+
+  async function tindakKeluar() {
+    await keluar();
+    await navigate({ to: "/masuk", replace: true });
+  }
 
   return (
     <>
-      <PageHead title="Profil cabang" sub="Data master diisi admin Pusat" />
+      <PageHead title="Profil" sub="Data cabang dikelola admin Pusat. Hubungi Pusat untuk perubahan." />
       <div className={styles.stack}>
         <Card>
-          <CardHead title="Data cabang" />
+          <CardHead title="Data cabang" tools={<Logo variant="lockup" height={56} />} />
           {memuat ? (
             <div className={styles.stack}>
               <Skeleton variant="title" />
@@ -322,11 +343,25 @@ export function ProfilPage() {
               <Field label="Email cabang" htmlFor="profil-email">
                 <Input id="profil-email" readOnly value={data.email} />
               </Field>
+              <Field
+                label="Telepon"
+                htmlFor="profil-telepon"
+                hint={data.telepon ? undefined : "Belum diisi admin Pusat."}
+              >
+                <Input id="profil-telepon" readOnly value={data.telepon} />
+              </Field>
               <div className={styles.tools}>
                 <Badge tone={data.is_active ? "success" : "danger"}>
                   {data.is_active ? "Aktif" : "Nonaktif"}
                 </Badge>
                 {data.is_cnc ? <Badge tone="cnc">Cash &amp; Carry</Badge> : null}
+                {data.is_special ? <Badge tone="info">Special</Badge> : null}
+                {data.pajak_in ? <Badge tone="info">PI</Badge> : null}
+              </div>
+              <div className={styles.tools}>
+                <Button variant="secondary" icon="sign-out" onClick={() => void tindakKeluar()}>
+                  Keluar
+                </Button>
               </div>
             </Form>
           ) : null}
@@ -334,18 +369,16 @@ export function ProfilPage() {
 
         <Card>
           <CardHead title="Ganti password" />
-          <Form>
-            <Field label="Password lama" htmlFor="pw-lama">
-              <Input id="pw-lama" type="password" autoComplete="current-password" />
-            </Field>
-            <Field label="Password baru" htmlFor="pw-baru" hint="Minimal 8 karakter.">
-              <Input id="pw-baru" type="password" autoComplete="new-password" />
-            </Field>
-            <Field label="Konfirmasi password baru" htmlFor="pw-konf">
-              <Input id="pw-konf" type="password" autoComplete="new-password" />
-            </Field>
-            <Button variant="primary">Simpan password</Button>
-          </Form>
+          <ChangePasswordForm
+            idPrefix="profil"
+            catatan="Setelah kata sandi berubah, seluruh sesi di perangkat lain ikut diakhiri."
+            onSubmit={async (passwordLama, passwordBaru) => {
+              await api.post("/auth/password/change", {
+                password_lama: passwordLama,
+                password_baru: passwordBaru,
+              });
+            }}
+          />
         </Card>
       </div>
     </>

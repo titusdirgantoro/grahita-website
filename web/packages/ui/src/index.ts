@@ -49,6 +49,23 @@ export { Segmented, type SegmentedOption, type SegmentedProps } from "./componen
 export { Switch, SwitchRow, type SwitchProps, type SwitchRowProps } from "./components/Switch";
 export { Avatar, AvatarLink, initials, type AvatarProps, type AvatarLinkProps } from "./components/Avatar";
 export { Brand, type BrandProps } from "./components/Brand";
+export { Logo, type LogoProps, type LogoVariant } from "./components/Logo";
+export {
+  ChangePasswordForm,
+  type ChangePasswordFormProps,
+} from "./components/ChangePassword";
+export {
+  PasswordResetPage,
+  type PasswordResetPageProps,
+} from "./components/PasswordReset";
+export {
+  MIN_PANJANG,
+  periksaKataSandiBaru,
+  pesanGalatSingkat,
+  fieldGalat,
+  type GalatKataSandi,
+  type GalatApiMirip,
+} from "./password";
 export { Table, type TableProps } from "./components/Table";
 export { Modal, type ModalProps } from "./components/Modal";
 export { EmptyState, type EmptyStateProps } from "./components/EmptyState";

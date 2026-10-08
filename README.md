@@ -206,6 +206,7 @@ Endpoint (semua di bawah `/api/v1`):
 | POST | `/auth/login` | satu endpoint untuk kedua portal; identitas dari akun, bukan host |
 | POST | `/auth/logout` | idempoten, wajib CSRF |
 | GET | `/auth/me` | profil + role + `branch_id` dari sesi |
+| PUT | `/auth/me` | ubah NAMA tampilan sendiri (admin); email/role read-only, akun cabang 403 |
 | POST | `/auth/password/forgot` | respons selalu sama (non-enumeratif), dibatasi per IP |
 | POST | `/auth/password/reset` | token sekali pakai; mencabut **semua** sesi |
 | POST | `/auth/password/change` | verifikasi kata sandi lama; mencabut sesi **lain** saja |
@@ -226,7 +227,10 @@ Endpoint (semua di bawah `/api/v1`):
   Manager vs Superadmin (bank/reporting/pengaturan/user admin hanya Superadmin)
   — bukan sekadar menyembunyikan menu.
 - Tautan email reset: `${portal}/lupa?token=...`; rutenya dapat diganti lewat
-  `PASSWORD_RESET_PATH`.
+  `PASSWORD_RESET_PATH`. **Kedua portal punya rute `/lupa`**: portal cabang
+  (`grahita-branch…`) dan portal admin (`grahita-admin…`) melayani form minta
+  tautan maupun form "buat kata sandi baru" saat `?token=` ada — tidak ada
+  cookie yang dibagi antar subdomain (F1-10).
 
 Uji: `internal/auth/reset_test.go` (unit, jam tetap),
 `internal/httpapi/router_auth_test.go` (API lewat HTTP penuh, termasuk isolasi
@@ -244,7 +248,7 @@ Detail keputusan dan bukti: `docs/design/f1-04/HASIL.md`.
 |---|---|
 | Token desain (brand, status, ukuran kontrol) | `src/tokens.css` |
 | Reset + utilitas global (`.muted`, `.num`, `.sr`, `.hatch`, fokus) | `src/base.css` |
-| Komponen | `src/components/*` (Button, Field/Form, Card, Badge/Chip, Table, Modal, Notice, Segmented, Switch, Avatar, EmptyState, Skeleton, Toast, Accordion, AuthLayout, Brand, PageHead) |
+| Komponen | `src/components/*` (Button, Field/Form, Card, Badge/Chip, Table, Modal, Notice, Segmented, Switch, Avatar, EmptyState, Skeleton, Toast, Accordion, AuthLayout, Brand, **Logo**, **ChangePasswordForm**, **PasswordResetPage**, PageHead) |
 | Shell + model menu | `src/shell/*` (`CustomerShell`, `AdminShell`, `filterNav`/`filterGroups`/`bolehLihat`) |
 
 - **Perbedaan antar portal** (mis. `--h-control` 40px vs 36px, `--primary`
@@ -253,7 +257,9 @@ Detail keputusan dan bukti: `docs/design/f1-04/HASIL.md`.
   komponen. Jadi satu set komponen tetap meniru kedua prototype.
 - **Self-host aset**: font Plus Jakarta Sans (`@fontsource-variable/…`) dan font
   ikon Phosphor (`@phosphor-icons/web`) diimpor dari `node_modules` dan ikut
-  ter-bundel; `index.html` tidak memuat URL eksternal (diuji di CI).
+  ter-bundel; `index.html` tidak memuat URL eksternal (diuji di CI). **Logo
+  GRAHITA INDONESIA juga self-host** (`src/assets/logo-grahita-*.png`, turunan
+  langsung dari aset resmi) dan dipakai lewat komponen `Logo`.
 - **Guard menu per peran**: item `superadminOnly` (Rekening bank, Reporting,
   Pengaturan) disaring `AdminShell`, halamannya menolak lewat `PenjagaSuperadmin`,
   dan API tetap otoritas akhir. Manager melihat metrik jumlah, Superadmin melihat
@@ -266,7 +272,26 @@ Detail keputusan dan bukti: `docs/design/f1-04/HASIL.md`.
   (`docs/design/f1-03/HASIL.md`).
 
 Perintah terkait: `npm run typecheck`, `npm run test`, `npm run build` di `web/`
-(65 tes: api-client 7, ui 44, admin 8, customer 6).
+(103 tes: api-client 7, ui 56, admin 29, customer 11; termasuk suite profil &
+kata sandi F1-10).
+
+## Profil & ganti kata sandi (F1-10)
+
+- **Profil cabang** `/profil` (portal cabang): data dari `GET /api/v1/me/branch`
+  — nama, kepala cabang, email, telepon tampil **read-only** (dikelola admin
+  Pusat), ditambah tombol Keluar dan form ganti kata sandi. Tidak ada rute tulis
+  untuk profil cabang (`PUT`/`PATCH`/`POST` → 405) dan `branch_id` tidak pernah
+  dibaca dari klien, jadi profil cabang lain tidak bisa dibaca.
+- **Profil admin** `/profil` (portal admin): dari `GET /auth/me`; **nama** boleh
+  diubah sendiri lewat `PUT /auth/me`, sedangkan **email** dan **role**
+  read-only (hanya Superadmin lewat user management yang mengubahnya).
+- **Ganti kata sandi** (kedua portal, komponen `ChangePasswordForm`):
+  `POST /auth/password/change` memverifikasi kata sandi lama; sesi yang dipakai
+  tetap hidup dan **sesi lain dicabut** (PRD CP-AUT-06/07).
+- **Lupa/atur ulang** (kedua portal, rute `/lupa`): tanpa query = minta tautan
+  (respons seragam); dengan `?token=` = buat kata sandi baru lewat
+  `POST /auth/password/reset` (token sekali pakai, seluruh sesi lama dicabut).
+- Bukti & keputusan: `docs/design/f1-10/HASIL.md`.
 
 ## Produksi
 

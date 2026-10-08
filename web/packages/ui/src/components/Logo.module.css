@@ -1,0 +1,38 @@
+/*
+ * Logo.module.css — aset branding resmi Grahita Indonesia.
+ *
+ * Berkas gambar di `../assets` adalah turunan LANGSUNG dari aset resmi yang
+ * diberikan pengguna (1254x1254 PNG beralfa):
+ *   logo-grahita-source.png    : aset asli apa adanya (sumber, tidak dipakai UI)
+ *   logo-grahita-lockup-320.png: potongan lambang + tulisan "GRAHITA INDONESIA",
+ *                                diperkecil ke lebar 320 px
+ *   logo-grahita-mark-128.png  : potongan lambang saja (kotak kuning + G),
+ *                                diperkecil ke 128 px
+ * Tidak ada warna yang diubah dan tidak ada elemen yang digambar ulang; hanya
+ * dipotong dan diperkecil dengan filter box (alpha premultiplied).
+ */
+
+.logo {
+  display: block;
+  flex: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.mark {
+  height: 30px;
+  width: auto;
+}
+
+.lockup {
+  height: 96px;
+  width: auto;
+  /* Tulisan pada lockup berwarna ungu gelap: selalu letakkan di permukaan
+     terang supaya tetap terbaca (latar kedua portal berbeda). */
+}
+
+@media (max-width: 600px) {
+  .lockup {
+    height: 76px;
+  }
+}

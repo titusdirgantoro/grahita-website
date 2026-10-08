@@ -27,6 +27,12 @@ export interface Sesi {
   peran: Role;
   masuk: (email: string, password: string) => Promise<void>;
   keluar: () => Promise<void>;
+  /**
+   * perbaruiPengguna menimpa sebagian data pengguna di sesi klien — dipakai
+   * setelah PUT /auth/me (ganti nama tampilan sendiri) supaya shell langsung
+   * menampilkan nama baru tanpa memuat ulang halaman.
+   */
+  perbaruiPengguna: (patch: Partial<Pengguna>) => void;
 }
 
 const SesiContext = createContext<Sesi | null>(null);
@@ -79,9 +85,13 @@ export function SessionProvider({
     setStatus("belum");
   }, []);
 
+  const perbaruiPengguna = useCallback((patch: Partial<Pengguna>) => {
+    setPengguna((lama) => (lama ? { ...lama, ...patch } : lama));
+  }, []);
+
   const nilai = useMemo<Sesi>(
-    () => ({ status, pengguna, peran: peranDari(pengguna?.role), masuk, keluar }),
-    [status, pengguna, masuk, keluar],
+    () => ({ status, pengguna, peran: peranDari(pengguna?.role), masuk, keluar, perbaruiPengguna }),
+    [status, pengguna, masuk, keluar, perbaruiPengguna],
   );
 
   return <SesiContext.Provider value={nilai}>{children}</SesiContext.Provider>;

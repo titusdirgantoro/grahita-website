@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { cn } from "../cn";
-import { Brand } from "./Brand";
+import { Logo } from "./Logo";
 import styles from "./AuthLayout.module.css";
 
 export interface AuthLayoutProps {
@@ -16,13 +16,21 @@ export interface AuthLayoutProps {
 /**
  * AuthLayout meniru blok "Auth" prototype (.auth/.auth-wrap/.auth-card).
  * Halaman masuk/daftar/lupa-password memakai layout ini, terpisah dari shell.
+ *
+ * Branding memakai aset resmi GRAHITA INDONESIA (lockup lengkap) dan diletakkan
+ * di atas kartu putih: latar halaman berbeda antar portal (portal cabang
+ * memakai brand-900 gelap, portal admin memakai canvas terang), sedangkan
+ * tulisan pada lockup berwarna ungu gelap — kartu putih membuatnya tetap
+ * terbaca di keduanya tanpa mengubah warna aset.
  */
 export function AuthLayout({ children, hint, steps, className }: AuthLayoutProps) {
   return (
     <div className={cn(styles.auth, className)}>
       <div className={styles.authWrap}>
         <div className={styles.authBrand}>
-          <Brand center />
+          <span className={styles.authChip}>
+            <Logo variant="lockup" alt="Grahita Indonesia" />
+          </span>
         </div>
         <div className={styles.authCard}>
           {steps ? (

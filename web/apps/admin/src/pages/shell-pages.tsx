@@ -1,21 +1,26 @@
-import { useState, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 
+import { ApiClientError, api } from "@grahita/api-client";
 import {
   Badge,
   Button,
   Card,
   CardHead,
+  ChangePasswordForm,
   Chip,
   EmptyState,
   Field,
   Form,
   Input,
+  Logo,
   Notice,
   PageHead,
   Segmented,
   Select,
   SkeletonList,
   Table,
+  labelPeran,
 } from "@grahita/ui";
 
 import { useSesi } from "../session";
@@ -338,41 +343,102 @@ export function ReportingPage() {
   );
 }
 
-/** pProfil (admin) — /profil: identitas + ganti password. */
+/**
+ * pProfil (admin) — /profil: identitas + ganti password (PRD §4.10).
+ *
+ * Sumber data adalah GET /auth/me lewat konteks sesi (nama, email, role).
+ * Nama bisa diubah pemiliknya sendiri lewat PUT /auth/me; EMAIL dan ROLE
+ * read-only — hanya Superadmin yang mengubahnya lewat user management, dan
+ * backend menolak field itu di endpoint profil (400) maupun untuk akun cabang
+ * (403).
+ */
 export function ProfilAdminPage() {
-  const { pengguna, peran } = useSesi();
+  const { pengguna, peran, perbaruiPengguna, keluar } = useSesi();
+  const navigate = useNavigate();
+  const [nama, setNama] = useState<string | null>(null);
+  const [galatNama, setGalatNama] = useState<string | null>(null);
+  const [suksesNama, setSuksesNama] = useState(false);
+  const [sibuk, setSibuk] = useState(false);
+
+  const nilaiNama = nama ?? pengguna?.nama ?? "";
+
+  async function simpanNama(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const baruNama = nilaiNama.trim();
+    if (baruNama.length < 2) {
+      setGalatNama("Nama minimal 2 karakter.");
+      setSuksesNama(false);
+      return;
+    }
+    setSibuk(true);
+    setGalatNama(null);
+    setSuksesNama(false);
+    try {
+      const hasil = await api.put<{ user: { id: string; nama: string; email: string; role: string } }>(
+        "/auth/me",
+        { nama: baruNama },
+      );
+      perbaruiPengguna({ nama: hasil.user.nama });
+      setNama(hasil.user.nama);
+      setSuksesNama(true);
+    } catch (err) {
+      setGalatNama(err instanceof ApiClientError ? err.message : "Gagal menyimpan nama.");
+    } finally {
+      setSibuk(false);
+    }
+  }
+
+  async function tindakKeluar() {
+    await keluar();
+    await navigate({ to: "/masuk", replace: true });
+  }
+
   return (
     <>
-      <PageHead title="Profil" sub="Identitas admin" />
+      <PageHead title="Profil" sub="Identitas akun admin" />
       <div className={styles.stack}>
         <Card>
-          <CardHead title="Akun" />
-          <Form>
+          <CardHead title="Akun" tools={<Logo variant="lockup" height={56} />} />
+          <Form onSubmit={(e) => void simpanNama(e)}>
+            {galatNama ? <Notice tone="danger">{galatNama}</Notice> : null}
+            {suksesNama ? <Notice tone="success">Nama profil tersimpan.</Notice> : null}
             <Field label="Nama" htmlFor="adm-nama">
-              <Input id="adm-nama" readOnly value={pengguna?.nama ?? ""} />
+              <Input
+                id="adm-nama"
+                value={nilaiNama}
+                onChange={(e) => setNama(e.target.value)}
+                autoComplete="name"
+              />
             </Field>
-            <Field label="Email" htmlFor="adm-email">
+            <Field label="Email (read-only)" htmlFor="adm-email" hint="Email login ditentukan Superadmin.">
               <Input id="adm-email" readOnly value={pengguna?.email ?? ""} />
             </Field>
-            <Field label="Peran" htmlFor="adm-peran">
-              <Input id="adm-peran" readOnly value={peran === "superadmin" ? "Superadmin" : "Manager"} />
+            <Field label="Role (read-only)" htmlFor="adm-peran" hint="Peran hanya diubah Superadmin di User management.">
+              <Input id="adm-peran" readOnly value={labelPeran(peran)} />
             </Field>
+            <div className={styles.row}>
+              <Button type="submit" variant="primary" disabled={sibuk}>
+                {sibuk ? "Menyimpan…" : "Simpan"}
+              </Button>
+              <Badge tone={peran === "superadmin" ? "rev" : "neutral"}>{labelPeran(peran)}</Badge>
+              <Button variant="ghost" icon="sign-out" onClick={() => void tindakKeluar()}>
+                Keluar
+              </Button>
+            </div>
           </Form>
         </Card>
         <Card>
           <CardHead title="Ganti password" />
-          <Form>
-            <Field label="Password lama" htmlFor="adm-p1">
-              <Input id="adm-p1" type="password" autoComplete="current-password" />
-            </Field>
-            <Field label="Password baru" htmlFor="adm-p2" hint="Minimal 8 karakter.">
-              <Input id="adm-p2" type="password" autoComplete="new-password" />
-            </Field>
-            <Field label="Konfirmasi password baru" htmlFor="adm-p3">
-              <Input id="adm-p3" type="password" autoComplete="new-password" />
-            </Field>
-            <Button variant="primary">Simpan password</Button>
-          </Form>
+          <ChangePasswordForm
+            idPrefix="adm"
+            catatan="Setelah kata sandi berubah, seluruh sesi di perangkat lain ikut diakhiri."
+            onSubmit={async (passwordLama, passwordBaru) => {
+              await api.post("/auth/password/change", {
+                password_lama: passwordLama,
+                password_baru: passwordBaru,
+              });
+            }}
+          />
         </Card>
       </div>
     </>

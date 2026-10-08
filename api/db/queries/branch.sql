@@ -1,8 +1,10 @@
 -- Master cabang (SystemDesign §6, PRD §4.4).
 
 -- name: GetBranch :one
--- Dipakai portal cabang untuk /me/branch (data cabang milik sesi).
-SELECT id, nama, nama_kepala, email::text AS email, telepon,
+-- Dipakai portal cabang untuk /me/branch (data cabang milik sesi). `telepon`
+-- selalu dikembalikan sebagai string (kosong bila belum diisi) supaya bentuk
+-- respons profil cabang stabil untuk UI (PRD §3.8).
+SELECT id, nama, nama_kepala, email::text AS email, COALESCE(telepon, '') AS telepon,
        is_cnc, is_special, pajak_in, is_active
   FROM branches
  WHERE id = $1;

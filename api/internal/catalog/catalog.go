@@ -93,7 +93,7 @@ type Branch struct {
 	Nama       string `json:"nama"`
 	NamaKepala string `json:"nama_kepala"`
 	Email      string `json:"email"`
-	Telepon    string `json:"telepon,omitempty"`
+	Telepon    string `json:"telepon"`
 	IsCNC      bool   `json:"is_cnc"`
 	IsSpecial  bool   `json:"is_special"`
 	PajakIn    bool   `json:"pajak_in"`

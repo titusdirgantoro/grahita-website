@@ -1,8 +1,17 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
-import { ApiClientError } from "@grahita/api-client";
-import { AuthLayout, AuthLinks, Button, Field, Form, Input, Notice } from "@grahita/ui";
+import { ApiClientError, api } from "@grahita/api-client";
+import {
+  AuthLayout,
+  AuthLinks,
+  Button,
+  Field,
+  Form,
+  Input,
+  Notice,
+  PasswordResetPage,
+} from "@grahita/ui";
 
 import { useSesi } from "../session";
 
@@ -139,37 +148,26 @@ export function HalamanDaftar() {
   );
 }
 
-/** pLupa — /lupa: respons selalu sukses (tidak membocorkan keberadaan email). */
-export function HalamanLupa() {
-  const [terkirim, setTerkirim] = useState(false);
-
-  function kirim(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setTerkirim(true);
-  }
-
+/**
+ * pLupa — /lupa: satu rute untuk DUA keadaan (PRD §3.2 CP-AUT-03/04).
+ *
+ *  - tanpa `?token=`: minta tautan atur ulang; respons backend selalu sama
+ *    (tidak membocorkan keberadaan email);
+ *  - dengan `?token=…` (tautan dari email): buat kata sandi baru; token sekali
+ *    pakai dan seluruh sesi lama dicabut setelah berhasil (CP-AUT-07).
+ */
+export function HalamanLupa({ token }: { token?: string }) {
   return (
-    <AuthLayout>
-      <Form onSubmit={kirim}>
-        <div>
-          <h1>Lupa password</h1>
-          <p className="muted">Kami kirim tautan membuat password baru ke email cabang.</p>
-        </div>
-        {terkirim ? (
-          <Notice tone="success">
-            Bila email terdaftar, tautan reset sudah dikirim. Periksa kotak masuk cabang.
-          </Notice>
-        ) : null}
-        <Field label="Email cabang" htmlFor="le">
-          <Input id="le" type="email" autoComplete="username" required />
-        </Field>
-        <Button type="submit" variant="primary" block>
-          Kirim tautan reset
-        </Button>
-        <AuthLinks>
-          <Link to="/masuk">Kembali ke halaman masuk</Link>
-        </AuthLinks>
-      </Form>
-    </AuthLayout>
+    <PasswordResetPage
+      token={token}
+      namaPortal="portal cabang"
+      onKirimTautan={async (email) => {
+        await api.post("/auth/password/forgot", { email });
+      }}
+      onSimpanKataSandi={async (tokenReset, password) => {
+        await api.post("/auth/password/reset", { token: tokenReset, password });
+      }}
+      tautanMasuk={<Link to="/masuk">Kembali ke halaman masuk</Link>}
+    />
   );
 }

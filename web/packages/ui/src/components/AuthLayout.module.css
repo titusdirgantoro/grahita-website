@@ -12,14 +12,23 @@
 }
 
 .authBrand {
-  color: #fff;
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  font-size: 18px;
-  letter-spacing: -0.01em;
   justify-content: center;
+}
+
+/*
+ * Kartu putih di belakang lockup: memastikan tulisan ungu pada aset resmi
+ * tetap terbaca di latar gelap (portal cabang) maupun terang (portal admin).
+ */
+.authChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 22px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 24px;
 }
 
 .authCard {
@@ -73,6 +82,13 @@
 
 .hint {
   font-size: 12px;
-  color: rgb(255 255 255 / 0.6);
+  /* Latar halaman berbeda antar portal: portal cabang brand-900 (gelap),
+     portal admin canvas terang. Warna hint ikut menyesuaikan supaya tetap
+     terbaca di keduanya. */
+  color: rgb(255 255 255 / 0.72);
   text-align: center;
+}
+
+:global(:root[data-portal="admin"]) .hint {
+  color: var(--text-muted);
 }

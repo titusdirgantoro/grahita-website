@@ -49,6 +49,10 @@ type UserStore interface {
 	// admin hasil undangan. Keduanya wajib terisi bersamaan: aturan
 	// boleh_login di SQL menolak akun yang salah satunya NULL.
 	ActivateAdmin(ctx context.Context, id, passwordHash string) error
+	// UpdateName menyimpan nama tampilan baru untuk satu akun admin. Akun
+	// cabang tidak punya nama sendiri (namanya dari master cabang), jadi
+	// implementasinya menolak KindBranch.
+	UpdateName(ctx context.Context, kind Kind, id, nama string) error
 }
 
 // Service menyatukan login, pemuatan aktor dari sesi, logout, dan siklus

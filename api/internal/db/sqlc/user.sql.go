@@ -619,6 +619,26 @@ func (q *Queries) TouchBranchLogin(ctx context.Context, id string) error {
 	return err
 }
 
+const updateAdminNama = `-- name: UpdateAdminNama :exec
+UPDATE admin_users
+   SET nama = $2,
+       updated_at = now()
+ WHERE id = $1
+`
+
+type UpdateAdminNamaParams struct {
+	ID   string `json:"id"`
+	Nama string `json:"nama"`
+}
+
+// Profil sendiri (PRD §4.10): admin mengubah NAMA TAMPILANNYA. Email dan role
+// tidak pernah diubah di sini — keduanya read-only dan hanya Superadmin yang
+// boleh mengubahnya lewat user management (PUT /admin/users/admin/{id}).
+func (q *Queries) UpdateAdminNama(ctx context.Context, arg UpdateAdminNamaParams) error {
+	_, err := q.db.Exec(ctx, updateAdminNama, arg.ID, arg.Nama)
+	return err
+}
+
 const updateAdminPassword = `-- name: UpdateAdminPassword :exec
 UPDATE admin_users SET password_hash = $2, updated_at = now() WHERE id = $1
 `

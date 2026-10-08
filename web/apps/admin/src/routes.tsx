@@ -13,7 +13,7 @@ import { AdminShell, Button, Segmented, SkeletonList, type ShellLinkProps } from
 
 import { SessionProvider, useSesi } from "./session";
 import { NAV_ADMIN } from "./nav";
-import { HalamanMasuk } from "./pages/auth";
+import { HalamanLupa, HalamanMasuk } from "./pages/auth";
 import {
   CabangPage,
   DashboardPage,
@@ -102,6 +102,22 @@ const rootRoute = createRootRoute({
 });
 
 const masukRoute = createRoute({ getParentRoute: () => rootRoute, path: "/masuk", component: HalamanMasuk });
+/**
+ * /lupa adalah jalur pemulihan akun admin: minta tautan (tanpa query) atau
+ * membuat kata sandi baru dari tautan email (`?token=…`). Rutenya harus ada di
+ * host admin supaya tautan PASSWORD_RESET_PATH tidak menyeberang subdomain.
+ */
+const lupaRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/lupa",
+  validateSearch: (search: Record<string, unknown>): { token?: string } => ({
+    token: typeof search.token === "string" ? search.token : undefined,
+  }),
+  component: function HalamanLupaRoute() {
+    const { token } = lupaRoute.useSearch();
+    return <HalamanLupa token={token} />;
+  },
+});
 const gayaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gaya", component: GayaPage });
 
 const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "shell", component: ShellLayout });
@@ -117,6 +133,7 @@ const profilRoute = createRoute({ getParentRoute: () => shellRoute, path: "/prof
 
 const routeTree = rootRoute.addChildren([
   masukRoute,
+  lupaRoute,
   gayaRoute,
   shellRoute.addChildren([
     dashboardRoute,

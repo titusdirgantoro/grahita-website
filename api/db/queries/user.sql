@@ -55,6 +55,15 @@ UPDATE admin_users
        updated_at    = now()
  WHERE id = $1;
 
+-- name: UpdateAdminNama :exec
+-- Profil sendiri (PRD §4.10): admin mengubah NAMA TAMPILANNYA. Email dan role
+-- tidak pernah diubah di sini — keduanya read-only dan hanya Superadmin yang
+-- boleh mengubahnya lewat user management (PUT /admin/users/admin/{id}).
+UPDATE admin_users
+   SET nama = $2,
+       updated_at = now()
+ WHERE id = $1;
+
 -- ---------- User management (PRD §4.8) ----------
 
 -- name: ListBranchAccountRows :many
