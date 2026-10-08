@@ -426,6 +426,167 @@ func TestKegagalanRenderTidakMenyisakanApaPun(t *testing.T) {
 	})
 }
 
+// storeGerbang menahan SaveAll (lihat repoBalapanNyata) sampai sejumlah
+// penulisan objek terjadi, supaya dua permintaan paralel benar-benar MELEWATI
+// jalur render+Put lebih dulu dan balapannya terjadi di titik penyimpanan
+// metadata — bukan salah satu pulang sebelum sempat merender.
+type storeGerbang struct {
+	*storeHitung
+	mu     sync.Mutex
+	n      int
+	batas  int
+	siap   chan struct{}
+	sekali sync.Once
+}
+
+func newStoreGerbang(batas int) *storeGerbang {
+	return &storeGerbang{storeHitung: newStoreHitung(), batas: batas, siap: make(chan struct{})}
+}
+
+func (g *storeGerbang) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if err := g.storeHitung.Put(ctx, key, body, size, contentType); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	g.n++
+	penuh := g.n >= g.batas
+	g.mu.Unlock()
+	if penuh {
+		g.sekali.Do(func() { close(g.siap) })
+	}
+	return nil
+}
+
+// repoBalapanNyata meniru dua permintaan render PARALEL atas dokumen yang sama:
+// panggilan SaveAll pertama commit barisnya, panggilan berikutnya GAGAL setelah
+// baris itu terlihat (mis. pool acquire timeout / error Commit dengan ctx masih
+// hidup) — persis skenario yang dilaporkan QA pada f7d035b.
+type repoBalapanNyata struct {
+	*Memory
+	siap    <-chan struct{}
+	mu      sync.Mutex
+	panggil int
+}
+
+func (r *repoBalapanNyata) SaveAll(ctx context.Context, req SaveRequest) ([]Document, error) {
+	select {
+	case <-r.siap:
+	case <-time.After(30 * time.Second):
+		return nil, errors.New("uji buntu: gerbang balapan tidak pernah terbuka")
+	}
+	r.mu.Lock()
+	r.panggil++
+	ke := r.panggil
+	r.mu.Unlock()
+	if ke > 1 {
+		return nil, errors.New("simulasi: SaveAll gagal setelah pesaing commit")
+	}
+	return r.Memory.SaveAll(ctx, req)
+}
+
+// TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain adalah uji regresi
+// temuan pemblokir QA F1-17: kunci storage deterministik dipakai bersama, jadi
+// permintaan yang SaveAll-nya gagal TIDAK boleh menghapus objek yang sudah
+// dirujuk baris `documents` milik permintaan lain yang lebih dulu commit.
+// Kalau dihapus, pesanan kehilangan Invoice/Surat Jalan secara permanen karena
+// render ulang menganggap barisnya sudah ada.
+func TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemory()
+	repo.SetOrder(fixtureOrder(orderA))
+	store := newStoreGerbang(6) // 2 permintaan x 3 dokumen
+	svc := NewService(&repoBalapanNyata{Memory: repo, siap: store.siap}, store, &rendererPalsu{})
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Ensure(ctx, orderA)
+		}(i)
+	}
+	wg.Wait()
+
+	gagal := 0
+	for _, err := range errs {
+		if err != nil {
+			gagal++
+		}
+	}
+	if gagal != 1 {
+		t.Fatalf("harus tepat satu permintaan gagal, dapat %d (errs=%v)", gagal, errs)
+	}
+
+	rows, err := repo.ListByOrder(ctx, orderA)
+	if err != nil {
+		t.Fatalf("ListByOrder: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("harus 3 baris dokumen, dapat %d", len(rows))
+	}
+	if store.hapus != 0 {
+		t.Errorf("permintaan yang gagal tidak boleh menghapus berkas milik baris yang sah: %d penghapusan", store.hapus)
+	}
+	for _, d := range rows {
+		if _, err := store.Get(ctx, d.StorageKey); err != nil {
+			t.Errorf("baris %s kehilangan berkasnya di storage: %v", d.Jenis, err)
+		}
+	}
+
+	// Render ulang tidak menyembuhkan berkas yang hilang, jadi yang dijaga di
+	// sini adalah keadaan akhirnya: setiap baris punya berkas DAN tautan unduh
+	// masih menunjuk objek yang ada.
+	docs, err := svc.Ensure(ctx, orderA)
+	if err != nil {
+		t.Fatalf("Ensure ulang: %v", err)
+	}
+	if len(docs) != 3 || store.jumlahPut() != 6 {
+		t.Errorf("Ensure ulang harus memakai baris yang ada tanpa merender ulang (docs=%d put=%d)", len(docs), store.jumlahPut())
+	}
+	for _, d := range docs {
+		dl, err := svc.DownloadURL(ctx, actorAdmin(), d.ID)
+		if err != nil {
+			t.Fatalf("unduh %s: %v", d.Jenis, err)
+		}
+		if !strings.Contains(dl.URL, d.StorageKey) {
+			t.Errorf("tautan unduh %s tidak menunjuk objeknya: %q", d.Jenis, dl.URL)
+		}
+	}
+}
+
+// TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan menjaga sisi lain
+// aturan pembersihan: bila memang tidak ada baris yang menunjuk objeknya (tidak
+// ada balapan), objek yang terlanjur ditulis tetap dibuang supaya storage tidak
+// menyimpan salinan yatim.
+func TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemory()
+	repo.SetOrder(fixtureOrder(orderA))
+	repo.GagalUntuk = orderA
+	store := newStoreHitung()
+	svc := NewService(repo, store, &rendererPalsu{})
+
+	if _, err := svc.Ensure(ctx, orderA); err == nil {
+		t.Fatal("harus gagal saat metadata tidak bisa disimpan")
+	}
+	if repo.JumlahDokumen() != 0 {
+		t.Fatalf("tidak boleh ada baris dokumen, dapat %d", repo.JumlahDokumen())
+	}
+	if store.hapus != 3 {
+		t.Errorf("berkas tanpa rujukan harus dibuang, dapat %d penghapusan", store.hapus)
+	}
+	for _, k := range []string{
+		StorageKey(orderA, JenisInvoicePDF, 0),
+		StorageKey(orderA, JenisSuratJalanXLSX, 0),
+		StorageKey(orderA, JenisSuratJalanPDF, 0),
+	} {
+		if _, err := store.Get(ctx, k); err == nil {
+			t.Errorf("objek %s seharusnya sudah dibuang", k)
+		}
+	}
+}
+
 // TestOtorisasiDaftarDanUnduh menegakkan isolasi cabang dan pembagian peran:
 // akun cabang hanya invoice pesanannya sendiri; staf Pusat boleh semuanya.
 func TestOtorisasiDaftarDanUnduh(t *testing.T) {

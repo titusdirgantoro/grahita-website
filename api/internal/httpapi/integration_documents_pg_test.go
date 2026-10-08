@@ -12,10 +12,12 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/document"
+	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 )
 
@@ -502,6 +505,86 @@ func TestPGDokumenRekeningNonAktifTidakTercetak(t *testing.T) {
 	}
 	if got := string(f.isiBerkas(t, document.StorageKey(pesanan.ID, "invoice_pdf", 0))); got != invoice {
 		t.Error("dokumen versi yang sudah ada tidak boleh dirender ulang")
+	}
+}
+
+// repoBalapanPG membungkus repository dokumen PostgreSQL nyata untuk meniru
+// balapan dua permintaan render atas dokumen yang sama: panggilan SaveAll
+// PERTAMA lebih dulu benar-benar commit barisnya (seolah permintaan pesaing
+// menang balapan), lalu mengembalikan kegagalan — persis keadaan yang membuat
+// permintaan ini menjalankan pembersihan objek. Panggilan berikutnya diteruskan
+// ke repository asli.
+type repoBalapanPG struct {
+	*documentpg.Repo
+	mu      sync.Mutex
+	panggil int
+}
+
+func (r *repoBalapanPG) SaveAll(ctx context.Context, req document.SaveRequest) ([]document.Document, error) {
+	r.mu.Lock()
+	r.panggil++
+	ke := r.panggil
+	r.mu.Unlock()
+	if ke == 1 {
+		if _, err := r.Repo.SaveAll(ctx, req); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("simulasi: SaveAll gagal setelah pesaing commit")
+	}
+	return r.Repo.SaveAll(ctx, req)
+}
+
+// TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain adalah uji regresi
+// HTTP + PostgreSQL nyata untuk temuan pemblokir QA F1-17: bila SaveAll gagal
+// setelah baris (order_id, jenis, versi) ter-commit, objek storage yang sudah
+// dirujuk baris itu TIDAK boleh dihapus — kalau dihapus, Invoice/Surat Jalan
+// pesanan hilang permanen dari sisi unduhan dan render ulang tidak
+// menyembuhkannya (barisnya dianggap sudah ada).
+func TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	pesanan := f.seedPesananDone(t, f.branchA, "2026-10-0009", false)
+
+	deps := f.deps
+	deps.Documents = document.NewService(&repoBalapanPG{Repo: f.docRepo}, f.objek, rendererUji{})
+	srv := httptest.NewServer(NewRouter(deps))
+	t.Cleanup(srv.Close)
+
+	sa, csrfSA := pgLogin(t, srv, "rina@example.test", "rahasia123")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+		srv.URL+"/api/v1/admin/orders/"+pesanan.ID+"/documents", "", sa, csrfSA)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("SaveAll yang gagal harus dijawab 500, dapat %d (%v)", status, body)
+	}
+
+	rows := f.barisDokumen(t, pesanan.ID)
+	if len(rows) != 3 {
+		t.Fatalf("baris dokumen yang sudah commit harus tetap ada (3), dapat %d", len(rows))
+	}
+	for _, d := range rows {
+		if _, err := f.objek.Get(ctx, d.StorageKey); err != nil {
+			t.Errorf("baris %s kehilangan berkasnya di storage: %v", d.Jenis, err)
+		}
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+			srv.URL+"/api/v1/documents/"+d.ID+"/download", "", sa, "")
+		if status != http.StatusOK {
+			t.Fatalf("unduh %s harus 200 karena objeknya masih ada, dapat %d (%v)", d.Jenis, status, body)
+		}
+		dl := dataMap(t, body)
+		if url, _ := dl["url"].(string); !strings.Contains(url, d.StorageKey) {
+			t.Errorf("tautan unduh %s tidak menunjuk objeknya: %q", d.Jenis, url)
+		}
+	}
+
+	// Permintaan berikutnya menemukan baris yang sudah ada: idempoten 200 tanpa
+	// merender ulang dan tanpa menggandakan baris.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost,
+		srv.URL+"/api/v1/admin/orders/"+pesanan.ID+"/documents", "", sa, csrfSA)
+	if status != http.StatusOK {
+		t.Fatalf("generate ulang harus 200, dapat %d (%v)", status, body)
+	}
+	if len(f.barisDokumen(t, pesanan.ID)) != 3 {
+		t.Error("generate ulang tidak boleh menggandakan baris dokumen")
 	}
 }
 

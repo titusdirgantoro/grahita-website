@@ -2,6 +2,7 @@ package document
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -219,6 +220,26 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	}
 	if !panes.Freeze || panes.YSplit != rowHeader {
 		t.Errorf("header tidak dibekukan: %+v", panes)
+	}
+
+	// Area cetak berhenti di baris data TERAKHIR — bukan satu baris setelahnya,
+	// supaya tidak ada baris kosong yang ikut tercetak.
+	mauName := map[string]string{
+		"_xlnm.Print_Area":   fmt.Sprintf("'%s'!$A$1:$E$%d", sheet, rowAwal+len(mauBaris)-1),
+		"_xlnm.Print_Titles": fmt.Sprintf("'%s'!$%d:$%d", sheet, rowHeader, rowHeader),
+	}
+	for _, dn := range f.GetDefinedName() {
+		mau, ok := mauName[dn.Name]
+		if !ok {
+			continue
+		}
+		if dn.RefersTo != mau {
+			t.Errorf("%s = %q, mau %q", dn.Name, dn.RefersTo, mau)
+		}
+		delete(mauName, dn.Name)
+	}
+	if len(mauName) > 0 {
+		t.Errorf("defined name cetak tidak ditemukan: %v", mauName)
 	}
 }
 

@@ -198,7 +198,6 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 
 	// Siap cetak: A4 tegak, muat satu halaman ke samping, header tabel
 	// diulang, area cetak sebatas isi.
-	lebarBaris := len(o.Lines)
 	if err := f.SetPageLayout(SheetSuratJalan, &excelize.PageLayoutOptions{
 		Size:        intPtr(9), // 9 = A4 (210 mm x 297 mm)
 		Orientation: strPtr("portrait"),
@@ -222,7 +221,7 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 	if err := f.SetDefinedName(&excelize.DefinedName{
 		Name:     "_xlnm.Print_Area",
 		Scope:    SheetSuratJalan,
-		RefersTo: fmt.Sprintf("'%s'!$A$1:$E$%d", SheetSuratJalan, lebarBaris+rowAwal),
+		RefersTo: fmt.Sprintf("'%s'!$A$1:$E$%d", SheetSuratJalan, rowDataTerakhir(len(o.Lines))),
 	}); err != nil {
 		return nil, fmt.Errorf("area cetak: %w", err)
 	}
@@ -255,6 +254,16 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 		return nil, fmt.Errorf("tulis berkas xlsx: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// rowDataTerakhir adalah nomor baris data terakhir pada sheet Surat Jalan.
+// Area cetak harus berhenti di sini, bukan satu baris setelahnya, supaya tidak
+// ada baris kosong ikut tercetak.
+func rowDataTerakhir(jumlahBaris int) int {
+	if jumlahBaris < 1 {
+		return rowHeader
+	}
+	return rowAwal + jumlahBaris - 1
 }
 
 // tepiTabel adalah garis tipis keliling sel tabel.

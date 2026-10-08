@@ -51,13 +51,40 @@ Yang dihasilkan satu pesanan Done (SystemDesign.md §4.4): **Invoice PDF**,
    `TestPGDokumenVersiBaruTidakMenimpaBerkasLama` (4 baris = 3 versi 0 + 1
    versi 1, berkas v0 byte-identik sebelum/sesudah, `Ensure` penuh setelahnya
    menjadi 6 baris tanpa menyentuh v0).
-4. **SATU permintaan render = SATU unit kerja.** Seluruh isi dirender lebih
-   dahulu di memori, baru ditulis ke object storage, lalu **seluruh** baris
-   `documents` disimpan dalam satu transaksi. Kegagalan di manapun membuang
-   objek yang sudah ditulis, jadi tidak ada berkas yatim maupun dokumen separuh
-   jadi. Bukti: `TestKegagalanRenderTidakMenyisakanApaPun` (3 skenario: mesin PDF
-   mati, gagal tulis storage pada berkas ke-2, gagal simpan metadata) dan
+4. **SATU permintaan render = SATU unit kerja DI SISI DATABASE.** Seluruh isi
+   dirender lebih dahulu di memori, baru ditulis ke object storage, lalu
+   **seluruh** baris `documents` disimpan dalam satu transaksi. Batas yang
+   ditegaskan (koreksi putaran QA-1): (a) atomisitas itu **hanya** berlaku untuk
+   tabel `documents` — penulisan objek TIDAK berada di dalam transaksi DB, jadi
+   tidak ada klaim atomisitas lintas DB↔object storage; (b) jaminan "tanpa
+   berkas yatim / dokumen separuh jadi" **hanya terbukti untuk satu permintaan
+   tanpa balapan**; (c) bukti storage memakai `storage.Memory`, bukan
+   S3/MinIO nyata, dan PDF berasal dari Chromium lokal (lihat butir 5).
+   Bukti: `TestKegagalanRenderTidakMenyisakanApaPun` (3 skenario: mesin PDF
+   mati, gagal tulis storage pada berkas ke-2, gagal simpan metadata),
+   `TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan`, dan
    `TestPGDokumenRendererTidakSiapMenjawab503` lewat HTTP.
+4b. **Pembersihan objek saat gagal diverifikasi terhadap baris `documents`.**
+   Kunci storage deterministik per (order, jenis, versi) DIPAKAI BERSAMA semua
+   permintaan render dokumen yang sama, sehingga permintaan yang gagal bisa
+   menulis kunci yang sudah dipegang baris milik permintaan lain yang lebih dulu
+   commit. Karena itu `renderDanSimpan` tidak pernah menghapus buta lagi: pada
+   kegagalan ia memanggil `hapusObjekTanpaRujukan`, yang (i) membaca ulang baris
+   `documents` lebih dulu, (ii) hanya menghapus kunci yang tidak dirujuk baris
+   mana pun, dan (iii) bila pembacaan verifikasi itu gagal, TIDAK menghapus
+   apa pun (objek yatim lebih ringan daripada baris tanpa berkas) serta mencatat
+   peringatan. Sisi lain tetap dijaga: bila tidak ada baris yang menunjuk
+   objeknya, objek yang terlanjur ditulis tetap dibuang. Sisa jalur sukses juga
+   dicek per kunci (bukan per indeks) supaya urutan kembalian repository tidak
+   bisa menghapus kunci yang salah. Bukti regresi (gagal pada `f7d035b`,
+   lulus setelah perbaikan):
+   `TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain` (2 render paralel,
+   `SaveAll` satu permintaan digagalkan setelah yang lain commit → 3 baris, 3
+   objek utuh, 0 penghapusan, `GET /documents/{id}/download` tetap menunjuk
+   objek yang ada) dan `TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain`
+   (HTTP + PostgreSQL nyata: 500 pada generate, 3 baris tetap ada, ketiga
+   unduhan 200). Bukti lama: pesanan benar-benar kehilangan ketiga berkas dan
+   unduhan dijawab 503.
 5. **Renderer tetap Gotenberg (SystemDesign.md §8), dan template diuji sampai
    PDF nyata.** Invoice/surat jalan PDF lewat `platform/pdf.Renderer`
    (`GOTENBERG_URL`); XLSX lewat `excelize`. Karena Gotenberg di Docker tidak
@@ -79,10 +106,14 @@ Yang dihasilkan satu pesanan Done (SystemDesign.md §4.4): **Invoice PDF**,
    `line_no`; serial apa adanya (`-` untuk baris packaging yang memang tidak
    berserial); A4 tegak, `FitToWidth=1`, header tabel diulang saat cetak
    (`_xlnm.Print_Titles`), header dibekukan saat dilihat, area cetak sebatas
-   isi. PDF surat jalan memakai data dan kolom yang sama supaya kedua berkas
-   konsisten. Bukti: `TestSuratJalanXLSXSatuBarisPerLine` (berkas dibuka ulang
-   dengan excelize: A1/A2 kop, B3 nomor, E3 tanggal, header baris 8, tiga baris
-   data termasuk packaging, layout & panes).
+   isi. Perbaikan putaran 2 (saran QA-1): `_xlnm.Print_Area` kini berhenti di
+   baris data TERAKHIR (`$A$1:$E$<rowAwal+baris-1>`, mis. `$E$10` untuk dua
+   baris), bukan satu baris setelahnya, sehingga tidak ada baris kosong yang
+   ikut tercetak. PDF surat jalan memakai data dan kolom yang sama supaya kedua
+   berkas konsisten. Bukti: `TestSuratJalanXLSXSatuBarisPerLine` (berkas dibuka
+   ulang dengan excelize: A1/A2 kop, B3 nomor, E3 tanggal, header baris 8, tiga
+   baris data termasuk packaging, layout/panes, serta `_xlnm.Print_Area` dan
+   `_xlnm.Print_Titles` yang benar).
 8. **Akses dokumen selalu lewat presigned URL berumur pendek.** Kunci storage
    tidak pernah keluar dari service (`json:"-"`) dan tidak pernah dikirim ke
    klien; unduhan memakai `PresignDownload` (nama berkas benar, paksa
@@ -172,41 +203,58 @@ Yang dihasilkan satu pesanan Done (SystemDesign.md §4.4): **Invoice PDF**,
 ## Bukti verifikasi
 
 Gerbang (cwd `api/`, toolchain Go `go1.27.0`, sqlc `v1.31.1`, PostgreSQL 16.15
-di 127.0.0.1:5455 + `scripts/pg-dev-shim.sql`):
+di 127.0.0.1:5455 + `scripts/pg-dev-shim.sql` dipasang di skema `public`):
 
 ```
-gofmt -l .                                   # kosong
+gofmt -l api                                 # kosong
 go vet ./...                                 # exit 0
 go build ./...                               # exit 0
-sqlc-v1.31.1 generate                        # tanpa diff (hanya berkas baru F1-17)
+sqlc-v1.31.1 generate                        # 0 diff (sha256 berkas sqlc sebelum==sesudah)
 ./scripts/check-secrets.sh                   # exit 0 — tidak ada rahasia
 redocly lint openapi/openapi.yaml            # valid, 10 warning gaya lama (sama seperti sebelumnya)
-TEST_DATABASE_URL=…/grahita_f117  go test -race -p 1 -count=1 ./...
-npm run typecheck (web)                      # exit 0
-npm test (web)                               # seluruh workspace lulus
+TEST_DATABASE_URL=…/grahita_f117r2  go test -race -p 1 -count=1 ./...
+go test -race -count=2 -run 'Dokumen|PDFNyata|KegagalanSimpanMetadata' ./internal/document/ ./internal/httpapi/
+npm run typecheck (web)                      # exit 0 — putaran 1, tak ada berkas web yang diubah di putaran 2
+npm test (web)                               # 167 uji lulus — putaran 1, tak ada berkas web yang diubah di putaran 2
 ```
 
-Hasil nyata suite penuh (`go test -race -p 1 -count=1 ./...`, DB
-`grahita_f117`, log `cache/scratch/f117-full.log`, dijalankan setelah `go mod
-tidy` menambahkan `excelize` sebagai dependensi langsung): **18 paket `ok`,
-0 FAIL, 0 SKIP, exit=0** (`httpapi` 109,5 s; `auth` 32,5 s; `document` 2,8 s).
+Hasil nyata suite penuh putaran 2 (`go test -race -p 1 -count=1 ./...`, DB
+`grahita_f117r2` + shim, log `cache/scratch/f117-r2-suite-bersih.log`):
+**18 paket `ok`, 0 FAIL, 0 SKIP, exit=0** (`httpapi` 309,8 s; `auth` 31,7 s;
+`document` 2,5 s). Uji fokus dokumen diulang `-count=2` (anti-flake): lulus
+(`internal/document` 1,9 s; `internal/httpapi` 64,2 s).
+
+Putaran 2 (perbaikan temuan QA-1) juga membuktikan uji regresinya MENGANGGU:
+pada salinan bersih `f7d035b` (worktree sementara, lalu dihapus) uji unit
+`TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain` GAGAL (3 penghapusan,
+ketiga berkas hilang, unduhan 503) dan uji HTTP+PG
+`TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain` GAGAL (unduhan 503);
+keduanya lulus pada revisi perbaikan — log
+`cache/scratch/f117-bukti-regresi-lama.txt`.
 
 Uji yang ditambahkan kartu ini:
 
-- `internal/document` (unit, tanpa DB): 18 uji — format Rupiah/tanggal, kunci
+- `internal/document` (unit, tanpa DB): 20 uji — format Rupiah/tanggal, kunci
   storage & nama berkas, render 3 dokumen + kunci, idempotensi & berkas tidak
   tertimpa, versi baru memakai kunci baru, pesanan belum Done ditolak,
-  tiga skenario kegagalan tanpa sisa berkas/baris (3 sub-uji), otorisasi daftar
-  & unduh (termasuk surat jalan 404 untuk cabang), `Generate` butuh
+  tiga skenario kegagalan tanpa sisa berkas/baris (3 sub-uji), **regresi
+  pembersihan objek pada balapan
+  (`TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain`, 2 render paralel)
+  dan pasangannya yang memastikan berkas tanpa rujukan tetap dibuang
+  (`TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan`)**, otorisasi
+  daftar & unduh (termasuk surat jalan 404 untuk cabang), `Generate` butuh
   CapAdminOrders, hasil render kosong ditolak, snapshot kurang ditolak; plus uji
   isi HTML & XLSX (escape, penanda C&C/LUNAS, header kolom, satu baris per line,
-  layout cetak, panes).
-- `internal/httpapi` (integrasi PostgreSQL nyata, skema bersih per uji): 7 uji —
+  layout cetak, panes, area cetak `_xlnm.Print_Area`).
+- `internal/httpapi` (integrasi PostgreSQL nyata, skema bersih per uji): 8 uji —
   `TestPGDokumenGenerateIdempotenDanIsolasi` (3 berkas + kunci + isi cocok
   snapshot + idempoten + isolasi cabang + unduhan per peran),
   `TestPGDokumenPesananBelumDone`, `TestPGDokumenVersiBaruTidakMenimpaBerkasLama`,
   `TestPGDokumenRekeningNonAktifTidakTercetak`,
   `TestPGDokumenRendererTidakSiapMenjawab503`,
+  **`TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain` (regresi temuan
+  QA: SaveAll gagal setelah baris commit → 500, 3 baris tetap ada, ketiga
+  unduhan 200)**,
   `TestPGDokumenPDFNyataMelaluiChromium` (PDF sungguhan dari Chromium lokal
   lewat klien Gotenberg + XLSX dibuka excelize), dan
   `TestChromeTersediaUntukUjiPDF` (penanda ketersediaan Chromium).
@@ -233,7 +281,16 @@ Uji yang ditambahkan kartu ini:
   sini supaya tidak menebak bentuk antrean F2-26.
 - Bila berkas di object storage hilang (tanpa baris DB yang hilang), render
   ulang tidak akan memperbaikinya karena barisnya sudah ada — rekonsiliasi
-  DB↔objek adalah lingkup F1-21 (backup/restore).
+  DB↔objek adalah lingkup F1-21 (backup/restore). Ini juga menutup sisa celah
+  putaran 2: verifikasi rujukan (`hapusObjekTanpaRujukan`) menutup kasus baris
+  pesaing yang sudah commit SEBELUM pembersihan, sementara celah teoretis
+  sub-milidetik — pesaing commit di antara pembacaan rujukan dan penghapusan —
+  tetap ada dan hanya bisa merusak berkas lewat balapan itu; rekonsiliasinya
+  milik F1-21, bukan render ulang.
+- Gagal di jalur verifikasi rujukan (mis. DB sedang tidak bisa dibaca) tidak
+  pernah menghapus objek: objek yatim dibiarkan dan dicatat lewat `slog.Warn`.
+  Jadi ada kemungkinan objek yatim di storage, tanpa pernah ada baris
+  `documents` tanpa berkas akibat jalur ini.
 
 ## Kewajiban untuk kartu turunan
 
