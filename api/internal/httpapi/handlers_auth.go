@@ -58,12 +58,7 @@ type changePasswordRequest struct {
 	PasswordBaru string `json:"password_baru" validate:"required,min=8,max=200"`
 }
 
-// updateSettingRequest adalah body PUT /api/v1/admin/settings.
-type updateSettingRequest struct {
-	Key   string `json:"key" validate:"required,max=64"`
-	Value any    `json:"value" validate:"required"`
-}
-
+// requestMeta merangkum metadata request untuk entri audit pengguna.
 func requestMeta(r *http.Request) auth.RequestMeta {
 	return auth.RequestMeta{IP: httpx.ClientIP(r), UserAgent: r.UserAgent()}
 }

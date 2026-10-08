@@ -18,12 +18,12 @@ import {
   CabangPage,
   DashboardPage,
   KatalogAdminPage,
-  PengaturanPage,
   PesananAdminPage,
   ProfilAdminPage,
-  RekeningPage,
   ReportingPage,
 } from "./pages/shell-pages";
+import { RekeningPage } from "./pages/rekening";
+import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
 

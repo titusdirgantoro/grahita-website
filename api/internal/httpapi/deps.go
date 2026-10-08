@@ -15,6 +15,7 @@ import (
 	"net/http"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/config"
@@ -44,6 +45,7 @@ type Deps struct {
 	Catalog  *catalog.Service
 	Users    *users.Service
 	Branches *branch.Service
+	Bank     *bank.Service
 
 	Storage   storage.Store
 	Gotenberg pdf.Renderer

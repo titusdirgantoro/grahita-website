@@ -15,7 +15,9 @@ import (
 
 // Entitas yang dicatat (kolom audit_logs.entity).
 const (
-	EntityBranch = "branch"
+	EntityBranch      = "branch"
+	EntityBankAccount = "bank_account"
+	EntitySetting     = "setting"
 )
 
 // Aksi yang dicatat (kolom audit_logs.action).

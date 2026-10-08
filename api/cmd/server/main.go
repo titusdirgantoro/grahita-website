@@ -23,6 +23,8 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
+	"github.com/grahita/portal/api/internal/bank"
+	bankpg "github.com/grahita/portal/api/internal/bank/postgres"
 	"github.com/grahita/portal/api/internal/branch"
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
@@ -176,6 +178,9 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// Master cabang + token registrasi sekali pakai (F1-06).
 	branchSvc := branch.NewService(branchpg.New(pool), clock.System())
 
+	// Rekening bank tujuan transfer (F1-09).
+	bankSvc := bank.NewService(bankpg.New(pool))
+
 	// Pembatas percobaan login selalu aktif dan tidak digantungkan pada
 	// CSRF_ENABLED: keduanya tidak berhubungan (PRD CP-AUT-05).
 	// 5 percobaan GAGAL per 15 menit, dihitung terpisah per akun dan per IP.
@@ -192,6 +197,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Catalog:       catalog.NewService(catalogpg.New(pool)),
 		Users:         usersSvc,
 		Branches:      branchSvc,
+		Bank:          bankSvc,
 		Storage:       store,
 		Gotenberg:     renderer,
 		Mailer:        mail,

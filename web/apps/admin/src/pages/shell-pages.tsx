@@ -14,9 +14,7 @@ import {
   PageHead,
   Segmented,
   Select,
-  Skeleton,
   SkeletonList,
-  SwitchRow,
   Table,
 } from "@grahita/ui";
 
@@ -409,42 +407,6 @@ export function KatalogAdminPage() {
   );
 }
 
-/** pRekening — /rekening (Superadmin): rekening bank tujuan transfer. */
-export function RekeningPage() {
-  return (
-    <PenjagaSuperadmin>
-      <PageHead
-        title="Rekening bank"
-        sub="Rekening aktif dipakai pada instruksi pembayaran dan pencocokan verifikasi"
-        actions={
-          <Button variant="primary" icon="plus">
-            Tambah rekening
-          </Button>
-        }
-      />
-      <Card>
-        <Table mobileCards caption="Rekening bank">
-          <thead>
-            <tr>
-              <th scope="col">Bank</th>
-              <th scope="col">Nama</th>
-              <th scope="col">Nomor</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colSpan={4}>
-                <EmptyState icon="bank">Belum ada rekening terdaftar.</EmptyState>
-              </td>
-            </tr>
-          </tbody>
-        </Table>
-      </Card>
-    </PenjagaSuperadmin>
-  );
-}
-
 /** pReporting — /reporting (Superadmin): laporan per order line + ekspor XLSX. */
 export function ReportingPage() {
   return (
@@ -460,75 +422,6 @@ export function ReportingPage() {
           di sini.
         </EmptyState>
       </Card>
-    </PenjagaSuperadmin>
-  );
-}
-
-/** pPengaturan — /pengaturan (Superadmin): nilai pengaturan sistem. */
-export function PengaturanPage() {
-  const { data, memuat, galat } = useApi<Record<string, unknown>>("/admin/settings");
-
-  return (
-    <PenjagaSuperadmin>
-      <PageHead title="Pengaturan" sub="Konstanta sistem (Superadmin)" />
-      <div className={styles.stack}>
-        <Card>
-          <CardHead title="Nilai tersimpan" />
-          {memuat ? (
-            <div className={styles.stack}>
-              <Skeleton variant="title" />
-              <Skeleton />
-              <Skeleton />
-            </div>
-          ) : galat ? (
-            <Notice tone="danger">{galat}</Notice>
-          ) : data && Object.keys(data).length > 0 ? (
-            <Table caption="Nilai pengaturan">
-              <thead>
-                <tr>
-                  <th scope="col">Kunci</th>
-                  <th scope="col">Nilai</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(data).map(([k, v]) => (
-                  <tr key={k}>
-                    <td>{k}</td>
-                    <td className="tabular muted">{typeof v === "object" ? JSON.stringify(v) : String(v)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          ) : (
-            <EmptyState icon="gear-six">Belum ada pengaturan tersimpan.</EmptyState>
-          )}
-        </Card>
-
-        <Card>
-          <CardHead title="Contoh kendali" />
-          <SwitchRow
-            checked
-            onChange={() => undefined}
-            label="Manager boleh merevisi invoice"
-            hint="Kunci manager_boleh_revisi"
-          />
-          <SwitchRow
-            checked={false}
-            onChange={() => undefined}
-            label="Verifikasi bukti transfer otomatis (AI)"
-            hint="Kunci ai.aktif — fase 2"
-          />
-          <Form>
-            <Field label="Biaya packaging (Rp)" htmlFor="pack">
-              <Input id="pack" type="number" defaultValue={3000} />
-            </Field>
-            <Field label="Tenggat Cash &amp; Carry (hari)" htmlFor="cnc">
-              <Input id="cnc" type="number" defaultValue={7} />
-            </Field>
-            <Button variant="primary">Simpan pengaturan</Button>
-          </Form>
-        </Card>
-      </div>
     </PenjagaSuperadmin>
   );
 }

@@ -7,29 +7,67 @@ import (
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
-	"github.com/grahita/portal/api/internal/settings"
 )
 
-// settings mengembalikan seluruh pengaturan untuk pengguna yang sudah login.
-// Kedua portal memakainya untuk konstanta UI (mis. biaya packaging).
+// settings mengembalikan konstanta operasional untuk pengguna yang sudah
+// login. Kedua portal memakainya untuk konstanta UI (mis. biaya packaging).
+// Setelan internal `ai` TIDAK termasuk — hanya Superadmin yang membacanya
+// lewat /admin/settings (PRD §2.1, §4.9).
 func (a *API) settings(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Settings == nil {
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan pengaturan belum tersedia.")
 	}
-	all, err := a.d.Settings.All(r.Context())
+	vals, err := a.d.Settings.Runtime(r.Context())
 	if err != nil {
 		return err
 	}
-	httpx.OK(w, data(all))
+	httpx.OK(w, data(vals))
 	return nil
 }
 
-// adminSettings adalah pembacaan pengaturan khusus Superadmin.
+// adminSettings adalah pembacaan pengaturan lengkap khusus Superadmin.
 func (a *API) adminSettings(w http.ResponseWriter, r *http.Request) error {
-	return a.settings(w, r)
+	if a.d.Settings == nil {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan pengaturan belum tersedia.")
+	}
+	vals, err := a.d.Settings.All(r.Context(), auth.ActorFrom(r.Context()))
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.OK(w, data(vals))
+	return nil
 }
 
-// adminSettingsUpdate menyimpan satu pengaturan (Superadmin saja).
+// updateSettingRequest adalah body PUT /api/v1/admin/settings.
+//
+// Dua bentuk diterima:
+//   - {"key":"biaya_packaging","value":4000} — satu kunci (kompatibel).
+//   - {"values":{"biaya_packaging":4000,"cnc_hari":7}} — banyak kunci sekaligus.
+type updateSettingRequest struct {
+	Key    *string                    `json:"key"`
+	Value  json.RawMessage            `json:"value"`
+	Values map[string]json.RawMessage `json:"values"`
+}
+
+// changes menyusun peta perubahan dari body yang dikirim.
+func (q updateSettingRequest) changes() (map[string]json.RawMessage, error) {
+	switch {
+	case len(q.Values) > 0:
+		if q.Key != nil {
+			return nil, apierr.Validation("Kirim salah satu: key/value atau values, bukan keduanya.", nil)
+		}
+		return q.Values, nil
+	case q.Key != nil:
+		if len(q.Value) == 0 {
+			return nil, apierr.Validation("Nilai pengaturan wajib diisi.", map[string]string{"value": "kosong"})
+		}
+		return map[string]json.RawMessage{*q.Key: q.Value}, nil
+	default:
+		return nil, apierr.Validation("Body harus memuat key/value atau values.", nil)
+	}
+}
+
+// adminSettingsUpdate menyimpan satu atau beberapa pengaturan (Superadmin saja).
 func (a *API) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Settings == nil {
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan pengaturan belum tersedia.")
@@ -38,29 +76,33 @@ func (a *API) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) error 
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err
 	}
-	if !isKnownSetting(req.Key) {
-		return apierr.Validation("Kunci pengaturan tidak dikenal.",
-			map[string]string{"key": "bukan kunci pengaturan yang dikenal"})
-	}
-	raw, err := json.Marshal(req.Value)
+	changes, err := req.changes()
 	if err != nil {
-		return apierr.Validation("Nilai pengaturan tidak bisa disimpan.",
-			map[string]string{"value": "bukan JSON yang valid"})
+		return err
 	}
-
 	actor := auth.ActorFrom(r.Context())
-	if err := a.d.Settings.Update(r.Context(), actor, req.Key, raw); err != nil {
+	if err := a.d.Settings.Update(r.Context(), actor, changes); err != nil {
 		return mapDomainErr(err)
 	}
-	httpx.OK(w, data(map[string]any{"key": req.Key, "value": json.RawMessage(raw)}))
-	return nil
-}
 
-func isKnownSetting(key string) bool {
-	for _, k := range settings.KnownKeys {
-		if k == key {
-			return true
+	// Respons: satu kunci mengembalikan {key,value} (kompatibel), banyak kunci
+	// mengembalikan {values:{...}} berisi nilai kanonik yang tersimpan.
+	if req.Key != nil {
+		vals, err := a.d.Settings.All(r.Context(), actor)
+		if err != nil {
+			return mapDomainErr(err)
 		}
+		httpx.OK(w, data(map[string]any{"key": *req.Key, "value": vals[*req.Key]}))
+		return nil
 	}
-	return false
+	vals, err := a.d.Settings.All(r.Context(), actor)
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	saved := make(map[string]json.RawMessage, len(changes))
+	for k := range changes {
+		saved[k] = vals[k]
+	}
+	httpx.OK(w, data(map[string]any{"values": saved}))
+	return nil
 }

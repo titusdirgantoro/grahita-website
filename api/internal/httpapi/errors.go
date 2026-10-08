@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/apierr"
@@ -52,6 +53,12 @@ func mapDomainErr(err error) error {
 		return apierr.Forbidden("Anda tidak memiliki akses ke data cabang ini.")
 	case errors.Is(err, settings.ErrNotFound), errors.Is(err, catalog.ErrNotFound):
 		return apierr.NotFound("Data yang diminta tidak ditemukan.")
+	case errors.Is(err, settings.ErrInvalidValue):
+		var ve *settings.ValidationError
+		if errors.As(err, &ve) {
+			return apierr.Validation("Nilai pengaturan tidak valid.", ve.Fields)
+		}
+		return apierr.Validation("Nilai pengaturan tidak valid.", nil)
 	case errors.Is(err, settings.ErrForbidden), errors.Is(err, catalog.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
 	case errors.Is(err, catalog.ErrNoBranch):
@@ -73,6 +80,14 @@ func mapDomainErr(err error) error {
 			"Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.")
 	case errors.Is(err, branch.ErrInvalidData):
 		return apierr.Validation("Data cabang tidak valid.", map[string]string{"cabang": err.Error()})
+	case errors.Is(err, bank.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke rekening bank.")
+	case errors.Is(err, bank.ErrNotFound):
+		return apierr.NotFound("Rekening yang diminta tidak ditemukan.")
+	case errors.Is(err, bank.ErrDuplicate):
+		return apierr.Conflict("BANK_DUPLICATE", "Rekening dengan bank dan nomor tersebut sudah terdaftar.")
+	case errors.Is(err, bank.ErrInvalidData):
+		return apierr.Validation("Data rekening tidak valid.", map[string]string{"rekening": err.Error()})
 	case errors.Is(err, users.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
 	case errors.Is(err, users.ErrNotFound):

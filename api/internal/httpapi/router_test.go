@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grahita/portal/api/internal/audit"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/clock"
@@ -61,8 +62,10 @@ func (r *fakeSettingsRepo) Get(_ context.Context, key string) ([]byte, error) {
 	return []byte(v), nil
 }
 
-func (r *fakeSettingsRepo) Upsert(_ context.Context, key string, value []byte, _ string) error {
-	r.values[key] = string(value)
+func (r *fakeSettingsRepo) Save(_ context.Context, _ string, changes []settings.Change, _ []audit.Entry) error {
+	for _, c := range changes {
+		r.values[c.Key] = string(c.Value)
+	}
 	return nil
 }
 

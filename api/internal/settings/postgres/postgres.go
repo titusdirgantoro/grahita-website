@@ -1,4 +1,8 @@
 // Package postgres adalah implementasi repository pengaturan di PostgreSQL.
+//
+// Penyimpanan perubahan dilakukan dalam satu transaksi bersama catatan
+// auditnya: bila salah satu gagal, tidak ada pengaturan yang berubah dan tidak
+// ada event audit yang tertinggal (SystemDesign.md §5.4).
 package postgres
 
 import (
@@ -8,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/grahita/portal/api/internal/audit"
+	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/pgtypes"
@@ -16,11 +22,12 @@ import (
 
 // Repo adalah repository pengaturan berbasis query yang dibangkitkan sqlc.
 type Repo struct {
-	q *sqlc.Queries
+	pool *database.Pool
+	q    *sqlc.Queries
 }
 
 // New membuat repository pengaturan.
-func New(pool *database.Pool) *Repo { return &Repo{q: sqlc.New(pool)} }
+func New(pool *database.Pool) *Repo { return &Repo{pool: pool, q: sqlc.New(pool)} }
 
 // List memuat seluruh pengaturan.
 func (r *Repo) List(ctx context.Context) ([]settings.Value, error) {
@@ -47,15 +54,32 @@ func (r *Repo) Get(ctx context.Context, key string) ([]byte, error) {
 	return raw, nil
 }
 
-// Upsert menyimpan satu pengaturan.
-func (r *Repo) Upsert(ctx context.Context, key string, value []byte, updatedBy string) error {
-	err := r.q.UpsertSetting(ctx, sqlc.UpsertSettingParams{
-		Key:       key,
-		Value:     value,
-		UpdatedBy: pgtypes.UUID(updatedBy),
-	})
+// Save menyimpan seluruh perubahan beserta catatan auditnya dalam satu
+// transaksi. updated_by diisi dari aktor mutasi.
+func (r *Repo) Save(ctx context.Context, actorID string, changes []settings.Change, recs []audit.Entry) error {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("query UpsertSetting: %w", err)
+		return fmt.Errorf("mulai transaksi pengaturan: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := r.q.WithTx(tx)
+	for _, c := range changes {
+		if err := q.UpsertSetting(ctx, sqlc.UpsertSettingParams{
+			Key:       c.Key,
+			Value:     c.Value,
+			UpdatedBy: pgtypes.UUID(actorID),
+		}); err != nil {
+			return fmt.Errorf("query UpsertSetting %s: %w", c.Key, err)
+		}
+	}
+	for _, rec := range recs {
+		if err := auditpg.Insert(ctx, tx, rec); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit pengaturan: %w", err)
 	}
 	return nil
 }

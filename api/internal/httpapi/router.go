@@ -61,6 +61,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/settings", a.adapt(a.settings))
 			r.Get("/catalog", a.adapt(a.catalog))
 			r.Get("/me/branch", a.adapt(a.myBranch))
+			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
+			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
+			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
 
 			r.Route("/admin", func(r chi.Router) {
 				r.Group(func(r chi.Router) {
@@ -95,6 +98,13 @@ func NewRouter(d Deps) http.Handler {
 					r.Use(a.requireCap(auth.CapAdminSettings))
 					r.Get("/settings", a.adapt(a.adminSettings))
 					r.Put("/settings", a.adapt(a.adminSettingsUpdate))
+				})
+				// Rekening bank: khusus Superadmin (PRD §2.1, §4.6).
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminBank))
+					r.Get("/bank-accounts", a.adapt(a.adminBankAccounts))
+					r.Post("/bank-accounts", a.adapt(a.adminBankAccountCreate))
+					r.Put("/bank-accounts/{id}", a.adapt(a.adminBankAccountUpdate))
 				})
 			})
 		})

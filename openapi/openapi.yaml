@@ -288,6 +288,11 @@ paths:
       tags: [customer, admin]
       operationId: listSettings
       summary: Pengaturan sistem (konstanta UI kedua portal)
+      description: |
+        Konstanta operasional yang dipakai UI kedua portal (mis. biaya
+        packaging pada pesanan sertifikat). Setelan internal `ai` TIDAK
+        diikutsertakan — pengelolaan pengaturan lengkap hanya untuk Superadmin
+        lewat `/api/v1/admin/settings` (PRD §2.1, §4.9).
       responses:
         "200":
           description: Peta kunci pengaturan
@@ -353,6 +358,31 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /api/v1/bank-accounts:
+    get:
+      tags: [customer, admin]
+      operationId: listActiveBankAccounts
+      summary: Rekening bank AKTIF (instruksi pembayaran)
+      description: |
+        Hanya rekening AKTIF yang dikembalikan. Dipakai Customer Portal untuk
+        instruksi pembayaran dan menjadi referensi pencocokan rekening tujuan
+        pada verifikasi bukti transfer (PRD §4.6, §5). Rekening nonaktif tidak
+        pernah ditampilkan di sini.
+      responses:
+        "200":
+          description: Daftar rekening aktif
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/BankAccount" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
 
   /api/v1/admin/branches:
     get:
@@ -599,7 +629,18 @@ paths:
     put:
       tags: [admin]
       operationId: updateSetting
-      summary: Simpan satu pengaturan (Superadmin)
+      summary: Simpan satu atau beberapa pengaturan (Superadmin)
+      description: |
+        Dua bentuk body diterima: satu kunci (`key` + `value`) untuk
+        kompatibilitas, atau banyak kunci sekaligus (`values`). Seluruh nilai
+        divalidasi lebih dahulu — bila ada satu yang tidak valid, tidak ada
+        yang tersimpan. Setiap kunci yang berubah tercatat di audit log.
+
+        Rentang: biaya_packaging 0..100000000 (Rupiah bulat);
+        cnc_hari/token_hari 1..3650; reset_menit 1..43200; max_mb 1..1024;
+        max_file 1..100; digit_invoice 1..10; manager_boleh_revisi boolean;
+        `ai` objek {aktif, min_keyakinan 0..1, tol_kurang, tol_lebih,
+        digit_rek 1..20, mundur 0..3650}.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -608,7 +649,6 @@ paths:
           application/json:
             schema:
               type: object
-              required: [key, value]
               additionalProperties: false
               properties:
                 key:
@@ -625,10 +665,19 @@ paths:
                       manager_boleh_revisi,
                       ai,
                     ]
-                value: {}
+                value: { $ref: "#/components/schemas/SettingValue" }
+                values:
+                  type: object
+                  description: Banyak kunci sekaligus (all-or-nothing).
+                  additionalProperties: { $ref: "#/components/schemas/SettingValue" }
+            examples:
+              satuKunci:
+                value: { key: biaya_packaging, value: 4000 }
+              banyakKunci:
+                value: { values: { biaya_packaging: 4000, cnc_hari: 7 } }
       responses:
         "200":
-          description: Pengaturan tersimpan
+          description: Pengaturan tersimpan (bentuk nilai kanonik)
           content:
             application/json:
               schema:
@@ -637,14 +686,108 @@ paths:
                 properties:
                   data:
                     type: object
-                    required: [key, value]
                     properties:
                       key: { type: string }
-                      value: {}
+                      value: { $ref: "#/components/schemas/SettingValue" }
+                      values:
+                        type: object
+                        additionalProperties: { $ref: "#/components/schemas/SettingValue" }
         "400":
           $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/bank-accounts:
+    get:
+      tags: [admin]
+      operationId: listBankAccounts
+      summary: Rekening bank, termasuk nonaktif (Superadmin)
+      description: |
+        Pengelolaan rekening: seluruh rekening dikembalikan, aktif maupun
+        nonaktif, supaya Superadmin dapat mengaktifkannya kembali. Manager dan
+        akun cabang ditolak (PRD §2.1).
+      responses:
+        "200":
+          description: Daftar rekening
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/BankAccount" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [admin]
+      operationId: createBankAccount
+      summary: Tambah rekening bank (Superadmin)
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BankAccountInput" }
+      responses:
+        "201":
+          description: Rekening dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/BankAccount" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/bank-accounts/{id}:
+    put:
+      tags: [admin]
+      operationId: updateBankAccount
+      summary: Ubah / aktif-nonaktifkan rekening (Superadmin)
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BankAccountUpdate" }
+      responses:
+        "200":
+          description: Rekening tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/BankAccount" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /api/v1/admin/users/branch:
     get:
@@ -1019,6 +1162,7 @@ components:
                   BRANCH_HAS_ORDERS,
                   BRANCH_HAS_ACCOUNT,
                   BRANCH_INACTIVE,
+                  BANK_DUPLICATE,
                   TIMEOUT,
                   METHOD_NOT_ALLOWED,
                   BRANCH_MISSING,
@@ -1094,6 +1238,50 @@ components:
         deskripsi: { type: string }
         harga: { type: integer, format: int64, minimum: 0 }
         urutan: { type: integer }
+
+    BankAccount:
+      type: object
+      description: Rekening bank tujuan transfer (PRD §4.6).
+      required: [id, bank, nama_pemilik, nomor, is_active]
+      properties:
+        id: { type: string, format: uuid }
+        bank: { type: string, enum: [BCA, BRI] }
+        nama_pemilik: { type: string }
+        nomor: { type: string, pattern: "^[0-9]{6,34}$" }
+        is_active: { type: boolean }
+
+    BankAccountInput:
+      type: object
+      description: Body pembuatan rekening (PRD §4.6).
+      required: [bank, nama_pemilik, nomor]
+      additionalProperties: false
+      properties:
+        bank: { type: string, enum: [BCA, BRI] }
+        nama_pemilik: { type: string, minLength: 2, maxLength: 120 }
+        nomor: { type: string, minLength: 6, maxLength: 34, pattern: "^[0-9]{6,34}$" }
+        is_active:
+          type: boolean
+          description: Kosong berarti aktif (default rekening baru).
+
+    BankAccountUpdate:
+      type: object
+      description: Body perubahan rekening; hanya field yang dikirim yang diubah.
+      additionalProperties: false
+      properties:
+        bank: { type: string, enum: [BCA, BRI] }
+        nama_pemilik: { type: string, minLength: 2, maxLength: 120 }
+        nomor: { type: string, minLength: 6, maxLength: 34, pattern: "^[0-9]{6,34}$" }
+        is_active: { type: boolean }
+
+    SettingValue:
+      description: |-
+        Nilai pengaturan: bilangan bulat (Rupiah tanpa sen), boolean, atau
+        objek `ai`.
+      oneOf:
+        - type: integer
+        - type: boolean
+        - type: object
+          additionalProperties: true
 
     Branch:
       type: object

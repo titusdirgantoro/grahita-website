@@ -26,6 +26,8 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
+	"github.com/grahita/portal/api/internal/bank"
+	bankpg "github.com/grahita/portal/api/internal/bank/postgres"
 	"github.com/grahita/portal/api/internal/branch"
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
@@ -47,10 +49,11 @@ type pgFixture struct {
 
 	// users adalah service pengelolaan akun (F1-05); queue menangkap email
 	// undangan admin yang diantre. branches adalah service master cabang
-	// (F1-06).
+	// (F1-06). bank adalah service rekening bank (F1-09).
 	users    *users.Service
 	queue    *fakeUsersQueue
 	branches *branch.Service
+	bank     *bank.Service
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -198,6 +201,9 @@ func newPGFixture(t *testing.T) *pgFixture {
 	branchSvc := branch.NewService(branchpg.New(pool), clock.System())
 	f.branches = branchSvc
 
+	bankSvc := bank.NewService(bankpg.New(pool))
+	f.bank = bankSvc
+
 	deps := Deps{
 		Config:        testConfig(),
 		Version:       "test-pg",
@@ -207,6 +213,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Catalog:       catalog.NewService(catalogpg.New(pool)),
 		Users:         usersSvc,
 		Branches:      branchSvc,
+		Bank:          bankSvc,
 		LoginLimiter:  httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),
 	}
