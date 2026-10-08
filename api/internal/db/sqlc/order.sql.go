@@ -140,6 +140,33 @@ func (q *Queries) GetOrderForBranch(ctx context.Context, arg GetOrderForBranchPa
 	return i, err
 }
 
+const insertOrderEvent = `-- name: InsertOrderEvent :exec
+INSERT INTO order_events (order_id, icon, teks, actor_kind, actor_id)
+VALUES ($1::uuid, $2, $3,
+        $4::actor_kind, $5::uuid)
+`
+
+type InsertOrderEventParams struct {
+	OrderID   string      `json:"order_id"`
+	Icon      pgtype.Text `json:"icon"`
+	Teks      string      `json:"teks"`
+	ActorKind ActorKind   `json:"actor_kind"`
+	ActorID   pgtype.UUID `json:"actor_id"`
+}
+
+// Timeline pesanan (PRD CP-ORD-08): "Pesanan dikirim ...". Aktornya dicatat
+// apa adanya (aktor cabang sesi) dan ditulis di transaksi submit yang sama.
+func (q *Queries) InsertOrderEvent(ctx context.Context, arg InsertOrderEventParams) error {
+	_, err := q.db.Exec(ctx, insertOrderEvent,
+		arg.OrderID,
+		arg.Icon,
+		arg.Teks,
+		arg.ActorKind,
+		arg.ActorID,
+	)
+	return err
+}
+
 const insertOrderLinePackaging = `-- name: InsertOrderLinePackaging :exec
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
 VALUES ($1, $2, 'packaging', NULL, $3, $4, 1, $5)
@@ -251,6 +278,86 @@ func (q *Queries) ListOrderLines(ctx context.Context, orderID string) ([]ListOrd
 	return items, nil
 }
 
+const listOrderLinesForSubmit = `-- name: ListOrderLinesForSubmit :many
+SELECT l.line_no,
+       l.jenis::text          AS jenis,
+       l.nama_snapshot,
+       l.satuan_snapshot,
+       l.qty,
+       (p.id IS NOT NULL)::bool     AS produk_ada,
+       COALESCE(p.is_active, false) AS produk_aktif,
+       COALESCE(p.nama, '')         AS produk_nama,
+       COALESCE(p.satuan, '')       AS produk_satuan,
+       COALESCE(p.jenis::text, '')::text AS produk_jenis,
+       COALESCE(bp.harga, 0)::bigint AS harga_cabang,
+       (bp.product_id IS NOT NULL)::bool AS ada_harga_cabang
+  FROM order_lines l
+  LEFT JOIN products p ON p.id = l.product_id
+  LEFT JOIN branch_prices bp
+         ON bp.product_id = l.product_id
+        AND bp.branch_id = $1::uuid
+ WHERE l.order_id = $2::uuid
+ ORDER BY l.line_no
+`
+
+type ListOrderLinesForSubmitParams struct {
+	BranchID string `json:"branch_id"`
+	OrderID  string `json:"order_id"`
+}
+
+type ListOrderLinesForSubmitRow struct {
+	LineNo         int32  `json:"line_no"`
+	Jenis          string `json:"jenis"`
+	NamaSnapshot   string `json:"nama_snapshot"`
+	SatuanSnapshot string `json:"satuan_snapshot"`
+	Qty            int32  `json:"qty"`
+	ProdukAda      bool   `json:"produk_ada"`
+	ProdukAktif    bool   `json:"produk_aktif"`
+	ProdukNama     string `json:"produk_nama"`
+	ProdukSatuan   string `json:"produk_satuan"`
+	ProdukJenis    string `json:"produk_jenis"`
+	HargaCabang    int64  `json:"harga_cabang"`
+	AdaHargaCabang bool   `json:"ada_harga_cabang"`
+}
+
+// Baris draft beserta keadaan master DAN harga cabang saat submit: produk
+// aktif, harga dari branch_prices cabang sesi (bukan harga_default, bukan
+// angka klien). Dipakai memvalidasi ulang dan menyegarkan snapshot
+// nama/satuan/harga (BR-05) DI DALAM transaksi submit, sehingga perubahan
+// master sesudah draft disimpan ikut terpakai.
+func (q *Queries) ListOrderLinesForSubmit(ctx context.Context, arg ListOrderLinesForSubmitParams) ([]ListOrderLinesForSubmitRow, error) {
+	rows, err := q.db.Query(ctx, listOrderLinesForSubmit, arg.BranchID, arg.OrderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrderLinesForSubmitRow{}
+	for rows.Next() {
+		var i ListOrderLinesForSubmitRow
+		if err := rows.Scan(
+			&i.LineNo,
+			&i.Jenis,
+			&i.NamaSnapshot,
+			&i.SatuanSnapshot,
+			&i.Qty,
+			&i.ProdukAda,
+			&i.ProdukAktif,
+			&i.ProdukNama,
+			&i.ProdukSatuan,
+			&i.ProdukJenis,
+			&i.HargaCabang,
+			&i.AdaHargaCabang,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrdersForBranch = `-- name: ListOrdersForBranch :many
 
 SELECT o.id,
@@ -344,6 +451,122 @@ func (q *Queries) ListOrdersForBranch(ctx context.Context, arg ListOrdersForBran
 	return items, nil
 }
 
+const lockOrderForSubmit = `-- name: LockOrderForSubmit :one
+
+SELECT o.status::text AS status
+  FROM orders o
+ WHERE o.id = $1::uuid
+   AND o.branch_id = $2::uuid
+ FOR UPDATE
+`
+
+type LockOrderForSubmitParams struct {
+	ID       string `json:"id"`
+	BranchID string `json:"branch_id"`
+}
+
+// ============================================================================
+// Submit pesanan (F1-14): draft -> submitted dan penomoran transaksional
+// (SystemDesign.md §4.2, Database.md §4.4/§6).
+//
+// Seluruh query di bawah ini dipanggil DI DALAM SATU transaksi repository
+// Submit, dengan urutan: kunci baris pesanan → baca baris + master + harga
+// cabang → validasi ulang → ambil nomor invoice/serial → tulis snapshot,
+// serial, status, tanggal, jatuh tempo, total, dan timeline. Karena penomoran
+// memakai tabel counter (bukan SEQUENCE) dan berada di transaksi yang sama,
+// submit yang gagal/rollback tidak memakai nomor (BR-09) dan submit
+// bersamaan tidak bisa mendapat nomor yang sama.
+// ============================================================================
+// Mengunci baris pesanan selama transaksi submit: cegah double submit dan
+// berpindah status di tengah jalan (SystemDesign §5.3). Baris milik cabang
+// lain tidak ditemukan (0 baris) sehingga keberadaannya tidak bocor.
+func (q *Queries) LockOrderForSubmit(ctx context.Context, arg LockOrderForSubmitParams) (string, error) {
+	row := q.db.QueryRow(ctx, lockOrderForSubmit, arg.ID, arg.BranchID)
+	var status string
+	err := row.Scan(&status)
+	return status, err
+}
+
+const setOrderLineSerial = `-- name: SetOrderLineSerial :exec
+UPDATE order_lines
+   SET serial_number = $1
+ WHERE order_id = $2::uuid
+   AND line_no = $3::int
+`
+
+type SetOrderLineSerialParams struct {
+	SerialNumber pgtype.Text `json:"serial_number"`
+	OrderID      string      `json:"order_id"`
+	LineNo       int32       `json:"line_no"`
+}
+
+// Serial number resmi satu baris produk (BR-02): YYYYMMDDXXX. Baris packaging
+// tidak pernah melewati query ini (constraint packaging_tanpa_serial).
+func (q *Queries) SetOrderLineSerial(ctx context.Context, arg SetOrderLineSerialParams) error {
+	_, err := q.db.Exec(ctx, setOrderLineSerial, arg.SerialNumber, arg.OrderID, arg.LineNo)
+	return err
+}
+
+const setOrderSubmitted = `-- name: SetOrderSubmitted :execrows
+UPDATE orders
+   SET status       = 'submitted',
+       nomor        = $1,
+       tanggal      = $2::date,
+       is_cnc       = $3,
+       jatuh_tempo  = $4::date,
+       total        = $5,
+       submitted_at = now()
+ WHERE id = $6::uuid
+   AND branch_id = $7::uuid
+   AND status = 'draft'
+`
+
+type SetOrderSubmittedParams struct {
+	Nomor      pgtype.Text `json:"nomor"`
+	Tanggal    time.Time   `json:"tanggal"`
+	IsCnc      bool        `json:"is_cnc"`
+	JatuhTempo *time.Time  `json:"jatuh_tempo"`
+	Total      int64       `json:"total"`
+	ID         string      `json:"id"`
+	BranchID   string      `json:"branch_id"`
+}
+
+// Transisi draft -> submitted: nomor, tanggal bisnis WIB, penanda C&C,
+// jatuh tempo (hanya C&C), total, dan waktu submit (UTC). Status 'draft'
+// diperiksa ulang di klausa WHERE supaya submit bersamaan tidak bisa
+// menembus dua kali; trigger orders_guard_submit menegakkan invariant isi
+// baris (serial lengkap, aturan sertifikat/packaging, total cocok).
+func (q *Queries) SetOrderSubmitted(ctx context.Context, arg SetOrderSubmittedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOrderSubmitted,
+		arg.Nomor,
+		arg.Tanggal,
+		arg.IsCnc,
+		arg.JatuhTempo,
+		arg.Total,
+		arg.ID,
+		arg.BranchID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sumOrderLineSubtotals = `-- name: SumOrderLineSubtotals :one
+SELECT COALESCE(sum(subtotal), 0)::bigint AS total
+  FROM order_lines
+ WHERE order_id = $1::uuid
+`
+
+// Total pesanan dihitung ULANG di server dari barisnya (BR-10); angka klien
+// tidak pernah dipakai. Dibaca setelah snapshot harga disegarkan.
+func (q *Queries) SumOrderLineSubtotals(ctx context.Context, orderID string) (int64, error) {
+	row := q.db.QueryRow(ctx, sumOrderLineSubtotals, orderID)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const updateOrderDraft = `-- name: UpdateOrderDraft :one
 UPDATE orders
    SET catatan = $1
@@ -366,4 +589,35 @@ func (q *Queries) UpdateOrderDraft(ctx context.Context, arg UpdateOrderDraftPara
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const updateOrderLineSnapshot = `-- name: UpdateOrderLineSnapshot :exec
+UPDATE order_lines
+   SET nama_snapshot   = $1,
+       satuan_snapshot = $2,
+       harga_satuan    = $3
+ WHERE order_id = $4::uuid
+   AND line_no = $5::int
+`
+
+type UpdateOrderLineSnapshotParams struct {
+	NamaSnapshot   string `json:"nama_snapshot"`
+	SatuanSnapshot string `json:"satuan_snapshot"`
+	HargaSatuan    int64  `json:"harga_satuan"`
+	OrderID        string `json:"order_id"`
+	LineNo         int32  `json:"line_no"`
+}
+
+// Menyegarkan snapshot satu baris saat submit. subtotal ikut berubah karena
+// kolomnya GENERATED ALWAYS (qty * harga_satuan), dan trigger
+// order_lines_recalc menyinkronkan orders.total.
+func (q *Queries) UpdateOrderLineSnapshot(ctx context.Context, arg UpdateOrderLineSnapshotParams) error {
+	_, err := q.db.Exec(ctx, updateOrderLineSnapshot,
+		arg.NamaSnapshot,
+		arg.SatuanSnapshot,
+		arg.HargaSatuan,
+		arg.OrderID,
+		arg.LineNo,
+	)
+	return err
 }

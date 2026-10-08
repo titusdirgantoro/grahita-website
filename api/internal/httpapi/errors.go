@@ -100,6 +100,10 @@ func mapDomainErr(err error) error {
 		// penjelasan yang bisa ditampilkan UI.
 		return apierr.Validation("Cash & Carry tidak tersedia untuk cabang ini.",
 			map[string]string{"is_cnc": "cabang ini tidak berflag Cash & Carry"})
+	case errors.Is(err, order.ErrProofRequired):
+		// Pesanan non-C&C wajib disertai bukti transfer (PRD CP-ORD-04).
+		return apierr.Validation("Pesanan belum disertai bukti transfer.",
+			map[string]string{"bukti": "minimal satu bukti transfer, kecuali pesanan Cash & Carry"})
 	case errors.Is(err, order.ErrInvalidData):
 		return apierr.Validation("Data pesanan tidak valid.",
 			map[string]string{"pesanan": err.Error()})

@@ -188,6 +188,223 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 	return nil
 }
 
+// Submit menjalankan transisi Draft -> Submitted dalam SATU transaksi
+// (SystemDesign.md §4.2, kartu F1-14).
+//
+// Urutannya penting dan disengaja:
+//
+//  1. kunci baris pesanan (`FOR UPDATE`) memakai branch_id SESI — cegah double
+//     submit dan submit yang menembus pemeriksaan status (SystemDesign §5.3);
+//  2. baca baris draft beserta master produk dan harga cabang SAAT ITU, lalu
+//     validasi ulang lewat order.SiapkanSubmit: produk aktif & dijual ke
+//     cabang, Sertifikat berharga 0 + tepat satu baris packaging, campuran
+//     ditolak (BR-05, CP-SER-01..03);
+//  3. pesanan non-C&C wajib punya bukti transfer — dihitung DI DALAM transaksi
+//     ini, setelah baris pesanan terkunci, supaya tidak ada celah antara
+//     pembacaan bukti dan submit;
+//  4. nomor invoice (global bulanan) dan serial (harian, satu rentang untuk
+//     seluruh baris produk) diambil dari tabel counter DI DALAM transaksi yang
+//     sama; rollback karena itu tidak memakai nomor (BR-09);
+//  5. snapshot nama/satuan/harga disegarkan, serial ditulis, lalu status,
+//     nomor, tanggal WIB, tenggat C&C, total, dan timeline ditulis; trigger
+//     orders_guard_submit menjadi benteng terakhir atas invariant isi pesanan.
+//
+// Kegagalan di langkah mana pun membatalkan seluruhnya: tidak ada nomor yang
+// terpakai, tidak ada baris yang berubah, dan tidak ada timeline yang tertulis.
+func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return order.Order{}, fmt.Errorf("mulai transaksi submit: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := r.q.WithTx(tx)
+
+	// 1. Kunci baris pesanan milik cabang sesi.
+	status, err := q.LockOrderForSubmit(ctx, sqlc.LockOrderForSubmitParams{ID: req.ID, BranchID: req.BranchID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return order.Order{}, order.ErrNotFound
+	}
+	if err != nil {
+		return order.Order{}, fmt.Errorf("query LockOrderForSubmit: %w", err)
+	}
+	if status != order.StatusDraft {
+		return order.Order{}, order.ErrLocked
+	}
+
+	// 2. Baca ulang isi draft + master + harga cabang, lalu validasi.
+	rows, err := q.ListOrderLinesForSubmit(ctx, sqlc.ListOrderLinesForSubmitParams{
+		BranchID: req.BranchID,
+		OrderID:  req.ID,
+	})
+	if err != nil {
+		return order.Order{}, fmt.Errorf("query ListOrderLinesForSubmit: %w", err)
+	}
+	lines := make([]order.SubmitLine, 0, len(rows))
+	for _, row := range rows {
+		lines = append(lines, order.SubmitLine{
+			LineNo:         int(row.LineNo),
+			Jenis:          row.Jenis,
+			Qty:            int(row.Qty),
+			NamaLama:       row.NamaSnapshot,
+			SatuanLama:     row.SatuanSnapshot,
+			ProdukAda:      row.ProdukAda,
+			ProdukAktif:    row.ProdukAktif,
+			ProdukNama:     row.ProdukNama,
+			ProdukSatuan:   row.ProdukSatuan,
+			ProdukJenis:    row.ProdukJenis,
+			HargaCabang:    row.HargaCabang,
+			AdaHargaCabang: row.AdaHargaCabang,
+		})
+	}
+	snapshots, err := order.SiapkanSubmit(lines, req.BiayaPackaging)
+	if err != nil {
+		return order.Order{}, err
+	}
+
+	// 3. Bukti transfer untuk pesanan non-C&C (PRD CP-ORD-04, BR-08).
+	if !req.IsCNC {
+		jumlah, err := q.CountPaymentProofs(ctx, req.ID)
+		if err != nil {
+			return order.Order{}, fmt.Errorf("query CountPaymentProofs: %w", err)
+		}
+		if jumlah < 1 {
+			return order.Order{}, order.ErrProofRequired
+		}
+	}
+
+	// 4. Nomor serial seluruh baris produk dalam SATU rentang.
+	productLines := make([]int, 0, len(lines))
+	for _, l := range lines {
+		if l.Jenis == order.JenisProduct {
+			productLines = append(productLines, l.LineNo)
+		}
+	}
+	serial := make(map[int]string, len(productLines))
+	if len(productLines) > 0 {
+		periode, err := q.SerialPeriode(ctx, req.Tanggal)
+		if err != nil {
+			return order.Order{}, fmt.Errorf("query SerialPeriode: %w", err)
+		}
+		pertama, err := q.NextNumbers(ctx, sqlc.NextNumbersParams{
+			Scope:   scopeSerial,
+			Periode: periode,
+			Jumlah:  int32(len(productLines)),
+		})
+		if err != nil {
+			return order.Order{}, fmt.Errorf("query NextNumbers(serial): %w", err)
+		}
+		for i, lineNo := range productLines {
+			nomor, err := q.FormatSerialNumber(ctx, sqlc.FormatSerialNumberParams{
+				Tanggal: req.Tanggal,
+				Urut:    pertama + int32(i),
+			})
+			if err != nil {
+				return order.Order{}, fmt.Errorf("query FormatSerialNumber: %w", err)
+			}
+			serial[lineNo] = nomor
+		}
+	}
+
+	// Nomor invoice: satu nomor global per bulan lintas cabang (BR-03).
+	periodeInvoice, err := q.InvoicePeriode(ctx, req.Tanggal)
+	if err != nil {
+		return order.Order{}, fmt.Errorf("query InvoicePeriode: %w", err)
+	}
+	urut, err := q.NextNumbers(ctx, sqlc.NextNumbersParams{
+		Scope:   scopeInvoice,
+		Periode: periodeInvoice,
+		Jumlah:  1,
+	})
+	if err != nil {
+		return order.Order{}, fmt.Errorf("query NextNumbers(invoice): %w", err)
+	}
+	nomor, err := q.FormatInvoiceNumber(ctx, sqlc.FormatInvoiceNumberParams{
+		Tanggal: req.Tanggal,
+		Urut:    urut,
+		Digit:   int32(req.DigitInvoice),
+	})
+	if err != nil {
+		return order.Order{}, fmt.Errorf("query FormatInvoiceNumber: %w", err)
+	}
+
+	// 5. Tulis snapshot final, serial, lalu transisi status.
+	for _, s := range snapshots {
+		if err := q.UpdateOrderLineSnapshot(ctx, sqlc.UpdateOrderLineSnapshotParams{
+			NamaSnapshot:   s.Nama,
+			SatuanSnapshot: s.Satuan,
+			HargaSatuan:    s.HargaSatuan,
+			OrderID:        req.ID,
+			LineNo:         int32(s.LineNo),
+		}); err != nil {
+			return order.Order{}, fmt.Errorf("query UpdateOrderLineSnapshot: %w", err)
+		}
+	}
+	for lineNo, nomorSerial := range serial {
+		if err := q.SetOrderLineSerial(ctx, sqlc.SetOrderLineSerialParams{
+			SerialNumber: pgtypes.Text(nomorSerial),
+			OrderID:      req.ID,
+			LineNo:       int32(lineNo),
+		}); err != nil {
+			return order.Order{}, fmt.Errorf("query SetOrderLineSerial: %w", err)
+		}
+	}
+
+	// Total dibaca ULANG dari barisnya (sumber tunggal: kolom generated),
+	// supaya angka yang ditulis selalu sama dengan Σ subtotal yang dilihat
+	// trigger orders_guard_submit.
+	total, err := q.SumOrderLineSubtotals(ctx, req.ID)
+	if err != nil {
+		return order.Order{}, fmt.Errorf("query SumOrderLineSubtotals: %w", err)
+	}
+
+	params := sqlc.SetOrderSubmittedParams{
+		Nomor:    pgtypes.Text(nomor),
+		Tanggal:  req.Tanggal,
+		IsCnc:    req.IsCNC,
+		Total:    total,
+		ID:       req.ID,
+		BranchID: req.BranchID,
+	}
+	if !req.JatuhTempo.IsZero() {
+		jt := req.JatuhTempo
+		params.JatuhTempo = &jt
+	}
+	changed, err := q.SetOrderSubmitted(ctx, params)
+	if err != nil {
+		return order.Order{}, fmt.Errorf("query SetOrderSubmitted: %w", err)
+	}
+	if changed == 0 {
+		// Berpindah status setelah penguncian (mis. submit paralel lain).
+		return order.Order{}, order.ErrLocked
+	}
+
+	if err := q.InsertOrderEvent(ctx, sqlc.InsertOrderEventParams{
+		OrderID:   req.ID,
+		Icon:      pgtypes.Text("kirim"),
+		Teks:      order.TeksEventSubmit,
+		ActorKind: sqlc.ActorKindBranch,
+		ActorID:   pgtypes.UUID(req.ActorID),
+	}); err != nil {
+		return order.Order{}, fmt.Errorf("query InsertOrderEvent: %w", err)
+	}
+
+	saved, err := loadOrder(ctx, q, req.ID, req.BranchID)
+	if err != nil {
+		return order.Order{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return order.Order{}, fmt.Errorf("commit submit: %w", err)
+	}
+	return saved, nil
+}
+
+// Scope counter penomoran (Database.md §6): invoice global per bulan, serial
+// per hari.
+const (
+	scopeInvoice = "invoice"
+	scopeSerial  = "serial"
+)
+
 // loadOrder membaca satu pesanan beserta barisnya memakai query yang sama untuk
 // jalur transaksi maupun pembacaan biasa.
 func loadOrder(ctx context.Context, q *sqlc.Queries, id, branchID string) (order.Order, error) {

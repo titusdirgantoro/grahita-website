@@ -46,6 +46,7 @@ func cfgUji() *fakeConfig {
 	return &fakeConfig{values: map[string]int64{
 		settings.BiayaPackaging: 3000,
 		settings.CNCHari:        7,
+		settings.DigitInvoice:   2,
 	}}
 }
 

@@ -116,3 +116,53 @@ func (a *API) orderDelete(w http.ResponseWriter, r *http.Request) error {
 	httpx.NoContent(w)
 	return nil
 }
+
+// orderSubmit mengirim draft menjadi pesanan resmi: status Submitted, nomor
+// invoice, serial number per baris produk, dan pesanan terkunci
+// (PRD CP-ORD-05, CP-ORD-09, BR-07).
+//
+// Badan permintaan berbentuk multipart (SystemDesign.md §6): berkas bukti
+// transfer pada field `file` (boleh NOL berkas — bukti boleh sudah diunggah
+// lewat POST /orders/{id}/proofs) dan penanda C&C pada field `is_cnc`
+// (PRD CP-CNC-02). Harga, biaya packaging, dan total tidak pernah diterima
+// dari klien; semuanya dibaca server.
+//
+// Urutan dua langkah ini disengaja dan tidak diklaim atomik lintas sistem:
+// berkas bukti disimpan lebih dulu lewat domain bukti (transaksinya sendiri),
+// baru pesanan dikirim. Bila submit-nya sendiri gagal — masih kurang bukti,
+// pesanan sudah terkunci, produk/harga berubah — bukti yang sudah terunggah
+// TETAP tersimpan sebagai bukti pesanan draft, sedangkan nomor, counter,
+// status, dan timeline tidak berubah sama sekali.
+func (a *API) orderSubmit(w http.ResponseWriter, r *http.Request) error {
+	if a.d.Orders == nil {
+		return ordersUnavailable()
+	}
+	files, isCNC, tutup, err := a.bacaSubmit(w, r)
+	if err != nil {
+		return err
+	}
+	defer tutup()
+
+	actor := auth.ActorFrom(r.Context())
+	orderID := chi.URLParam(r, "id")
+	if len(files) > 0 {
+		if a.d.Payments == nil {
+			return proofsUnavailable()
+		}
+		// Unggahan bukti tetap dibatasi laju seperti endpoint bukti
+		// (Architecture.md §6).
+		if a.d.ProofLimiter != nil && !a.d.ProofLimiter.Allow(string(actor.Kind)+":"+actor.UserID) {
+			return apierr.RateLimited("Terlalu banyak unggahan bukti. Coba lagi beberapa saat lagi.")
+		}
+		if _, err := a.d.Payments.Upload(r.Context(), actor, orderID, files); err != nil {
+			return mapDomainErr(err)
+		}
+	}
+
+	o, err := a.d.Orders.Submit(r.Context(), actor, orderID, order.SubmitInput{IsCNC: isCNC})
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.OK(w, data(o))
+	return nil
+}

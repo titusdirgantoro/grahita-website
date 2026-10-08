@@ -109,3 +109,103 @@ SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, satuan_snap
   FROM order_lines
  WHERE order_id = $1
  ORDER BY line_no;
+
+-- ============================================================================
+-- Submit pesanan (F1-14): draft -> submitted dan penomoran transaksional
+-- (SystemDesign.md §4.2, Database.md §4.4/§6).
+--
+-- Seluruh query di bawah ini dipanggil DI DALAM SATU transaksi repository
+-- Submit, dengan urutan: kunci baris pesanan → baca baris + master + harga
+-- cabang → validasi ulang → ambil nomor invoice/serial → tulis snapshot,
+-- serial, status, tanggal, jatuh tempo, total, dan timeline. Karena penomoran
+-- memakai tabel counter (bukan SEQUENCE) dan berada di transaksi yang sama,
+-- submit yang gagal/rollback tidak memakai nomor (BR-09) dan submit
+-- bersamaan tidak bisa mendapat nomor yang sama.
+-- ============================================================================
+
+-- name: LockOrderForSubmit :one
+-- Mengunci baris pesanan selama transaksi submit: cegah double submit dan
+-- berpindah status di tengah jalan (SystemDesign §5.3). Baris milik cabang
+-- lain tidak ditemukan (0 baris) sehingga keberadaannya tidak bocor.
+SELECT o.status::text AS status
+  FROM orders o
+ WHERE o.id = sqlc.arg(id)::uuid
+   AND o.branch_id = sqlc.arg(branch_id)::uuid
+ FOR UPDATE;
+
+-- name: ListOrderLinesForSubmit :many
+-- Baris draft beserta keadaan master DAN harga cabang saat submit: produk
+-- aktif, harga dari branch_prices cabang sesi (bukan harga_default, bukan
+-- angka klien). Dipakai memvalidasi ulang dan menyegarkan snapshot
+-- nama/satuan/harga (BR-05) DI DALAM transaksi submit, sehingga perubahan
+-- master sesudah draft disimpan ikut terpakai.
+SELECT l.line_no,
+       l.jenis::text          AS jenis,
+       l.nama_snapshot,
+       l.satuan_snapshot,
+       l.qty,
+       (p.id IS NOT NULL)::bool     AS produk_ada,
+       COALESCE(p.is_active, false) AS produk_aktif,
+       COALESCE(p.nama, '')         AS produk_nama,
+       COALESCE(p.satuan, '')       AS produk_satuan,
+       COALESCE(p.jenis::text, '')::text AS produk_jenis,
+       COALESCE(bp.harga, 0)::bigint AS harga_cabang,
+       (bp.product_id IS NOT NULL)::bool AS ada_harga_cabang
+  FROM order_lines l
+  LEFT JOIN products p ON p.id = l.product_id
+  LEFT JOIN branch_prices bp
+         ON bp.product_id = l.product_id
+        AND bp.branch_id = sqlc.arg(branch_id)::uuid
+ WHERE l.order_id = sqlc.arg(order_id)::uuid
+ ORDER BY l.line_no;
+
+-- name: UpdateOrderLineSnapshot :exec
+-- Menyegarkan snapshot satu baris saat submit. subtotal ikut berubah karena
+-- kolomnya GENERATED ALWAYS (qty * harga_satuan), dan trigger
+-- order_lines_recalc menyinkronkan orders.total.
+UPDATE order_lines
+   SET nama_snapshot   = sqlc.arg(nama_snapshot),
+       satuan_snapshot = sqlc.arg(satuan_snapshot),
+       harga_satuan    = sqlc.arg(harga_satuan)
+ WHERE order_id = sqlc.arg(order_id)::uuid
+   AND line_no = sqlc.arg(line_no)::int;
+
+-- name: SetOrderLineSerial :exec
+-- Serial number resmi satu baris produk (BR-02): YYYYMMDDXXX. Baris packaging
+-- tidak pernah melewati query ini (constraint packaging_tanpa_serial).
+UPDATE order_lines
+   SET serial_number = sqlc.arg(serial_number)
+ WHERE order_id = sqlc.arg(order_id)::uuid
+   AND line_no = sqlc.arg(line_no)::int;
+
+-- name: SumOrderLineSubtotals :one
+-- Total pesanan dihitung ULANG di server dari barisnya (BR-10); angka klien
+-- tidak pernah dipakai. Dibaca setelah snapshot harga disegarkan.
+SELECT COALESCE(sum(subtotal), 0)::bigint AS total
+  FROM order_lines
+ WHERE order_id = sqlc.arg(order_id)::uuid;
+
+-- name: SetOrderSubmitted :execrows
+-- Transisi draft -> submitted: nomor, tanggal bisnis WIB, penanda C&C,
+-- jatuh tempo (hanya C&C), total, dan waktu submit (UTC). Status 'draft'
+-- diperiksa ulang di klausa WHERE supaya submit bersamaan tidak bisa
+-- menembus dua kali; trigger orders_guard_submit menegakkan invariant isi
+-- baris (serial lengkap, aturan sertifikat/packaging, total cocok).
+UPDATE orders
+   SET status       = 'submitted',
+       nomor        = sqlc.arg(nomor),
+       tanggal      = sqlc.arg(tanggal)::date,
+       is_cnc       = sqlc.arg(is_cnc),
+       jatuh_tempo  = sqlc.narg(jatuh_tempo)::date,
+       total        = sqlc.arg(total),
+       submitted_at = now()
+ WHERE id = sqlc.arg(id)::uuid
+   AND branch_id = sqlc.arg(branch_id)::uuid
+   AND status = 'draft';
+
+-- name: InsertOrderEvent :exec
+-- Timeline pesanan (PRD CP-ORD-08): "Pesanan dikirim ...". Aktornya dicatat
+-- apa adanya (aktor cabang sesi) dan ditulis di transaksi submit yang sama.
+INSERT INTO order_events (order_id, icon, teks, actor_kind, actor_id)
+VALUES (sqlc.arg(order_id)::uuid, sqlc.arg(icon), sqlc.arg(teks),
+        sqlc.arg(actor_kind)::actor_kind, sqlc.narg(actor_id)::uuid);

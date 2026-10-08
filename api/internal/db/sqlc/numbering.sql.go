@@ -7,7 +7,44 @@ package sqlc
 
 import (
 	"context"
+	"time"
 )
+
+const formatInvoiceNumber = `-- name: FormatInvoiceNumber :one
+SELECT format_invoice_number($1::date, $2::int, $3::int)::text AS nomor
+`
+
+type FormatInvoiceNumberParams struct {
+	Tanggal time.Time `json:"tanggal"`
+	Urut    int32     `json:"urut"`
+	Digit   int32     `json:"digit"`
+}
+
+// Nomor invoice YYYY-MM-XX; bila urutan melebihi `digit_invoice`, jumlah
+// digit bertambah (tidak pernah gagal).
+func (q *Queries) FormatInvoiceNumber(ctx context.Context, arg FormatInvoiceNumberParams) (string, error) {
+	row := q.db.QueryRow(ctx, formatInvoiceNumber, arg.Tanggal, arg.Urut, arg.Digit)
+	var nomor string
+	err := row.Scan(&nomor)
+	return nomor, err
+}
+
+const formatSerialNumber = `-- name: FormatSerialNumber :one
+SELECT format_serial_number($1::date, $2::int)::text AS nomor
+`
+
+type FormatSerialNumberParams struct {
+	Tanggal time.Time `json:"tanggal"`
+	Urut    int32     `json:"urut"`
+}
+
+// Serial number YYYYMMDDXXX (minimal 3 digit, melebar bila perlu).
+func (q *Queries) FormatSerialNumber(ctx context.Context, arg FormatSerialNumberParams) (string, error) {
+	row := q.db.QueryRow(ctx, formatSerialNumber, arg.Tanggal, arg.Urut)
+	var nomor string
+	err := row.Scan(&nomor)
+	return nomor, err
+}
 
 const getCounter = `-- name: GetCounter :one
 SELECT last_value
@@ -25,6 +62,25 @@ func (q *Queries) GetCounter(ctx context.Context, arg GetCounterParams) (int32, 
 	var last_value int32
 	err := row.Scan(&last_value)
 	return last_value, err
+}
+
+const invoicePeriode = `-- name: InvoicePeriode :one
+
+SELECT invoice_periode($1::date)::text AS periode
+`
+
+// ----------------------------------------------------------------------------
+// Format nomor (F1-14). Definisi periode dan bentuk nomor ada di migrasi 0004
+// sebagai fungsi PostgreSQL supaya tidak terduplikasi di kode Go: transaksi
+// submit memanggil fungsi yang sama dengan yang diuji di Database.md §6,
+// termasuk perilaku "digit melebar" saat urutan melewati digit_invoice.
+// ----------------------------------------------------------------------------
+// Periode counter invoice (YYYY-MM) dari tanggal bisnis WIB.
+func (q *Queries) InvoicePeriode(ctx context.Context, tanggal time.Time) (string, error) {
+	row := q.db.QueryRow(ctx, invoicePeriode, tanggal)
+	var periode string
+	err := row.Scan(&periode)
+	return periode, err
 }
 
 const nextNumbers = `-- name: NextNumbers :one
@@ -50,4 +106,16 @@ func (q *Queries) NextNumbers(ctx context.Context, arg NextNumbersParams) (int32
 	var nomor_pertama int32
 	err := row.Scan(&nomor_pertama)
 	return nomor_pertama, err
+}
+
+const serialPeriode = `-- name: SerialPeriode :one
+SELECT serial_periode($1::date)::text AS periode
+`
+
+// Periode counter serial (YYYYMMDD) dari tanggal bisnis WIB.
+func (q *Queries) SerialPeriode(ctx context.Context, tanggal time.Time) (string, error) {
+	row := q.db.QueryRow(ctx, serialPeriode, tanggal)
+	var periode string
+	err := row.Scan(&periode)
+	return periode, err
 }

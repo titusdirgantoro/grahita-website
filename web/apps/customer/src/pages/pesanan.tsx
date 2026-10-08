@@ -16,6 +16,7 @@ import {
   Segmented,
   Select,
   SkeletonList,
+  SwitchRow,
   Table,
   Textarea,
 } from "@grahita/ui";
@@ -290,6 +291,8 @@ export function PesananDetailPage({ id }: { id: string }) {
   const [konfirmasi, setKonfirmasi] = useState(false);
   const [hapusGalat, setHapusGalat] = useState<string | null>(null);
   const [menghapus, setMenghapus] = useState(false);
+  const [kirim, setKirim] = useState(false);
+  const [pesanKirim, setPesanKirim] = useState<string | null>(null);
 
   async function hapusDraft() {
     setMenghapus(true);
@@ -355,6 +358,9 @@ export function PesananDetailPage({ id }: { id: string }) {
               >
                 Ubah
               </Button>
+              <Button variant="primary" icon="paper-plane-tilt" onClick={() => setKirim(true)}>
+                Kirim pesanan
+              </Button>
             </div>
           ) : undefined
         }
@@ -372,6 +378,7 @@ export function PesananDetailPage({ id }: { id: string }) {
             </Notice>
           )}
           {hapusGalat ? <Notice tone="danger">{hapusGalat}</Notice> : null}
+          {pesanKirim ? <Notice tone="success">{pesanKirim}</Notice> : null}
 
           <div className={styles.tools}>
             <Badge tone={toneStatus(data.status, data.verif_status)}>
@@ -474,7 +481,154 @@ export function PesananDetailPage({ id }: { id: string }) {
           cabang.
         </p>
       </Modal>
+
+      <ModalKirim
+        open={kirim}
+        onClose={() => setKirim(false)}
+        pesanan={data}
+        onSukses={() => {
+          setKirim(false);
+          setPesanKirim(
+            "Pesanan sudah dikirim. Nomor pesanan dan serial number sudah terbit dan pesanan terkunci.",
+          );
+          muatUlang();
+        }}
+      />
     </>
+  );
+}
+
+// -------------------------------------------------------------- kirim ------
+
+/** CabangRingkas adalah bagian data cabang yang dipakai modal kirim. */
+interface CabangRingkas {
+  is_cnc: boolean;
+}
+
+/**
+ * ModalKirim mengirim draft menjadi pesanan resmi (F1-14): satu permintaan
+ * multipart berisi berkas bukti transfer dan penanda Cash & Carry.
+ *
+ * Aturan yang ditampilkan di sini hanya membantu pengguna; yang MENGIKAT tetap
+ * server: pesanan non-C&C wajib punya minimal satu bukti (kalau tidak, API
+ * menjawab 400 dan pesanan tetap draft), dan pilihan C&C hanya sah untuk
+ * cabang berflag `cash_and_carry` — karena itu centangnya hanya muncul bila
+ * flag cabang (dibaca server lewat /me/branch) memang aktif.
+ */
+function ModalKirim({
+  open,
+  onClose,
+  pesanan,
+  onSukses,
+}: {
+  open: boolean;
+  onClose: () => void;
+  pesanan: Pesanan;
+  onSukses: () => void;
+}) {
+  const { data: cabang } = useApi<CabangRingkas>("/me/branch", open);
+  const [cnc, setCnc] = useState(false);
+  const [berkas, setBerkas] = useState<File[]>([]);
+  const [galat, setGalat] = useState<string | null>(null);
+  const [mengirim, setMengirim] = useState(false);
+
+  const bisaCNC = cabang?.is_cnc === true;
+  const wajibBukti = !(bisaCNC && cnc);
+
+  function tutup() {
+    if (mengirim) return;
+    setGalat(null);
+    onClose();
+  }
+
+  async function kirim() {
+    if (wajibBukti && berkas.length === 0) {
+      setGalat("Pesanan wajib disertai minimal satu bukti transfer (JPG, PNG, atau PDF).");
+      return;
+    }
+    setMengirim(true);
+    setGalat(null);
+    try {
+      const form = new FormData();
+      for (const f of berkas) form.append("file", f);
+      form.append("is_cnc", bisaCNC && cnc ? "true" : "false");
+      await api.postForm<Pesanan>(`/orders/${pesanan.id}/submit`, form);
+      setBerkas([]);
+      setCnc(false);
+      onSukses();
+    } catch (err) {
+      setGalat(galatPesan(err));
+    } finally {
+      setMengirim(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={tutup}
+      title="Kirim pesanan"
+      footer={
+        <>
+          <Button variant="secondary" onClick={tutup} disabled={mengirim}>
+            Batal
+          </Button>
+          <Button
+            variant="primary"
+            icon="paper-plane-tilt"
+            onClick={() => void kirim()}
+            disabled={mengirim}
+          >
+            {mengirim ? "Mengirim…" : "Kirim pesanan"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void kirim();
+        }}
+        data-testid="form-kirim"
+      >
+        <Notice tone="info">
+          Setelah dikirim, nomor pesanan dan serial number dibuat, harga dikunci sesuai daftar harga
+          cabang saat ini, dan pesanan tidak dapat diubah atau dihapus lagi dari portal cabang.
+        </Notice>
+        {galat ? <Notice tone="danger">{galat}</Notice> : null}
+
+        {bisaCNC ? (
+          <SwitchRow
+            checked={cnc}
+            onChange={setCnc}
+            label="Cash & Carry"
+            hint="Bukti transfer menjadi opsional. Jatuh tempo dihitung server setelah pesanan dikirim."
+          />
+        ) : null}
+
+        <Field
+          label={
+            wajibBukti
+              ? "Bukti transfer (JPG/PNG/PDF, minimal satu berkas)"
+              : "Bukti transfer (opsional untuk Cash & Carry)"
+          }
+          htmlFor="berkas-kirim"
+          hint={
+            wajibBukti
+              ? "Boleh beberapa berkas bila pembayaran dicicil."
+              : "Boleh dikosongkan; bukti bisa ditambahkan setelah pesanan dikirim."
+          }
+        >
+          <Input
+            id="berkas-kirim"
+            type="file"
+            multiple
+            accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+            onChange={(e) => setBerkas(Array.from(e.target.files ?? []))}
+          />
+        </Field>
+      </form>
+    </Modal>
   );
 }
 

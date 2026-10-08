@@ -268,7 +268,8 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	settingsSvc := settings.NewService(settingspg.New(pool))
 	// Pesanan cabang: draft, editor order line, aturan Sertifikat/packaging,
 	// daftar dan detail (F1-11 + F1-12).
-	orderSvc := order.NewService(orderpg.New(pool), catalogSvc, settingsSvc)
+	orderSvc := order.NewService(orderpg.New(pool), catalogSvc, settingsSvc,
+		order.WithBranchFlags(branchSvc), order.WithClock(clock.System()))
 
 	// Bukti transfer pesanan (F1-13). Satu repository melayani dua peran:
 	// metadata bukti (termasuk komit atomik + timeline) dan konteks pesanan

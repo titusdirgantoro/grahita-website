@@ -75,6 +75,10 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/orders/{id}", a.adapt(a.orderGet))
 			r.Put("/orders/{id}", a.adapt(a.orderUpdate))
 			r.Delete("/orders/{id}", a.adapt(a.orderDelete))
+			// Submit pesanan (F1-14): multipart (bukti opsional + flag C&C).
+			// Nomor invoice/serial, snapshot harga, tanggal WIB, dan timeline
+			// ditulis dalam satu transaksi oleh domain pesanan.
+			r.Post("/orders/{id}/submit", a.adapt(a.orderSubmit))
 			// Bukti transfer pesanan (F1-13): multi-berkas, dibatasi cabang
 			// sesi di layer service. Unduhan selalu lewat presigned URL
 			// berumur pendek — kunci storage tidak pernah dikirim ke klien.

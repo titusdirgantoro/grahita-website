@@ -23,6 +23,12 @@
 //   - Draft tidak punya nomor, tanggal, serial number, maupun bukti transfer;
 //     semuanya lahir saat submit (F1-14).
 //
+// Submit (kartu F1-14) ada di submit.go: satu transaksi Draft -> Submitted
+// yang mengunci baris pesanan, menyegarkan snapshot harga/nama/satuan dari
+// master (BR-05), memastikan bukti transfer non-C&C, menerbitkan nomor invoice
+// dan serial number dari tabel counter (BR-02/BR-03/BR-09), menetapkan tanggal
+// bisnis WIB + tenggat C&C, dan mencatat timeline.
+//
 // Aturan Sertifikat dan Cash & Carry (kartu F1-12, PRD §3.6–3.7):
 //
 //   - Produk Sertifikat selalu berharga 0 berapa pun qty-nya (CP-SER-01). Harga
@@ -217,20 +223,39 @@ type Repository interface {
 	// DeleteDraft menghapus draft milik cabang tersebut; ErrNotFound bila tidak
 	// ada, bukan miliknya, atau sudah bukan draft.
 	DeleteDraft(ctx context.Context, id, branchID string) error
+	// Submit menjalankan transisi draft -> submitted dalam SATU transaksi:
+	// mengunci baris pesanan, memvalidasi ulang isinya terhadap master dan
+	// harga cabang yang berlaku saat itu (SiapkanSubmit), memastikan bukti
+	// transfer non-C&C, mengambil nomor invoice + serial dari tabel counter,
+	// lalu menulis snapshot, serial, status, tanggal, tenggat, total, dan
+	// timeline. ErrLocked bila pesanan sudah bukan draft; ErrNotFound bila
+	// tidak ada atau bukan milik cabang tersebut; ErrProofRequired bila bukan
+	// C&C dan belum ada bukti.
+	Submit(ctx context.Context, req SubmitRequest) (Order, error)
 }
 
 // Service adalah logika bisnis pesanan cabang.
 type Service struct {
-	repo Repository
-	cat  Catalog
-	cfg  Config
+	repo  Repository
+	cat   Catalog
+	cfg   Config
+	flags BranchFlags
+	clk   clock.Clock
 }
 
 // NewService membuat service pesanan. cfg menyajikan setelan operasional
 // server (biaya packaging pesanan sertifikat); ia tidak boleh nil karena biaya
 // packaging tidak pernah diambil dari klien.
-func NewService(repo Repository, cat Catalog, cfg Config) *Service {
-	return &Service{repo: repo, cat: cat, cfg: cfg}
+//
+// Sumber flag cabang (C&C) dan clock dipasang lewat Option: tanpa
+// WithBranchFlags, permintaan C&C ditolak (fail closed); tanpa WithClock
+// dipakai clock.System().
+func NewService(repo Repository, cat Catalog, cfg Config, opts ...Option) *Service {
+	s := &Service{repo: repo, cat: cat, cfg: cfg, clk: clock.System()}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // List mengembalikan daftar pesanan cabang sesuai filter status (PRD CP-ORD-01).

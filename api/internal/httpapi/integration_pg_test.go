@@ -316,7 +316,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Auth:                svc,
 		Settings:            settingsSvc,
 		Catalog:             catalogSvc,
-		Orders:              order.NewService(orderpg.New(pool), catalogSvc, settingsSvc),
+		Orders:              order.NewService(orderpg.New(pool), catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
 		Payments:            paySvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,

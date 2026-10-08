@@ -24,6 +24,33 @@ func proofsUnavailable() error {
 // multipart; sisanya melimpah ke berkas sementara di luar repo.
 const memoryBerkas = 1 << 20 // 1 MiB
 
+// fieldCNC adalah nama field multipart penanda Cash & Carry pada submit
+// pesanan (PRD CP-CNC-02).
+const fieldCNC = "is_cnc"
+
+// defaultMaxRequestBytes adalah batas badan permintaan bila domain bukti tidak
+// terpasang (mis. pada pengujian yang hanya memasang domain pesanan): cukup
+// besar untuk beberapa berkas kecil, tetap terbatas.
+const defaultMaxRequestBytes = 4 << 20 // 4 MiB
+
+// parseCNC membaca penanda Cash & Carry dari nilai form. Nilai yang tidak
+// dikenal DITOLAK (bukan diam-diam dianggap false) supaya salah ketik tidak
+// membuat pesanan kehilangan penanda C&C tanpa terlihat.
+func parseCNC(nilai []string) (bool, error) {
+	if len(nilai) == 0 {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(nilai[0])) {
+	case "", "false", "0", "off":
+		return false, nil
+	case "true", "1", "on":
+		return true, nil
+	default:
+		return false, apierr.Validation("Penanda Cash & Carry tidak valid.",
+			map[string]string{fieldCNC: "harus true atau false"})
+	}
+}
+
 // unggahBukti adalah alur bersama kedua portal: batasi laju → baca berkas →
 // simpan lewat domain.
 func (a *API) unggahBukti(w http.ResponseWriter, r *http.Request) error {
@@ -55,9 +82,36 @@ func (a *API) unggahBukti(w http.ResponseWriter, r *http.Request) error {
 // dari setelan yang sama dengan service) supaya tidak ada unggahan raksasa yang
 // menahan memori/disk server sebelum validasi.
 func (a *API) bacaBerkas(w http.ResponseWriter, r *http.Request) ([]payment.FileInput, func(), error) {
-	batas, err := a.d.Payments.MaxRequestBytes(r.Context())
+	files, tutup, err := a.bacaMultipart(w, r, true)
+	return files, tutup, err
+}
+
+// bacaSubmit mengurai badan multipart submit pesanan: berkas bukti pada field
+// `file` (boleh NOL berkas — bukti boleh sudah diunggah lewat
+// /orders/{id}/proofs) dan penanda C&C pada field `is_cnc`.
+func (a *API) bacaSubmit(w http.ResponseWriter, r *http.Request) ([]payment.FileInput, bool, func(), error) {
+	files, tutup, err := a.bacaMultipart(w, r, false)
 	if err != nil {
-		return nil, func() {}, mapDomainErr(err)
+		return nil, false, tutup, err
+	}
+	isCNC, err := parseCNC(r.MultipartForm.Value[fieldCNC])
+	if err != nil {
+		return nil, false, tutup, err
+	}
+	return files, isCNC, tutup, nil
+}
+
+// bacaMultipart mengurai badan multipart permintaan bukti. wajibBerkas
+// menentukan apakah minimal satu berkas dituntut (endpoint unggah) atau tidak
+// (endpoint submit, yang boleh memakai bukti yang sudah tersimpan).
+func (a *API) bacaMultipart(w http.ResponseWriter, r *http.Request, wajibBerkas bool) ([]payment.FileInput, func(), error) {
+	batas := int64(defaultMaxRequestBytes)
+	if a.d.Payments != nil {
+		var err error
+		batas, err = a.d.Payments.MaxRequestBytes(r.Context())
+		if err != nil {
+			return nil, func() {}, mapDomainErr(err)
+		}
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, batas)
 	if err := r.ParseMultipartForm(memoryBerkas); err != nil {
@@ -73,7 +127,10 @@ func (a *API) bacaBerkas(w http.ResponseWriter, r *http.Request) ([]payment.File
 
 	headers := r.MultipartForm.File[payment.FieldBerkas]
 	if len(headers) == 0 {
-		return nil, func() {}, mapDomainErr(payment.ErrNoFile)
+		if wajibBerkas {
+			return nil, func() {}, mapDomainErr(payment.ErrNoFile)
+		}
+		return nil, func() {}, nil
 	}
 	files := make([]payment.FileInput, 0, len(headers))
 	tebuka := make([]multipart.File, 0, len(headers))

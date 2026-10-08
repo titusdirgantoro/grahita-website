@@ -145,10 +145,21 @@ const sertifikatCNC = {
  * endpoint pesanan. Setiap panggilan dicatat supaya tes dapat memeriksa URL,
  * metode, dan body yang benar-benar dikirim UI.
  */
-function fetchPesanan(opsi: { daftar?: unknown[]; detail?: unknown; bukti?: unknown[] } = {}) {
+function fetchPesanan(
+  opsi: {
+    daftar?: unknown[];
+    detail?: unknown;
+    bukti?: unknown[];
+    /** Flag cash_and_carry cabang sesi (F1-14: centang C&C di modal kirim). */
+    cabangCNC?: boolean;
+  } = {},
+) {
   const panggilan: Panggilan[] = [];
   const daftar = opsi.daftar ?? [draft, terkirim];
   const bukti = opsi.bukti ?? [];
+  // Setelah submit berhasil, detail pesanan memuat versi yang sudah dikirim —
+  // memaksa UI memuat ulang dan menampilkan nomor/serial.
+  let setelahKirim = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -156,7 +167,17 @@ function fetchPesanan(opsi: { daftar?: unknown[]; detail?: unknown; bukti?: unkn
       if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
       if (input.endsWith("/catalog")) return json({ data: katalog });
       if (input.endsWith("/me/branch")) {
-        return json({ data: { id: "b1", nama: "Grahita Bandung", nama_kepala: "Sri", email: "a@b.test", telepon: "", is_cnc: false, is_active: true } });
+        return json({
+          data: {
+            id: "b1",
+            nama: "Grahita Bandung",
+            nama_kepala: "Sri",
+            email: "a@b.test",
+            telepon: "",
+            is_cnc: opsi.cabangCNC ?? false,
+            is_active: true,
+          },
+        });
       }
       if (input.includes("/orders?status=draft")) {
         return json({ data: daftar.filter((o) => (o as { status: string }).status === "draft") });
@@ -165,8 +186,13 @@ function fetchPesanan(opsi: { daftar?: unknown[]; detail?: unknown; bukti?: unkn
       if (input.endsWith("/orders") && init?.method === "POST") {
         return json({ data: { ...draft, id: "o-baru" } }, 201);
       }
+      // Kirim pesanan (F1-14): multipart ke /orders/{id}/submit.
+      if (input.endsWith("/orders/o1/submit") && init?.method === "POST") {
+        setelahKirim = true;
+        return json({ data: terkirim });
+      }
       if (input.endsWith("/orders/o1") && (init?.method ?? "GET") === "GET") {
-        return json({ data: opsi.detail ?? draftLengkap });
+        return json({ data: setelahKirim ? terkirim : (opsi.detail ?? draftLengkap) });
       }
       if (input.endsWith("/orders/o1") && init?.method === "PUT") {
         return json({ data: { ...draftLengkap, total: 200000 } });
@@ -399,6 +425,99 @@ describe("Customer Portal — Sertifikat & Cash and Carry (F1-12)", () => {
     expect(screen.getAllByText(/3\.000/).length).toBeGreaterThan(0);
     // Pesanan yang sudah dikirim tetap terkunci untuk cabang.
     expect(screen.queryByRole("button", { name: "Ubah" })).toBeNull();
+  });
+});
+
+describe("Customer Portal — kirim pesanan (F1-14)", () => {
+  it("membuka modal kirim: bukti wajib untuk cabang non-C&C", async () => {
+    fetchPesanan();
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).getByText(/nomor pesanan dan serial number dibuat/)).toBeDefined();
+    expect(within(dialog).getByLabelText(/minimal satu berkas/)).toBeDefined();
+    // Cabang tanpa flag C&C tidak punya pilihan C&C sama sekali (CP-CNC-01).
+    expect(within(dialog).queryByRole("switch")).toBeNull();
+  });
+
+  it("menolak mengirim pesanan non-C&C tanpa bukti tanpa memanggil API", async () => {
+    const panggilan = fetchPesanan();
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+
+    expect(
+      await within(dialog).findByText("Pesanan wajib disertai minimal satu bukti transfer (JPG, PNG, atau PDF)."),
+    ).toBeDefined();
+    expect(panggilan.some((p) => p.url.endsWith("/submit"))).toBe(false);
+  });
+
+  it("mengirim multipart bukti + is_cnc=false lalu menampilkan nomor pesanan", async () => {
+    const panggilan = fetchPesanan();
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    const berkas = new File(["data"], "transfer.jpg", { type: "image/jpeg" });
+    fireEvent.change(within(dialog).getByLabelText(/Bukti transfer \(JPG\/PNG\/PDF/), {
+      target: { files: [berkas] },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+
+    await waitFor(() => {
+      expect(panggilan.some((p) => p.init?.method === "POST" && p.url.endsWith("/orders/o1/submit"))).toBe(
+        true,
+      );
+    });
+    const kirim = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"));
+    expect(kirim?.init?.body instanceof FormData).toBe(true);
+    const form = kirim?.init?.body as FormData;
+    expect(form.getAll("file").length).toBe(1);
+    expect(form.get("is_cnc")).toBe("false");
+    // Content-Type tidak disetel manual supaya boundary multipart tetap sah.
+    expect((kirim?.init?.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+
+    // Setelah berhasil: halaman memuat ulang detail yang sudah dikirim.
+    expect(await screen.findByRole("heading", { name: "2026-10-01" })).toBeDefined();
+    expect(
+      screen.getByText(/Pesanan sudah dikirim\. Nomor pesanan dan serial number sudah terbit/),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Ubah" })).toBeNull();
+  });
+
+  it("cabang C&C boleh mengirim tanpa bukti dan mengirim is_cnc=true", async () => {
+    const panggilan = fetchPesanan({ cabangCNC: true });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    // Flag C&C cabang dibaca dari server; centangnya muncul karena itu.
+    const saklar = await within(dialog).findByRole("switch", { name: "Cash & Carry" });
+    expect(within(dialog).getByLabelText(/minimal satu berkas/)).toBeDefined();
+
+    fireEvent.click(saklar);
+    expect(within(dialog).getByLabelText(/opsional untuk Cash & Carry/)).toBeDefined();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+    await waitFor(() => {
+      expect(panggilan.some((p) => p.url.endsWith("/orders/o1/submit"))).toBe(true);
+    });
+    const kirim = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"));
+    const form = kirim?.init?.body as FormData;
+    expect(form.get("is_cnc")).toBe("true");
+    expect(form.getAll("file").length).toBe(0);
   });
 });
 

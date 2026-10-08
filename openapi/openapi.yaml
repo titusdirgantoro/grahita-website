@@ -643,6 +643,99 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/v1/orders/{id}/submit:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    post:
+      tags: [customer]
+      operationId: submitOrder
+      summary: Kirim draft menjadi pesanan resmi (nomor + serial terbit)
+      description: |
+        Transisi `draft` → `submitted` (PRD CP-ORD-05, CP-ORD-09): nomor
+        invoice dan serial number per baris produk diterbitkan, snapshot
+        harga/nama/satuan disegarkan dari master yang berlaku SAAT SUBMIT
+        (BR-05), tanggal pesanan ditetapkan menurut zona Asia/Jakarta (BR-04,
+        BR-11), dan pesanan terkunci untuk cabang (BR-07).
+
+        Badan permintaan `multipart/form-data`:
+
+        - `file` — bukti transfer (JPG/PNG/PDF), boleh diulang dan boleh
+          TIDAK DIISI bila buktinya sudah diunggah lewat
+          `POST /orders/{id}/proofs`. Aturan jenis/ukuran/jumlah sama dengan
+          unggahan bukti (`max_file` × `max_mb`, CP-ORD-04);
+        - `is_cnc` — `true`/`false` (opsional, bawaan `false`). Menandai Cash
+          & Carry: bukti transfer menjadi opsional dan `jatuh_tempo` diisi
+          tanggal pesanan + `cnc_hari` (CP-CNC-02, CP-CNC-04).
+
+        Aturan yang ditegakkan server di dalam SATU transaksi:
+
+        - baris pesanan dikunci (`FOR UPDATE`) dan statusnya diperiksa ulang,
+          sehingga submit bersamaan tidak bisa menembus dua kali → submit
+          ulang dijawab `409 ORDER_LOCKED`;
+        - isi draft divalidasi ULANG: produk aktif dan punya harga cabang
+          (`branch_prices`, bukan `harga_default`), Sertifikat berharga 0
+          dengan tepat satu baris biaya packaging senilai setelan
+          `biaya_packaging` yang berlaku, dan pencampuran Sertifikat dengan
+          produk reguler ditolak;
+        - pesanan non-C&C wajib punya minimal satu bukti transfer →
+          `400 VALIDATION_FAILED` bila belum ada (bukti yang sudah diunggah
+          tetap tersimpan, dan TIDAK ada nomor yang terpakai);
+        - C&C hanya sah bila cabang sesi benar-benar berflag `cash_and_carry`;
+          cabang tanpa flag dijawab `400` (flag dibaca server, bukan dari
+          klien) → anti pemalsuan `is_cnc`/biaya/total;
+        - nomor invoice diambil dari counter global bulanan (`YYYY-MM-XX`,
+          `XX` = `digit_invoice`, melebar bila urutannya melebihi digit itu)
+          dan serial dari counter harian (`YYYYMMDDXXX`, satu rentang untuk
+          seluruh baris produk; baris packaging tanpa serial);
+        - total dihitung ulang server dari barisnya (BR-10) dan timeline
+          "Pesanan dikirim oleh cabang" ditulis di transaksi yang sama, jadi
+          rollback tidak memakai nomor (BR-09).
+
+        Bukti transfer disimpan oleh domain bukti SEBELUM pesanan dikirim, jadi
+        atomisitas lintas storage + database tidak diklaim: bila submit-nya
+        gagal, bukti yang sudah terunggah tetap tersimpan sebagai bukti draft.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: array
+                  items: { type: string, format: binary }
+                is_cnc:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Pesanan terkirim (status submitted, bernomor)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Order" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
   /api/v1/orders/{id}/proofs:
     parameters:
       - $ref: "#/components/parameters/OrderIdPath"
