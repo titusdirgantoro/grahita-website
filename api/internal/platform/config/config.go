@@ -60,12 +60,21 @@ type Config struct {
 	S3SecretKey    string
 	S3UsePathStyle bool
 
-	// SMTP (Mailpit saat lokal, Gmail saat produksi).
-	SMTPHost string
-	SMTPPort int
-	SMTPUser string
-	SMTPPass string
-	MailFrom string
+	// SMTP (Mailpit saat lokal, Gmail saat produksi). Timeout adalah batas
+	// waktu TOTAL satu operasi kirim supaya peer SMTP yang diam tidak
+	// menggantung worker (temuan QA F1-05).
+	SMTPHost    string
+	SMTPPort    int
+	SMTPUser    string
+	SMTPPass    string
+	MailFrom    string
+	SMTPTimeout time.Duration
+
+	// Email outbox (F1-16): jeda pemindaian, batas percobaan kirim per email,
+	// dan ukuran batch worker pengirim email.
+	OutboxInterval    time.Duration
+	OutboxMaxAttempts int
+	OutboxBatch       int
 
 	// Gotenberg (HTML -> PDF).
 	GotenbergURL string
@@ -131,6 +140,8 @@ func Load() (Config, error) {
 		SMTPPass:          env("SMTP_PASS", ""),
 		MailFrom:          env("MAIL_FROM", "no-reply@grahita.id"),
 		GotenbergURL:      env("GOTENBERG_URL", ""),
+		OutboxMaxAttempts: envInt("OUTBOX_MAX_ATTEMPTS", 6),
+		OutboxBatch:       envInt("OUTBOX_BATCH", 50),
 		WorkerShutdown:    20 * time.Second,
 		JobPollInterval:   15 * time.Second,
 	}
@@ -150,6 +161,12 @@ func Load() (Config, error) {
 		return c, err
 	}
 	if c.JobPollInterval, err = envDuration("WORKER_INTERVAL", c.JobPollInterval); err != nil {
+		return c, err
+	}
+	if c.SMTPTimeout, err = envDuration("SMTP_TIMEOUT", 30*time.Second); err != nil {
+		return c, err
+	}
+	if c.OutboxInterval, err = envDuration("OUTBOX_INTERVAL", time.Minute); err != nil {
 		return c, err
 	}
 

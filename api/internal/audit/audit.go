@@ -23,6 +23,9 @@ const (
 	// EntityBranchPrice mencatat perubahan sel matriks harga Produk × Cabang
 	// (PRD AP-KAT-06). EntityID-nya adalah product_id.
 	EntityBranchPrice = "branch_price"
+	// EntityEmail mencatat email transaksional (email_outbox). EntityID-nya
+	// adalah id baris outbox yang bersangkutan (F1-16).
+	EntityEmail = "email"
 )
 
 // Aksi yang dicatat (kolom audit_logs.action).
@@ -37,6 +40,9 @@ const (
 	// ActionCopy mencatat aksi "salin harga" dari satu cabang ke cabang lain
 	// (PRD AP-KAT-04); EntityID-nya adalah cabang tujuan.
 	ActionCopy = "copy"
+	// ActionResend mencatat kirim ulang email transaksional oleh admin
+	// (SystemDesign.md §6, kartu F1-16).
+	ActionResend = "resend"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.

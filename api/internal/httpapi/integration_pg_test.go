@@ -32,11 +32,14 @@ import (
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
+	"github.com/grahita/portal/api/internal/notification"
+	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
 	"github.com/grahita/portal/api/internal/order"
 	orderpg "github.com/grahita/portal/api/internal/order/postgres"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/registration"
 	registrationpg "github.com/grahita/portal/api/internal/registration/postgres"
 	"github.com/grahita/portal/api/internal/settings"
@@ -49,17 +52,24 @@ import (
 type pgFixture struct {
 	srv  *httptest.Server
 	pool *database.Pool
-	mail *fakeResetMailer
+	mail *resetSpy
 
 	// users adalah service pengelolaan akun (F1-05); queue menangkap email
 	// undangan admin yang diantre. branches adalah service master cabang
 	// (F1-06). bank adalah service rekening bank (F1-09). registration adalah
 	// service pendaftaran akun cabang lewat token (F1-07).
 	users        *users.Service
-	queue        *fakeUsersQueue
+	queue        *queueSpy
 	branches     *branch.Service
 	bank         *bank.Service
 	registration *registration.Service
+
+	// Email outbox (F1-16): notif adalah service outbox produksi, kirim
+	// menangkap email yang benar-benar dikirim worker, objek adalah object
+	// storage in-memory untuk lampiran dokumen.
+	notif *notification.Service
+	kirim *fakeSender
+	objek *storage.Memory
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -157,7 +167,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		t.Fatalf("mengosongkan tabel domain: %v", err)
 	}
 
-	f := &pgFixture{pool: pool, mail: &fakeResetMailer{}}
+	f := &pgFixture{pool: pool}
 	hash, err := auth.HashPassword("rahasia123")
 	if err != nil {
 		t.Fatalf("hash kata sandi uji: %v", err)
@@ -190,11 +200,31 @@ func newPGFixture(t *testing.T) *pgFixture {
 
 	authRepo := authpg.New(pool)
 	svc := auth.NewService(authRepo, authRepo, authRepo, clock.System(), 8*time.Hour, 30*24*time.Hour)
+
+	// Email outbox produksi (F1-16) di atas PostgreSQL nyata: service outbox,
+	// pengirim palsu yang menangkap email, dan object storage in-memory untuk
+	// lampiran dokumen.
+	notifStore := notificationpg.New(pool)
+	objek := storage.NewMemory("/files")
+	kirim := &fakeSender{}
+	notifSvc := notification.New(notifStore, kirim,
+		notification.WithObjectStore(objek),
+		notification.WithOrderReader(notifStore),
+		notification.WithAdminRecipients(userspg.New(pool)),
+	)
+	f.notif = notifSvc
+	f.kirim = kirim
+	f.objek = objek
+	// Tautan reset/undangan tetap harus menunjuk portal yang benar; spy
+	// mencatat permintaan lalu meneruskannya ke outbox produksi.
+	f.mail = &resetSpy{delegat: notification.NewResetMailer(
+		notifSvc, testConfig().CustomerBaseURL(), testConfig().AdminBaseURL(), testConfig().PasswordResetPath)}
 	svc.SetResetMailer(f.mail)
 
 	// Pengelolaan akun pengguna (F1-05): repository nyata di atas PostgreSQL,
-	// email undangan diantre lewat queue palsu, tautan diarahkan ke portal admin.
-	queue := &fakeUsersQueue{}
+	// email undangan diantre lewat outbox produksi, tautan diarahkan ke portal
+	// admin.
+	queue := &queueSpy{delegat: notification.NewQueue(notifSvc)}
 	usersSvc := users.NewService(userspg.New(pool), svc, svc,
 		users.WithEmailQueue(queue),
 		users.WithResetURLBuilder(func(kind auth.Kind, token string) string {
@@ -230,6 +260,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Branches:            branchSvc,
 		Bank:                bankSvc,
 		Registration:        registrationSvc,
+		Emails:              notifSvc,
 		LoginLimiter:        httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter:       httpx.NewRateLimiter(5, 15*time.Minute),
 		RegistrationLimiter: httpx.NewRateLimiter(50, 15*time.Minute),
@@ -272,7 +303,8 @@ func pgEnsureSchema(t *testing.T, ctx context.Context, scopedURL string, pool *d
 
 func kosongkanDomain(ctx context.Context, pool *database.Pool) error {
 	_, err := pool.Exec(ctx, `TRUNCATE branches, branch_users, admin_users, products, sessions,
-		registration_tokens, password_reset_tokens, audit_logs RESTART IDENTITY CASCADE`)
+		registration_tokens, password_reset_tokens, audit_logs, orders, order_lines,
+		documents, order_events, email_outbox, cnc_reminders RESTART IDENTITY CASCADE`)
 	return err
 }
 

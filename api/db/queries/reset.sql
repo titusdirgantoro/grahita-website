@@ -3,12 +3,15 @@
 -- Yang disimpan hanya SHA-256 token; nilai aslinya hanya dikirim lewat email.
 -- Karena itu kolom uniknya token_hash, bukan nilai token.
 
--- name: DeleteActivePasswordResetTokens :exec
--- Minta tautan baru membatalkan tautan lama yang belum dipakai supaya hanya
--- satu tautan berlaku pada satu waktu.
-DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL;
-
--- name: CreatePasswordResetToken :exec
+-- name: ReplacePasswordResetToken :exec
+-- Membatalkan tautan lama dan menyimpan yang baru dalam SATU pernyataan
+-- (data-modifying CTE). Dipakai jalur email (F1-16): kegagalan separuh jalan
+-- tidak boleh meninggalkan akun tanpa tautan aktif sama sekali.
+WITH dibatalkan AS (
+    DELETE FROM password_reset_tokens
+     WHERE user_id = sqlc.arg(user_id)
+       AND used_at IS NULL
+)
 INSERT INTO password_reset_tokens (actor_kind, user_id, token_hash, expires_at)
 VALUES (sqlc.arg(actor_kind)::actor_kind, sqlc.arg(user_id), sqlc.arg(token_hash), sqlc.arg(expires_at));
 

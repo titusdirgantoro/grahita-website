@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
 )
@@ -41,15 +42,48 @@ func (PingWorker) Work(ctx context.Context, job *river.Job[PingArgs]) error {
 	return nil
 }
 
+// EmailScanArgs adalah job pemindai email_outbox (F1-16). Job ini tidak
+// membawa data apa pun: seluruh keadaan ada di tabel email_outbox, sehingga
+// job yang terlewat/tergandakan tidak pernah membuat email terkirim dua kali
+// (klaim baris memakai FOR UPDATE SKIP LOCKED).
+type EmailScanArgs struct{}
+
+// Kind mengidentifikasi job pemindai email di tabel River.
+func (EmailScanArgs) Kind() string { return "email_outbox_pindai" }
+
+// EmailScanWorker memindai email_outbox dan mengirim yang sudah waktunya.
+type EmailScanWorker struct {
+	river.WorkerDefaults[EmailScanArgs]
+	notif *notification.Service
+}
+
+// Work menjalankan satu siklus pengiriman email.
+func (w *EmailScanWorker) Work(ctx context.Context, job *river.Job[EmailScanArgs]) error {
+	if w.notif == nil {
+		return nil
+	}
+	hasil, err := w.notif.ProsesAntrean(ctx, 0)
+	slog.InfoContext(ctx, "pemindaian email outbox",
+		"diklaim", hasil.Diklaim, "terkirim", hasil.Terkirim,
+		"ditunda", hasil.Ditunda, "menyerah", hasil.Menyerah)
+	return err
+}
+
 // Client membungkus River client beserta pool-nya.
 type Client struct {
 	river *river.Client[pgx.Tx]
 }
 
 // New membuat River client dengan queue sesuai konfigurasi.
-func New(pool *database.Pool, cfg config.Config) (*Client, error) {
+//
+// notif boleh nil (mis. pengujian unit worker tanpa database domain); bila
+// diisi, worker mengirim email_outbox secara berkala.
+func New(pool *database.Pool, cfg config.Config, notif *notification.Service) (*Client, error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &PingWorker{})
+	if notif != nil {
+		river.AddWorker(workers, &EmailScanWorker{notif: notif})
+	}
 
 	queues := map[string]river.QueueConfig{}
 	for name, max := range cfg.WorkerQueues {
@@ -68,9 +102,23 @@ func New(pool *database.Pool, cfg config.Config) (*Client, error) {
 		cooldown = cfg.JobPollInterval / 2
 	}
 
+	periodic := []*river.PeriodicJob{}
+	if notif != nil {
+		interval := cfg.OutboxInterval
+		if interval < time.Second {
+			interval = time.Minute
+		}
+		periodic = append(periodic, river.NewPeriodicJob(
+			river.PeriodicInterval(interval),
+			func() (river.JobArgs, *river.InsertOpts) { return EmailScanArgs{}, nil },
+			&river.PeriodicJobOpts{ID: "email-outbox", RunOnStart: true},
+		))
+	}
+
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues:            queues,
 		Workers:           workers,
+		PeriodicJobs:      periodic,
 		JobTimeout:        2 * time.Minute,
 		FetchCooldown:     cooldown,
 		FetchPollInterval: cfg.JobPollInterval,

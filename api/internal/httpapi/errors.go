@@ -8,6 +8,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -132,8 +133,34 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, users.ErrNoAccount):
 		return apierr.Conflict("NO_ACCOUNT",
 			"Cabang ini belum punya akun. Buat token registrasi lebih dahulu di halaman Cabang.")
+	case errors.Is(err, users.ErrNotInvited):
+		return apierr.Conflict("NOT_INVITED",
+			"Akun admin ini bukan undangan yang menunggu aktivasi. Gunakan lupa kata sandi bila akunnya sudah aktif.")
 	case errors.Is(err, users.ErrInvalidData):
 		return apierr.Validation("Data pengguna tidak valid.", nil)
+	// Email transaksional (F1-16). Kirim ulang adalah pemulihan: admin hanya
+	// bisa memicu email yang memang pernah dibuat untuk pesanan itu.
+	case errors.Is(err, notification.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke email pesanan.")
+	case errors.Is(err, notification.ErrNotFound):
+		return apierr.NotFound("Email yang diminta tidak ditemukan untuk pesanan ini.")
+	case errors.Is(err, notification.ErrKindInvalid):
+		return apierr.New(http.StatusBadRequest, "EMAIL_KIND_INVALID",
+			"Jenis email tidak dikenal. Pilihan: invoice_cabang, invoice_admin, surat_jalan_admin.")
+	case errors.Is(err, notification.ErrNoRecipient):
+		return apierr.New(http.StatusConflict, "NO_RECIPIENT",
+			"Tidak ada penerima yang berhak menerima email ini. Periksa status aktif admin dan flag notifikasinya.")
+	case errors.Is(err, notification.ErrDocumentNotReady):
+		return apierr.New(http.StatusConflict, "DOCUMENT_NOT_READY",
+			"Dokumen pesanan belum selesai dirender sehingga email belum bisa dikirim. Coba lagi setelah proses dokumen selesai.")
+	case errors.Is(err, notification.ErrAlreadyQueued):
+		return apierr.Conflict("EMAIL_ALREADY_QUEUED",
+			"Email jenis ini masih dalam antrean. Tunggu prosesnya selesai sebelum mengirim ulang.")
+	case errors.Is(err, notification.ErrAttachmentUnavailable):
+		return apierr.New(http.StatusConflict, "ATTACHMENT_UNAVAILABLE",
+			"Lampiran dokumen tidak dapat dibaca. Hubungi admin Pusat.")
+	case errors.Is(err, notification.ErrInvalidData):
+		return apierr.Validation("Data email tidak valid.", map[string]string{"email": err.Error()})
 	// Pendaftaran akun cabang lewat token (F1-07). Pesan sengaja spesifik per
 	// keadaan supaya pengguna tahu harus berbuat apa (PRD CP-REG-07).
 	case errors.Is(err, registration.ErrTokenInvalid):

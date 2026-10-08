@@ -212,18 +212,19 @@ func (r *Repo) UpdateName(ctx context.Context, kind auth.Kind, id, nama string) 
 
 // CreateResetToken membatalkan token atur ulang lama milik pengguna lalu
 // menyimpan yang baru — hanya satu tautan berlaku pada satu waktu.
+//
+// Pembatalan dan penyimpanan terjadi dalam SATU pernyataan SQL (data-modifying
+// CTE) supaya kegagalan separuh jalan tidak mungkin meninggalkan akun tanpa
+// tautan aktif (catatan QA F1-04 untuk F1-16).
 func (r *Repo) CreateResetToken(ctx context.Context, t auth.ResetToken, tokenHash []byte) error {
-	if err := r.q.DeleteActivePasswordResetTokens(ctx, t.UserID); err != nil {
-		return fmt.Errorf("query DeleteActivePasswordResetTokens: %w", err)
-	}
-	err := r.q.CreatePasswordResetToken(ctx, sqlc.CreatePasswordResetTokenParams{
+	err := r.q.ReplacePasswordResetToken(ctx, sqlc.ReplacePasswordResetTokenParams{
 		ActorKind: sqlc.ActorKind(t.Kind),
 		UserID:    t.UserID,
 		TokenHash: tokenHash,
 		ExpiresAt: t.ExpiresAt,
 	})
 	if err != nil {
-		return fmt.Errorf("query CreatePasswordResetToken: %w", err)
+		return fmt.Errorf("query ReplacePasswordResetToken: %w", err)
 	}
 	return nil
 }

@@ -80,6 +80,13 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
 
 			r.Route("/admin", func(r chi.Router) {
+				// Riwayat email pesanan + kirim ulang (F1-16). Manager maupun
+				// Superadmin boleh memakainya (PRD §2.1).
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminOrders))
+					r.Get("/orders/{id}/emails", a.adapt(a.adminOrderEmails))
+					r.Post("/orders/{id}/emails/{kind}/resend", a.adapt(a.adminOrderEmailResend))
+				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminBranches))
 					r.Get("/branches", a.adapt(a.adminBranches))
@@ -103,6 +110,9 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/users/admin", a.adapt(a.adminUsers))
 					r.Post("/users/admin", a.adapt(a.adminUserCreate))
 					r.Put("/users/admin/{id}", a.adapt(a.adminUserUpdate))
+					// Kirim ulang tautan aktivasi admin yang masih undangan
+					// (pemulihan bila email undangan pertama gagal).
+					r.Post("/users/admin/{id}/resend", a.adapt(a.adminUserResendInvite))
 				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminCatalog))

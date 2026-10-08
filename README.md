@@ -118,6 +118,7 @@ membaca import graph kode sumber. Melanggarnya = CI merah.
    └─ internal/
       ├─ httpapi                # router, middleware, handler
       ├─ auth catalog settings  # service + kontrak repository
+      ├─ notification           # outbox email: template, retry, worker
       ├─ */postgres             # implementasi repository (sqlc)
       ├─ db/sqlc                # kode hasil generate
       ├─ platform/*             # config, database, httpx, apierr, clock, storage, mailer, pdf, pgtypes
@@ -292,6 +293,45 @@ kata sandi F1-10).
   (respons seragam); dengan `?token=` = buat kata sandi baru lewat
   `POST /auth/password/reset` (token sekali pakai, seluruh sesi lama dicabut).
 - Bukti & keputusan: `docs/design/f1-10/HASIL.md`.
+
+## Email transaksional: outbox, retry & kirim ulang (F1-16)
+
+Email tidak pernah dikirim dari handler HTTP. Service menulis baris ke
+`email_outbox` (di dalam transaksi bisnisnya lewat `EnqueueTx`), worker
+(`--mode=worker`, job periodik `email_outbox_pindai`) memindai, mengirim, lalu
+memperbarui status (`queued` → `sending` → `sent`/`failed`).
+
+- **Jenis**: `reset_password`, `undangan_admin`, `invoice_cabang`,
+  `invoice_admin`, `surat_jalan_admin`, `reminder_cnc` (Database.md §3).
+- **Retry**: 1m, 5m, 30m, 2j, 6j — maksimum 5 percobaan **ulang** (jadi 6 kali
+  kirim), setelah itu `failed` dengan `last_error` (PRD EM-01). Baris `sent`
+  tidak pernah dikirim ulang worker.
+- **Klaim aman paralel**: `FOR UPDATE SKIP LOCKED` + masa sewa 15 menit,
+  sehingga baris tidak terkirim dua kali dan baris `sending` yang ditinggal
+  proses mati pulih sendiri.
+- **Penerima**: email Pusat hanya ke admin **aktif & sudah diaktivasi** yang
+  ber-flag `notif_invoice`/`notif_surat_jalan`; admin undangan/nonaktif tidak
+  pernah menerima. Email cabang memakai `branches.email`.
+- **Lampiran**: email dokumen menunggu baris `documents` pada versi pesanan
+  yang diminta (`409 DOCUMENT_NOT_READY` bila belum) dan melampirkan berkas
+  dari object storage (invoice PDF; surat jalan PDF + XLSX).
+- **Endpoint admin**:
+
+| Method | Path | Catatan |
+|---|---|---|
+| GET | `/admin/orders/{id}/emails` | riwayat + status + `last_error` (EM-02) |
+| POST | `/admin/orders/{id}/emails/{kind}/resend` | kirim ulang dokumen, ber-audit |
+| POST | `/admin/users/admin/{id}/resend` | pemulihan undangan admin (Superadmin) |
+
+- **Konfigurasi** (tanpa rahasia di repo): `SMTP_HOST/PORT/USER/PASS`,
+  `MAIL_FROM`, `SMTP_TIMEOUT` (batas waktu total satu kirim, default 30s),
+  `OUTBOX_INTERVAL`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_BATCH`. Lokal memakai
+  Mailpit (`http://localhost:8025`).
+- **Uji**: `internal/notification` (unit + integrasi PostgreSQL: rollback tidak
+  mengirim, klaim paralel, retry tersimpan), `internal/platform/mailer`
+  (MIME + lampiran, deadline peer diam), dan `internal/httpapi` (integrasi PG:
+  tautan reset/undangan dari outbox, penerima email dokumen, kirim ulang +
+  audit, email gagal di riwayat).
 
 ## Produksi
 

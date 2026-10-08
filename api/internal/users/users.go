@@ -70,6 +70,9 @@ var (
 	ErrLastSuperadmin = errors.New("superadmin aktif terakhir tidak boleh dinonaktifkan atau diturunkan")
 	// ErrNoAccount: cabang belum punya akun (belum registrasi).
 	ErrNoAccount = errors.New("cabang belum punya akun")
+	// ErrNotInvited: akun admin bukan undangan yang menunggu aktivasi (sudah
+	// aktif atau nonaktif) sehingga tautan undangan tidak berlaku untuknya.
+	ErrNotInvited = errors.New("akun admin ini bukan undangan yang menunggu aktivasi")
 	// ErrInvalidData: data yang dikirim tidak lolos validasi domain.
 	ErrInvalidData = errors.New("data pengguna tidak valid")
 )
@@ -381,9 +384,25 @@ func (s *Service) InviteAdmin(ctx context.Context, actor auth.Actor, in NewAdmin
 		return AdminUser{}, fmt.Errorf("buat undangan admin: %w", err)
 	}
 
+	// Catatan: CreateAdmin, tautan aktivasi, dan antrean email bukan satu
+	// transaksi database (repository pengguna dan repository token terpisah).
+	// Karena itu kegagalan di sini TIDAK boleh membiarkan undangan tanpa jalan
+	// pemulihan: admin yang sudah terlanjur dibuat selalu bisa dikirim ulang
+	// tautannya lewat ResendInviteAdmin, dan belum bisa login sampai
+	// mengaktivasi (password_hash/activated_at NULL).
+	if err := s.sendInvite(ctx, admin, ttl); err != nil {
+		return AdminUser{}, err
+	}
+	return admin, nil
+}
+
+// sendInvite membuat tautan aktivasi baru untuk seorang admin undangan lalu
+// mengantre email undangannya lewat outbox. Tautan lama otomatis batal
+// (satu tautan aktif per akun).
+func (s *Service) sendInvite(ctx context.Context, admin AdminUser, ttl time.Duration) error {
 	issued, err := s.resets.IssuePasswordResetFor(ctx, auth.KindAdmin, admin.ID, ttl)
 	if err != nil {
-		return AdminUser{}, fmt.Errorf("buat tautan aktivasi admin: %w", err)
+		return fmt.Errorf("buat tautan aktivasi admin: %w", err)
 	}
 	tautan := ""
 	if s.resetURL != nil {
@@ -403,7 +422,35 @@ func (s *Service) InviteAdmin(ctx context.Context, actor auth.Actor, in NewAdmin
 			"catatan":        "Buat kata sandi lewat tautan ini; akun baru aktif setelah kata sandi dibuat.",
 		},
 	}); err != nil {
-		return AdminUser{}, fmt.Errorf("antre email undangan admin: %w", err)
+		return fmt.Errorf("antre email undangan admin: %w", err)
+	}
+	return nil
+}
+
+// ResendInviteAdmin mengirim ulang (membuat ulang) tautan aktivasi untuk admin
+// yang masih berstatus UNDANGAN — jalan pemulihan resmi bila antrean email
+// undangan pertama gagal, tanpa harus menunggu admin itu tidak bisa apa-apa.
+//
+// Sifatnya idempoten dari sisi keadaan: pemanggilan berulang tidak membuat
+// akun baru, dan selalu menyisakan tepat satu tautan aktif (tautan lama batal).
+// Akun yang sudah aktif (atau nonaktif) ditolak dengan ErrNotInvited: mereka
+// memakai alur lupa kata sandi biasa.
+func (s *Service) ResendInviteAdmin(ctx context.Context, actor auth.Actor, id string, ttl time.Duration) (AdminUser, error) {
+	if !actor.Can(auth.CapAdminUsersAdmin) {
+		return AdminUser{}, ErrForbidden
+	}
+	if id == "" {
+		return AdminUser{}, ErrNotFound
+	}
+	admin, err := s.repo.AdminByID(ctx, id)
+	if err != nil {
+		return AdminUser{}, err
+	}
+	if !admin.IsActive || admin.ActivatedAt != nil {
+		return AdminUser{}, ErrNotInvited
+	}
+	if err := s.sendInvite(ctx, admin, ttl); err != nil {
+		return AdminUser{}, err
 	}
 	return admin, nil
 }

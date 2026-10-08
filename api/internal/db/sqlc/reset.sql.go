@@ -45,40 +45,37 @@ func (q *Queries) ConsumePasswordResetToken(ctx context.Context, arg ConsumePass
 	return i, err
 }
 
-const createPasswordResetToken = `-- name: CreatePasswordResetToken :exec
+const replacePasswordResetToken = `-- name: ReplacePasswordResetToken :exec
+
+WITH dibatalkan AS (
+    DELETE FROM password_reset_tokens
+     WHERE user_id = $2
+       AND used_at IS NULL
+)
 INSERT INTO password_reset_tokens (actor_kind, user_id, token_hash, expires_at)
 VALUES ($1::actor_kind, $2, $3, $4)
 `
 
-type CreatePasswordResetTokenParams struct {
+type ReplacePasswordResetTokenParams struct {
 	ActorKind ActorKind `json:"actor_kind"`
 	UserID    string    `json:"user_id"`
 	TokenHash []byte    `json:"token_hash"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) error {
-	_, err := q.db.Exec(ctx, createPasswordResetToken,
+// Token atur ulang kata sandi (Database.md §4.2, PRD §3.2).
+//
+// Yang disimpan hanya SHA-256 token; nilai aslinya hanya dikirim lewat email.
+// Karena itu kolom uniknya token_hash, bukan nilai token.
+// Membatalkan tautan lama dan menyimpan yang baru dalam SATU pernyataan
+// (data-modifying CTE). Dipakai jalur email (F1-16): kegagalan separuh jalan
+// tidak boleh meninggalkan akun tanpa tautan aktif sama sekali.
+func (q *Queries) ReplacePasswordResetToken(ctx context.Context, arg ReplacePasswordResetTokenParams) error {
+	_, err := q.db.Exec(ctx, replacePasswordResetToken,
 		arg.ActorKind,
 		arg.UserID,
 		arg.TokenHash,
 		arg.ExpiresAt,
 	)
-	return err
-}
-
-const deleteActivePasswordResetTokens = `-- name: DeleteActivePasswordResetTokens :exec
-
-DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL
-`
-
-// Token atur ulang kata sandi (Database.md §4.2, PRD §3.2).
-//
-// Yang disimpan hanya SHA-256 token; nilai aslinya hanya dikirim lewat email.
-// Karena itu kolom uniknya token_hash, bukan nilai token.
-// Minta tautan baru membatalkan tautan lama yang belum dipakai supaya hanya
-// satu tautan berlaku pada satu waktu.
-func (q *Queries) DeleteActivePasswordResetTokens(ctx context.Context, userID string) error {
-	_, err := q.db.Exec(ctx, deleteActivePasswordResetTokens, userID)
 	return err
 }

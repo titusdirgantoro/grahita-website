@@ -162,6 +162,9 @@ services:
       GOTENBERG_URL: ${GOTENBERG_URL:-http://gotenberg:3000}
       WORKER_INTERVAL: ${WORKER_INTERVAL:-15s}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}
+      # Di lokal outbox dipindai lebih sering supaya email Mailpit cepat muncul.
+      OUTBOX_INTERVAL: ${OUTBOX_INTERVAL:-10s}
     command: ["--mode=worker"]
 
   # Menyajikan hasil build kedua SPA dan mem-proxy /api/* ke service api

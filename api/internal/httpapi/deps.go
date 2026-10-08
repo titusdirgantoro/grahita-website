@@ -18,6 +18,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -48,6 +49,10 @@ type Deps struct {
 	Users    *users.Service
 	Branches *branch.Service
 	Bank     *bank.Service
+
+	// Emails melayani outbox email transaksional: riwayat email pesanan dan
+	// kirim ulang oleh admin (F1-16).
+	Emails *notification.Service
 
 	// Orders melayani draft, editor order line, daftar dan detail pesanan
 	// cabang (F1-11).

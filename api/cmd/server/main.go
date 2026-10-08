@@ -30,6 +30,8 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/httpapi"
+	"github.com/grahita/portal/api/internal/notification"
+	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
 	"github.com/grahita/portal/api/internal/order"
 	orderpg "github.com/grahita/portal/api/internal/order/postgres"
 	"github.com/grahita/portal/api/internal/platform/clock"
@@ -119,7 +121,8 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 	defer pool.Close()
 
 	if mode == "worker" {
-		client, err := worker.New(pool, cfg)
+		notif := buildNotification(pool, cfg, storage.Store(storage.Disabled{}), buildMailer(cfg))
+		client, err := worker.New(pool, cfg, notif)
 		if err != nil {
 			return err
 		}
@@ -130,6 +133,38 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 	}
 
 	return runAPI(ctx, pool, cfg, logger)
+}
+
+// buildMailer menyusun pengirim email dari konfigurasi.
+//
+// SMTP tidak dikonfigurasi berarti pengirim Log (hanya mencatat) — dipakai di
+// lingkungan lokal tanpa Mailpit dan pada pengujian.
+func buildMailer(cfg config.Config) mailer.Mailer {
+	if cfg.SMTPHost == "" {
+		return mailer.Log{}
+	}
+	smtp := mailer.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.MailFrom)
+	smtp.SetTimeout(cfg.SMTPTimeout)
+	return smtp
+}
+
+// buildNotification menyusun service email_outbox (F1-16).
+//
+// Penerima dokumen admin diambil langsung dari repository pengguna
+// (DocumentRecipients) supaya tidak ada ketergantungan melingkar antara
+// users.Service dan service outbox.
+func buildNotification(pool *database.Pool, cfg config.Config, store storage.Store, mail mailer.Mailer) *notification.Service {
+	repo := notificationpg.New(pool)
+	return notification.New(repo, mail,
+		notification.WithObjectStore(store),
+		notification.WithOrderReader(repo),
+		notification.WithAdminRecipients(userspg.New(pool)),
+		notification.WithConfig(notification.Config{
+			MaxAttempts: cfg.OutboxMaxAttempts,
+			SendTimeout: cfg.SMTPTimeout,
+			Batch:       cfg.OutboxBatch,
+		}),
+	)
 }
 
 // health adalah adapter dependensi /readyz. Ia hidup di composition root
@@ -162,20 +197,20 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		renderer = pdf.NewGotenberg(cfg.GotenbergURL)
 	}
 
-	mail := mailer.Mailer(mailer.Log{})
-	if cfg.SMTPHost != "" {
-		mail = mailer.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.MailFrom)
-	}
+	mail := buildMailer(cfg)
 	// Tautan atur ulang menunjuk portal asal akun: cabang ke portal cabang,
 	// admin ke portal admin (keduanya same-origin dengan API-nya).
 	resetURL := auth.NewResetURLBuilder(cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath)
-	authSvc.SetResetMailer(auth.NewEmailResetMailer(mail, cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath))
 
-	// Pengelolaan akun pengguna. Undangan admin TIDAK dikirim langsung: ia
-	// diantre lewat EmailQueue yang penulis email_outbox-nya menyusul di F1-16
-	// (users.LogQueue hanya mencatat antrean).
+	// Email transaksional lewat email_outbox (F1-16). Sejak kartu ini tidak
+	// ada lagi email yang dikirim langsung dari service: lupa kata sandi dan
+	// undangan admin menulis baris outbox, worker yang mengirim.
+	notifSvc := buildNotification(pool, cfg, store, mail)
+	authSvc.SetResetMailer(notification.NewResetMailer(notifSvc, cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath))
+
+	// Pengelolaan akun pengguna. Undangan admin diantre lewat email_outbox.
 	usersSvc := users.NewService(userspg.New(pool), authSvc, authSvc,
-		users.WithEmailQueue(users.LogQueue{}),
+		users.WithEmailQueue(notification.NewQueue(notifSvc)),
 		users.WithResetURLBuilder(resetURL),
 	)
 
@@ -216,6 +251,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Branches:            branchSvc,
 		Bank:                bankSvc,
 		Registration:        registrationSvc,
+		Emails:              notifSvc,
 		Storage:             store,
 		Gotenberg:           renderer,
 		Mailer:              mail,

@@ -1537,6 +1537,132 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/v1/admin/users/admin/{id}/resend:
+    post:
+      tags: [admin]
+      operationId: resendAdminInvitation
+      summary: Kirim ulang tautan aktivasi admin undangan (Superadmin)
+      description: |
+        Jalan pemulihan bila email undangan pertama gagal terkirim: tautan
+        aktivasi dibuat ULANG (tautan lama otomatis batal, satu tautan aktif per
+        akun) dan email undangan diantre ulang lewat email_outbox.
+
+        Hanya berlaku untuk admin yang masih berstatus `undangan`. Akun yang
+        sudah mengaktivasi (atau sudah dinonaktifkan) dijawab
+        `409 NOT_INVITED` dan memakai alur lupa kata sandi biasa. Memanggil
+        berulang tidak membuat akun baru. Tautan aslinya tidak pernah
+        dikembalikan endpoint ini.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Tautan aktivasi dibuat ulang dan email undangan diantre
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AdminUser" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/orders/{id}/emails:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [admin]
+      operationId: listOrderEmails
+      summary: Riwayat email satu pesanan (Manager & Superadmin)
+      description: |
+        Menampilkan setiap email transaksional pesanan itu beserta statusnya:
+        `queued` (menunggu), `sending` (sedang dikirim), `sent` (terkirim), atau
+        `failed` (gagal setelah percobaannya habis: 1 percobaan + 5 retry
+        berjenjang). Email gagal tampil di sini lengkap dengan `last_error` dan
+        dapat dikirim ulang lewat endpoint resend (PRD EM-02/EM-03).
+      responses:
+        "200":
+          description: Riwayat email pesanan (terbaru lebih dulu)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/EmailOutbox" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/orders/{id}/emails/{kind}/resend:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: kind
+        in: path
+        required: true
+        description: Jenis email dokumen yang dikirim ulang.
+        schema:
+          type: string
+          enum: [invoice_cabang, invoice_admin, surat_jalan_admin]
+    post:
+      tags: [admin]
+      operationId: resendOrderEmail
+      summary: Kirim ulang email dokumen pesanan (Manager & Superadmin)
+      description: |
+        Membuat baris email_outbox BARU untuk pesanan itu, lalu worker
+        mengirimnya. Sifatnya:
+
+        - hanya untuk email yang MEMANG pernah dibuat untuk pesanan tersebut;
+          pesanan/jenis yang belum pernah punya email dijawab `404`
+          (endpoint ini bukan cara memicu email ke alamat sembarang);
+        - penerima dihitung ULANG dari keadaan sekarang: email Pusat hanya ke
+          admin aktif yang sudah diaktivasi dan flag `notif_invoice` /
+          `notif_surat_jalan` menyala; admin undangan/nonaktif tidak pernah
+          menerima. Bila tidak ada penerima yang berhak dijawab
+          `409 NO_RECIPIENT`;
+        - dokumen harus sudah selesai dirender; bila belum, dijawab
+          `409 DOCUMENT_NOT_READY` (lampiran tidak pernah menunggu di dalam
+          worker);
+        - ditolak `409 EMAIL_ALREADY_QUEUED` bila masih ada email jenis yang
+          sama dalam antrean, sehingga klik ganda tidak menggandakan email;
+        - setiap kirim ulang dicatat di `audit_logs` (`entity` = `email`,
+          `action` = `resend`).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "201":
+          description: Email diantre ulang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/EmailOutbox" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -2125,6 +2251,48 @@ components:
         invited_at: { type: string, format: date-time }
         activated_at: { type: string, format: date-time }
         last_login_at: { type: string, format: date-time }
+
+    EmailOutbox:
+      type: object
+      description: |
+        Satu email transaksional di tabel `email_outbox`. Email tidak pernah
+        dikirim langsung dari handler HTTP: service menulis baris ini di dalam
+        transaksinya, worker memindai dan mengirimnya, lalu memperbarui status.
+      required: [id, jenis, to_addr, subject, status, attempts, next_try_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        order_id:
+          type: string
+          format: uuid
+          description: Kosong untuk email yang tidak terikat pesanan (reset/undangan).
+        jenis:
+          type: string
+          enum: [reset_password, undangan_admin, invoice_cabang, invoice_admin, surat_jalan_admin, reminder_cnc]
+        to_addr: { type: array, items: { type: string, format: email } }
+        cc_addr: { type: array, items: { type: string, format: email } }
+        subject: { type: string }
+        payload:
+          type: object
+          additionalProperties: true
+          description: |
+            Data template + daftar lampiran (`lampiran`: storage_key, nama,
+            content_type). Nilai token/tautan mentah TIDAK pernah dikembalikan
+            ke API selain di dalam payload baris ini yang hanya untuk admin.
+        status:
+          type: string
+          enum: [queued, sending, sent, failed]
+          description: |
+            `failed` berarti percobaannya sudah habis: satu percobaan pertama
+            ditambah 5 percobaan ulang berjenjang (1m, 5m, 30m, 2j, 6j). Baris
+            `sending` yang prosesnya mati akan diklaim ulang setelah masa sewa
+            klaim habis, dan baris `sending` yang percobaannya habis ditandai
+            `failed` pada pemindaian berikutnya. Baris `sent` tidak pernah
+            dikirim ulang oleh worker.
+        attempts: { type: integer, minimum: 0 }
+        next_try_at: { type: string, format: date-time }
+        last_error: { type: string }
+        sent_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
 
 security:
   - cookieAuth: []

@@ -132,6 +132,23 @@ func (a *API) adminUserCreate(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// adminUserResendInvite membuat ulang tautan aktivasi admin undangan dan
+// mengantre ulang email undangannya (PRD §4.8, F1-16). Ini jalan pemulihan bila
+// email undangan pertama gagal terkirim. Tautan aslinya tidak pernah
+// dikembalikan API.
+func (a *API) adminUserResendInvite(w http.ResponseWriter, r *http.Request) error {
+	if a.d.Users == nil {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan pengguna belum tersedia.")
+	}
+	admin, err := a.d.Users.ResendInviteAdmin(r.Context(), auth.ActorFrom(r.Context()),
+		chi.URLParam(r, "id"), a.invitationTTL(r))
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.OK(w, data(admin))
+	return nil
+}
+
 // adminUserUpdate mengubah nama, role, flag notifikasi, dan status aktif admin.
 func (a *API) adminUserUpdate(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Users == nil {
