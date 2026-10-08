@@ -1,0 +1,19 @@
+{
+  "name": "@grahita/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Klien HTTP bersama untuk API /api/v1 (amplop sukses {data}, error {error:{code,message,fields}}, CSRF double-submit).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

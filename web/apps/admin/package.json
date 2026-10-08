@@ -1,0 +1,29 @@
+{
+  "name": "@grahita/admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Admin Portal (grahita-admin.tiusclaw.com)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@grahita/api-client": "*",
+    "@grahita/ui": "*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.2",
+    "jsdom": "^30.1.2",
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3"
+  }
+}

@@ -1,0 +1,559 @@
+openapi: 3.1.0
+info:
+  title: Grahita Portal API
+  version: 0.1.0
+  description: |
+    API untuk Sistem Pemesanan Cabang Grahita Indonesia (modular monolith Go).
+
+    Kontrak yang berlaku untuk SELURUH endpoint:
+    - Semua endpoint bisnis berada di bawah `/api/v1` dan selalu same-origin
+      pada host portal yang bersangkutan (`grahita-branch.tiusclaw.com` untuk
+      cabang, `grahita-admin.tiusclaw.com` untuk admin).
+    - Autentikasi memakai cookie sesi **host-only** (`HttpOnly`, `SameSite=Lax`,
+      `Secure` di luar lokal) yang nilainya disimpan sebagai hash di PostgreSQL.
+    - Setiap request non-GET wajib membawa header `X-CSRF-Token` yang nilainya
+      sama dengan cookie `grahita_csrf` (double-submit).
+    - Respons sukses dibungkus `{ "data": ... }`; respons gagal berbentuk
+      `{ "error": { "code", "message", "fields"? } }`.
+    - Otorisasi selalu ditentukan role akun di server, bukan hostname.
+  license:
+    name: Proprietary
+servers:
+  - url: https://grahita-branch.tiusclaw.com
+    description: Customer Portal (cabang)
+  - url: https://grahita-admin.tiusclaw.com
+    description: Admin Portal (Pusat)
+  - url: http://localhost:8088
+    description: Pengembangan lokal
+
+tags:
+  - name: health
+  - name: meta
+  - name: auth
+  - name: customer
+  - name: admin
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness — proses hidup (tidak menyentuh dependensi)
+      security: []
+      responses:
+        "200":
+          description: Proses hidup
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status: { type: string, const: ok }
+                  version: { type: string }
+
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness — dependensi wajib siap melayani
+      description: |
+        `database` dan `migrations` bersifat wajib (503 bila gagal).
+        `storage`, `gotenberg`, dan `smtp` diperiksa hanya bila dikonfigurasi.
+      security: []
+      responses:
+        "200":
+          description: Siap melayani
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+        "503":
+          description: Belum siap
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+
+  /api/v1/meta:
+    get:
+      tags: [meta]
+      operationId: getMeta
+      summary: Informasi runtime untuk kedua SPA
+      security: []
+      responses:
+        "200":
+          description: Informasi aplikasi
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [app, version, env, api_base, customer_host, admin_host, waktu_wib]
+                    properties:
+                      app: { type: string }
+                      version: { type: string }
+                      env: { type: string, enum: [local, staging, production] }
+                      api_base: { type: string, const: /api/v1 }
+                      customer_host: { type: string, example: grahita-branch.tiusclaw.com }
+                      admin_host: { type: string, example: grahita-admin.tiusclaw.com }
+                      waktu_wib: { type: string, format: date-time }
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Masuk ke portal (identitas ditentukan konteks akun, bukan host)
+      security: []
+      description: Endpoint ini dikecualikan dari pemeriksaan CSRF.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, minLength: 8, maxLength: 200 }
+      responses:
+        "200":
+          description: Berhasil masuk; cookie sesi dipasang (host-only)
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: |
+                `grahita_session=...; Path=/; HttpOnly; SameSite=Lax` (ditambah
+                `Secure` di luar lingkungan lokal). Tanpa atribut `Domain`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserEnvelope"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Keluar — mencabut sesi dan menghapus cookie
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: Sesi dicabut
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      operationId: getCurrentUser
+      summary: Profil, role, dan cabang pengguna yang sedang masuk
+      responses:
+        "200":
+          description: Profil pengguna
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /api/v1/settings:
+    get:
+      tags: [customer, admin]
+      operationId: listSettings
+      summary: Pengaturan sistem (konstanta UI kedua portal)
+      responses:
+        "200":
+          description: Peta kunci pengaturan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: true
+                    example:
+                      biaya_packaging: 3000
+                      cnc_hari: 7
+                      manager_boleh_revisi: true
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /api/v1/catalog:
+    get:
+      tags: [customer, admin]
+      operationId: getCatalog
+      summary: Katalog sesuai sudut pandang aktor
+      description: |
+        Akun cabang menerima produk yang benar-benar dijual ke cabangnya
+        (punya baris harga). Staf admin menerima seluruh produk aktif beserta
+        harga default.
+      responses:
+        "200":
+          description: Daftar produk
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      anyOf:
+                        - $ref: "#/components/schemas/BranchProduct"
+                        - $ref: "#/components/schemas/Product"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /api/v1/me/branch:
+    get:
+      tags: [customer]
+      operationId: getMyBranch
+      summary: Data cabang milik akun yang sedang masuk
+      responses:
+        "200":
+          description: Data cabang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Branch" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/branches:
+    get:
+      tags: [admin]
+      operationId: listBranches
+      summary: Master cabang (Manager & Superadmin)
+      responses:
+        "200":
+          description: Daftar cabang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Branch" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/branches/{id}:
+    get:
+      tags: [admin]
+      operationId: getBranch
+      summary: Satu cabang berdasarkan id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Data cabang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Branch" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/admin/products:
+    get:
+      tags: [admin]
+      operationId: listProducts
+      summary: Katalog produk (Manager & Superadmin)
+      responses:
+        "200":
+          description: Daftar produk
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Product" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/settings:
+    get:
+      tags: [admin]
+      operationId: listAdminSettings
+      summary: Pengaturan sistem (Superadmin)
+      responses:
+        "200":
+          description: Peta kunci pengaturan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: true
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      tags: [admin]
+      operationId: updateSetting
+      summary: Simpan satu pengaturan (Superadmin)
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              additionalProperties: false
+              properties:
+                key:
+                  type: string
+                  enum:
+                    [
+                      biaya_packaging,
+                      cnc_hari,
+                      token_hari,
+                      reset_menit,
+                      max_mb,
+                      max_file,
+                      digit_invoice,
+                      manager_boleh_revisi,
+                      ai,
+                    ]
+                value: {}
+      responses:
+        "200":
+          description: Pengaturan tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [key, value]
+                    properties:
+                      key: { type: string }
+                      value: {}
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: grahita_session
+      description: |
+        Cookie sesi host-only. Browser mengirimnya otomatis selama request
+        same-origin; tidak ada token bearer.
+
+  parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Nilai cookie `grahita_csrf` (double-submit).
+      schema: { type: string }
+
+  responses:
+    ValidationError:
+      description: Data yang dikirim tidak valid
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: VALIDATION_FAILED
+              message: Data yang dikirim belum lengkap atau tidak valid.
+              fields:
+                email: format email tidak valid
+    Unauthenticated:
+      description: Belum masuk atau sesi sudah berakhir
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: UNAUTHENTICATED
+              message: Anda harus masuk terlebih dahulu.
+    Forbidden:
+      description: Sudah masuk tetapi role tidak berhak
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: FORBIDDEN
+              message: Anda tidak memiliki akses ke tindakan ini.
+    NotFound:
+      description: Data atau endpoint tidak ditemukan
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: NOT_FOUND
+              message: Endpoint tidak ditemukan.
+    RateLimited:
+      description: Terlalu banyak percobaan
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: RATE_LIMITED
+              message: Terlalu banyak percobaan masuk. Coba lagi beberapa saat lagi.
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              description: Kode mesin yang stabil
+              enum:
+                [
+                  VALIDATION_FAILED,
+                  UNAUTHENTICATED,
+                  FORBIDDEN,
+                  NOT_FOUND,
+                  CONFLICT,
+                  RATE_LIMITED,
+                  CSRF_INVALID,
+                  TIMEOUT,
+                  METHOD_NOT_ALLOWED,
+                  BRANCH_MISSING,
+                  UNAVAILABLE,
+                  INTERNAL,
+                ]
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+              description: Kesalahan per field untuk ditempelkan ke form
+
+    Readiness:
+      type: object
+      required: [status, version, checks]
+      properties:
+        status: { type: string, enum: [ready, "not ready"] }
+        version: { type: string }
+        checks:
+          type: object
+          additionalProperties: { type: string }
+          example:
+            database: ok
+            migrations: ok (versi 2)
+            storage: tidak dikonfigurasi
+            gotenberg: ok
+            smtp: ok
+
+    User:
+      type: object
+      required: [id, kind, role, nama, email]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [branch, admin] }
+        role: { type: string, enum: [branch, manager, superadmin] }
+        branch_id: { type: string, format: uuid }
+        nama: { type: string }
+        email: { type: string, format: email }
+
+    UserEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [user]
+          properties:
+            user: { $ref: "#/components/schemas/User" }
+
+    Product:
+      type: object
+      required: [id, nama, jenis, satuan, harga_default, urutan, is_active]
+      properties:
+        id: { type: string, format: uuid }
+        kode: { type: string }
+        nama: { type: string }
+        jenis: { type: string, enum: [reguler, sertifikat] }
+        satuan: { type: string }
+        deskripsi: { type: string }
+        harga_default: { type: integer, format: int64, minimum: 0 }
+        urutan: { type: integer }
+        is_active: { type: boolean }
+
+    BranchProduct:
+      type: object
+      description: Produk beserta harga khusus cabang (Rupiah bulat)
+      required: [id, nama, jenis, satuan, harga, urutan]
+      properties:
+        id: { type: string, format: uuid }
+        nama: { type: string }
+        jenis: { type: string, enum: [reguler, sertifikat] }
+        satuan: { type: string }
+        deskripsi: { type: string }
+        harga: { type: integer, format: int64, minimum: 0 }
+        urutan: { type: integer }
+
+    Branch:
+      type: object
+      required: [id, nama, nama_kepala, email, is_cnc, is_special, pajak_in, is_active]
+      properties:
+        id: { type: string, format: uuid }
+        nama: { type: string }
+        nama_kepala: { type: string }
+        email: { type: string, format: email }
+        telepon: { type: string }
+        is_cnc: { type: boolean }
+        is_special: { type: boolean }
+        pajak_in: { type: boolean }
+        is_active: { type: boolean }
+
+security:
+  - cookieAuth: []

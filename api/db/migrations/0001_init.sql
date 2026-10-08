@@ -1,4 +1,5 @@
--- 0001_init.sql — skema awal (lihat Database.md)
+-- +goose Up
+-- 0001_init.sql — skema awal (lihat Database.md).
 -- Target: PostgreSQL 18 (uuidv7() bawaan).
 
 CREATE EXTENSION IF NOT EXISTS citext;
@@ -345,3 +346,40 @@ CREATE TABLE numbering_counters (
     last_value int  NOT NULL DEFAULT 0,
     PRIMARY KEY (scope, periode)
 );
+
+-- +goose Down
+DROP TABLE IF EXISTS numbering_counters;
+DROP TABLE IF EXISTS backup_runs;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS cnc_reminders;
+DROP TABLE IF EXISTS email_outbox;
+DROP TABLE IF EXISTS order_events;
+DROP TABLE IF EXISTS invoice_revisions;
+DROP TABLE IF EXISTS documents;
+DROP TABLE IF EXISTS verification_logs;
+DROP TABLE IF EXISTS payment_proofs;
+DROP TABLE IF EXISTS order_lines;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS bank_accounts;
+DROP TABLE IF EXISTS branch_prices;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS password_reset_tokens;
+DROP TABLE IF EXISTS registration_tokens;
+DROP TABLE IF EXISTS admin_users;
+DROP TABLE IF EXISTS branch_users;
+DROP TABLE IF EXISTS branches;
+
+DROP TYPE IF EXISTS bank_code;
+DROP TYPE IF EXISTS email_status;
+DROP TYPE IF EXISTS email_kind;
+DROP TYPE IF EXISTS doc_kind;
+DROP TYPE IF EXISTS verify_method;
+DROP TYPE IF EXISTS line_kind;
+DROP TYPE IF EXISTS review_reason;
+DROP TYPE IF EXISTS verif_status;
+DROP TYPE IF EXISTS order_status;
+DROP TYPE IF EXISTS product_kind;
+DROP TYPE IF EXISTS admin_role;
+DROP TYPE IF EXISTS actor_kind;

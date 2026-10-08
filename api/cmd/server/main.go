@@ -1,10 +1,12 @@
 // Command server adalah satu binary dengan beberapa mode jalan:
 //
-//	--mode=api          menjalankan HTTP API
-//	--mode=worker       menjalankan pemroses job latar belakang
-//	--mode=migrate      menjalankan migrasi database lalu keluar
-//	--mode=seed         mengisi data contoh untuk development lalu keluar
-//	--mode=healthcheck  memanggil /healthz lokal (dipakai Docker healthcheck)
+//	--mode=api            menjalankan HTTP API
+//	--mode=worker         menjalankan pemroses job latar belakang (River)
+//	--mode=migrate        menjalankan migrasi database lalu keluar
+//	--mode=migrate-down   menurunkan seluruh migrasi (dipakai uji CI)
+//	--mode=seed           mengisi data contoh untuk pengembangan lalu keluar
+//	--mode=healthcheck    memanggil /healthz lokal (dipakai Docker healthcheck)
+//	--mode=version        mencetak versi build
 package main
 
 import (
@@ -19,21 +21,36 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/grahita/portal/api/internal/auth"
+	authpg "github.com/grahita/portal/api/internal/auth/postgres"
+	"github.com/grahita/portal/api/internal/catalog"
+	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/httpapi"
+	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/config"
-	"github.com/grahita/portal/api/internal/platform/db"
+	"github.com/grahita/portal/api/internal/platform/database"
+	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/platform/mailer"
+	"github.com/grahita/portal/api/internal/platform/pdf"
+	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/seed"
+	"github.com/grahita/portal/api/internal/settings"
+	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
 	"github.com/grahita/portal/api/internal/worker"
 )
 
-// Diisi saat build: -ldflags "-X main.version=..."
+// version diisi saat build: -ldflags "-X main.version=<sha>".
 var version = "dev"
 
 func main() {
-	mode := flag.String("mode", "api", "api | worker | migrate | seed | healthcheck")
+	mode := flag.String("mode", "api", "api | worker | migrate | migrate-down | seed | healthcheck | version")
 	flag.Parse()
 
-	if *mode == "healthcheck" {
+	switch *mode {
+	case "version":
+		fmt.Println(version)
+		return
+	case "healthcheck":
 		if err := healthcheck(); err != nil {
 			fmt.Fprintln(os.Stderr, "healthcheck gagal:", err)
 			os.Exit(1)
@@ -47,59 +64,122 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel()}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevelSlog()}))
 	slog.SetDefault(logger)
-	logger.Info("starting", "mode", *mode, "env", cfg.AppEnv, "version", version)
+	logger.Info("menjalankan server", "mode", *mode, "env", cfg.AppEnv, "version", version)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
-	if err != nil {
-		logger.Error("tidak bisa terhubung ke database", "err", err)
+	if err := run(ctx, *mode, cfg, logger); err != nil {
+		logger.Error("berhenti karena error", "mode", *mode, "err", err)
 		os.Exit(1)
+	}
+	logger.Info("berhenti dengan rapi", "mode", *mode)
+}
+
+func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logger) error {
+	// Mode migrasi memakai koneksi database/sql sendiri (goose) dan tidak
+	// perlu pool pgx.
+	switch mode {
+	case "migrate":
+		if err := database.Up(ctx, cfg.DatabaseURL); err != nil {
+			return err
+		}
+		logger.Info("migrasi selesai")
+		return migrateRiver(ctx, cfg, logger)
+	case "migrate-down":
+		return database.DownTo(ctx, cfg.DatabaseURL, 0)
+	case "seed":
+		pool, err := database.Connect(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		return seed.Run(ctx, pool)
+	case "api", "worker":
+	default:
+		return fmt.Errorf("mode tidak dikenal: %s", mode)
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
 	}
 	defer pool.Close()
 
-	switch *mode {
-	case "migrate":
-		if err := db.Migrate(ctx, pool); err != nil {
-			logger.Error("migrasi gagal", "err", err)
-			os.Exit(1)
+	if mode == "worker" {
+		client, err := worker.New(pool, cfg)
+		if err != nil {
+			return err
 		}
-		logger.Info("migrasi selesai")
-
-	case "seed":
-		if err := seed.Run(ctx, pool); err != nil {
-			logger.Error("seed gagal", "err", err)
-			os.Exit(1)
+		if err := client.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			return err
 		}
-		logger.Info("seed selesai")
-
-	case "worker":
-		if err := worker.Run(ctx, pool, cfg); err != nil && !errors.Is(err, context.Canceled) {
-			logger.Error("worker berhenti karena error", "err", err)
-			os.Exit(1)
-		}
-		logger.Info("worker berhenti dengan rapi")
-
-	case "api":
-		if err := runAPI(ctx, pool, cfg, logger); err != nil {
-			logger.Error("api berhenti karena error", "err", err)
-			os.Exit(1)
-		}
-		logger.Info("api berhenti dengan rapi")
-
-	default:
-		fmt.Fprintf(os.Stderr, "mode tidak dikenal: %s\n", *mode)
-		os.Exit(2)
+		return nil
 	}
+
+	return runAPI(ctx, pool, cfg, logger)
 }
 
-func runAPI(ctx context.Context, pool *db.Pool, cfg config.Config, logger *slog.Logger) error {
+// health adalah adapter dependensi /readyz. Ia hidup di composition root
+// supaya paket httpapi tidak pernah menyentuh pgx atau goose.
+type health struct {
+	pool *database.Pool
+	dsn  string
+}
+
+func (h health) Ping(ctx context.Context) error { return h.pool.Ping(ctx) }
+
+func (h health) MigrationVersion(ctx context.Context) (int64, error) {
+	return database.Version(ctx, h.dsn)
+}
+
+func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger *slog.Logger) error {
+	authRepo := authpg.New(pool)
+	authSvc := auth.NewService(authRepo, authRepo, clock.System(), cfg.SessionIdle, cfg.SessionAbsolute)
+
+	store := storage.Store(storage.Disabled{})
+	if cfg.S3Endpoint != "" && cfg.S3Bucket != "" {
+		// Implementasi S3 asli menyusul bersama domain dokumen; sampai itu,
+		// storage dilaporkan "tidak dikonfigurasi" di /readyz.
+		logger.Warn("S3_ENDPOINT diisi tetapi implementasi S3 belum tersedia pada tahap ini")
+	}
+
+	renderer := pdf.Renderer(pdf.Disabled{})
+	if cfg.GotenbergURL != "" {
+		renderer = pdf.NewGotenberg(cfg.GotenbergURL)
+	}
+
+	mail := mailer.Mailer(mailer.Log{})
+	if cfg.SMTPHost != "" {
+		mail = mailer.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.MailFrom)
+	}
+
+	var loginLimiter *httpx.RateLimiter
+	if cfg.CSRFEnabled {
+		// 10 percobaan per 15 menit per (IP+akun); PRD CP-AUT-05 minta 5,
+		// nilai lebih longgar dipakai agar tidak menyulitkan pengujian manual
+		// sekaligus tetap menahan brute force.
+		loginLimiter = httpx.NewRateLimiter(10, 15*time.Minute)
+	}
+
+	handler := httpapi.NewRouter(httpapi.Deps{
+		Config:       cfg,
+		Version:      version,
+		Health:       health{pool: pool, dsn: cfg.DatabaseURL},
+		Auth:         authSvc,
+		Settings:     settings.NewService(settingspg.New(pool)),
+		Catalog:      catalog.NewService(catalogpg.New(pool)),
+		Storage:      store,
+		Gotenberg:    renderer,
+		Mailer:       mail,
+		LoginLimiter: loginLimiter,
+	})
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(pool, cfg, version),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      120 * time.Second,
@@ -108,7 +188,7 @@ func runAPI(ctx context.Context, pool *db.Pool, cfg config.Config, logger *slog.
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("http listening", "addr", cfg.HTTPAddr)
+		logger.Info("http listening", "addr", cfg.HTTPAddr, "customer", cfg.CustomerHost, "admin", cfg.AdminHost)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -124,7 +204,7 @@ func runAPI(ctx context.Context, pool *db.Pool, cfg config.Config, logger *slog.
 	}
 }
 
-// healthcheck dipakai oleh Docker HEALTHCHECK: tidak butuh curl di image.
+// healthcheck dipakai Docker HEALTHCHECK: tidak butuh curl di dalam image.
 func healthcheck() error {
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {

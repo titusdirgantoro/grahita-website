@@ -1,6 +1,8 @@
 .env
-api/go.sum
 api/tmp/
-web/*/dist/
+dist/
 node_modules/
 *.log
+coverage/
+playwright-report/
+test-results/

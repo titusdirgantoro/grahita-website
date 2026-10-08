@@ -1,0 +1,125 @@
+// Package storage adalah abstraksi object storage S3-compatible
+// (MinIO saat lokal, R2/S3 saat produksi) — Architecture.md §1.
+//
+// Implementasi S3 asli menyusul bersama domain dokumen; paket ini menyediakan
+// kontrak, implementasi in-memory untuk pengujian, dan penanda
+// "belum dikonfigurasi" agar /readyz tidak berbohong.
+package storage
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+)
+
+// ErrNotConfigured dikembalikan bila kredensial storage belum diisi.
+var ErrNotConfigured = errors.New("object storage belum dikonfigurasi")
+
+// Object adalah metadata objek yang disimpan.
+type Object struct {
+	Key         string `json:"key"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+}
+
+// Store adalah kontrak penyimpanan objek. Semua akses baca ke pengguna akhir
+// memakai presigned URL berumur pendek (Architecture.md §6).
+type Store interface {
+	Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
+	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+	Delete(ctx context.Context, key string) error
+	Health(ctx context.Context) error
+}
+
+// Disabled dipakai saat S3_ENDPOINT/S3_BUCKET kosong.
+type Disabled struct{}
+
+// Put selalu gagal karena storage belum dikonfigurasi.
+func (Disabled) Put(context.Context, string, io.Reader, int64, string) error {
+	return ErrNotConfigured
+}
+
+// Get selalu gagal karena storage belum dikonfigurasi.
+func (Disabled) Get(context.Context, string) (io.ReadCloser, error) { return nil, ErrNotConfigured }
+
+// PresignGet selalu gagal karena storage belum dikonfigurasi.
+func (Disabled) PresignGet(context.Context, string, time.Duration) (string, error) {
+	return "", ErrNotConfigured
+}
+
+// Delete selalu gagal karena storage belum dikonfigurasi.
+func (Disabled) Delete(context.Context, string) error { return ErrNotConfigured }
+
+// Health melaporkan bahwa storage memang belum aktif.
+func (Disabled) Health(context.Context) error { return ErrNotConfigured }
+
+// Memory adalah penyimpanan in-memory untuk pengujian dan mode lokal tanpa
+// MinIO. Bukan untuk produksi: isi hilang saat proses berhenti.
+type Memory struct {
+	mu      sync.RWMutex
+	objects map[string][]byte
+	types   map[string]string
+	baseURL string
+}
+
+// NewMemory membuat penyimpanan in-memory.
+func NewMemory(baseURL string) *Memory {
+	if baseURL == "" {
+		baseURL = "/files"
+	}
+	return &Memory{objects: map[string][]byte{}, types: map[string]string{}, baseURL: baseURL}
+}
+
+// Put menyalin isi objek ke memori.
+func (m *Memory) Put(_ context.Context, key string, body io.Reader, size int64, contentType string) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return fmt.Errorf("baca body: %w", err)
+	}
+	if size > 0 && int64(len(data)) != size {
+		return fmt.Errorf("ukuran tidak sesuai: diharapkan %d, diterima %d", size, len(data))
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.objects[key] = data
+	m.types[key] = contentType
+	return nil
+}
+
+// Get mengembalikan pembaca atas objek.
+func (m *Memory) Get(_ context.Context, key string) (io.ReadCloser, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.objects[key]
+	if !ok {
+		return nil, fmt.Errorf("objek %q tidak ada", key)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+// PresignGet mengembalikan URL statis (hanya untuk pengujian).
+func (m *Memory) PresignGet(_ context.Context, key string, _ time.Duration) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.objects[key]; !ok {
+		return "", fmt.Errorf("objek %q tidak ada", key)
+	}
+	return m.baseURL + "/" + key, nil
+}
+
+// Delete menghapus objek.
+func (m *Memory) Delete(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.objects, key)
+	delete(m.types, key)
+	return nil
+}
+
+// Health selalu sehat.
+func (m *Memory) Health(context.Context) error { return nil }

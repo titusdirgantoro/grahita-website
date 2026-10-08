@@ -1,7 +1,7 @@
 # Overlay produksi.
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
-# Perbedaan dari development:
+# Perbedaan dari pengembangan:
 #   - Caddy memakai domain asli + TLS otomatis (port 80/443)
 #   - Mailpit tidak dipakai; SMTP mengarah ke Gmail
 #   - Postgres & MinIO tidak mengekspos port ke publik
@@ -11,7 +11,7 @@ services:
   postgres:
     ports: !override []
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?wajib diisi di .env produksi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?wajib diisi di environment produksi}
     command:
       - "postgres"
       - "-c"
@@ -34,12 +34,16 @@ services:
     environment:
       APP_ENV: production
       LOG_LEVEL: info
+      CUSTOMER_HOST: ${CUSTOMER_HOST:-grahita-branch.tiusclaw.com}
+      ADMIN_HOST: ${ADMIN_HOST:-grahita-admin.tiusclaw.com}
+      PUBLIC_SCHEME: https
+      SESSION_SECURE: "true"
+      CORS_ORIGINS: ""
       SMTP_HOST: smtp.gmail.com
       SMTP_PORT: "587"
       SMTP_USER: ${SMTP_USER:?wajib diisi}
       SMTP_PASS: ${SMTP_PASS:?wajib diisi}
-      MAIL_FROM: ${MAIL_FROM:-no-reply@grahitaindonesia.com}
-      CORS_ORIGINS: https://grahitaindonesia.com
+      MAIL_FROM: ${MAIL_FROM:-no-reply@grahita.id}
 
   worker:
     environment:
@@ -50,14 +54,16 @@ services:
       SMTP_USER: ${SMTP_USER:?wajib diisi}
       SMTP_PASS: ${SMTP_PASS:?wajib diisi}
 
-  caddy:
+  web:
     ports: !override
       - "80:80"
       - "443:443"
+      - "443:443/udp"
+    environment:
+      CUSTOMER_HOST: ${CUSTOMER_HOST:-grahita-branch.tiusclaw.com}
+      ADMIN_HOST: ${ADMIN_HOST:-grahita-admin.tiusclaw.com}
     volumes:
       - ./infra/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
-      - ./web/customer:/srv/customer:ro
-      - ./web/admin:/srv/admin:ro
       - caddydata:/data
       - caddyconfig:/config
 

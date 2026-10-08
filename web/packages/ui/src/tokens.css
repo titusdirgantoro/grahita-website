@@ -1,0 +1,62 @@
+/*
+ * tokens.css — token desain Grahita Indonesia.
+ *
+ * Diekstrak apa adanya dari blok :root prototype (customer_v2.html /
+ * admin_v2.html) sesuai Architecture.md §3.2 dan PRD §1. Warna masukan brand
+ * tidak boleh diubah tanpa persetujuan:
+ *   --brand-primary   #504068
+ *   --brand-secondary #906088
+ *   --brand-accent    #FFF038
+ *
+ * Komponen (btn, input, card, table, chip, modal, shell) diport pada kartu
+ * F1-03 dan memakai token ini.
+ */
+:root {
+  /* INPUT BRAND — dari logo resmi Grahita Indonesia */
+  --brand-primary: #504068;
+  --brand-secondary: #906088;
+  --brand-accent: #fff038;
+
+  --brand-50: color-mix(in oklch, var(--brand-primary) 6%, white);
+  --brand-100: color-mix(in oklch, var(--brand-primary) 12%, white);
+  --brand-200: color-mix(in oklch, var(--brand-primary) 24%, white);
+  --brand-300: color-mix(in oklch, var(--brand-primary) 42%, white);
+  --brand-500: var(--brand-primary);
+  --brand-700: color-mix(in oklch, var(--brand-primary) 72%, black);
+  --brand-900: color-mix(in oklch, var(--brand-primary) 42%, black);
+  --ink: color-mix(in oklch, var(--brand-primary) 14%, black);
+  --accent-100: color-mix(in oklch, var(--brand-accent) 20%, white);
+  --accent-300: color-mix(in oklch, var(--brand-accent) 60%, white);
+
+  --canvas: #ededeb;
+  --surface: #ffffff;
+  --surface-sunken: #f5f5f3;
+  --line: #e6e6e3;
+  --line-strong: #d2d2ce;
+  --hatch: #dededa;
+  --text: #26262a;
+  --text-muted: #6d6d72;
+  --text-subtle: #9c9ca1;
+
+  --success-bg: #e2f3e7;
+  --success-fg: #1b6b3a;
+  --success: #2e9e5b;
+  --warning-bg: #fff2d3;
+  --warning-fg: #855400;
+  --warning: #de9f00;
+  --danger-bg: #fce3df;
+  --danger-fg: #a2291b;
+  --danger: #d8432e;
+  --info-bg: #e2ecfa;
+  --info-fg: #1f4e95;
+  --info: #3a72c9;
+
+  --primary: var(--brand-900);
+  --h-control: 40px;
+  --shadow-float: 0 8px 24px -8px rgb(20 20 25 / 0.18);
+  --font:
+    "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+  --radius-card: 16px;
+  --radius-control: 10px;
+}

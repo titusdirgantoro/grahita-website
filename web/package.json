@@ -1,0 +1,26 @@
+{
+  "name": "grahita-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dua SPA React 19 + TypeScript + Vite: portal cabang dan portal admin.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:customer": "npm run dev --workspace @grahita/customer",
+    "dev:admin": "npm run dev --workspace @grahita/admin",
+    "preview:customer": "npm run preview --workspace @grahita/customer",
+    "preview:admin": "npm run preview --workspace @grahita/admin"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

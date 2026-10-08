@@ -1,0 +1,19 @@
+{
+  "name": "@grahita/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Token dan komponen dasar hasil port prototype (diisi penuh pada kartu F1-03).",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tokens.css": "./src/tokens.css",
+    "./base.css": "./src/base.css"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

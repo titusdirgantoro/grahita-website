@@ -1,13 +1,17 @@
+-- +goose Up
 -- 0002_functions.sql — fungsi penomoran, trigger, dan pengaturan default.
 
 -- ---------- updated_at otomatis ----------
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
 BEGIN
     NEW.updated_at := now();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 DO $$
 DECLARE t text;
 BEGIN
@@ -20,12 +24,14 @@ BEGIN
     END LOOP;
 END;
 $$;
+-- +goose StatementEnd
 
 -- ---------- Penomoran invoice & serial number ----------
 -- Mengambil p_count nomor berurutan sekaligus. Dipanggil di dalam transaksi
 -- submit; baris counter terkunci sampai COMMIT sehingga aman terhadap
 -- submit bersamaan dan nomor tidak bolong saat rollback.
 -- Mengembalikan nomor PERTAMA dari rentang [v, v + p_count - 1].
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION next_numbers(p_scope text, p_periode text, p_count int)
 RETURNS int AS $$
 DECLARE v int;
@@ -43,8 +49,10 @@ BEGIN
     RETURN v;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 -- ---------- Total pesanan selalu sinkron dengan order_lines ----------
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION recalc_order_totals() RETURNS trigger AS $$
 DECLARE oid uuid;
 BEGIN
@@ -66,6 +74,7 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 CREATE TRIGGER order_lines_recalc
     AFTER INSERT OR UPDATE OR DELETE ON order_lines
@@ -83,3 +92,26 @@ INSERT INTO settings (key, value) VALUES
     ('manager_boleh_revisi', 'true'::jsonb),
     ('ai', '{"aktif":false,"min_keyakinan":0.9,"tol_kurang":0,"tol_lebih":0,"digit_rek":4,"mundur":1}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
+
+-- +goose Down
+DROP TRIGGER IF EXISTS order_lines_recalc ON order_lines;
+DROP FUNCTION IF EXISTS recalc_order_totals();
+DROP FUNCTION IF EXISTS next_numbers(text, text, int);
+
+-- +goose StatementBegin
+DO $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY[
+        'branches','branch_users','admin_users','products','bank_accounts','orders'
+    ] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS %I_set_updated_at ON %I', t, t);
+    END LOOP;
+END;
+$$;
+-- +goose StatementEnd
+
+DROP FUNCTION IF EXISTS set_updated_at();
+DELETE FROM settings WHERE key IN (
+    'biaya_packaging','cnc_hari','token_hari','reset_menit','max_mb','max_file',
+    'digit_invoice','manager_boleh_revisi','ai');

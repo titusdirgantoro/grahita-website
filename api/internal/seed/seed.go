@@ -1,14 +1,20 @@
-// Package seed mengisi data contoh untuk development.
-// Datanya mengikuti prototype (7 produk, beberapa cabang, 2 rekening).
-// Aman dijalankan berulang: memakai ON CONFLICT DO NOTHING.
+// Package seed mengisi data contoh untuk pengembangan lokal.
+//
+// Aman dijalankan berulang (ON CONFLICT DO NOTHING). Akun pengguna hanya
+// dibuat bila SEED_PASSWORD diisi, sehingga tidak ada kredensial bawaan yang
+// ikut masuk ke repo (Architecture.md §6).
 package seed
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
-	"github.com/grahita/portal/api/internal/platform/db"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/platform/database"
 )
 
 type produk struct {
@@ -18,11 +24,12 @@ type produk struct {
 }
 
 type cabang struct {
-	nama, kepala, email         string
-	cnc, special, pi            bool
+	nama, kepala, email string
+	cnc, special, pi    bool
 }
 
-func Run(ctx context.Context, pool *db.Pool) error {
+// Run mengisi data contoh.
+func Run(ctx context.Context, pool *database.Pool) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -64,38 +71,67 @@ func Run(ctx context.Context, pool *db.Pool) error {
 		}
 	}
 
-	// Harga per cabang: mulai dari harga default, cabang "special" dapat diskon 5%.
+	// Matriks harga: semua produk dijual ke semua cabang dengan harga default.
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO branch_prices (branch_id, product_id, harga)
-		SELECT b.id, p.id,
-		       CASE WHEN b.is_special THEN (p.harga_default * 95) / 100 ELSE p.harga_default END
+		SELECT b.id, p.id, p.harga_default
 		  FROM branches b CROSS JOIN products p
-		 WHERE p.is_active
+		 WHERE p.jenis = 'reguler'
 		ON CONFLICT (branch_id, product_id) DO NOTHING`); err != nil {
-		return fmt.Errorf("seed harga: %w", err)
+		return fmt.Errorf("seed harga cabang: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO bank_accounts (bank, nama_pemilik, nomor) VALUES
-			('BCA','PT Grahita Indonesia','5271039988'),
-			('BRI','PT Grahita Indonesia','038201000456307')
+		INSERT INTO bank_accounts (bank, nama_pemilik, nomor)
+		VALUES ('BCA','PT Grahita Indonesia','1234567890'),
+		       ('BRI','PT Grahita Indonesia','0987654321')
 		ON CONFLICT (bank, nomor) DO NOTHING`); err != nil {
 		return fmt.Errorf("seed rekening: %w", err)
 	}
 
-	// Admin awal tanpa password: diaktifkan lewat alur undangan nanti.
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO admin_users (nama, email, role, notif_invoice, notif_surat_jalan, invited_at)
-		VALUES ('Superadmin Grahita','admin@grahitaindonesia.com','superadmin',true,true,now())
-		ON CONFLICT (email) DO NOTHING`); err != nil {
-		return fmt.Errorf("seed admin: %w", err)
+	if err := seedUsers(ctx, tx); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+	slog.Info("seed selesai")
+	return nil
+}
 
-	slog.Info("data contoh siap",
-		"produk", len(produks), "cabang", len(cabangs), "rekening", 2, "admin", 1)
+// seedUsers membuat akun cabang & admin dari SEED_PASSWORD.
+func seedUsers(ctx context.Context, tx pgx.Tx) error {
+	password := os.Getenv("SEED_PASSWORD")
+	if password == "" {
+		slog.Warn("SEED_PASSWORD tidak diisi — akun contoh dilewati")
+		return nil
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash SEED_PASSWORD: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO admin_users (nama, email, password_hash, role, is_active)
+		VALUES ($1,$2,$3,'superadmin',true)
+		ON CONFLICT (email) DO NOTHING`,
+		"Rina Kartika", "rina@grahitaindonesia.com", hash); err != nil {
+		return fmt.Errorf("seed admin superadmin: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO admin_users (nama, email, password_hash, role, is_active)
+		VALUES ($1,$2,$3,'manager',true)
+		ON CONFLICT (email) DO NOTHING`,
+		"Budi Santoso", "budi@grahitaindonesia.com", hash); err != nil {
+		return fmt.Errorf("seed admin manager: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO branch_users (branch_id, email, password_hash, is_active)
+		SELECT id, email, $1, true FROM branches
+		ON CONFLICT (email) DO NOTHING`, hash); err != nil {
+		return fmt.Errorf("seed akun cabang: %w", err)
+	}
+	slog.Info("akun contoh dibuat", "jumlah_admin", 2, "sumber_password", "SEED_PASSWORD")
 	return nil
 }

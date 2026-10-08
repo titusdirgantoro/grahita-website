@@ -16,18 +16,17 @@ check() {
 }
 
 echo "Memeriksa service..."
-check "API healthz"      "$API/healthz"
-check "API readyz"       "$API/readyz"
-check "API meta"         "$API/api/v1/meta"
-check "API settings"     "$API/api/v1/settings"
-check "API products"     "$API/api/v1/products"
-check "Customer Portal"  "$CUSTOMER/"
-check "Admin Portal"     "$ADMIN/"
-check "Proxy /api lewat Caddy" "$CUSTOMER/api/v1/meta"
-check "Mailpit"          "http://localhost:8025/"
+check "API healthz"          "$API/healthz"
+check "API readyz"           "$API/readyz"
+check "API meta"             "$API/api/v1/meta"
+check "Customer Portal"      "$CUSTOMER/"
+check "Admin Portal"         "$ADMIN/"
+check "Proxy /api customer"  "$CUSTOMER/api/v1/meta"
+check "Proxy /api admin"     "$ADMIN/api/v1/meta"
+check "Mailpit"              "http://localhost:8025/"
 
 echo ""
-echo "Jumlah produk hasil seed:"
-curl -s "$API/api/v1/products" | head -c 200; echo
+echo "Readiness:"
+curl -s "$API/readyz"; echo
 echo ""
 echo "Semua pemeriksaan lolos."
