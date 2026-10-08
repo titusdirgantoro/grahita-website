@@ -15,6 +15,7 @@
 package settings
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -117,16 +118,7 @@ func (s *Service) All(ctx context.Context, actor auth.Actor) (map[string]json.Ra
 	if !actor.Can(auth.CapAdminSettings) {
 		return nil, ErrForbidden
 	}
-	return s.merged(ctx, nil)
-}
-
-// Runtime mengembalikan konstanta operasional yang perlu diketahui kedua
-// portal. Kunci `ai` TIDAK termasuk: ia internal verifikasi bukti transfer
-// (fase 2) dan hanya dibaca Superadmin lewat All. Endpoint ini tidak menuntut
-// kapabilitas admin karena nilainya memang dipakai UI (mis. biaya packaging
-// pada pesanan sertifikat, PRD CP-SER-02).
-func (s *Service) Runtime(ctx context.Context) (map[string]json.RawMessage, error) {
-	return s.merged(ctx, func(key string) bool { return key != AI })
+	return s.merged(ctx)
 }
 
 // Get mengembalikan satu nilai pengaturan tersimpan. Kunci yang tidak dikenal
@@ -155,8 +147,10 @@ func Default(key string) (json.RawMessage, error) {
 // Update menyimpan satu atau beberapa pengaturan sekaligus (Superadmin).
 //
 // Seluruh nilai divalidasi LEBIH DAHULU: bila ada satu yang tidak valid, tidak
-// ada yang tersimpan (all-or-nothing). Setiap kunci yang berubah menghasilkan
-// satu entri audit di dalam transaksi penyimpanan.
+// ada yang tersimpan (all-or-nothing). Hanya kunci yang nilainya benar-benar
+// BERUBAH — dibandingkan dalam bentuk kanonik — yang ditulis dan menghasilkan
+// satu entri audit di dalam transaksi penyimpanan; mengirim ulang nilai yang
+// sama tidak menulis apa pun.
 func (s *Service) Update(ctx context.Context, actor auth.Actor, values map[string]json.RawMessage) error {
 	if !actor.Can(auth.CapAdminSettings) {
 		return ErrForbidden
@@ -186,7 +180,8 @@ func (s *Service) Update(ctx context.Context, actor auth.Actor, values map[strin
 		return &ValidationError{Fields: fields}
 	}
 
-	// Tahap 2: susun perubahan + entri audit (before dari nilai berlaku).
+	// Tahap 2: susun perubahan + entri audit hanya untuk kunci yang berubah
+	// (before dari nilai berlaku, dibandingkan kanonik).
 	changes := make([]Change, 0, len(keys))
 	recs := make([]audit.Entry, 0, len(keys))
 	for _, k := range keys {
@@ -195,14 +190,36 @@ func (s *Service) Update(ctx context.Context, actor auth.Actor, values map[strin
 			return err
 		}
 		after := norm[k]
+		if samaNilai(k, before, after) {
+			continue
+		}
 		changes = append(changes, Change{Key: k, Value: after})
 		recs = append(recs, audit.NewEntry(ctx, actor, audit.EntitySetting, "",
 			audit.ActionUpdate, snapshot(k, before), snapshot(k, after)))
+	}
+	if len(changes) == 0 {
+		// Semua nilai yang dikirim sama dengan yang berlaku: tidak ada mutasi,
+		// jadi tidak ada baris yang ditulis dan tidak ada event audit.
+		return nil
 	}
 	if err := s.repo.Save(ctx, actor.UserID, changes, recs); err != nil {
 		return fmt.Errorf("simpan pengaturan: %w", err)
 	}
 	return nil
+}
+
+// samaNilai membandingkan nilai berlaku dengan nilai baru dalam bentuk
+// KANONIK supaya perbedaan penulisan saja — urutan kunci objek `ai`,
+// `0.90` vs `0.9` — tidak dianggap perubahan. Nilai lama yang tidak lolos
+// validasi dibandingkan apa adanya.
+func samaNilai(key string, before, after json.RawMessage) bool {
+	if canon, msg := Check(key, before); msg == "" {
+		before = canon
+	}
+	if canon, msg := Check(key, after); msg == "" {
+		after = canon
+	}
+	return bytes.Equal(before, after)
 }
 
 // effective mengembalikan nilai yang sedang berlaku untuk satu kunci:
@@ -218,14 +235,12 @@ func (s *Service) effective(ctx context.Context, key string) (json.RawMessage, e
 	return Default(key)
 }
 
-// merged menggabungkan nilai bawaan dengan nilai tersimpan; allow membatasi
-// kunci yang dikembalikan (nil = semua kunci dikenal).
-func (s *Service) merged(ctx context.Context, allow func(string) bool) (map[string]json.RawMessage, error) {
+// merged menggabungkan nilai bawaan dengan nilai tersimpan untuk seluruh kunci
+// yang dikenal. TIDAK ada jalur pembacaan lintas-role: pemanggilnya hanya All.
+func (s *Service) merged(ctx context.Context) (map[string]json.RawMessage, error) {
 	out := make(map[string]json.RawMessage, len(specs))
 	for k, sp := range specs {
-		if allow == nil || allow(k) {
-			out[k] = json.RawMessage(sp.defaultRaw)
-		}
+		out[k] = json.RawMessage(sp.defaultRaw)
 	}
 	rows, err := s.repo.List(ctx)
 	if err != nil {
@@ -234,9 +249,6 @@ func (s *Service) merged(ctx context.Context, allow func(string) bool) (map[stri
 	for _, r := range rows {
 		if _, ok := specs[r.Key]; !ok {
 			continue // kunci tak dikenal di database diabaikan
-		}
-		if allow != nil && !allow(r.Key) {
-			continue
 		}
 		out[r.Key] = json.RawMessage(r.Value)
 	}

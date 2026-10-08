@@ -62,7 +62,6 @@ func NewRouter(d Deps) http.Handler {
 
 			r.Get("/auth/me", a.adapt(a.me))
 			r.Post("/auth/password/change", a.adapt(a.changePassword))
-			r.Get("/settings", a.adapt(a.settings))
 			r.Get("/catalog", a.adapt(a.catalog))
 			r.Get("/me/branch", a.adapt(a.myBranch))
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR

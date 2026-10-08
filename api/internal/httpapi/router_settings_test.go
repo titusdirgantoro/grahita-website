@@ -109,28 +109,25 @@ func TestApiPengaturanBatchValidasi(t *testing.T) {
 	}
 }
 
-// TestApiSettingsRuntimeTanpaAi memastikan endpoint konstanta kedua portal
-// tidak membocorkan setelan internal ai.
-func TestApiSettingsRuntimeTanpaAi(t *testing.T) {
+// TestApiSettingsLintasRoleTidakAda memastikan permukaan pengaturan lintas-role
+// benar-benar GONE (keputusan CEO atas review QA putaran 1): pengelolaan
+// pengaturan hanya lewat /api/v1/admin/settings untuk Superadmin, sehingga
+// /api/v1/settings dijawab 404 untuk siapa pun.
+func TestApiSettingsLintasRoleTidakAda(t *testing.T) {
 	bs := newBankServer(t)
 	base := bs.srv.URL + "/api/v1"
 
-	// Tanpa sesi → 401 (endpoint ada di dalam grup terautentikasi).
-	status, _, _ := apiReq(t, http.DefaultClient, http.MethodGet, base+"/settings", "", nil, "")
-	if status != http.StatusUnauthorized {
-		t.Fatalf("tanpa sesi harus 401, dapat %d", status)
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, base+"/settings", "", nil, "")
+	if status != http.StatusNotFound {
+		t.Fatalf("GET /api/v1/settings tanpa sesi harus 404, dapat %d (%v)", status, body)
 	}
+	assertErrorShape(t, body, "NOT_FOUND")
 
-	cookies, _ := login(t, bs.srv, "a@example.test")
-	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, base+"/settings", "", cookies, "")
-	if status != http.StatusOK {
-		t.Fatalf("cabang baca konstanta harus 200, dapat %d", status)
-	}
-	data := body["data"].(map[string]any)
-	if _, ok := data["ai"]; ok {
-		t.Error("konstanta kedua portal TIDAK boleh memuat ai")
-	}
-	if data["biaya_packaging"] != float64(3000) {
-		t.Errorf("biaya_packaging harus tersedia, dapat %v", data["biaya_packaging"])
+	for _, email := range []string{"a@example.test", "budi@example.test", "rina@example.test"} {
+		cookies, _ := login(t, bs.srv, email)
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, base+"/settings", "", cookies, "")
+		if status != http.StatusNotFound {
+			t.Errorf("%s GET /api/v1/settings harus 404, dapat %d (%v)", email, status, body)
+		}
 	}
 }

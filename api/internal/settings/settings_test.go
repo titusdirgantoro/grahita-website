@@ -276,7 +276,7 @@ func TestUpdateKosongDitolak(t *testing.T) {
 	}
 }
 
-func TestAllDanRuntime(t *testing.T) {
+func TestAllMengembalikanSemuaKunci(t *testing.T) {
 	repo := newFakeRepo(map[string]string{BiayaPackaging: "5000"})
 	svc := NewService(repo)
 	ctx := context.Background()
@@ -294,16 +294,81 @@ func TestAllDanRuntime(t *testing.T) {
 	if _, ok := all[AI]; !ok {
 		t.Error("All harus memuat ai")
 	}
+	// Tidak ada permukaan pembacaan lintas-role: hanya All yang boleh membaca.
+	if _, err := svc.All(ctx, manager()); !errors.Is(err, ErrForbidden) {
+		t.Errorf("manager tidak boleh membaca All, dapat %v", err)
+	}
+}
 
-	runtime, err := svc.Runtime(ctx)
+// TestUpdateHanyaMencatatKunciYangBerubah mengunci janji "satu entri audit per
+// kunci yang BERUBAH": nilai yang sama (kanonik) tidak menulis baris maupun
+// event audit, batch campuran hanya mencatat kunci yang berubah, dan kegagalan
+// simpan tidak meninggalkan audit.
+func TestUpdateHanyaMencatatKunciYangBerubah(t *testing.T) {
+	repo := newFakeRepo(map[string]string{BiayaPackaging: "3000"})
+	svc := NewService(repo)
+	ctx := context.Background()
+
+	// Nilai sama dengan yang tersimpan → no-op.
+	if err := svc.Update(ctx, superadmin(), map[string]json.RawMessage{
+		BiayaPackaging: json.RawMessage("3000"),
+	}); err != nil {
+		t.Fatalf("update nilai sama: %v", err)
+	}
+	if len(repo.audit) != 0 {
+		t.Errorf("nilai sama tidak boleh menambah audit, dapat %d", len(repo.audit))
+	}
+
+	// Nilai bawaan yang belum pernah tersimpan juga no-op walau dikirim
+	// dengan penulisan berbeda (objek ai: urutan kunci tidak sama).
+	bawaan, err := Default(AI)
 	if err != nil {
-		t.Fatalf("Runtime: %v", err)
+		t.Fatalf("Default(ai): %v", err)
 	}
-	if _, ok := runtime[AI]; ok {
-		t.Error("Runtime TIDAK boleh memuat ai")
+	if err := svc.Update(ctx, superadmin(), map[string]json.RawMessage{AI: bawaan}); err != nil {
+		t.Fatalf("update nilai bawaan: %v", err)
 	}
-	if string(runtime[BiayaPackaging]) != "5000" {
-		t.Errorf("Runtime harus memuat nilai tersimpan: %s", runtime[BiayaPackaging])
+	if len(repo.audit) != 0 {
+		t.Errorf("nilai bawaan yang sama tidak boleh menambah audit, dapat %d", len(repo.audit))
+	}
+	if _, ok := repo.values[AI]; ok {
+		t.Error("kunci yang tidak berubah tidak perlu ditulis ke database")
+	}
+
+	// Batch campuran: hanya kunci yang berubah yang ditulis & dicatat.
+	if err := svc.Update(ctx, superadmin(), map[string]json.RawMessage{
+		BiayaPackaging: json.RawMessage("4500"), // berubah dari 3000
+		CNCHari:        json.RawMessage("7"),    // sama dengan default
+	}); err != nil {
+		t.Fatalf("batch campuran: %v", err)
+	}
+	if len(repo.audit) != 1 {
+		t.Fatalf("hanya kunci yang berubah dicatat, dapat %d", len(repo.audit))
+	}
+	if repo.values[BiayaPackaging] != "4500" {
+		t.Errorf("nilai berubah harus tersimpan: %v", repo.values)
+	}
+	if _, ok := repo.values[CNCHari]; ok {
+		t.Error("kunci yang tidak berubah tidak boleh ditulis")
+	}
+	b, _ := json.Marshal(repo.audit[0].Before)
+	a, _ := json.Marshal(repo.audit[0].After)
+	if !strings.Contains(string(b), "3000") || !strings.Contains(string(a), "4500") {
+		t.Errorf("snapshot audit harus 3000 → 4500: %s → %s", b, a)
+	}
+
+	// Kegagalan simpan → tidak ada perubahan nilai maupun audit tambahan.
+	repo.saveErr = errors.New("gagal simpan")
+	if err := svc.Update(ctx, superadmin(), map[string]json.RawMessage{
+		BiayaPackaging: json.RawMessage("9000"),
+	}); err == nil {
+		t.Fatal("kegagalan simpan harus dikembalikan")
+	}
+	if len(repo.audit) != 1 {
+		t.Errorf("rollback tidak boleh menambah audit, dapat %d", len(repo.audit))
+	}
+	if repo.values[BiayaPackaging] != "4500" {
+		t.Errorf("nilai tidak boleh berubah saat simpan gagal: %q", repo.values[BiayaPackaging])
 	}
 }
 

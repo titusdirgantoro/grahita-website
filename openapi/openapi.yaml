@@ -387,35 +387,6 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /api/v1/settings:
-    get:
-      tags: [customer, admin]
-      operationId: listSettings
-      summary: Pengaturan sistem (konstanta UI kedua portal)
-      description: |
-        Konstanta operasional yang dipakai UI kedua portal (mis. biaya
-        packaging pada pesanan sertifikat). Setelan internal `ai` TIDAK
-        diikutsertakan — pengelolaan pengaturan lengkap hanya untuk Superadmin
-        lewat `/api/v1/admin/settings` (PRD §2.1, §4.9).
-      responses:
-        "200":
-          description: Peta kunci pengaturan
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [data]
-                properties:
-                  data:
-                    type: object
-                    additionalProperties: true
-                    example:
-                      biaya_packaging: 3000
-                      cnc_hari: 7
-                      manager_boleh_revisi: true
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-
   /api/v1/catalog:
     get:
       tags: [customer, admin]
@@ -738,7 +709,12 @@ paths:
         Dua bentuk body diterima: satu kunci (`key` + `value`) untuk
         kompatibilitas, atau banyak kunci sekaligus (`values`). Seluruh nilai
         divalidasi lebih dahulu — bila ada satu yang tidak valid, tidak ada
-        yang tersimpan. Setiap kunci yang berubah tercatat di audit log.
+        yang tersimpan. Hanya kunci yang nilainya benar-benar BERUBAH
+        (perbandingan bentuk kanonik) yang ditulis dan tercatat di audit log;
+        mengirim ulang nilai yang sama bersifat no-op (tetap `200`) tanpa
+        entri audit baru. Baca lengkap pengaturan hanya lewat
+        `/api/v1/admin/settings` — tidak ada permukaan pengaturan lintas-role
+        (PRD §2.1).
 
         Rentang: biaya_packaging 0..100000000 (Rupiah bulat);
         cnc_hari/token_hari 1..3650; reset_menit 1..43200; max_mb 1..1024;

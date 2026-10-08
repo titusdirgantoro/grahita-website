@@ -54,17 +54,22 @@ dokumentasi).
 6. **Nilai tersimpan selalu bentuk kanonik.** Bilangan bulat ditulis tanpa
    pecahan, pecahan `min_keyakinan` tanpa nol berekor (`0.9`), `ai` diurutkan
    kunci-nya — sehingga yang tampil di audit dan di UI konsisten.
-7. **`GET /api/v1/settings` (kedua portal) tidak lagi memuat `ai`.** Endpoint
-   itu tetap ada sebagai konstanta UI (mis. biaya packaging pada pesanan
-   sertifikat, CP-SER-02), tetapi setelan internal verifikasi AI hanya dibaca
-   Superadmin lewat `/admin/settings`. Ini memperketat kriteria "hanya
-   Superadmin dapat membaca pengaturan lewat UI maupun API".
+7. **Tidak ada permukaan pengaturan lintas-role.** `GET /api/v1/settings` dan
+   `settings.Service.Runtime` **dihapus** (keputusan CEO atas review QA putaran
+   1): endpoint itu tidak punya konsumen di `web/`, tidak tercantum di
+   SystemDesign §6, dan berbenturan dengan kriteria kartu "hanya Superadmin
+   dapat membaca/mengubah lewat UI maupun API". Baca lengkap & ubah pengaturan
+   hanya lewat `/api/v1/admin/settings` (Superadmin); filter "semua kunci kecuali
+   `ai`" tidak disisakan dalam bentuk apa pun. Rute yang dihapus dijawab **404**
+   oleh router (diuji untuk anon, cabang, Manager, dan Superadmin).
 8. **Audit selalu satu transaksi dengan mutasinya** (SystemDesign §5.4).
    `audit.EntityBankAccount`/`EntitySetting` dicatat lewat `audit.NewEntry` dan
    disimpan repository **di dalam** `pgx.Tx` yang sama; kegagalan validasi atau
    constraint tidak meninggalkan event (diuji di PostgreSQL nyata). Satu batch
-   pengaturan → satu entri audit per kunci yang berubah (before = nilai lama,
-   after = nilai baru).
+   pengaturan → satu entri audit **per kunci yang nilainya benar-benar berubah**
+   (perbandingan bentuk kanonik: urutan kunci `ai` dan penulisan angka tidak
+   dianggap perubahan); mengirim ulang nilai yang sama adalah **no-op** — tetap
+   `200` tetapi tidak menulis baris maupun event audit baru.
 9. **Batch all-or-nothing.** `PUT /admin/settings` menerima `{"values":{...}}`
    (validasi SEMUA dulu, baru simpan) atau bentuk lama `{"key":..,"value":..}`
    yang responsnya tetap `{key,value}` demi kompatibilitas F1-04.
@@ -109,29 +114,68 @@ Uji baru yang relevan (50 baris PASS termasuk subtest):
   audit create/update.
 - `internal/settings/settings_test.go` — default sesuai PRD §4.9, validasi
   tipe/rentang per kunci, validasi `ai` (termasuk parsial + penolakan field
-  tak dikenal), update all-or-nothing, audit satu entri per kunci, `All` vs
-  `Runtime` (tanpa `ai`).
+  tak dikenal), update all-or-nothing, audit hanya untuk kunci yang berubah
+  (no-op nilai sama, nilai bawaan dengan urutan kunci berbeda, batch campuran,
+  rollback saat simpan gagal), dan `All` satu-satunya permukaan baca.
 - `internal/httpapi/router_bank_test.go` + `router_settings_test.go` — HTTP:
   anon 401 (mutasi 403 CSRF lebih dulu), cabang/Manager 403, Superadmin 200,
   duplikat 409 `BANK_DUPLICATE`, validasi per-field 400, rekening nonaktif
-  hilang dari daftar publik, audit tercatat.
+  hilang dari daftar publik, audit tercatat, dan `GET /api/v1/settings` 404
+  untuk semua peran.
 - `internal/httpapi/integration_bank_pg_test.go` — PostgreSQL nyata: constraint
   unik, audit transaksional (percobaan duplikat tidak meninggalkan event),
-  batch gagal tidak mengubah nilai lama, dan pesanan lama tidak terpengaruh
-  perubahan `biaya_packaging`.
+  no-op nilai sama (0 baris, 0 audit), batch gagal tidak mengubah nilai lama,
+  batch campuran hanya mencatat kunci yang berubah, dan pesanan lama tidak
+  terpengaruh perubahan `biaya_packaging`.
 
 ## Risiko sisa
 
 - Rentang nilai adalah keputusan kami (didokumentasikan di `settings.go` dan
   deskripsi OpenAPI). Bila Pusat butuh batas lain (mis. `max_mb` > 1024),
   rentangnya mudah disesuaikan di satu tempat.
-- `GET /api/v1/settings` tetap dapat dibaca semua pengguna yang login untuk
-  konstanta operasional (biaya packaging dsb.) — memang dipakai UI kedua
-  portal; setelan `ai` sudah dikeluarkan dari sana. Bila kelak konstanta itu
-  dianggap sensitif, tinggal dibatasi lewat allowlist `Runtime`.
+- Permukaan pengaturan lintas-role sudah **dihapus**, bukan dibatasi allowlist:
+  bila kelak portal butuh konstanta operasional (mis. biaya packaging), nilai
+  itu disajikan endpoint yang memang memiliki datanya (draft pesanan/katalog/
+  unggah bukti), bukan endpoint pengaturan baru.
 - Halaman rekening/pengaturan memakai `useState`/`useApi` sederhana (belum
   TanStack Query) mengikuti pola kartu sebelumnya; cache akan menyusul bersama
   kartu fitur lain.
 - Belum ada `DELETE` rekening (PRD §4.6 hanya menyebut Aktif; rekening
   dinonaktifkan, bukan dihapus) dan belum ada halaman audit log — keduanya di
   luar cakupan kartu ini.
+
+## Revisi putaran 1 (permintaan QA)
+
+Review QA putaran 1 (lensa artifact, commit `5079e69`) meminta dua koreksi;
+keduanya dikerjakan di kartu yang sama dengan keputusan CEO pada komentar
+2026-10-08 12:05.
+
+1. **`GET /api/v1/settings` + `settings.Service.Runtime` DIHAPUS** (opsi 1a).
+   Tidak ada lagi jalur "semua kunci kecuali `ai`": pengaturan hanya dibaca dan
+   diubah lewat `/api/v1/admin/settings` (Superadmin). Perubahan: `router.go`
+   (rute dihapus), `handlers_settings.go` (handler dihapus), `openapi/openapi.yaml`
+   (path dihapus, deskripsi `put` diperjelas), `settings.go` (`merged` tanpa
+   parameter allow). Uji: `TestApiSettingsRuntimeTanpaAi` → diganti
+   `TestApiSettingsLintasRoleTidakAda` (404 untuk anon, cabang, Manager,
+   Superadmin) dan blok 404 di uji integrasi PG.
+2. **Audit hanya untuk kunci yang berubah.** `Service.Update` membandingkan
+   nilai berlaku dengan nilai baru dalam bentuk kanonik (`samaNilai`) dan
+   melewati kunci yang sama — tidak ada baris ditulis maupun entri audit.
+   Uji unit baru `TestUpdateHanyaMencatatKunciYangBerubah` (no-op nilai sama,
+   nilai bawaan `ai` yang urutan kuncinya berbeda, batch campuran, rollback
+   saat simpan gagal) dan blok audit di `TestPGSettingsValidasiAuditDanSnapshotPackaging`
+   (no-op = 0 baris + 0 audit, batch valid = 2, PUT ulang = tetap 2, batch
+   campuran = 3, `ai` tidak valid tetap 3, `ai` valid = 4).
+
+### Gerbang setelah revisi (dijalankan ulang)
+
+| Gerbang | Perintah | Hasil |
+|---|---|---|
+| gofmt/vet/build | `gofmt -l .`; `go vet ./...`; `go build ./...` (di `api/`) | kosong; exit 0; exit 0 |
+| sqlc pin | `sqlc-v1.31.1 generate` + `git status --porcelain -- internal/db/sqlc db` | tanpa diff |
+| seluruh suite (race) | `go test -race -p 1 -count=1 ./...` | **EXIT=0**, 11 paket `ok`, 0 FAIL |
+| integrasi PG | `-run 'TestPGBank\|TestPGSettings' -v` dengan `TEST_DATABASE_URL` (PG16 `grahita_test` + shim) | `--- PASS: TestPGBankRekeningTransaksionalDanNonaktif`; `--- PASS: TestPGSettingsValidasiAuditDanSnapshotPackaging` |
+| rahasia | `./scripts/check-secrets.sh` | exit 0 |
+| OpenAPI | `redocly lint openapi/openapi.yaml` (`@redocly/cli` v1.34.20, pin mayor 1) | valid, 10 warning gaya lama |
+| frontend | `npm run typecheck`; `npm run test` (di `web/`) | exit 0; 76 uji lulus (api-client 7, ui 44, admin 19, customer 6) |
+

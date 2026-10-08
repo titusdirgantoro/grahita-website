@@ -127,7 +127,8 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 	mgrCookies, _ := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
 	saCookies, saCsrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 
-	// Pengelolaan hanya Superadmin; konstanta kedua portal tanpa ai.
+	// Pengelolaan hanya Superadmin; tidak ada lagi permukaan pengaturan
+	// lintas-role (GET /api/v1/settings dihapus atas keputusan CEO).
 	status, _, _ := apiReq(t, http.DefaultClient, http.MethodGet, base+"/admin/settings", "", mgrCookies, "")
 	if status != http.StatusForbidden {
 		t.Errorf("manager baca pengaturan harus 403, dapat %d", status)
@@ -143,12 +144,14 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 	if data["biaya_packaging"] != float64(3000) {
 		t.Errorf("default biaya_packaging harus 3000, dapat %v", data["biaya_packaging"])
 	}
-	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/settings", "", cabangCookies, "")
-	if status != http.StatusOK {
-		t.Fatalf("cabang baca konstanta harus 200, dapat %d", status)
-	}
-	if _, ok := body["data"].(map[string]any)["ai"]; ok {
-		t.Error("konstanta kedua portal tidak boleh memuat ai")
+	for _, aktor := range []struct {
+		nama    string
+		cookies []*http.Cookie
+	}{{"cabang", cabangCookies}, {"manager", mgrCookies}, {"superadmin", saCookies}} {
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, base+"/settings", "", aktor.cookies, "")
+		if status != http.StatusNotFound {
+			t.Errorf("%s GET /api/v1/settings harus 404, dapat %d (%v)", aktor.nama, status, body)
+		}
 	}
 
 	// Simpan pesanan lama yang memakai biaya packaging 3000 (snapshot).
@@ -163,36 +166,43 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 		t.Fatalf("seed baris packaging: %v", err)
 	}
 
-	// Fixture mengosongkan tabel settings, jadi nilai awal ditulis lewat API.
+	var stored string
+	var auditCount, settingRows int
+	hitungPengaturan := func() (int, int) {
+		t.Helper()
+		var audit, baris int
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE entity='setting'`).Scan(&audit); err != nil {
+			t.Fatalf("hitung audit pengaturan: %v", err)
+		}
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM settings`).Scan(&baris); err != nil {
+			t.Fatalf("hitung baris pengaturan: %v", err)
+		}
+		return audit, baris
+	}
+
+	// Skema uji mulai kosong (nilai berlaku = default). Mengirim nilai yang
+	// SAMA dengan default adalah no-op: tidak ada baris ditulis, tanpa audit.
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
 		`{"values":{"biaya_packaging":3000}}`, saCookies, saCsrf)
 	if status != http.StatusOK {
-		t.Fatalf("set biaya_packaging awal harus 200, dapat %d", status)
+		t.Fatalf("PUT nilai sama dengan default harus 200, dapat %d", status)
+	}
+	if auditCount, settingRows = hitungPengaturan(); auditCount != 0 || settingRows != 0 {
+		t.Errorf("PUT nilai yang tidak berubah harus no-op, dapat audit=%d baris=%d", auditCount, settingRows)
 	}
 
-	// Nilai tidak valid → 400, nilai lama tidak berubah, tanpa event audit baru.
+	// Nilai tidak valid → 400, tidak ada baris tersimpan, tanpa event audit.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
 		`{"values":{"biaya_packaging":-1,"cnc_hari":10}}`, saCookies, saCsrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("nilai tidak valid harus 400, dapat %d (%v)", status, body)
 	}
 	assertErrorShape(t, body, "VALIDATION_FAILED")
-	var stored string
-	if err := f.pool.QueryRow(ctx, `SELECT value::text FROM settings WHERE key='biaya_packaging'`).Scan(&stored); err != nil {
-		t.Fatalf("baca pengaturan: %v", err)
-	}
-	if stored != "3000" {
-		t.Errorf("nilai lama tidak boleh berubah saat validasi gagal, dapat %s", stored)
-	}
-	var auditCount int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE entity='setting'`).Scan(&auditCount); err != nil {
-		t.Fatalf("hitung audit pengaturan: %v", err)
-	}
-	if auditCount != 1 {
-		t.Errorf("validasi gagal tidak boleh mencatat audit baru, dapat %d (mau 1)", auditCount)
+	if auditCount, settingRows = hitungPengaturan(); auditCount != 0 || settingRows != 0 {
+		t.Errorf("validasi gagal tidak boleh menyimpan/mencatat apa pun, dapat audit=%d baris=%d", auditCount, settingRows)
 	}
 
-	// Batch valid → tersimpan sekaligus + satu audit per kunci.
+	// Batch valid → tersimpan sekaligus + satu audit per kunci yang berubah.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
 		`{"values":{"biaya_packaging":5000,"manager_boleh_revisi":false}}`, saCookies, saCsrf)
 	if status != http.StatusOK {
@@ -204,11 +214,34 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 	if stored != "5000" {
 		t.Errorf("biaya_packaging harus tersimpan 5000, dapat %s", stored)
 	}
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE entity='setting'`).Scan(&auditCount); err != nil {
-		t.Fatalf("hitung audit pengaturan: %v", err)
+	if auditCount, _ = hitungPengaturan(); auditCount != 2 {
+		t.Errorf("harus 2 entri audit (dua kunci berubah), dapat %d", auditCount)
 	}
-	if auditCount != 3 {
-		t.Errorf("harus 3 entri audit (1 + 2), dapat %d", auditCount)
+
+	// Mengirim ulang nilai yang sama → tetap 200 tetapi TIDAK menambah audit.
+	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
+		`{"values":{"biaya_packaging":5000,"manager_boleh_revisi":false}}`, saCookies, saCsrf)
+	if status != http.StatusOK {
+		t.Fatalf("PUT nilai sama harus tetap 200, dapat %d", status)
+	}
+	if auditCount, _ = hitungPengaturan(); auditCount != 2 {
+		t.Errorf("PUT nilai sama tidak boleh menambah audit, dapat %d (mau 2)", auditCount)
+	}
+
+	// Batch campuran: hanya kunci yang benar-benar berubah yang dicatat.
+	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
+		`{"values":{"biaya_packaging":5000,"cnc_hari":10}}`, saCookies, saCsrf)
+	if status != http.StatusOK {
+		t.Fatalf("batch campuran harus 200, dapat %d", status)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT value::text FROM settings WHERE key='cnc_hari'`).Scan(&stored); err != nil {
+		t.Fatalf("baca cnc_hari: %v", err)
+	}
+	if stored != "10" {
+		t.Errorf("cnc_hari harus tersimpan 10, dapat %s", stored)
+	}
+	if auditCount, _ = hitungPengaturan(); auditCount != 3 {
+		t.Errorf("hanya kunci yang berubah dicatat: mau 3, dapat %d", auditCount)
 	}
 
 	// Perubahan biaya packaging TIDAK memengaruhi pesanan lama (BR-05/CP-SER-05):
@@ -224,15 +257,22 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 		t.Errorf("pesanan lama harus tetap 3000 (harga=%d subtotal=%d total=%d)", harga, subtotal, total)
 	}
 
-	// Setelan ai dapat disimpan dan divalidasi rentangnya.
+	// Setelan ai: nilai tidak valid ditolak tanpa audit, nilai valid tersimpan
+	// dan menambah tepat satu entri audit.
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
 		`{"values":{"ai":{"aktif":true,"min_keyakinan":1.5}}}`, saCookies, saCsrf)
 	if status != http.StatusBadRequest {
 		t.Errorf("ai dengan keyakinan di luar 0..1 harus 400, dapat %d", status)
 	}
+	if auditCount, _ = hitungPengaturan(); auditCount != 3 {
+		t.Errorf("ai tidak valid tidak boleh menambah audit, dapat %d (mau 3)", auditCount)
+	}
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
 		`{"values":{"ai":{"aktif":true,"min_keyakinan":0.85,"tol_kurang":1000,"tol_lebih":500,"digit_rek":4,"mundur":2}}}`, saCookies, saCsrf)
 	if status != http.StatusOK {
 		t.Errorf("ai valid harus 200, dapat %d", status)
+	}
+	if auditCount, _ = hitungPengaturan(); auditCount != 4 {
+		t.Errorf("ai valid harus menambah 1 audit, dapat %d (mau 4)", auditCount)
 	}
 }

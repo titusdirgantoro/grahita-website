@@ -9,22 +9,6 @@ import (
 	"github.com/grahita/portal/api/internal/platform/httpx"
 )
 
-// settings mengembalikan konstanta operasional untuk pengguna yang sudah
-// login. Kedua portal memakainya untuk konstanta UI (mis. biaya packaging).
-// Setelan internal `ai` TIDAK termasuk — hanya Superadmin yang membacanya
-// lewat /admin/settings (PRD §2.1, §4.9).
-func (a *API) settings(w http.ResponseWriter, r *http.Request) error {
-	if a.d.Settings == nil {
-		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan pengaturan belum tersedia.")
-	}
-	vals, err := a.d.Settings.Runtime(r.Context())
-	if err != nil {
-		return err
-	}
-	httpx.OK(w, data(vals))
-	return nil
-}
-
 // adminSettings adalah pembacaan pengaturan lengkap khusus Superadmin.
 func (a *API) adminSettings(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Settings == nil {
