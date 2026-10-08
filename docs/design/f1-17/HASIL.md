@@ -56,35 +56,45 @@ Yang dihasilkan satu pesanan Done (SystemDesign.md §4.4): **Invoice PDF**,
    **seluruh** baris `documents` disimpan dalam satu transaksi. Batas yang
    ditegaskan (koreksi putaran QA-1): (a) atomisitas itu **hanya** berlaku untuk
    tabel `documents` — penulisan objek TIDAK berada di dalam transaksi DB, jadi
-   tidak ada klaim atomisitas lintas DB↔object storage; (b) jaminan "tanpa
-   berkas yatim / dokumen separuh jadi" **hanya terbukti untuk satu permintaan
-   tanpa balapan**; (c) bukti storage memakai `storage.Memory`, bukan
-   S3/MinIO nyata, dan PDF berasal dari Chromium lokal (lihat butir 5).
-   Bukti: `TestKegagalanRenderTidakMenyisakanApaPun` (3 skenario: mesin PDF
-   mati, gagal tulis storage pada berkas ke-2, gagal simpan metadata),
-   `TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan`, dan
-   `TestPGDokumenRendererTidakSiapMenjawab503` lewat HTTP.
-4b. **Pembersihan objek saat gagal diverifikasi terhadap baris `documents`.**
-   Kunci storage deterministik per (order, jenis, versi) DIPAKAI BERSAMA semua
-   permintaan render dokumen yang sama, sehingga permintaan yang gagal bisa
-   menulis kunci yang sudah dipegang baris milik permintaan lain yang lebih dulu
-   commit. Karena itu `renderDanSimpan` tidak pernah menghapus buta lagi: pada
-   kegagalan ia memanggil `hapusObjekTanpaRujukan`, yang (i) membaca ulang baris
-   `documents` lebih dulu, (ii) hanya menghapus kunci yang tidak dirujuk baris
-   mana pun, dan (iii) bila pembacaan verifikasi itu gagal, TIDAK menghapus
-   apa pun (objek yatim lebih ringan daripada baris tanpa berkas) serta mencatat
-   peringatan. Sisi lain tetap dijaga: bila tidak ada baris yang menunjuk
-   objeknya, objek yang terlanjur ditulis tetap dibuang. Sisa jalur sukses juga
-   dicek per kunci (bukan per indeks) supaya urutan kembalian repository tidak
-   bisa menghapus kunci yang salah. Bukti regresi (gagal pada `f7d035b`,
-   lulus setelah perbaikan):
-   `TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain` (2 render paralel,
-   `SaveAll` satu permintaan digagalkan setelah yang lain commit → 3 baris, 3
-   objek utuh, 0 penghapusan, `GET /documents/{id}/download` tetap menunjuk
-   objek yang ada) dan `TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain`
-   (HTTP + PostgreSQL nyata: 500 pada generate, 3 baris tetap ada, ketiga
-   unduhan 200). Bukti lama: pesanan benar-benar kehilangan ketiga berkas dan
-   unduhan dijawab 503.
+   tidak ada klaim atomisitas lintas DB↔object storage; (b) bukti storage
+   memakai `storage.Memory`, bukan S3/MinIO nyata, dan PDF berasal dari
+   Chromium lokal (lihat butir 5).
+4b. **Jalur render TIDAK PERNAH menghapus objek (aturan putaran QA-2).** Kunci
+   storage deterministik per (order, jenis, versi) dipakai bersama semua
+   permintaan render dokumen yang sama, sehingga penghapusan kunci apa pun —
+   termasuk bentuk putaran 2 "hapus hanya bila tidak ada baris yang merujuk" —
+   selalu bertumpu pada snapshot rujukan yang bisa basi: pesaing yang sudah
+   menulis objek tetapi belum commit kehilangan berkasnya begitu barisnya
+   commit, dan kehilangan itu **PERMANEN** karena render ulang menganggap
+   barisnya sudah ada sehingga berkasnya tidak pernah dibuat lagi. Keterjadiannya
+   bukan teoretis: probe QA putaran 2 mengukur 2/10 percobaan berakhir dengan
+   berkas hilang permanen. Karena baris `documents` HANYA ditulis setelah SEMUA
+   objeknya berhasil ditulis, dan objek yang sudah ditulis tidak pernah dihapus,
+   invariannya berlaku untuk SELURUH penjadwalan:
+
+   > **bila baris (order, jenis, versi) ada ⇒ objek storage-nya ada.**
+
+   Harganya: permintaan yang gagal setelah sebagian objeknya tertulis
+   meninggalkan objek **YATIM** (objek tanpa baris). Objek yatim dicatat lewat
+   `logObjekTertinggal` (`slog.Warn`, memuat kunci yang tertulis dan kunci yang
+   gagal) dan direkonsiliasi oleh F1-21. Bukti regresi (GAGAL pada `8f91c3a`,
+   lulus pada revisi ini): `TestKegagalanPutTidakMencabutBerkasPesaingBelumCommit`
+   (unit deterministik: pemenang sudah menulis 3 objek tetapi belum commit,
+   pesaing gagal di Put dokumen kedua → 0 penghapusan, 3 baris, tiap objek ada,
+   tautan unduh menunjuk objek yang ada),
+   `TestKeterjadianAlamiTidakAdaBerkasHilang` (20 percobaan alami tanpa gerbang
+   urutan: 0 kehilangan; pada `8f91c3a` 2/20), dan
+   `TestPGDokumenKegagalanPutTidakMencabutBerkasPemenang` (PostgreSQL nyata +
+   service produksi: dua `Ensure` paralel, satu gagal di Put dokumen kedua,
+   `SaveAll` pemenang ditahan sampai pembersihan yang kalah selesai → 3 baris,
+   tiap objek ada, unduhan 200 menunjuk objek yang ada). Uji yang menjaga sisi
+   "bersih" disesuaikan dengan aturan baru:
+   `TestKegagalanRenderTidakMenyisakanBarisDokumen` (tidak ada baris dokumen;
+   objek yang terlanjur ditulis dibiarkan) dan
+   `TestKegagalanSimpanMetadataMenyisakanObjekYatimTanpaMenghapus`. Temuan QA
+   putaran 1 tetap dijaga `TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain`
+   dan `TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain` (keduanya tetap
+   lulus).
 5. **Renderer tetap Gotenberg (SystemDesign.md §8), dan template diuji sampai
    PDF nyata.** Invoice/surat jalan PDF lewat `platform/pdf.Renderer`
    (`GOTENBERG_URL`); XLSX lewat `excelize`. Karena Gotenberg di Docker tidak
@@ -209,52 +219,66 @@ di 127.0.0.1:5455 + `scripts/pg-dev-shim.sql` dipasang di skema `public`):
 gofmt -l api                                 # kosong
 go vet ./...                                 # exit 0
 go build ./...                               # exit 0
-sqlc-v1.31.1 generate                        # 0 diff (sha256 berkas sqlc sebelum==sesudah)
+sqlc-v1.31.1 generate                        # 0 diff (sha256 berkas sqlc sebelum==sesudah; tidak ada perubahan SQL di putaran ini)
 ./scripts/check-secrets.sh                   # exit 0 — tidak ada rahasia
-redocly lint openapi/openapi.yaml            # valid, 10 warning gaya lama (sama seperti sebelumnya)
-TEST_DATABASE_URL=…/grahita_f117r2  go test -race -p 1 -count=1 ./...
-go test -race -count=2 -run 'Dokumen|PDFNyata|KegagalanSimpanMetadata' ./internal/document/ ./internal/httpapi/
-npm run typecheck (web)                      # exit 0 — putaran 1, tak ada berkas web yang diubah di putaran 2
-npm test (web)                               # 167 uji lulus — putaran 1, tak ada berkas web yang diubah di putaran 2
+redocly lint openapi/openapi.yaml            # valid, 10 warning gaya lama (openapi tidak diubah)
+TEST_DATABASE_URL=…/grahita_f117r3  go test -race -p 1 -count=1 ./...
+go test -race -count=2 -run 'Dokumen|PDFNyata|Kegagalan|KeterjadianAlami' ./internal/document/ ./internal/httpapi/
+npm run typecheck (web)                      # exit 0 — putaran 1, tak ada berkas web yang diubah sejak itu
+npm test (web)                               # 167 uji lulus — putaran 1, tak ada berkas web yang diubah sejak itu
 ```
 
-Hasil nyata suite penuh putaran 2 (`go test -race -p 1 -count=1 ./...`, DB
-`grahita_f117r2` + shim, log `cache/scratch/f117-r2-suite-bersih.log`):
-**18 paket `ok`, 0 FAIL, 0 SKIP, exit=0** (`httpapi` 309,8 s; `auth` 31,7 s;
-`document` 2,5 s). Uji fokus dokumen diulang `-count=2` (anti-flake): lulus
-(`internal/document` 1,9 s; `internal/httpapi` 64,2 s).
+Hasil nyata suite penuh putaran 3 (`go test -race -p 1 -count=1 ./...`, DB
+`grahita_f117r3` + shim `scripts/pg-dev-shim.sql` di skema `public`, log
+`cache/scratch/f117-r3-suite-bersih.log`): **18 paket `ok`, 0 FAIL, 0 SKIP,
+exit=0** (`httpapi` 321,4 s; `auth` 28,0 s; `document` 3,7 s). Uji fokus dokumen
+diulang `-count=2` (anti-flake): lulus (`internal/document` 5,6 s; `internal/httpapi`
+71,7 s) — log `cache/scratch/f117-r3-fokus.log`. Catatan lingkungan: DB uji perlu
+shim `uuidv7()` di `public` sebelum suite (tanpa itu 10 uji
+`internal/platform/database` gagal karena `function uuidv7() does not exist`;
+bukan kegagalan kode kartu ini — run pertama saya memang begitu, lalu diulang
+setelah shim dipasang).
 
-Putaran 2 (perbaikan temuan QA-1) juga membuktikan uji regresinya MENGANGGU:
-pada salinan bersih `f7d035b` (worktree sementara, lalu dihapus) uji unit
-`TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain` GAGAL (3 penghapusan,
-ketiga berkas hilang, unduhan 503) dan uji HTTP+PG
-`TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain` GAGAL (unduhan 503);
-keduanya lulus pada revisi perbaikan — log
-`cache/scratch/f117-bukti-regresi-lama.txt`.
+Bukti bahwa uji regresi putaran 3 MENGANGGU (GAGAL pada `8f91c3a`, worktree
+sementara yang sudah dihapus, log `cache/scratch/f117-r3-bukti-regresi-lama.txt`):
+`TestKegagalanPutTidakMencabutBerkasPesaingBelumCommit` GAGAL (1 penghapusan,
+berkas invoice hilang), `TestKeterjadianAlamiTidakAdaBerkasHilang` GAGAL
+(1–2 dari 20 percobaan kehilangan berkas permanen; pada probe QA putaran 2
+terukur 2/10), dan `TestPGDokumenKegagalanPutTidakMencabutBerkasPemenang` GAGAL
+(baris invoice kehilangan berkasnya di PostgreSQL nyata). Ketiganya lulus pada
+revisi ini.
 
 Uji yang ditambahkan kartu ini:
 
-- `internal/document` (unit, tanpa DB): 20 uji — format Rupiah/tanggal, kunci
+- `internal/document` (unit, tanpa DB): 22 uji — format Rupiah/tanggal, kunci
   storage & nama berkas, render 3 dokumen + kunci, idempotensi & berkas tidak
   tertimpa, versi baru memakai kunci baru, pesanan belum Done ditolak,
-  tiga skenario kegagalan tanpa sisa berkas/baris (3 sub-uji), **regresi
-  pembersihan objek pada balapan
-  (`TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain`, 2 render paralel)
-  dan pasangannya yang memastikan berkas tanpa rujukan tetap dibuang
-  (`TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan`)**, otorisasi
+  tiga skenario kegagalan tanpa sisa baris dokumen (3 sub-uji: mesin PDF mati,
+  gagal tulis storage, gagal simpan metadata — objek yang terlanjur tertulis
+  dibiarkan), **regresi putaran 1
+  (`TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain`, 2 render paralel)**
+  dan **regresi putaran 3 untuk urutan "pesaing sudah menulis objek, belum
+  commit" (`TestKegagalanPutTidakMencabutBerkasPesaingBelumCommit` deterministik
+  + `TestKeterjadianAlamiTidakAdaBerkasHilang` 20 percobaan alami) serta
+  `TestKegagalanSimpanMetadataMenyisakanObjekYatimTanpaMenghapus`**, otorisasi
   daftar & unduh (termasuk surat jalan 404 untuk cabang), `Generate` butuh
   CapAdminOrders, hasil render kosong ditolak, snapshot kurang ditolak; plus uji
   isi HTML & XLSX (escape, penanda C&C/LUNAS, header kolom, satu baris per line,
   layout cetak, panes, area cetak `_xlnm.Print_Area`).
-- `internal/httpapi` (integrasi PostgreSQL nyata, skema bersih per uji): 8 uji —
+- `internal/httpapi` (integrasi PostgreSQL nyata, skema bersih per uji): 9 uji —
   `TestPGDokumenGenerateIdempotenDanIsolasi` (3 berkas + kunci + isi cocok
   snapshot + idempoten + isolasi cabang + unduhan per peran),
   `TestPGDokumenPesananBelumDone`, `TestPGDokumenVersiBaruTidakMenimpaBerkasLama`,
   `TestPGDokumenRekeningNonAktifTidakTercetak`,
   `TestPGDokumenRendererTidakSiapMenjawab503`,
   **`TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain` (regresi temuan
-  QA: SaveAll gagal setelah baris commit → 500, 3 baris tetap ada, ketiga
-  unduhan 200)**,
+  QA putaran 1: SaveAll gagal setelah baris commit → 500, 3 baris tetap ada,
+  ketiga unduhan 200)**,
+  **`TestPGDokumenKegagalanPutTidakMencabutBerkasPemenang` (regresi QA putaran 2
+  butir 2(ii): dua `Ensure` paralel di PG nyata + service produksi, satu gagal
+  di Put dokumen kedua, `SaveAll` pemenang ditahan sampai pembersihan yang kalah
+  selesai → 3 baris, tiap objek ada di storage, unduhan 200 menunjuk objek yang
+  ada)**,
   `TestPGDokumenPDFNyataMelaluiChromium` (PDF sungguhan dari Chromium lokal
   lewat klien Gotenberg + XLSX dibuka excelize), dan
   `TestChromeTersediaUntukUjiPDF` (penanda ketersediaan Chromium).
@@ -279,18 +303,23 @@ Uji yang ditambahkan kartu ini:
 - Render masih sinkron di dalam permintaan HTTP (tanpa antrean job); jalur
   River/worker untuk dokumen belum dimiliki kartu mana pun dan tidak dibuat di
   sini supaya tidak menebak bentuk antrean F2-26.
-- Bila berkas di object storage hilang (tanpa baris DB yang hilang), render
-  ulang tidak akan memperbaikinya karena barisnya sudah ada — rekonsiliasi
-  DB↔objek adalah lingkup F1-21 (backup/restore). Ini juga menutup sisa celah
-  putaran 2: verifikasi rujukan (`hapusObjekTanpaRujukan`) menutup kasus baris
-  pesaing yang sudah commit SEBELUM pembersihan, sementara celah teoretis
-  sub-milidetik — pesaing commit di antara pembacaan rujukan dan penghapusan —
-  tetap ada dan hanya bisa merusak berkas lewat balapan itu; rekonsiliasinya
-  milik F1-21, bukan render ulang.
-- Gagal di jalur verifikasi rujukan (mis. DB sedang tidak bisa dibaca) tidak
-  pernah menghapus objek: objek yatim dibiarkan dan dicatat lewat `slog.Warn`.
-  Jadi ada kemungkinan objek yatim di storage, tanpa pernah ada baris
-  `documents` tanpa berkas akibat jalur ini.
+- **Objek yatim di storage adalah harga yang sengaja dipilih** (aturan putaran
+  QA-2: jalur render tidak pernah menghapus objek). Permintaan yang gagal setelah
+  sebagian objeknya tertulis meninggalkan objek tanpa baris; dicatat lewat
+  `slog.Warn` (`logObjekTertinggal`) dan direkonsiliasi F1-21. Arah kesalahannya
+  dipilih sadar: baris tanpa berkas bersifat PERMANEN (render ulang tidak
+  menyembuhkannya, dan pada S3/MinIO kerugiannya senyap — API 200 + URL yang
+  `NoSuchKey`), sedangkan objek yatim tidak merusak apa pun. Tidak ada lagi celah
+  balapan yang bisa menghilangkan berkas pada jalur render: penghapusan tidak
+  pernah terjadi, jadi tidak ada snapshot rujukan yang bisa basi.
+- Bila berkas di object storage hilang karena sebab di LUAR jalur render (mis.
+  penghapusan manual, kegagalan/retensi storage), render ulang tidak akan
+  memperbaikinya karena barisnya sudah ada — rekonsiliasi DB↔objek adalah
+  lingkup F1-21 (backup/restore).
+- **(Non-pemblokir, dicatat untuk T4/T5)** Gerbang E2E dokumen wajib memeriksa
+  KEBERADAAN objek, bukan hanya HTTP 200 unduhan: presign S3/MinIO tidak
+  memverifikasi keberadaan objek, sehingga kehilangan berkas bisa lolos dari
+  pemeriksaan yang hanya melihat status HTTP.
 
 ## Kewajiban untuk kartu turunan
 
@@ -306,7 +335,11 @@ Uji yang ditambahkan kartu ini:
   `GET /api/v1/documents/{id}/download` untuk unduhan/cetak.
 - **F1-21 (backup/restore)**: daftar objek dokumen ada di `documents.storage_key`;
   restore harus memverifikasi DB↔objek untuk kunci ini karena render ulang tidak
-  memperbaiki objek yang hilang.
+  memperbaiki objek yang hilang. Rekonsiliasi juga harus menyapu objek **yatim di
+  bawah `documents/`** (objek tanpa baris) yang ditinggalkan oleh render yang
+  gagal di tengah — aturan putaran QA-2 sengaja tidak menghapusnya di jalur
+  render; kandidatnya tercatat di log `slog.Warn` `render dokumen gagal: objek
+  yang sudah tertulis DIBIARKAN`.
 
 ## Hotspot
 

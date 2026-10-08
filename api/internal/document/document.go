@@ -19,15 +19,20 @@
 //     dirender lebih dahulu di memori, baru ditulis ke object storage, lalu
 //     SELURUH baris `documents` disimpan dalam satu transaksi. Atomisitas itu
 //     HANYA berlaku untuk tabel `documents`: penulisan objek TIDAK berada di
-//     dalam transaksi DB (object storage bukan transaksional), jadi jaminan
-//     "tanpa berkas yatim/dokumen separuh jadi" hanya terbukti untuk satu
-//     permintaan TANPA balapan. Pada balapan, permintaan yang gagal tidak
-//     boleh menghapus objek secara buta: kunci deterministik per (order,
-//     jenis, versi) DIPAKAI BERSAMA, jadi objek yang kita tulis bisa sudah
-//     dirujuk baris milik permintaan lain — pembersihannya lewat
-//     hapusObjekTanpaRujukan (baca ulang baris lebih dulu; bila pembacaan itu
-//     gagal, objek DIBIARKAN karena objek yatim lebih ringan daripada baris
-//     tanpa berkas).
+//     dalam transaksi DB (object storage bukan transaksional), jadi tidak ada
+//     klaim atomisitas lintas DB↔object storage.
+//   - Jalur render TIDAK PERNAH menghapus objek — tidak pada kegagalan, tidak
+//     pada jalur sukses. Kunci storage deterministik per (order, jenis, versi)
+//     dipakai bersama semua permintaan render dokumen yang sama, jadi setiap
+//     penghapusan kunci berisiko mencabut berkas milik baris yang sudah atau
+//     akan di-commit permintaan lain, dan kerusakannya PERMANEN (render ulang
+//     menganggap barisnya sudah ada sehingga berkasnya tidak pernah dibuat
+//     lagi). Karena baris `documents` hanya ditulis SETELAH seluruh objeknya
+//     berhasil ditulis, berlaku untuk SEMUA penjadwalan: bila baris
+//     (order, jenis, versi) ada, objeknya ada. Harga aturan ini adalah objek
+//     YATIM bila permintaan gagal setelah sebagian objeknya tertulis — jauh
+//     lebih ringan daripada baris tanpa berkas, dan direkonsiliasi oleh F1-21
+//     (lihat logObjekTertinggal).
 //   - Akses selalu lewat presigned URL berumur pendek dan diperiksa per aktor:
 //     akun cabang hanya boleh mengunduh INVOICE pesanan cabang SESI-nya
 //     (CapInvoiceOwn), sedangkan staf Pusat dengan CapAdminOrders boleh
@@ -404,11 +409,28 @@ func (s *Service) ensure(ctx context.Context, orderID string, kinds []string) ([
 // renderDanSimpan merender seluruh dokumen yang belum ada, menulis isinya ke
 // object storage, lalu menyimpan metadatanya dalam satu transaksi.
 //
-// Kegagalan di manapun tidak boleh mencabut berkas yang sudah dirujuk baris
-// `documents` yang sah (lihat hapusObjekTanpaRujukan): kunci storage
-// deterministik per (order, jenis, versi) dipakai bersama semua permintaan
-// render dokumen yang sama, jadi permintaan yang gagal bisa saja menulis kunci
-// yang sudah dipegang baris milik permintaan lain yang lebih dulu commit.
+// ATURAN KESELAMATAN (putaran QA-2 → perbaikan putaran 3): jalur ini TIDAK
+// PERNAH menghapus objek — baik pada kegagalan maupun pada jalur sukses.
+//
+// Kunci storage deterministik per (order, jenis, versi) dipakai bersama oleh
+// semua permintaan render dokumen yang sama, jadi penghapusan kunci apa pun
+// (termasuk "hapus hanya bila tidak ada baris yang merujuk") selalu bertumpu
+// pada snapshot rujukan yang bisa basi: pesaing yang sudah menulis objek
+// tetapi belum commit akan kehilangan berkasnya begitu barisnya commit, dan
+// kehilangan itu PERMANEN karena render ulang menganggap barisnya sudah ada.
+// Keterjadiannya bukan teoretis — probe QA putaran 2 mengukur 2/10 percobaan
+// kehilangan berkas permanen pada dua render paralel.
+//
+// Karena baris `documents` HANYA ditulis setelah SEMUA objeknya berhasil
+// ditulis, dan objek yang sudah ditulis tidak pernah dihapus, invariannya
+// berlaku untuk seluruh penjadwalan:
+//
+//	bila baris (order, jenis, versi) ada  ⇒  objek storage-nya ada.
+//
+// Harganya: permintaan yang gagal setelah sebagian objeknya tertulis
+// meninggalkan objek YATIM (objek tanpa baris). Objek yatim jauh lebih ringan
+// daripada baris tanpa berkas, dan rekonsiliasinya adalah lingkup F1-21 —
+// dicatat lewat logObjekTertinggal supaya bisa ditemukan.
 func (s *Service) renderDanSimpan(ctx context.Context, order Order, kinds []string) ([]Document, error) {
 	isi := make([][]byte, 0, len(kinds))
 	for _, k := range kinds {
@@ -424,7 +446,7 @@ func (s *Service) renderDanSimpan(ctx context.Context, order Order, kinds []stri
 	for i, k := range kinds {
 		key := StorageKey(order.ID, k, order.Versi)
 		if err := s.store.Put(ctx, key, bytes.NewReader(isi[i]), int64(len(isi[i])), MimeType(k)); err != nil {
-			s.hapusObjekTanpaRujukan(ctx, order.ID, kunci)
+			logObjekTertinggal(ctx, order, kunci, key)
 			return nil, fmt.Errorf("%w: %v", ErrStorageUnavailable, err)
 		}
 		kunci = append(kunci, key)
@@ -441,23 +463,8 @@ func (s *Service) renderDanSimpan(ctx context.Context, order Order, kinds []stri
 
 	simpan, err := s.repo.SaveAll(ctx, SaveRequest{OrderID: order.ID, Docs: docs})
 	if err != nil {
-		s.hapusObjekTanpaRujukan(ctx, order.ID, kunci)
+		logObjekTertinggal(ctx, order, kunci, "")
 		return nil, err
-	}
-
-	// Baris yang dikembalikan SaveAll adalah baris FINAL: baris baru kita, atau
-	// baris lama yang memenangkan balapan. Objek kita yang tidak dirujuk baris
-	// final mana pun dibuang supaya storage tidak menyimpan salinan yatim —
-	// dicek per kunci (bukan per indeks) supaya urutan kembalian repository
-	// tidak bisa membuat kunci yang salah ikut terhapus.
-	rujukan := make(map[string]bool, len(simpan))
-	for _, d := range simpan {
-		rujukan[d.StorageKey] = true
-	}
-	for _, k := range kunci {
-		if !rujukan[k] {
-			_ = s.store.Delete(ctx, k)
-		}
 	}
 	return simpan, nil
 }
@@ -520,53 +527,19 @@ func (s *Service) presign(ctx context.Context, d Document) (string, error) {
 	return url, nil
 }
 
-// hapusObjekTanpaRujukan membuang kunci yang terlanjur ditulis HANYA bila tidak
-// ada baris `documents` satu pesanan pun yang menunjuknya.
+// logObjekTertinggal mencatat objek yang sudah terlanjur ditulis tetapi
+// barisnya tidak (atau belum) ada — pendamping ATURAN KESELAMATAN di
+// renderDanSimpan: objek sengaja DIBIARKAN karena menghapus kunci
+// deterministik selalu berisiko mencabut berkas permintaan lain yang menang
+// balapan (dan bila barisnya sudah commit, kerusakannya permanen).
 //
-// Kunci dokumen deterministik per (order, jenis, versi), jadi beberapa permintaan
-// render untuk dokumen yang sama menulis kunci yang SAMA. Menghapus buta pada
-// kegagalan berarti bisa mencabut berkas milik baris yang sudah commit (pesaing
-// menang balapan), dan kerusakannya permanen: render ulang menganggap barisnya
-// sudah ada sehingga berkasnya tidak pernah dibuat lagi.
-//
-// Aturannya sengaja asimetris:
-//   - Bila pembacaan ulang baris gagal, JANGAN hapus apa pun: objek yatim jauh
-//     lebih ringan daripada baris tanpa berkas, dan rekonsiliasi objek yatim
-//     adalah lingkup F1-21.
-//   - Hanya kunci yang tidak dirujuk baris mana pun yang dihapus.
-//
-// Batas yang diketahui: pembacaan ulang menutup kasus yang dilaporkan QA (baris
-// pesaing sudah commit SEBELUM pembersihan). Celah teoretis yang tersisa adalah
-// pesaing commit tepat di antara pembacaan dan penghapusan; window-nya sangat
-// pendek dan hanya menyentuh kunci yang saat pembacaan tidak dirujuk siapa pun.
-// Objek yang hilang tanpa baris yang hilang, dan baris yang kehilangan berkas
-// saat balapan, sama-sama direkonsiliasi di F1-21 (render ulang tidak
-// menyembuhkan baris yang sudah ada).
-func (s *Service) hapusObjekTanpaRujukan(ctx context.Context, orderID string, kunci []string) {
-	if len(kunci) == 0 {
-		return
-	}
-	rows, err := s.repo.ListByOrder(ctx, orderID)
-	if err != nil {
-		// Tidak bisa memastikan kepemilikan kunci: biarkan objeknya ada.
-		slog.WarnContext(ctx, "pembersihan dokumen dilewati: gagal membaca baris rujukan",
-			"err", err, "order_id", orderID, "jumlah_kunci", len(kunci))
-		return
-	}
-	dipakai := make(map[string]bool, len(rows))
-	for _, d := range rows {
-		dipakai[d.StorageKey] = true
-	}
-	for _, k := range kunci {
-		if dipakai[k] {
-			// Sudah dirujuk baris yang sah (pesaing menang balapan): jangan
-			// disentuh, kalau tidak dokumennya kehilangan berkas permanen.
-			slog.InfoContext(ctx, "objek dokumen dipertahankan: sudah dirujuk baris documents",
-				"order_id", orderID, "storage_key", k)
-			continue
-		}
-		_ = s.store.Delete(ctx, k)
-	}
+// gkey adalah kunci yang Put-nya gagal (boleh kosong); kunci berisi kunci yang
+// sudah berhasil ditulis sebelum kegagalan. Objek-objek ini menjadi kandidat
+// rekonsiliasi F1-21.
+func logObjekTertinggal(ctx context.Context, order Order, kunci []string, gkey string) {
+	slog.WarnContext(ctx, "render dokumen gagal: objek yang sudah tertulis DIBIARKAN (bukan dihapus)",
+		"order_id", order.ID, "versi", order.Versi,
+		"storage_key_tertulis", kunci, "storage_key_put_gagal", gkey)
 }
 
 // bolehAktor memastikan aktor berhak menyentuh dokumen sama sekali: akun

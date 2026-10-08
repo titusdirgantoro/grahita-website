@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -585,6 +586,157 @@ func TestPGDokumenKegagalanCommitTidakMencabutBerkasBarisLain(t *testing.T) {
 	}
 	if len(f.barisDokumen(t, pesanan.ID)) != 3 {
 		t.Error("generate ulang tidak boleh menggandakan baris dokumen")
+	}
+}
+
+// storePGMenang membungkus object storage bersama (objekHitung) dan menutup
+// `siap` begitu pemiliknya selesai menulis `butuh` objek — supaya permintaan
+// pesaing yang gagal menjalankan pembersihannya SETELAH objek pemenang tertulis
+// tetapi SEBELUM pemenang commit (jendela yang dilaporkan QA putaran 2).
+type storePGMenang struct {
+	*objekHitung
+	mu     sync.Mutex
+	n      int
+	butuh  int
+	siap   chan struct{}
+	sekali sync.Once
+}
+
+// storePGMenangBaru menyiapkan pembungkus storage pemenang.
+func storePGMenangBaru(m *objekHitung, butuh int) *storePGMenang {
+	return &storePGMenang{objekHitung: m, butuh: butuh, siap: make(chan struct{})}
+}
+
+// Put menyimpan objek lalu menandai gerbang bila seluruh objek sudah ditulis.
+func (s *storePGMenang) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if err := s.objekHitung.Put(ctx, key, body, size, contentType); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.n++
+	penuh := s.n >= s.butuh
+	s.mu.Unlock()
+	if penuh {
+		s.sekali.Do(func() { close(s.siap) })
+	}
+	return nil
+}
+
+// storePGKalah meniru permintaan dokumen yang memakai object storage yang SAMA
+// tetapi selalu gagal menulis satu kunci (Surat Jalan XLSX = dokumen kedua).
+type storePGKalah struct {
+	*objekHitung
+	gagalKey string
+	tunggu   <-chan struct{}
+}
+
+// Put gagal untuk kunci yang ditandai, setelah menunggu gerbang pemenang.
+func (s *storePGKalah) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if key == s.gagalKey {
+		if s.tunggu != nil {
+			select {
+			case <-s.tunggu:
+			case <-time.After(60 * time.Second):
+				return errors.New("uji buntu: pemenang tidak menyelesaikan penulisan objeknya")
+			}
+		}
+		return errors.New("simulasi: storage mati saat menulis dokumen kedua")
+	}
+	return s.objekHitung.Put(ctx, key, body, size, contentType)
+}
+
+// repoPGTahan menahan SaveAll sampai gerbangnya dibuka: meniru pemenang yang
+// sudah menulis seluruh objeknya tetapi belum commit ketika pesaing gagal.
+type repoPGTahan struct {
+	*documentpg.Repo
+	siap <-chan struct{}
+}
+
+// SaveAll menunggu gerbang lalu meneruskan ke repository PostgreSQL nyata.
+func (r *repoPGTahan) SaveAll(ctx context.Context, req document.SaveRequest) ([]document.Document, error) {
+	select {
+	case <-r.siap:
+	case <-time.After(60 * time.Second):
+		return nil, errors.New("uji buntu: gerbang commit tidak pernah dibuka")
+	}
+	return r.Repo.SaveAll(ctx, req)
+}
+
+// TestPGDokumenKegagalanPutTidakMencabutBerkasPemenang adalah uji regresi QA
+// putaran 2 butir 1/2(ii) pada PostgreSQL NYATA + service produksi: dua
+// permintaan render paralel atas dokumen yang sama, satu gagal di Put dokumen
+// kedua, sementara SaveAll pemenang ditahan sampai pembersihan yang kalah
+// selesai. Pada 8f91c3a urutan ini menghapus objek yang kemudian dirujuk baris
+// pemenang (berkas hilang permanen); aturan putaran 3 (jalur render tidak
+// pernah menghapus objek) harus menjaga setiap baris tetap punya objeknya dan
+// tautan unduhnya menunjuk objek yang ada.
+func TestPGDokumenKegagalanPutTidakMencabutBerkasPemenang(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	pesanan := f.seedPesananDone(t, f.branchA, "2026-10-0011", false)
+
+	menang := storePGMenangBaru(f.objek, 3)
+	kalah := &storePGKalah{
+		objekHitung: f.objek,
+		gagalKey:    document.StorageKey(pesanan.ID, document.JenisSuratJalanXLSX, 0),
+		tunggu:      menang.siap,
+	}
+	gerbangCommit := make(chan struct{})
+	repo := &repoPGTahan{Repo: f.docRepo, siap: gerbangCommit}
+
+	svcMenang := document.NewService(repo, menang, rendererUji{})
+	svcKalah := document.NewService(repo, kalah, rendererUji{})
+
+	var wg sync.WaitGroup
+	var errMenang, errKalah error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errMenang = svcMenang.Ensure(ctx, pesanan.ID)
+	}()
+	go func() {
+		defer wg.Done()
+		_, errKalah = svcKalah.Ensure(ctx, pesanan.ID)
+		close(gerbangCommit)
+	}()
+	wg.Wait()
+
+	if errKalah == nil {
+		t.Fatal("permintaan yang Put-nya gagal harus mengembalikan error")
+	}
+	if errMenang != nil {
+		t.Fatalf("permintaan pemenang harus sukses, dapat %v", errMenang)
+	}
+
+	// Baris pemenang ada di PostgreSQL dan SETIAP baris wajib masih punya
+	// objeknya di storage (bukan hanya HTTP 200: presign S3 tidak memeriksa
+	// keberadaan objek).
+	rows := f.barisDokumen(t, pesanan.ID)
+	if len(rows) != 3 {
+		t.Fatalf("harus 3 baris dokumen pemenang, dapat %d", len(rows))
+	}
+
+	deps := f.deps
+	deps.Documents = svcMenang
+	srv := httptest.NewServer(NewRouter(deps))
+	t.Cleanup(srv.Close)
+
+	sa, _ := pgLogin(t, srv, "rina@example.test", "rahasia123")
+	for _, d := range rows {
+		if _, err := f.objek.Get(ctx, d.StorageKey); err != nil {
+			t.Errorf("baris %s kehilangan berkasnya di storage: %v", d.Jenis, err)
+			continue
+		}
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+			srv.URL+"/api/v1/documents/"+d.ID+"/download", "", sa, "")
+		if status != http.StatusOK {
+			t.Fatalf("unduh %s harus 200, dapat %d (%v)", d.Jenis, status, body)
+		}
+		dl := dataMap(t, body)
+		url, _ := dl["url"].(string)
+		if !strings.Contains(url, d.StorageKey) {
+			t.Errorf("tautan unduh %s tidak menunjuk objeknya: %q", d.Jenis, url)
+		}
 	}
 }
 

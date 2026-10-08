@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -365,9 +366,12 @@ func TestPesananBelumDoneDitolak(t *testing.T) {
 	}
 }
 
-// TestKegagalanRenderTidakMenyisakanApaPun memeriksa sifat satu-unit-kerja:
-// gagal di tengah jalan tidak meninggalkan baris dokumen maupun berkas yatim.
-func TestKegagalanRenderTidakMenyisakanApaPun(t *testing.T) {
+// TestKegagalanRenderTidakMenyisakanBarisDokumen memeriksa sifat satu-unit-kerja
+// di sisi database: gagal di tengah jalan tidak pernah meninggalkan baris
+// dokumen. Objek yang terlanjur ditulis pada jalur gagal DIBIARKAN dengan
+// sengaja (aturan putaran 3 — lihat renderDanSimpan): menghapus kunci
+// deterministik bisa mencabut berkas permintaan lain yang menang balapan.
+func TestKegagalanRenderTidakMenyisakanBarisDokumen(t *testing.T) {
 	t.Run("mesin PDF tidak siap", func(t *testing.T) {
 		repo := NewMemory()
 		repo.SetOrder(fixtureOrder(orderA))
@@ -399,11 +403,17 @@ func TestKegagalanRenderTidakMenyisakanApaPun(t *testing.T) {
 		if repo.JumlahDokumen() != 0 {
 			t.Errorf("tidak boleh ada baris dokumen, dapat %d", repo.JumlahDokumen())
 		}
-		if _, err := store.Get(context.Background(), StorageKey(orderA, JenisInvoicePDF, 0)); err == nil {
-			t.Error("berkas yang sudah ditulis harus dibuang saat permintaan gagal")
+		// Aturan putaran 3: objek yang terlanjur ditulis TIDAK dihapus. Menghapus
+		// kunci deterministik bisa mencabut berkas permintaan lain yang menang
+		// balapan; objek yatim direkonsiliasi F1-21.
+		if store.hapus != 0 {
+			t.Errorf("jalur gagal tidak boleh menghapus objek, dapat %d penghapusan", store.hapus)
 		}
-		if store.hapus != 1 {
-			t.Errorf("harus 1 penghapusan berkas, dapat %d", store.hapus)
+		if isi := isiObjek(t, store, StorageKey(orderA, JenisInvoicePDF, 0)); len(isi) == 0 {
+			t.Error("objek yang terlanjur ditulis harus tetap ada (kandidat rekonsiliasi F1-21)")
+		}
+		if _, err := store.Get(context.Background(), StorageKey(orderA, JenisSuratJalanXLSX, 0)); err == nil {
+			t.Error("Put yang gagal tidak boleh menghasilkan objek")
 		}
 	})
 
@@ -417,11 +427,20 @@ func TestKegagalanRenderTidakMenyisakanApaPun(t *testing.T) {
 		if _, err := svc.Ensure(context.Background(), orderA); err == nil {
 			t.Fatal("harus gagal saat metadata tidak bisa disimpan")
 		}
-		if _, err := store.Get(context.Background(), StorageKey(orderA, JenisInvoicePDF, 0)); err == nil {
-			t.Error("berkas harus dibuang bila metadata gagal disimpan")
+		if repo.JumlahDokumen() != 0 {
+			t.Errorf("tidak boleh ada baris dokumen, dapat %d", repo.JumlahDokumen())
 		}
-		if store.hapus != 3 {
-			t.Errorf("seluruh berkas harus dibersihkan, dapat %d", store.hapus)
+		if store.hapus != 0 {
+			t.Errorf("jalur gagal tidak boleh menghapus objek, dapat %d penghapusan", store.hapus)
+		}
+		for _, k := range []string{
+			StorageKey(orderA, JenisInvoicePDF, 0),
+			StorageKey(orderA, JenisSuratJalanXLSX, 0),
+			StorageKey(orderA, JenisSuratJalanPDF, 0),
+		} {
+			if isi := isiObjek(t, store, k); len(isi) == 0 {
+				t.Errorf("objek %s harus tetap ada (kandidat rekonsiliasi F1-21)", k)
+			}
 		}
 	})
 }
@@ -555,11 +574,15 @@ func TestKegagalanSimpanMetadataTidakMencabutBerkasBarisLain(t *testing.T) {
 	}
 }
 
-// TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan menjaga sisi lain
-// aturan pembersihan: bila memang tidak ada baris yang menunjuk objeknya (tidak
-// ada balapan), objek yang terlanjur ditulis tetap dibuang supaya storage tidak
-// menyimpan salinan yatim.
-func TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan(t *testing.T) {
+// TestKegagalanSimpanMetadataMenyisakanObjekYatimTanpaMenghapus menegakkan
+// aturan putaran 3 (temuan QA putaran 2): ketika permintaan render gagal dan
+// tidak ada baris `documents` mana pun yang menunjuk objeknya, objek itu TETAP
+// DIBIARKAN — bukan dibuang. Alasannya keselamatan, bukan kerapian storage:
+// kunci deterministik dipakai bersama permintaan render lain, dan penghapusan
+// yang bertumpu pada snapshot rujukan bisa menghabisi berkas baris pesaing
+// yang sudah menulis objek tetapi belum commit (kehilangan permanen). Objek
+// yatim direkonsiliasi F1-21.
+func TestKegagalanSimpanMetadataMenyisakanObjekYatimTanpaMenghapus(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemory()
 	repo.SetOrder(fixtureOrder(orderA))
@@ -573,16 +596,16 @@ func TestKegagalanSimpanMetadataMembersihkanBerkasTanpaRujukan(t *testing.T) {
 	if repo.JumlahDokumen() != 0 {
 		t.Fatalf("tidak boleh ada baris dokumen, dapat %d", repo.JumlahDokumen())
 	}
-	if store.hapus != 3 {
-		t.Errorf("berkas tanpa rujukan harus dibuang, dapat %d penghapusan", store.hapus)
+	if store.hapus != 0 {
+		t.Errorf("tidak boleh ada penghapusan objek pada jalur gagal, dapat %d", store.hapus)
 	}
 	for _, k := range []string{
 		StorageKey(orderA, JenisInvoicePDF, 0),
 		StorageKey(orderA, JenisSuratJalanXLSX, 0),
 		StorageKey(orderA, JenisSuratJalanPDF, 0),
 	} {
-		if _, err := store.Get(ctx, k); err == nil {
-			t.Errorf("objek %s seharusnya sudah dibuang", k)
+		if isi := isiObjek(t, store, k); len(isi) == 0 {
+			t.Errorf("objek yatim %s harus dibiarkan (kandidat rekonsiliasi F1-21)", k)
 		}
 	}
 }
@@ -731,5 +754,208 @@ func TestSnapshotKurangDitolak(t *testing.T) {
 	}
 	if _, err := svc.Ensure(context.Background(), "tidak-ada"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("pesanan tidak ada harus ErrNotFound, dapat %v", err)
+	}
+}
+
+// storePemenang membungkus object storage BERSAMA dan menandai (menutup
+// `siap`) saat pemiliknya selesai menulis seluruh objeknya — dipakai supaya
+// permintaan pesaing yang gagal benar-benar menjalankan pembersihannya SETELAH
+// objek pemenang tertulis, tetapi SEBELUM pemenang commit.
+type storePemenang struct {
+	*storeHitung
+	mu     sync.Mutex
+	n      int
+	butuh  int
+	siap   chan struct{}
+	sekali sync.Once
+}
+
+func newStorePemenang(butuh int) *storePemenang {
+	return &storePemenang{storeHitung: newStoreHitung(), butuh: butuh, siap: make(chan struct{})}
+}
+
+func (s *storePemenang) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if err := s.storeHitung.Put(ctx, key, body, size, contentType); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.n++
+	penuh := s.n >= s.butuh
+	s.mu.Unlock()
+	if penuh {
+		s.sekali.Do(func() { close(s.siap) })
+	}
+	return nil
+}
+
+// storeGagalSatu meniru permintaan yang memakai object storage yang sama tetapi
+// SELALU gagal menulis satu kunci tertentu (mis. Surat Jalan XLSX). Sebelum
+// melaporkan kegagalan ia boleh menunggu `tunggu` supaya urutan kejadiannya
+// deterministik.
+type storeGagalSatu struct {
+	*storeHitung
+	gagalKey string
+	tunggu   <-chan struct{}
+}
+
+func (s *storeGagalSatu) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if key == s.gagalKey {
+		if s.tunggu != nil {
+			select {
+			case <-s.tunggu:
+			case <-time.After(30 * time.Second):
+				return errors.New("uji buntu: pemenang tidak menyelesaikan penulisan objeknya")
+			}
+		}
+		return errors.New("simulasi: storage mati saat menulis dokumen kedua")
+	}
+	return s.storeHitung.Put(ctx, key, body, size, contentType)
+}
+
+// repoTahanSimpan menahan SaveAll sampai gerbangnya dibuka: meniru permintaan
+// pemenang yang sudah menulis seluruh objeknya tetapi BELUM commit ketika
+// permintaan pesaing menjalankan pembersihannya — jendela yang dilaporkan QA
+// putaran 2 (pesaing commit setelah pembacaan rujukan).
+type repoTahanSimpan struct {
+	*Memory
+	siap <-chan struct{}
+}
+
+func (r *repoTahanSimpan) SaveAll(ctx context.Context, req SaveRequest) ([]Document, error) {
+	select {
+	case <-r.siap:
+	case <-time.After(30 * time.Second):
+		return nil, errors.New("uji buntu: gerbang commit tidak pernah dibuka")
+	}
+	return r.Memory.SaveAll(ctx, req)
+}
+
+// TestKegagalanPutTidakMencabutBerkasPesaingBelumCommit adalah uji regresi
+// putaran 3 untuk urutan yang terbukti MERUSAK pada 8f91c3a: permintaan
+// pesaing sudah menulis seluruh objeknya tetapi belum commit, sementara
+// permintaan ini gagal di Put dokumen kedua lalu menjalankan pembersihannya.
+// Guard "hapus hanya bila tidak ada baris yang merujuk" membaca snapshot yang
+// memang masih kosong (baris pemenang belum commit), lalu menghapus kunci
+// deterministik yang dipakai bersama — begitu pemenang commit, barisnya ada
+// tetapi berkasnya hilang PERMANEN (render ulang menganggap barisnya sudah
+// ada). Karena aturan putaran 3 tidak pernah menghapus objek di jalur render,
+// urutan ini aman untuk seluruh penjadwalan.
+func TestKegagalanPutTidakMencabutBerkasPesaingBelumCommit(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemory()
+	repo.SetOrder(fixtureOrder(orderA))
+
+	store := newStorePemenang(3)
+	gagal := &storeGagalSatu{
+		storeHitung: store.storeHitung,
+		gagalKey:    StorageKey(orderA, JenisSuratJalanXLSX, 0),
+		tunggu:      store.siap, // tunggu sampai pemenang menulis 3 objeknya
+	}
+	gerbangCommit := make(chan struct{})
+	repoTahan := &repoTahanSimpan{Memory: repo, siap: gerbangCommit}
+
+	svcPemenang := NewService(repoTahan, store, &rendererPalsu{})
+	svcKalah := NewService(repoTahan, gagal, &rendererPalsu{})
+
+	var wg sync.WaitGroup
+	var errPemenang, errKalah error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errPemenang = svcPemenang.Ensure(ctx, orderA)
+	}()
+	go func() {
+		defer wg.Done()
+		_, errKalah = svcKalah.Ensure(ctx, orderA)
+		// Pemenang baru boleh commit setelah permintaan ini selesai — sehingga
+		// jendela "objek sudah tertulis, baris belum commit" pasti dilewati.
+		close(gerbangCommit)
+	}()
+	wg.Wait()
+
+	if errKalah == nil {
+		t.Fatal("permintaan yang Put-nya gagal harus mengembalikan error")
+	}
+	if errPemenang != nil {
+		t.Fatalf("permintaan pemenang harus sukses, dapat %v", errPemenang)
+	}
+	if store.hapus != 0 {
+		t.Errorf("permintaan yang gagal tidak boleh menghapus objek: %d penghapusan", store.hapus)
+	}
+	rows, err := repo.ListByOrder(ctx, orderA)
+	if err != nil {
+		t.Fatalf("ListByOrder: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("harus 3 baris dokumen, dapat %d", len(rows))
+	}
+	for _, d := range rows {
+		if _, err := store.Get(ctx, d.StorageKey); err != nil {
+			t.Errorf("baris %s kehilangan berkasnya di storage: %v", d.Jenis, err)
+			continue
+		}
+		dl, err := svcPemenang.DownloadURL(ctx, actorAdmin(), d.ID)
+		if err != nil {
+			t.Fatalf("unduh %s: %v", d.Jenis, err)
+		}
+		if !strings.Contains(dl.URL, d.StorageKey) {
+			t.Errorf("tautan unduh %s tidak menunjuk objeknya: %q", d.Jenis, dl.URL)
+		}
+	}
+}
+
+// TestKeterjadianAlamiTidakAdaBerkasHilang mengukur keterjadian ALAMI (tanpa
+// gerbang urutan apa pun): 20 pesanan, masing-masing dirender oleh DUA
+// permintaan paralel yang mulai bersamaan sementara satu di antaranya selalu
+// gagal di Put dokumen kedua — meniru dua klik "Buat dokumen" di mana satu
+// klik gagal menyimpan. Probe QA putaran 2 mengukur 2/10 percobaan berakhir
+// dengan berkas hilang permanen pada 8f91c3a; dengan aturan putaran 3 (tak ada
+// penghapusan di jalur render) harus NOL dari seluruh percobaan.
+func TestKeterjadianAlamiTidakAdaBerkasHilang(t *testing.T) {
+	ctx := context.Background()
+	const percobaan = 20
+	hilang := 0
+	for i := 0; i < percobaan; i++ {
+		id := fmt.Sprintf("0f8fad5b-d9cb-469f-a165-708677289%03d", i)
+		repo := NewMemory()
+		repo.SetOrder(fixtureOrder(id))
+
+		store := newStoreHitung()
+		gagal := &storeGagalSatu{
+			storeHitung: store,
+			gagalKey:    StorageKey(id, JenisSuratJalanXLSX, 0),
+		}
+		svcPemenang := NewService(repo, store, &rendererPalsu{})
+		svcKalah := NewService(repo, gagal, &rendererPalsu{})
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = svcPemenang.Ensure(ctx, id)
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = svcKalah.Ensure(ctx, id)
+		}()
+		wg.Wait()
+
+		rows, err := repo.ListByOrder(ctx, id)
+		if err != nil {
+			t.Fatalf("ListByOrder %s: %v", id, err)
+		}
+		if len(rows) != 3 {
+			t.Fatalf("pesanan %s harus punya 3 baris dokumen, dapat %d", id, len(rows))
+		}
+		for _, d := range rows {
+			if _, err := store.Get(ctx, d.StorageKey); err != nil {
+				hilang++
+				t.Logf("percobaan %d: baris %s kehilangan berkasnya: %v", i, d.Jenis, err)
+				break
+			}
+		}
+	}
+	if hilang != 0 {
+		t.Errorf("ada %d/%d percobaan yang kehilangan berkas meski barisnya ada (harus 0)", hilang, percobaan)
 	}
 }
