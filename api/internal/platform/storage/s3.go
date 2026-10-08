@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -137,6 +138,38 @@ func (s *S3) Health(ctx context.Context) error {
 		return fmt.Errorf("head bucket %s: %w", s.bucket, err)
 	}
 	return nil
+}
+
+// List mendaftarkan seluruh objek dengan awalan prefix (rekursif) memakai
+// ListObjectsV2 berhalaman. Dipakai sinkronisasi cadangan dan rekonsiliasi
+// DB↔object storage; ia hanya membaca metadata (bukan isi objek), sehingga
+// biayanya tetap kecil walau bucket besar.
+func (s *S3) List(ctx context.Context, prefix string) ([]Info, error) {
+	out := []Info{}
+	var token *string
+	for {
+		in := &s3.ListObjectsV2Input{Bucket: aws.String(s.bucket), Prefix: aws.String(prefix)}
+		if token != nil {
+			in.ContinuationToken = token
+		}
+		page, err := s.client.ListObjectsV2(ctx, in)
+		if err != nil {
+			return nil, fmt.Errorf("list objek %q: %w", prefix, err)
+		}
+		for _, obj := range page.Contents {
+			info := Info{Key: aws.ToString(obj.Key), Size: aws.ToInt64(obj.Size)}
+			if obj.LastModified != nil {
+				info.ModTime = *obj.LastModified
+			}
+			out = append(out, info)
+		}
+		if page.IsTruncated == nil || !*page.IsTruncated || page.NextContinuationToken == nil {
+			break
+		}
+		token = page.NextContinuationToken
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
 }
 
 // sanitasiNamaHeader membuang karakter yang bisa memecah header HTTP.

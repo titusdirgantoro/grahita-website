@@ -22,6 +22,16 @@ const (
 	DefaultAdminHost    = "grahita-admin.tiusclaw.com"
 )
 
+// Cara menjangkau tujuan cadangan (BACKUP_TARGET, F1-21).
+const (
+	// BackupTargetDir menulis cadangan terenkripsi ke direktori lokal
+	// (termasuk mount Google Drive yang disinkronkan alat lain).
+	BackupTargetDir = "dir"
+	// BackupTargetRclone menulis cadangan terenkripsi ke remote rclone
+	// (Google Drive di produksi, Architecture.md §7).
+	BackupTargetRclone = "rclone"
+)
+
 // Config adalah seluruh konfigurasi runtime satu binary.
 type Config struct {
 	AppEnv   string // local | staging | production
@@ -79,6 +89,32 @@ type Config struct {
 	// Gotenberg (HTML -> PDF).
 	GotenbergURL string
 
+	// Cadangan terenkripsi (F1-21, Architecture.md §7).
+	//
+	// BackupTarget: cara menjangkau tujuan — "" (nonaktif), "dir" (direktori
+	// lokal, termasuk mount Drive), atau "rclone" (Google Drive lewat biner
+	// rclone). Kredensial rclone SELALU berada di berkas milik operator di
+	// luar repo (BackupRcloneConfig).
+	BackupTarget         string
+	BackupDir            string
+	BackupRcloneBin      string
+	BackupRcloneRemote   string
+	BackupRcloneConfig   string
+	BackupAgeRecipient   string
+	BackupAgeIdentity    string
+	BackupPgDump         string
+	BackupPgRestore      string
+	BackupWorkDir        string
+	BackupRetensiHarian  int
+	BackupRetensiBulanan int
+	BackupWALHari        int
+	BackupWALDir         string
+	BackupJamWIB         int
+	BackupInterval       time.Duration
+	BackupSweepHapus     bool
+	BackupSweepGrace     time.Duration
+	BackupRestoreDSN     string
+
 	// Worker River.
 	WorkerQueues    map[string]int
 	WorkerShutdown  time.Duration
@@ -118,32 +154,60 @@ func (c Config) AdminBaseURL() string {
 // Load membaca dan memvalidasi konfigurasi.
 func Load() (Config, error) {
 	c := Config{
-		AppEnv:            env("APP_ENV", "local"),
-		HTTPAddr:          env("HTTP_ADDR", ":8080"),
-		LogLevel:          env("LOG_LEVEL", "info"),
-		DatabaseURL:       env("DATABASE_URL", ""),
-		CustomerHost:      env("CUSTOMER_HOST", DefaultCustomerHost),
-		AdminHost:         env("ADMIN_HOST", DefaultAdminHost),
-		PublicScheme:      env("PUBLIC_SCHEME", "https"),
-		CookieName:        env("SESSION_COOKIE_NAME", "grahita_session"),
-		CSRFEnabled:       envBool("CSRF_ENABLED", true),
-		PasswordResetPath: env("PASSWORD_RESET_PATH", "/lupa"),
-		S3Endpoint:        env("S3_ENDPOINT", ""),
-		S3Region:          env("S3_REGION", "us-east-1"),
-		S3Bucket:          env("S3_BUCKET", ""),
-		S3AccessKey:       env("S3_ACCESS_KEY", ""),
-		S3SecretKey:       env("S3_SECRET_KEY", ""),
-		S3UsePathStyle:    envBool("S3_USE_PATH_STYLE", true),
-		SMTPHost:          env("SMTP_HOST", ""),
-		SMTPPort:          envInt("SMTP_PORT", 1025),
-		SMTPUser:          env("SMTP_USER", ""),
-		SMTPPass:          env("SMTP_PASS", ""),
-		MailFrom:          env("MAIL_FROM", "no-reply@grahita.id"),
-		GotenbergURL:      env("GOTENBERG_URL", ""),
-		OutboxMaxAttempts: envInt("OUTBOX_MAX_ATTEMPTS", 6),
-		OutboxBatch:       envInt("OUTBOX_BATCH", 50),
-		WorkerShutdown:    20 * time.Second,
-		JobPollInterval:   15 * time.Second,
+		AppEnv:               env("APP_ENV", "local"),
+		HTTPAddr:             env("HTTP_ADDR", ":8080"),
+		LogLevel:             env("LOG_LEVEL", "info"),
+		DatabaseURL:          env("DATABASE_URL", ""),
+		CustomerHost:         env("CUSTOMER_HOST", DefaultCustomerHost),
+		AdminHost:            env("ADMIN_HOST", DefaultAdminHost),
+		PublicScheme:         env("PUBLIC_SCHEME", "https"),
+		CookieName:           env("SESSION_COOKIE_NAME", "grahita_session"),
+		CSRFEnabled:          envBool("CSRF_ENABLED", true),
+		PasswordResetPath:    env("PASSWORD_RESET_PATH", "/lupa"),
+		S3Endpoint:           env("S3_ENDPOINT", ""),
+		S3Region:             env("S3_REGION", "us-east-1"),
+		S3Bucket:             env("S3_BUCKET", ""),
+		S3AccessKey:          env("S3_ACCESS_KEY", ""),
+		S3SecretKey:          env("S3_SECRET_KEY", ""),
+		S3UsePathStyle:       envBool("S3_USE_PATH_STYLE", true),
+		SMTPHost:             env("SMTP_HOST", ""),
+		SMTPPort:             envInt("SMTP_PORT", 1025),
+		SMTPUser:             env("SMTP_USER", ""),
+		SMTPPass:             env("SMTP_PASS", ""),
+		MailFrom:             env("MAIL_FROM", "no-reply@grahita.id"),
+		GotenbergURL:         env("GOTENBERG_URL", ""),
+		OutboxMaxAttempts:    envInt("OUTBOX_MAX_ATTEMPTS", 6),
+		OutboxBatch:          envInt("OUTBOX_BATCH", 50),
+		BackupDir:            env("BACKUP_TARGET_DIR", ""),
+		BackupRcloneBin:      env("BACKUP_RCLONE_BIN", "rclone"),
+		BackupRcloneRemote:   env("BACKUP_RCLONE_REMOTE", ""),
+		BackupRcloneConfig:   env("BACKUP_RCLONE_CONFIG", ""),
+		BackupAgeRecipient:   env("BACKUP_AGE_RECIPIENT", ""),
+		BackupAgeIdentity:    env("BACKUP_AGE_IDENTITY_FILE", ""),
+		BackupPgDump:         env("BACKUP_PG_DUMP", "pg_dump"),
+		BackupPgRestore:      env("BACKUP_PG_RESTORE", "pg_restore"),
+		BackupWorkDir:        env("BACKUP_WORK_DIR", os.TempDir()),
+		BackupRetensiHarian:  envInt("BACKUP_RETENSI_HARIAN", 30),
+		BackupRetensiBulanan: envInt("BACKUP_RETENSI_BULANAN", 12),
+		BackupWALHari:        envInt("BACKUP_WAL_HARI", 7),
+		BackupWALDir:         env("BACKUP_WAL_DIR", ""),
+		BackupJamWIB:         envInt("BACKUP_JAM_WIB", 2),
+		BackupSweepHapus:     envBool("BACKUP_SWEEP_HAPUS", false),
+		BackupRestoreDSN:     env("BACKUP_RESTORE_DSN", ""),
+		WorkerShutdown:       20 * time.Second,
+		JobPollInterval:      15 * time.Second,
+	}
+
+	// Cara menjangkau tujuan cadangan ditentukan otomatis bila tidak disebut
+	// eksplisit: remote rclone lebih dahulu, lalu direktori.
+	c.BackupTarget = env("BACKUP_TARGET", "")
+	if c.BackupTarget == "" {
+		switch {
+		case c.BackupRcloneRemote != "":
+			c.BackupTarget = BackupTargetRclone
+		case c.BackupDir != "":
+			c.BackupTarget = BackupTargetDir
+		}
 	}
 
 	// Cookie Secure hanya dimatikan di lingkungan lokal supaya bisa diakses
@@ -167,6 +231,12 @@ func Load() (Config, error) {
 		return c, err
 	}
 	if c.OutboxInterval, err = envDuration("OUTBOX_INTERVAL", time.Minute); err != nil {
+		return c, err
+	}
+	if c.BackupInterval, err = envDuration("BACKUP_INTERVAL", 15*time.Minute); err != nil {
+		return c, err
+	}
+	if c.BackupSweepGrace, err = envDuration("BACKUP_SWEEP_GRACE", 24*time.Hour); err != nil {
 		return c, err
 	}
 
@@ -205,6 +275,39 @@ func (c Config) Validate() error {
 	}
 	if c.IsProduction() && !c.SessionSecure {
 		return errors.New("SESSION_SECURE wajib true di produksi")
+	}
+	if err := c.ValidasiCadangan(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// CadanganAktif melaporkan apakah tujuan cadangan dikonfigurasi.
+func (c Config) CadanganAktif() bool { return strings.TrimSpace(c.BackupTarget) != "" }
+
+// ValidasiCadangan menolak konfigurasi cadangan yang SETENGAH JADI.
+//
+// Aturan kerasnya: bila tujuan cadangan aktif, kunci publik age wajib ada.
+// Tanpa kunci, cadangan hanya bisa ditulis polos — dan cadangan polos berisi
+// seluruh data bisnis (termasuk hash kata sandi) di Drive. Lebih baik gagal
+// saat start daripada mengirim rahasia dalam bentuk terbuka.
+func (c Config) ValidasiCadangan() error {
+	switch strings.TrimSpace(c.BackupTarget) {
+	case "":
+		return nil
+	case BackupTargetDir:
+		if strings.TrimSpace(c.BackupDir) == "" {
+			return errors.New("BACKUP_TARGET=dir wajib disertai BACKUP_TARGET_DIR")
+		}
+	case BackupTargetRclone:
+		if strings.TrimSpace(c.BackupRcloneRemote) == "" {
+			return errors.New("BACKUP_TARGET=rclone wajib disertai BACKUP_RCLONE_REMOTE")
+		}
+	default:
+		return fmt.Errorf("BACKUP_TARGET tidak dikenal: %q (pakai dir atau rclone)", c.BackupTarget)
+	}
+	if strings.TrimSpace(c.BackupAgeRecipient) == "" {
+		return errors.New("BACKUP_AGE_RECIPIENT wajib diisi bila tujuan cadangan aktif: cadangan tidak boleh ditulis tanpa enkripsi age")
 	}
 	return nil
 }

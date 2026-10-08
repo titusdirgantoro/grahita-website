@@ -15,6 +15,7 @@ import (
 	"net/http"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/backup"
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
@@ -55,6 +56,10 @@ type Deps struct {
 	// Emails melayani outbox email transaksional: riwayat email pesanan dan
 	// kirim ulang oleh admin (F1-16).
 	Emails *notification.Service
+
+	// Backups menyediakan status cadangan terenkripsi untuk halaman
+	// Pengaturan admin (F1-21, Architecture.md §7).
+	Backups *backup.Service
 
 	// Orders melayani draft, editor order line, daftar dan detail pesanan
 	// cabang (F1-11).

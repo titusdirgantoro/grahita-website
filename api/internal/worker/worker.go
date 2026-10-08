@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	"github.com/grahita/portal/api/internal/backup"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -69,6 +70,41 @@ func (w *EmailScanWorker) Work(ctx context.Context, job *river.Job[EmailScanArgs
 	return err
 }
 
+// BackupArgs adalah job jadwal cadangan harian (F1-21). Satu job = satu
+// pemeriksaan jadwal: pekerjaan yang benar-benar dijalankan ditentukan
+// penjaga jadwal di domain backup (02:00 WIB, sekali per hari per jenis),
+// sehingga job yang terlewat/tergandakan tidak pernah membuat cadangan dobel.
+type BackupArgs struct{}
+
+// Kind mengidentifikasi jenis job cadangan di tabel River.
+func (BackupArgs) Kind() string { return "backup_jadwal" }
+
+// BackupWorker menjalankan pekerjaan cadangan yang sudah waktunya.
+type BackupWorker struct {
+	river.WorkerDefaults[BackupArgs]
+	svc *backup.Service
+}
+
+// Work menjalankan satu pemeriksaan jadwal cadangan.
+func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) error {
+	if w.svc == nil {
+		return nil
+	}
+	hasil := w.svc.JalankanHarian(ctx, time.Now().UTC())
+	for _, h := range hasil {
+		if h.Sukses {
+			slog.InfoContext(ctx, "cadangan selesai", "jenis", h.Jenis, "ukuran_byte", h.UkuranByte, "tujuan", h.Tujuan)
+			continue
+		}
+		slog.ErrorContext(ctx, "cadangan gagal", "jenis", h.Jenis, "pesan", h.Pesan, "err", h.Err)
+	}
+	// Kegagalan cadangan sudah dicatat di backup_runs dan diberitahukan ke
+	// Superadmin; job TIDAK dikembalikan sebagai error supaya River tidak
+	// mencoba ulang tanpa henti (retry tidak akan memperbaiki kredensial
+	// tujuan atau kunci yang salah, dan justru menutupi alarm).
+	return nil
+}
+
 // Client membungkus River client beserta pool-nya.
 type Client struct {
 	river *river.Client[pgx.Tx]
@@ -77,12 +113,17 @@ type Client struct {
 // New membuat River client dengan queue sesuai konfigurasi.
 //
 // notif boleh nil (mis. pengujian unit worker tanpa database domain); bila
-// diisi, worker mengirim email_outbox secara berkala.
-func New(pool *database.Pool, cfg config.Config, notif *notification.Service) (*Client, error) {
+// diisi, worker mengirim email_outbox secara berkala. bk boleh nil: tanpa
+// service cadangan (BACKUP_TARGET kosong) tidak ada job cadangan yang
+// dijadwalkan sama sekali.
+func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service) (*Client, error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &PingWorker{})
 	if notif != nil {
 		river.AddWorker(workers, &EmailScanWorker{notif: notif})
+	}
+	if bk != nil {
+		river.AddWorker(workers, &BackupWorker{svc: bk})
 	}
 
 	queues := map[string]river.QueueConfig{}
@@ -112,6 +153,17 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service) (*
 			river.PeriodicInterval(interval),
 			func() (river.JobArgs, *river.InsertOpts) { return EmailScanArgs{}, nil },
 			&river.PeriodicJobOpts{ID: "email-outbox", RunOnStart: true},
+		))
+	}
+	if bk != nil {
+		interval := cfg.BackupInterval
+		if interval < time.Minute {
+			interval = 15 * time.Minute
+		}
+		periodic = append(periodic, river.NewPeriodicJob(
+			river.PeriodicInterval(interval),
+			func() (river.JobArgs, *river.InsertOpts) { return BackupArgs{}, nil },
+			&river.PeriodicJobOpts{ID: "backup-harian", RunOnStart: true},
 		))
 	}
 

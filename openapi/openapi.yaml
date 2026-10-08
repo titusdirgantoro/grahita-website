@@ -1457,6 +1457,66 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/admin/backup-runs:
+    get:
+      tags: [admin]
+      operationId: listBackupRuns
+      summary: Status cadangan terenkripsi (Superadmin)
+      description: |
+        Hasil setiap pekerjaan cadangan dari tabel `backup_runs`
+        (Architecture.md §7, Database.md §4.7) berikut ringkasan status:
+
+        - `terakhir` — run terbaru (jenis postgres/storage/wal), terbaru dulu;
+        - `perlu_tindakan` — true bila run terakhir yang GAGAL belum disusul
+          run sukses apa pun untuk jenis yang sama (dipakai dashboard admin
+          F1-20 sebagai penanda "perlu tindakan");
+        - `tujuan`, `jadwal`, `retensi` — konfigurasi efektif yang berlaku
+          (30 harian, 12 bulanan, bukti transfer tanpa batas).
+
+        Manager dan akun cabang ditolak (PRD §2.1).
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+      responses:
+        "200":
+          description: Ringkasan status cadangan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [terakhir, perlu_tindakan, tujuan, jadwal, retensi]
+                    properties:
+                      terakhir:
+                        type: array
+                        items: { $ref: "#/components/schemas/BackupRun" }
+                      perlu_tindakan: { type: boolean }
+                      pesan: { type: string }
+                      tujuan: { type: string }
+                      jadwal: { type: string }
+                      retensi:
+                        type: object
+                        properties:
+                          harian: { type: integer }
+                          bulanan: { type: integer }
+                          wal_hari: { type: integer }
+                          bukti_tanpa_batas: { type: boolean }
+                      sukses_terakhir:
+                        type: object
+                        additionalProperties: { type: string, format: date-time }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /api/v1/admin/bank-accounts:
     get:
       tags: [admin]
@@ -3107,6 +3167,24 @@ components:
         nama_pemilik: { type: string, minLength: 2, maxLength: 120 }
         nomor: { type: string, minLength: 6, maxLength: 34, pattern: "^[0-9]{6,34}$" }
         is_active: { type: boolean }
+
+    BackupRun:
+      type: object
+      description: |
+        Satu baris tabel `backup_runs` (Database.md §4.7): jejak satu pekerjaan
+        cadangan. `selesai`/`sukses` kosong berarti pekerjaan masih berjalan
+        (mis. proses mati di tengah jalan) — baris seperti itu juga terlihat
+        di halaman Pengaturan.
+      required: [id, jenis, mulai, ukuran_byte]
+      properties:
+        id: { type: string, format: uuid }
+        jenis: { type: string, enum: [postgres, storage, wal] }
+        mulai: { type: string, format: date-time }
+        selesai: { type: string, format: date-time }
+        sukses: { type: boolean }
+        ukuran_byte: { type: integer, format: int64 }
+        tujuan: { type: string, description: "Contoh: rclone:gdrive:grahita-backup:postgres/grahita-2026-10-08.dump.age" }
+        pesan: { type: string }
 
     SettingValue:
       description: |-

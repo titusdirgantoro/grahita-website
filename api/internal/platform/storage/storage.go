@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,13 +29,27 @@ type Object struct {
 	Size        int64  `json:"size"`
 }
 
+// Info adalah metadata satu objek hasil pendaftaran (dipakai sinkronisasi
+// cadangan dan rekonsiliasi DB↔object storage, Architecture.md §7).
+type Info struct {
+	Key         string    `json:"key"`
+	Size        int64     `json:"size"`
+	ContentType string    `json:"content_type"`
+	ModTime     time.Time `json:"mod_time"`
+}
+
 // Store adalah kontrak penyimpanan objek. Semua akses baca ke pengguna akhir
 // memakai presigned URL berumur pendek (Architecture.md §6).
+//
+// `List` bersifat baca-saja dan WAJIB ada: cadangan dan rekonsiliasi perlu
+// tahu objek apa saja yang benar-benar ada di storage (tanpa itu, objek yatim
+// tidak mungkin ditemukan dan sinkronisasi tidak mungkin inkremental).
 type Store interface {
 	Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
 	Delete(ctx context.Context, key string) error
+	List(ctx context.Context, prefix string) ([]Info, error)
 	Health(ctx context.Context) error
 }
 
@@ -56,6 +72,9 @@ func (Disabled) PresignGet(context.Context, string, time.Duration) (string, erro
 // Delete selalu gagal karena storage belum dikonfigurasi.
 func (Disabled) Delete(context.Context, string) error { return ErrNotConfigured }
 
+// List selalu gagal karena storage belum dikonfigurasi.
+func (Disabled) List(context.Context, string) ([]Info, error) { return nil, ErrNotConfigured }
+
 // Health melaporkan bahwa storage memang belum aktif.
 func (Disabled) Health(context.Context) error { return ErrNotConfigured }
 
@@ -65,6 +84,7 @@ type Memory struct {
 	mu      sync.RWMutex
 	objects map[string][]byte
 	types   map[string]string
+	mod     map[string]time.Time
 	baseURL string
 }
 
@@ -73,7 +93,12 @@ func NewMemory(baseURL string) *Memory {
 	if baseURL == "" {
 		baseURL = "/files"
 	}
-	return &Memory{objects: map[string][]byte{}, types: map[string]string{}, baseURL: baseURL}
+	return &Memory{
+		objects: map[string][]byte{},
+		types:   map[string]string{},
+		mod:     map[string]time.Time{},
+		baseURL: baseURL,
+	}
 }
 
 // Put menyalin isi objek ke memori.
@@ -89,6 +114,7 @@ func (m *Memory) Put(_ context.Context, key string, body io.Reader, size int64, 
 	defer m.mu.Unlock()
 	m.objects[key] = data
 	m.types[key] = contentType
+	m.mod[key] = time.Now()
 	return nil
 }
 
@@ -134,7 +160,29 @@ func (m *Memory) Delete(_ context.Context, key string) error {
 	defer m.mu.Unlock()
 	delete(m.objects, key)
 	delete(m.types, key)
+	delete(m.mod, key)
 	return nil
+}
+
+// List mendaftarkan objek yang kuncinya berawalan prefix, terurut menurut
+// kunci supaya hasilnya deterministik untuk pembandingan di pengujian.
+func (m *Memory) List(_ context.Context, prefix string) ([]Info, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Info, 0, len(m.objects))
+	for key, data := range m.objects {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		out = append(out, Info{
+			Key:         key,
+			Size:        int64(len(data)),
+			ContentType: m.types[key],
+			ModTime:     m.mod[key],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
 }
 
 // Health selalu sehat.

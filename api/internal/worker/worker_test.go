@@ -50,7 +50,7 @@ func TestWorkerMenjalankanJob(t *testing.T) {
 		WorkerShutdown:  5 * time.Second,
 	}
 
-	client, err := worker.New(pool, cfg, nil)
+	client, err := worker.New(pool, cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("buat worker: %v", err)
 	}

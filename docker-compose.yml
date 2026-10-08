@@ -165,6 +165,23 @@ services:
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}
       # Di lokal outbox dipindai lebih sering supaya email Mailpit cepat muncul.
       OUTBOX_INTERVAL: ${OUTBOX_INTERVAL:-10s}
+      # Cadangan terenkripsi (F1-21). Dibiarkan kosong secara bawaan supaya
+      # lingkungan pengembangan tidak menjalankan pekerjaan cadangan sama
+      # sekali; operasi nyatanya ada di infra/backup/README.md.
+      BACKUP_TARGET: ${BACKUP_TARGET:-}
+      BACKUP_TARGET_DIR: ${BACKUP_TARGET_DIR:-}
+      BACKUP_RCLONE_BIN: ${BACKUP_RCLONE_BIN:-rclone}
+      BACKUP_RCLONE_REMOTE: ${BACKUP_RCLONE_REMOTE:-}
+      BACKUP_RCLONE_CONFIG: ${BACKUP_RCLONE_CONFIG:-}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:-}
+      BACKUP_AGE_IDENTITY_FILE: ${BACKUP_AGE_IDENTITY_FILE:-}
+      BACKUP_WORK_DIR: ${BACKUP_WORK_DIR:-/tmp/grahita-backup}
+      BACKUP_RETENSI_HARIAN: ${BACKUP_RETENSI_HARIAN:-30}
+      BACKUP_RETENSI_BULANAN: ${BACKUP_RETENSI_BULANAN:-12}
+      BACKUP_WAL_DIR: ${BACKUP_WAL_DIR:-}
+      BACKUP_JAM_WIB: ${BACKUP_JAM_WIB:-2}
+      BACKUP_SWEEP_HAPUS: ${BACKUP_SWEEP_HAPUS:-false}
+      BACKUP_RESTORE_DSN: ${BACKUP_RESTORE_DSN:-}
     command: ["--mode=worker"]
 
   # Menyajikan hasil build kedua SPA dan mem-proxy /api/* ke service api

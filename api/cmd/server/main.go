@@ -1,12 +1,15 @@
 // Command server adalah satu binary dengan beberapa mode jalan:
 //
-//	--mode=api            menjalankan HTTP API
-//	--mode=worker         menjalankan pemroses job latar belakang (River)
-//	--mode=migrate        menjalankan migrasi database lalu keluar
-//	--mode=migrate-down   menurunkan seluruh migrasi (dipakai uji CI)
-//	--mode=seed           mengisi data contoh untuk pengembangan lalu keluar
-//	--mode=healthcheck    memanggil /healthz lokal (dipakai Docker healthcheck)
-//	--mode=version        mencetak versi build
+//	--mode=api               menjalankan HTTP API
+//	--mode=worker            menjalankan pemroses job latar belakang (River)
+//	--mode=migrate           menjalankan migrasi database lalu keluar
+//	--mode=migrate-down      menurunkan seluruh migrasi (dipakai uji CI)
+//	--mode=seed               mengisi data contoh untuk pengembangan lalu keluar
+//	--mode=backup             menjalankan cadangan terenkripsi sekali lalu keluar
+//	--mode=backup-rekonsiliasi memeriksa DB↔object storage (dry-run bawaan)
+//	--mode=backup-restore     uji restore ke database uji (staging anonim)
+//	--mode=healthcheck        memanggil /healthz lokal (dipakai Docker healthcheck)
+//	--mode=version            mencetak versi build
 package main
 
 import (
@@ -23,6 +26,7 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
+	"github.com/grahita/portal/api/internal/backup"
 	"github.com/grahita/portal/api/internal/bank"
 	bankpg "github.com/grahita/portal/api/internal/bank/postgres"
 	"github.com/grahita/portal/api/internal/branch"
@@ -59,7 +63,18 @@ import (
 var version = "dev"
 
 func main() {
-	mode := flag.String("mode", "api", "api | worker | migrate | migrate-down | seed | healthcheck | version")
+	mode := flag.String("mode", "api", "api | worker | migrate | migrate-down | seed | backup | backup-rekonsiliasi | backup-restore | healthcheck | version")
+	// Flag mode cadangan (F1-21).
+	jenis := flag.String("jenis", "semua", "backup: postgres | storage | wal | semua")
+	sweep := flag.Bool("sweep", false, "backup-rekonsiliasi: hapus objek yatim (bawaan: hanya melaporkan)")
+	grace := flag.Duration("grace", 0, "backup-rekonsiliasi: umur minimum objek yatim (bawaan BACKUP_SWEEP_GRACE)")
+	dsnTujuan := flag.String("dsn-tujuan", "", "backup-restore: DSN database uji (bawaan BACKUP_RESTORE_DSN)")
+	objekDir := flag.String("objek-dir", "", "backup-restore: direktori pemulihan bukti/dokumen")
+	berkas := flag.String("berkas", "", "backup-restore: nama cadangan yang dipakai (bawaan: terbaru)")
+	anonim := flag.Bool("anonim", false, "backup-restore: samarkan data pribadi (staging anonim)")
+	bersih := flag.Bool("bersih", false, "backup-restore: hapus & buat ulang database tujuan")
+	paksa := flag.Bool("paksa", false, "backup-restore: izinkan --bersih pada nama database non-uji")
+	laporan := flag.String("laporan", "", "backup-restore: berkas JSON laporan bukti uji restore")
 	flag.Parse()
 
 	switch *mode {
@@ -87,14 +102,35 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, *mode, cfg, logger); err != nil {
+	opsi := opsiCadangan{
+		jenis:     *jenis,
+		sweep:     *sweep,
+		grace:     *grace,
+		dsnTujuan: pilihDSN(*dsnTujuan, cfg.BackupRestoreDSN),
+		objekDir:  *objekDir,
+		berkas:    *berkas,
+		anonim:    *anonim,
+		bersih:    *bersih,
+		paksa:     *paksa,
+		laporan:   *laporan,
+	}
+
+	if err := run(ctx, *mode, cfg, logger, opsi); err != nil {
 		logger.Error("berhenti karena error", "mode", *mode, "err", err)
 		os.Exit(1)
 	}
 	logger.Info("berhenti dengan rapi", "mode", *mode)
 }
 
-func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logger) error {
+// pilihDSN memilih nilai pertama yang terisi (flag lebih diutamakan).
+func pilihDSN(flag, env string) string {
+	if flag != "" {
+		return flag
+	}
+	return env
+}
+
+func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logger, opsi opsiCadangan) error {
 	// Mode migrasi memakai koneksi database/sql sendiri (goose) dan tidak
 	// perlu pool pgx.
 	switch mode {
@@ -113,6 +149,11 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 		}
 		defer pool.Close()
 		return seed.Run(ctx, pool)
+	case "backup", "backup-rekonsiliasi", "backup-restore":
+		if !cfg.CadanganAktif() {
+			return fmt.Errorf("mode %s butuh tujuan cadangan: isi BACKUP_TARGET_DIR atau BACKUP_RCLONE_REMOTE beserta BACKUP_AGE_RECIPIENT", mode)
+		}
+		return jalankanModeCadangan(ctx, mode, cfg, logger, opsi)
 	case "api", "worker":
 	default:
 		return fmt.Errorf("mode tidak dikenal: %s", mode)
@@ -125,8 +166,26 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 	defer pool.Close()
 
 	if mode == "worker" {
-		notif := buildNotification(pool, cfg, storage.Store(storage.Disabled{}), buildMailer(cfg))
-		client, err := worker.New(pool, cfg, notif)
+		// Object storage juga dipasang di worker: pengiriman lampiran dokumen
+		// (F1-16) dan sinkronisasi cadangan (F1-21) membacanya di sini.
+		store, err := buildStorage(cfg, logger)
+		if err != nil {
+			return err
+		}
+		notif := buildNotification(pool, cfg, store, buildMailer(cfg))
+
+		// Service cadangan hanya dijalankan bila tujuan dikonfigurasi; tanpa
+		// itu tidak ada job jadwal cadangan yang didaftarkan sama sekali
+		// (bukan job yang selalu gagal).
+		var bk *backup.Service
+		if cfg.CadanganAktif() {
+			if bk, err = buildBackup(cfg, pool, store, logger); err != nil {
+				return err
+			}
+			logger.Info("jadwal cadangan aktif", "tujuan", bk.Target().Nama(), "jadwal", bk.Jadwal())
+		}
+
+		client, err := worker.New(pool, cfg, notif, bk)
 		if err != nil {
 			return err
 		}
@@ -294,6 +353,17 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	documentRepo := documentpg.New(pool)
 	documentSvc := document.NewService(documentRepo, store, renderer)
 
+	// Cadangan terenkripsi (F1-21). Service yang sama dengan worker; di mode
+	// API ia dipakai untuk MENAMPILKAN status di halaman Pengaturan
+	// (Architecture.md §7) dan tidak pernah menjalankan cadangan sendiri.
+	backupSvc, err := buildBackup(cfg, pool, store, logger)
+	if err != nil {
+		return err
+	}
+	if !cfg.CadanganAktif() {
+		logger.Warn("tujuan cadangan belum dikonfigurasi: status cadangan hanya bisa dibaca, cadangan tidak akan berjalan")
+	}
+
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Config:              cfg,
 		Version:             version,
@@ -310,6 +380,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Bank:                bankSvc,
 		Registration:        registrationSvc,
 		Emails:              notifSvc,
+		Backups:             backupSvc,
 		Storage:             store,
 		Gotenberg:           renderer,
 		Mailer:              mail,

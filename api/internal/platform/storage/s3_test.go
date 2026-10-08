@@ -3,10 +3,13 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +46,10 @@ func (s *s3Palsu) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(bagian) == 1 || bagian[1] == "" {
 		if r.Method == http.MethodHead {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+			s.daftarBucket(w, r)
 			return
 		}
 		http.Error(w, "metode tidak didukung", http.StatusMethodNotAllowed)
@@ -84,6 +91,43 @@ func (s *s3Palsu) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "metode tidak didukung", http.StatusMethodNotAllowed)
 	}
+}
+
+// daftarBucket melayani ListObjectsV2 (list-type=2) ala S3: mengembalikan XML
+// dengan objek yang kuncinya berawalan Prefix. Hanya satu halaman (MaxKeys
+// 1000) — cukup untuk membuktikan klien List kita mengurai jawaban sungguhan.
+func (s *s3Palsu) daftarBucket(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	s.mu.Lock()
+	kunci := make([]string, 0, len(s.objek))
+	for k := range s.objek {
+		if strings.HasPrefix(k, prefix) {
+			kunci = append(kunci, k)
+		}
+	}
+	sort.Strings(kunci)
+	type entri struct {
+		kunci string
+		size  int
+	}
+	entriList := make([]entri, 0, len(kunci))
+	for _, k := range kunci {
+		entriList = append(entriList, entri{kunci: k, size: len(s.objek[k])})
+	}
+	s.mu.Unlock()
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	fmt.Fprintf(&b, "<Name>%s</Name><Prefix>%s</Prefix><KeyCount>%d</KeyCount>", s.bucket, prefix, len(entriList))
+	b.WriteString("<MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>")
+	for _, e := range entriList {
+		fmt.Fprintf(&b, "<Contents><Key>%s</Key><LastModified>2026-10-08T02:00:00.000Z</LastModified><ETag>\"x\"</ETag><Size>%d</Size><StorageClass>STANDARD</StorageClass></Contents>", e.kunci, e.size)
+	}
+	b.WriteString(`</ListBucketResult>`)
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
 }
 
 func newS3UntukUji(t *testing.T) (*S3, *s3Palsu) {
@@ -256,5 +300,59 @@ func TestDisabledStoreMenolakDenganJelas(t *testing.T) {
 	}
 	if _, err := d.PresignGet(context.Background(), "k", time.Minute); err == nil {
 		t.Error("PresignGet pada storage belum dikonfigurasi harus gagal")
+	}
+	if _, err := d.List(context.Background(), ""); !errors.Is(err, ErrNotConfigured) {
+		t.Errorf("List pada storage belum dikonfigurasi harus ErrNotConfigured, dapat %v", err)
+	}
+}
+
+// TestS3ListMendaftarkanObjek membuktikan List (dipakai sinkronisasi cadangan
+// dan rekonsiliasi DB↔object storage) benar-benar memanggil ListObjectsV2 dan
+// mengurai jawabannya, termasuk penyaringan prefix.
+func TestS3ListMendaftarkanObjek(t *testing.T) {
+	store, _ := newS3UntukUji(t)
+	ctx := context.Background()
+
+	kunci := []string{
+		"proofs/ord-1/acak.jpg",
+		"proofs/ord-2/acak.pdf",
+		"documents/ord-1/invoice_pdf-0.pdf",
+	}
+	for _, k := range kunci {
+		isi := []byte("isi " + k)
+		if err := store.Put(ctx, k, bytes.NewReader(isi), int64(len(isi)), "application/octet-stream"); err != nil {
+			t.Fatalf("Put %s: %v", k, err)
+		}
+	}
+
+	semua, err := store.List(ctx, "")
+	if err != nil {
+		t.Fatalf("List semua: %v", err)
+	}
+	if len(semua) != 3 {
+		t.Fatalf("List(\"\") = %d objek, mau 3", len(semua))
+	}
+	urut := append([]string(nil), kunci...)
+	sort.Strings(urut)
+	for i, info := range semua {
+		if want := urut[i]; info.Key != want {
+			t.Errorf("urutan objek ke-%d = %q, mau %q (hasil harus terurut)", i, info.Key, want)
+		}
+		if info.Size != int64(len("isi "+info.Key)) {
+			t.Errorf("ukuran %s = %d, tidak cocok", info.Key, info.Size)
+		}
+	}
+
+	proofs, err := store.List(ctx, "proofs/")
+	if err != nil {
+		t.Fatalf("List prefix: %v", err)
+	}
+	if len(proofs) != 2 {
+		t.Fatalf("List(\"proofs/\") = %d objek, mau 2", len(proofs))
+	}
+	for _, info := range proofs {
+		if !strings.HasPrefix(info.Key, "proofs/") {
+			t.Errorf("objek %q tidak berawalan proofs/", info.Key)
+		}
 	}
 }

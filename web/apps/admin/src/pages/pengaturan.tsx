@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ApiClientError, api } from "@grahita/api-client";
 import {
+  Badge,
   Button,
   Card,
   CardHead,
@@ -90,16 +91,149 @@ function dariApi(nilai: NilaiPengaturan): FormPengaturan {
 
 /**
  * PengaturanPage — /pengaturan (Superadmin): nilai pengaturan sistem
- * (PRD §2.1, §4.9). Semua nilai divalidasi server (tipe + rentang); pesan
- * kesalahan per kunci ditampilkan pada field yang bersangkutan. Perubahan
- * biaya packaging tidak memengaruhi pesanan lama karena harga di-snapshot
- * pada order line saat submit (BR-05, CP-SER-05).
+ * (PRD §2.1, §4.9) plus status cadangan terenkripsi (Architecture.md §7).
+ * Semua nilai divalidasi server (tipe + rentang); pesan kesalahan per kunci
+ * ditampilkan pada field yang bersangkutan. Perubahan biaya packaging tidak
+ * memengaruhi pesanan lama karena harga di-snapshot pada order line saat
+ * submit (BR-05, CP-SER-05).
  */
 export function PengaturanPage() {
   return (
     <PenjagaSuperadmin>
       <PengaturanContent />
     </PenjagaSuperadmin>
+  );
+}
+
+/** BackupRun adalah satu baris backup_runs seperti dikirim API. */
+export interface BackupRun {
+  id: string;
+  jenis: string;
+  mulai: string;
+  selesai?: string;
+  sukses?: boolean;
+  ukuran_byte: number;
+  tujuan?: string;
+  pesan?: string;
+}
+
+/** RingkasanBackup adalah bentuk data GET /admin/backup-runs (F1-21). */
+export interface RingkasanBackup {
+  terakhir: BackupRun[];
+  perlu_tindakan: boolean;
+  pesan?: string;
+  tujuan: string;
+  jadwal: string;
+  retensi: { harian: number; bulanan: number; wal_hari: number; bukti_tanpa_batas: boolean };
+  sukses_terakhir?: Record<string, string>;
+}
+
+/** waktuWIB menampilkan stempel waktu dalam zona bisnis (WIB, UTC+7). */
+function waktuWIB(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("id-ID", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Jakarta",
+  }).format(d);
+}
+
+/** ukuranRingkas menampilkan ukuran byte dalam satuan yang mudah dibaca. */
+function ukuranRingkas(byte: number): string {
+  if (!byte) return "—";
+  if (byte < 1024) return `${byte} B`;
+  if (byte < 1024 * 1024) return `${(byte / 1024).toFixed(1)} KB`;
+  return `${(byte / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** TetapanBackup menampilkan status + riwayat cadangan terenkripsi (F1-21). */
+function TetapanBackup() {
+  const [ringkasan, setRingkasan] = useState<RingkasanBackup | null>(null);
+  const [galat, setGalat] = useState<string | null>(null);
+  const [memuat, setMemuat] = useState(true);
+
+  useEffect(() => {
+    let batal = false;
+    void (async () => {
+      try {
+        const data = await api.get<RingkasanBackup>("/admin/backup-runs");
+        if (!batal) setRingkasan(data);
+      } catch (err) {
+        if (!batal) setGalat(pesanGalat(err));
+      } finally {
+        if (!batal) setMemuat(false);
+      }
+    })();
+    return () => {
+      batal = true;
+    };
+  }, []);
+
+  return (
+    <Card>
+      <CardHead title="Backup harian" />
+      {memuat ? (
+        <SkeletonList rows={2} />
+      ) : galat ? (
+        <Notice tone="danger">{galat}</Notice>
+      ) : ringkasan ? (
+        <>
+          {ringkasan.perlu_tindakan ? (
+            <Notice tone="danger">
+              {ringkasan.pesan ??
+                "Cadangan terakhir gagal dan belum ada cadangan sukses sesudahnya. Hubungi operator."}
+            </Notice>
+          ) : null}
+          <p className="muted small">
+            Tujuan: {ringkasan.tujuan || "belum dikonfigurasi"} · Jadwal: {ringkasan.jadwal} · Retensi:{" "}
+            {ringkasan.retensi.harian} harian, {ringkasan.retensi.bulanan} bulanan, WAL{" "}
+            {ringkasan.retensi.wal_hari} hari
+            {ringkasan.retensi.bukti_tanpa_batas ? ", bukti transfer tanpa batas" : ""}.
+          </p>
+          {ringkasan.terakhir.length === 0 ? (
+            <EmptyState icon="cloud-arrow-up">
+              Belum ada pekerjaan cadangan tercatat. Cadangan berjalan otomatis setiap hari pukul
+              02:00 WIB.
+            </EmptyState>
+          ) : (
+            <Table caption="Riwayat cadangan">
+              <thead>
+                <tr>
+                  <th scope="col">Mulai (WIB)</th>
+                  <th scope="col">Jenis</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Ukuran</th>
+                  <th scope="col">Tujuan / pesan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ringkasan.terakhir.map((run) => (
+                  <tr key={run.id}>
+                    <td className="tabular">{waktuWIB(run.mulai)}</td>
+                    <td>{run.jenis}</td>
+                    <td>
+                      {run.sukses === undefined ? (
+                        <Badge tone="warning">Berjalan</Badge>
+                      ) : run.sukses ? (
+                        <Badge tone="success">Sukses</Badge>
+                      ) : (
+                        <Badge tone="danger">Gagal</Badge>
+                      )}
+                    </td>
+                    <td className="tabular">{ukuranRingkas(run.ukuran_byte)}</td>
+                    <td className="muted small">
+                      {run.tujuan || "—"}
+                      {run.pesan ? ` — ${run.pesan}` : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </>
+      ) : null}
+    </Card>
   );
 }
 
@@ -184,6 +318,7 @@ function PengaturanContent() {
     <>
       <PageHead title="Pengaturan" sub="Konstanta sistem (Superadmin)" />
       <div className={styles.stack}>
+        <TetapanBackup />
         <Card>
           <CardHead title="Nilai tersimpan" />
           {memuat ? (

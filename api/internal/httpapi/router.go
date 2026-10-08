@@ -165,6 +165,10 @@ func NewRouter(d Deps) http.Handler {
 					r.Use(a.requireCap(auth.CapAdminSettings))
 					r.Get("/settings", a.adapt(a.adminSettings))
 					r.Put("/settings", a.adapt(a.adminSettingsUpdate))
+					// Status cadangan terenkripsi (F1-21): hasil setiap pekerjaan
+					// (jenis/status/ukuran/tujuan) + ringkasan "perlu tindakan".
+					// Tampil di halaman Pengaturan (Architecture.md §7).
+					r.Get("/backup-runs", a.adapt(a.adminBackupRuns))
 				})
 				// Rekening bank: khusus Superadmin (PRD §2.1, §4.6).
 				r.Group(func(r chi.Router) {

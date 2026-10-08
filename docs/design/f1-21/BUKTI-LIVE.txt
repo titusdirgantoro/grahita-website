@@ -1,0 +1,82 @@
+== 0. Siapkan database sumber (migrasi + seed PRD)
+NOTICE:  database "grahita_f121_live_uji" does not exist, skipping
+   cabang=4 pesanan=0 pengaturan=9 superadmin=1
+== 1. Kunci age (identitas privat HANYA di luar repo, mode 600)
+/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121/live
+   kunci publik: age18e7mwszeas0d97d248je...
+   mode identitas: 600
+== 2. Bukti/dokumen yang akan dicadangkan (S3 tidak tersedia: objek disiapkan langsung di tujuan)
+   pesanan=01a11d72-ae55-e867-6098-90dda48597c9 bukti=proofs/01a11d72-ae55-e867-6098-90dda48597c9/bukti-live.jpg (38 B) dokumen=documents/01a11d72-ae55-e867-6098-90dda48597c9/invoice_pdf-0.pdf (40 B)
+== 3. Cadangan nyata: --mode=backup --jenis=semua
+{"time":"2026-10-08T21:36:58.05315523Z","level":"INFO","msg":"menjalankan server","mode":"backup","env":"local","version":"dev"}
+{"time":"2026-10-08T21:36:58.066806924Z","level":"WARN","msg":"object storage belum dikonfigurasi (S3_ENDPOINT/S3_BUCKET kosong); unggah bukti akan ditolak"}
+{"time":"2026-10-08T21:36:58.466229588Z","level":"INFO","msg":"cadangan selesai","jenis":"postgres","ukuran_byte":85327,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121/live/drive:postgres/grahita-2026-10-09.dump.age","pesan":"dump grahita@127.0.0.1:5455/grahita_f121_live: 85111 byte polos, 85327 byte terenkripsi -> postgres/grahita-2026-10-09.dump.age; ringkasan potret disimpan; retensi: simpan 2, hapus 0"}
+{"jenis":"postgres","sukses":true,"ukuran_byte":85327,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121/live/drive:postgres/grahita-2026-10-09.dump.age","pesan":"dump grahita@127.0.0.1:5455/grahita_f121_live: 85111 byte polos, 85327 byte terenkripsi -\u003e postgres/grahita-2026-10-09.dump.age; ringkasan potret disimpan; retensi: simpan 2, hapus 0"}
+{"time":"2026-10-08T21:36:58.474118597Z","level":"ERROR","msg":"cadangan gagal","jenis":"storage","pesan":"object storage belum dikonfigurasi: sinkronisasi bukti/dokumen tidak bisa dijalankan: object storage belum dikonfigurasi"}
+{"time":"2026-10-08T21:36:58.482625679Z","level":"INFO","msg":"email (tidak dikirim, SMTP tidak dikonfigurasi)","to":"rina@grahitaindonesia.com","subject":"[Grahita] Cadangan harian GAGAL — storage","lampiran":""}
+{"time":"2026-10-08T21:36:58.48266905Z","level":"INFO","msg":"pemberitahuan kegagalan cadangan terkirim","jenis":"storage","penerima":1}
+{"jenis":"storage","sukses":false,"ukuran_byte":0,"pesan":"object storage belum dikonfigurasi: sinkronisasi bukti/dokumen tidak bisa dijalankan: object storage belum dikonfigurasi"}
+{"time":"2026-10-08T21:36:58.489108387Z","level":"INFO","msg":"cadangan selesai","jenis":"wal","ukuran_byte":0,"tujuan":"","pesan":"PITR tidak aktif (BACKUP_WAL_DIR kosong): arsip WAL tidak dicadangkan"}
+{"jenis":"wal","sukses":true,"ukuran_byte":0,"pesan":"PITR tidak aktif (BACKUP_WAL_DIR kosong): arsip WAL tidak dicadangkan"}
+{"time":"2026-10-08T21:36:58.490958616Z","level":"ERROR","msg":"berhenti karena error","mode":"backup","err":"1 dari 3 pekerjaan cadangan gagal"}
+   kode keluar: 0
+--- log pekerjaan (alarm + sebab kegagalan):
+== 4. Berkas di tujuan
+   postgres/grahita-2026-10-09.dump.age                          85327 byte  awalan=age-encryption.org/v1
+   postgres/grahita-2026-10-09.ringkasan.json                     1176 byte  awalan={
+  "versi": 1,
+  "be
+   storage/_manifest.json                                          694 byte  awalan={
+  "versi": 1,
+  "di
+   storage/documents/01a11d72-ae55-e867-6098-90dda48597c9/invoice_pdf-0.pdf.age      240 byte  awalan=age-encryption.org/v1
+   storage/proofs/01a11d72-ae55-e867-6098-90dda48597c9/bukti-live.jpg.age      238 byte  awalan=age-encryption.org/v1
+== 5. Bukti enkripsi dump (isi polos tidak boleh terlihat)
+   berkas            : postgres/grahita-2026-10-09.dump.age
+   header age        : age-encryption.org/v1
+   'PGDMP' di dump   : 0
+   email seed bocor  : 0
+   sha256 terenkripsi: 6793e347c10d3626999d8d0d67293b86abb1282db89768ffa3fbbaa07593d8a2
+== 6. Jejak backup_runs (catatan nyata di database)
+  jenis   | sukses | ukuran_byte |                        tujuan                        |                                  pesan                                   
+----------+--------+-------------+------------------------------------------------------+--------------------------------------------------------------------------
+ postgres | t      |       85327 | dir:/home/hermes/hermes-dev-data/profiles/swe-tiusap | dump grahita@127.0.0.1:5455/grahita_f121_live: 85111 byte polos, 85327 b
+ storage  | f      |           0 | -                                                    | object storage belum dikonfigurasi: sinkronisasi bukti/dokumen tidak bis
+ wal      | t      |           0 | -                                                    | PITR tidak aktif (BACKUP_WAL_DIR kosong): arsip WAL tidak dicadangkan
+(3 rows)
+
+== 7. Penjaga 'tidak ada cadangan polos': tujuan aktif tanpa kunci age harus ditolak
+konfigurasi tidak valid: BACKUP_AGE_RECIPIENT wajib diisi bila tujuan cadangan aktif: cadangan tidak boleh ditulis tanpa enkripsi age
+   kode keluar: 0
+== 8. Uji restore kuartalan: dekripsi + pg_restore + penyamaran staging + byte objek
+{"time":"2026-10-08T21:36:59.335696953Z","level":"INFO","msg":"menjalankan server","mode":"backup-restore","env":"local","version":"dev"}
+{"time":"2026-10-08T21:36:59.34578935Z","level":"WARN","msg":"object storage belum dikonfigurasi (S3_ENDPOINT/S3_BUCKET kosong); unggah bukti akan ditolak"}
+{"mulai":"2026-10-08T21:36:59.345938408Z","selesai":"2026-10-08T21:37:00.493119644Z","berkas":"postgres/grahita-2026-10-09.dump.age","ukuran_dump_polos":85111,"database_tujuan":"grahita@127.0.0.1:5455/grahita_f121_live_uji","database_dibuat":true,"statistik_sumber":{"admin_users":2,"audit_logs":1,"bank_accounts":2,"branch_prices":28,"branch_users":4,"branches":4,"cnc_reminders":0,"documents":1,"email_outbox":0,"invoice_revisions":0,"numbering_counters":0,"order_events":0,"order_lines":0,"orders":1,"password_reset_tokens":0,"payment_proofs":1,"products":7,"registration_tokens":0,"river_job":0,"sessions":0,"settings":9,"verification_logs":0},"statistik_tujuan":{"admin_users":2,"audit_logs":0,"bank_accounts":2,"branch_prices":28,"branch_users":4,"branches":4,"cnc_reminders":0,"documents":1,"email_outbox":0,"invoice_revisions":0,"numbering_counters":0,"order_events":0,"order_lines":0,"orders":1,"password_reset_tokens":0,"payment_proofs":1,"products":7,"registration_tokens":0,"river_job":0,"sessions":0,"settings":9,"verification_logs":0},"data_cocok":true,"potret_dipakai":true,"jejak_cadangan":1,"objek_dir":"/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121/live/objek","objek_diperiksa":2,"objek_dipulihkan":2,"objek_cocok":true,"anonim":true,"anonim_hasil":{"email_cabang_bocor":0,"email_admin_bocor":0,"email_outbox_bocor":0,"sesi_tersisa":0,"token_reset_tersisa":0,"token_registrasi_tersisa":0,"ip_audit_tersisa":0},"anonim_cocok":true}
+{"time":"2026-10-08T21:37:00.493837983Z","level":"INFO","msg":"laporan uji restore ditulis","berkas":"/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121/live/laporan-restore.json"}
+{"time":"2026-10-08T21:37:00.494090683Z","level":"INFO","msg":"berhenti dengan rapi","mode":"backup-restore"}
+   berkas objek hasil pemulihan:
+   documents/01a11d72-ae55-e867-6098-90dda48597c9/invoice_pdf-0.pdf 40 byte  sha256=c3ee36ffd7f86c8721057bad4ef7a1729f1eef846b1e3f03484d77a8c65bea3d
+   proofs/01a11d72-ae55-e867-6098-90dda48597c9/bukti-live.jpg 38 byte  sha256=dd64379d96c75bd1aed65dbe31880efd12c1e3795e18929566de9bf292a2d8d9
+   sha256 objek asli: bukti=dd64379d96c75bd1aed65dbe31880efd12c1e3795e18929566de9bf292a2d8d9 dokumen=c3ee36ffd7f86c8721057bad4ef7a1729f1eef846b1e3f03484d77a8c65bea3d
+   data pribadi di salinan staging:
+ cabang_disamarkan | cabang | admin_disamarkan | sesi_tersisa | token_reset_tersisa | ip_audit_tersisa | jejak_cadangan 
+-------------------+--------+------------------+--------------+---------------------+------------------+----------------
+                 4 |      4 |                2 |            0 |                   0 |                0 |              1
+(1 row)
+
+   jumlah baris tabel inti (sumber vs hasil restore):
+   orders           sumber=1    restore=1
+   documents        sumber=1    restore=1
+   payment_proofs   sumber=1    restore=1
+   settings         sumber=9    restore=9
+   branches         sumber=4    restore=4
+   audit_logs       sumber=1    restore=0
+== 9. API: halaman Pengaturan menampilkan status cadangan (Superadmin)
+curl: (7) Failed to connect to 127.0.0.1 port 8099 after 0 ms: Couldn't connect to server
+--- Superadmin GET /api/v1/admin/backup-runs:
+{"data":{"terakhir":[{"id":"01a11d72-b274-8d07-83f8-759e273a8414","jenis":"wal","mulai":"2026-10-08T21:36:58.482722Z","selesai":"2026-10-08T21:36:58.486409Z","sukses":true,"ukuran_byte":0,"pesan":"PITR tidak aktif (BACKUP_WAL_DIR kosong): arsip WAL tidak dicadangkan"},{"id":"01a11d72-b264-b4f7-3c68-9c15addabdf3","jenis":"storage","mulai":"2026-10-08T21:36:58.466547Z","selesai":"2026-10-08T21:36:58.470461Z","sukses":false,"ukuran_byte":0,"pesan":"object storage belum dikonfigurasi: sinkronisasi bukti/dokumen tidak bisa dijalankan: object storage belum dikonfigurasi"},{"id":"01a11d72-b0d8-e0c7-88b8-468d1c00b008","jenis":"postgres","mulai":"2026-10-08T21:36:58.067835Z","selesai":"2026-10-08T21:36:58.462248Z","sukses":true,"ukuran_byte":85327,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121/live/drive:postgres/grahita-2026-10-09.dump.age","pesan":"dump grahita@127.0.0.1:5455/grahita_f121_live: 85111 byte polos, 85327 byte terenkripsi -\u003e postgres/grahita-2026-10-09.dump.age; ringkasan potret disimpan; retensi: simpan 2, hapus 0"}],"perlu_tindakan":true,"pesan":"Cadangan storage gagal pada 09 Oct 2026 04:36 WIB dan belum ada cadangan sukses sesudahn
+--- Manager GET (harus 403) dan anonim GET (harus 401):
+   manager HTTP 403
+   anonim  HTTP 401
+== 10. Bersih-bersih
+SELESAI
