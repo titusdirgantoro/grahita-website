@@ -79,7 +79,21 @@ const rootRoute = createRootRoute({
   ),
 });
 
-const masRoute = createRoute({ getParentRoute: () => rootRoute, path: "/masuk", component: HalamanMasuk });
+/**
+ * /masuk menerima `?daftar=sukses` dari akhir alur pendaftaran (F1-07b) supaya
+ * halaman masuk bisa menampilkan pesan sukses tanpa menyimpan apa pun di klien.
+ */
+const masRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/masuk",
+  validateSearch: (search: Record<string, unknown>): { daftar?: string } => ({
+    daftar: search.daftar === "sukses" ? "sukses" : undefined,
+  }),
+  component: function HalamanMasukRoute() {
+    const { daftar } = masRoute.useSearch();
+    return <HalamanMasuk terdaftar={daftar === "sukses"} />;
+  },
+});
 const daftarRoute = createRoute({ getParentRoute: () => rootRoute, path: "/daftar", component: HalamanDaftar });
 /**
  * /lupa melayani dua keadaan: minta tautan (tanpa query) dan membuat kata sandi

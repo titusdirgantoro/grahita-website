@@ -24,6 +24,12 @@ export interface PeriksaKataSandiInput {
   fieldBaru?: string;
   /** Nama field galat untuk konfirmasi (default "password_konfirmasi"). */
   fieldKonfirmasi?: string;
+  /**
+   * Pesan saat konfirmasi tidak sama. Bawaan menyebut "kata sandi baru"
+   * (alur ganti sandi); pendaftaran akun cabang memakai pesan tanpa kata
+   * "baru" sehingga tidak membingungkan pengguna yang baru pertama mengisi.
+   */
+  pesanKonfirmasi?: string;
 }
 
 /**
@@ -36,6 +42,7 @@ export function periksaKataSandiBaru({
   konfirmasi,
   fieldBaru = "password_baru",
   fieldKonfirmasi = "password_konfirmasi",
+  pesanKonfirmasi = "Konfirmasi tidak sama dengan kata sandi baru.",
 }: PeriksaKataSandiInput): GalatKataSandi {
   const galat: GalatKataSandi = {};
   if (baru.length < MIN_PANJANG) {
@@ -48,9 +55,45 @@ export function periksaKataSandiBaru({
     galat[fieldBaru] = "Kata sandi baru harus berbeda dari kata sandi lama.";
   }
   if (konfirmasi !== undefined && konfirmasi !== baru) {
-    galat[fieldKonfirmasi] = "Konfirmasi tidak sama dengan kata sandi baru.";
+    galat[fieldKonfirmasi] = pesanKonfirmasi;
   }
   return galat;
+}
+
+/** SkorKekuatan adalah tingkat kekuatan kata sandi untuk indikator UI. */
+export type SkorKekuatan = 0 | 1 | 2 | 3 | 4;
+
+/** KekuatanKataSandi membawa skor (0-4) beserta labelnya untuk ditampilkan. */
+export interface KekuatanKataSandi {
+  skor: SkorKekuatan;
+  label: string;
+}
+
+const LABEL_KEKUATAN: Record<SkorKekuatan, string> = {
+  0: "Sangat lemah",
+  1: "Lemah",
+  2: "Cukup",
+  3: "Kuat",
+  4: "Sangat kuat",
+};
+
+/**
+ * kekuatanKataSandi menilai kekuatan kata sandi untuk INDIKATOR saja
+ * (PRD CP-REG-05). Syarat mengikat tetap milik backend: minimal 8 karakter,
+ * memuat huruf dan angka. Skor < 8 karakter selalu 0 supaya indikator tidak
+ * pernah terlihat "kuat" untuk kata sandi yang pasti ditolak.
+ */
+export function kekuatanKataSandi(password: string): KekuatanKataSandi {
+  let nilai = 0;
+  if (password.length >= MIN_PANJANG) {
+    nilai = 1;
+    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) nilai += 1;
+    if (/[0-9]/.test(password)) nilai += 1;
+    if (/[^A-Za-z0-9]/.test(password) || password.length >= 12) nilai += 1;
+    if (nilai > 4) nilai = 4;
+  }
+  const skor = nilai as SkorKekuatan;
+  return { skor, label: LABEL_KEKUATAN[skor] };
 }
 
 /**

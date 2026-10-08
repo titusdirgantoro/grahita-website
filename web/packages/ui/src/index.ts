@@ -61,11 +61,15 @@ export {
 export {
   MIN_PANJANG,
   periksaKataSandiBaru,
+  kekuatanKataSandi,
   pesanGalatSingkat,
   fieldGalat,
   type GalatKataSandi,
   type GalatApiMirip,
+  type SkorKekuatan,
+  type KekuatanKataSandi,
 } from "./password";
+export { PasswordStrength, type PasswordStrengthProps } from "./components/PasswordStrength";
 export { Table, type TableProps } from "./components/Table";
 export { Modal, type ModalProps } from "./components/Modal";
 export { EmptyState, type EmptyStateProps } from "./components/EmptyState";
