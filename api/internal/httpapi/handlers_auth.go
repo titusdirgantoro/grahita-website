@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/grahita/portal/api/internal/auth"
@@ -65,9 +64,6 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) error {
 		UserAgent: r.UserAgent(),
 	})
 	if err != nil {
-		if a.d.LoginLimiter == nil || !errors.Is(err, auth.ErrInvalidCredentials) {
-			return mapDomainErr(err)
-		}
 		return mapDomainErr(err)
 	}
 	if a.d.LoginLimiter != nil {

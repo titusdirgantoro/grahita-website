@@ -9,6 +9,11 @@ on:
 env:
   GO_VERSION: "1.27"
   NODE_VERSION: "22"
+  # Kredensial pengembangan untuk service PostgreSQL pada job "migrasi".
+  # DSN dibangun lewat interpolasi ${{ }} supaya tidak ada kredensial
+  # literal pada berkas terlacak (gate: scripts/check-secrets.sh).
+  PG_USER: grahita
+  PG_PASSWORD: grahita
 
 jobs:
   backend:
@@ -76,8 +81,8 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      DATABASE_URL: postgres://grahita:grahita@localhost:5432/grahita?sslmode=disable
-      TEST_DATABASE_URL: postgres://grahita:grahita@localhost:5432/grahita?sslmode=disable
+      DATABASE_URL: postgres://${{ env.PG_USER }}:${{ env.PG_PASSWORD }}@localhost:5432/grahita?sslmode=disable
+      TEST_DATABASE_URL: postgres://${{ env.PG_USER }}:${{ env.PG_PASSWORD }}@localhost:5432/grahita?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 

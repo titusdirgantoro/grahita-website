@@ -24,6 +24,11 @@ func NewRouter(d Deps) http.Handler {
 	if len(d.Config.AllowedOrigins) > 0 {
 		r.Use(httpx.CORS(d.Config.AllowedOrigins))
 	}
+	// CSRF dipasang pada tingkat router (sebelum routing), jadi permintaan
+	// non-GET ke rute yang hanya menerima GET — mis. POST /healthz — akan
+	// dijawab 403 CSRF_INVALID alih-alih 405. Bentuk error tetap konsisten
+	// {error:{code,message,fields}}; kesengajaan ini didokumentasikan agar
+	// tidak dianggap bug.
 	r.Use(httpx.CSRF(httpx.CSRFConfig{
 		Enabled: d.Config.CSRFEnabled,
 		Secure:  d.Config.SessionSecure,

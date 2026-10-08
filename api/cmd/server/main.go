@@ -156,13 +156,12 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		mail = mailer.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.MailFrom)
 	}
 
-	var loginLimiter *httpx.RateLimiter
-	if cfg.CSRFEnabled {
-		// 10 percobaan per 15 menit per (IP+akun); PRD CP-AUT-05 minta 5,
-		// nilai lebih longgar dipakai agar tidak menyulitkan pengujian manual
-		// sekaligus tetap menahan brute force.
-		loginLimiter = httpx.NewRateLimiter(10, 15*time.Minute)
-	}
+	// Pembatas percobaan login selalu aktif dan tidak digantungkan pada
+	// CSRF_ENABLED: keduanya tidak berhubungan (PRD CP-AUT-05).
+	// 10 percobaan per 15 menit per (IP+akun); PRD minta 5, nilai lebih
+	// longgar dipakai agar tidak menyulitkan pengujian manual sekaligus
+	// tetap menahan brute force.
+	loginLimiter := httpx.NewRateLimiter(10, 15*time.Minute)
 
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Config:       cfg,
