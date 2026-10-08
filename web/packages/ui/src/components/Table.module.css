@@ -1,0 +1,79 @@
+.tableWrap {
+  overflow-x: auto;
+  margin: 0 -8px;
+  padding: 0 8px;
+}
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tbl th {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: left;
+  padding: 0 12px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.tbl td {
+  padding: 0 12px;
+  height: var(--row-h);
+  border-bottom: 1px solid var(--line);
+}
+
+.tbl td.wrap {
+  white-space: normal;
+}
+
+.tbl tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.tbl th:global(.num),
+.tbl td:global(.num) {
+  text-align: right;
+}
+
+.tbl tbody tr.click {
+  cursor: pointer;
+}
+
+.tbl tbody tr.click:hover {
+  background: var(--brand-50);
+}
+
+.tbl tfoot td {
+  font-weight: 700;
+  border-bottom: none;
+  border-top: 1px solid var(--line-strong);
+}
+
+/* Di mobile, tabel ringkas berubah menjadi daftar kartu (seperti prototype). */
+@media (max-width: 767px) {
+  .mobileCards thead {
+    display: none;
+  }
+
+  .mobileCards tbody tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .mobileCards td {
+    height: auto;
+    padding: 0;
+    border: none;
+  }
+
+  .mobileCards td:global(.num) {
+    text-align: left;
+  }
+}

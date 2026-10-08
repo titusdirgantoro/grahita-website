@@ -1,0 +1,95 @@
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.kpi {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.lbl {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.val {
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 4px 0 6px;
+  letter-spacing: -0.01em;
+}
+
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
+.catGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.prod {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prod .nm {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.prod .price {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.prod .desc {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 18px;
+  flex: 1;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+@media (max-width: 767px) {
+  .kpis {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 16px;
+    margin: 0 -16px 16px;
+    padding: 0 16px;
+  }
+
+  .kpis > :first-child {
+    flex: 0 0 84%;
+    scroll-snap-align: start;
+  }
+}

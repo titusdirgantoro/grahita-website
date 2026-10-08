@@ -1,0 +1,19 @@
+.avatar {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 50%;
+  background: var(--avatar-bg);
+  color: var(--avatar-fg);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 13px;
+  flex: none;
+  text-decoration: none;
+}
+
+.sm {
+  width: 34px;
+  height: 34px;
+  font-size: 13px;
+}

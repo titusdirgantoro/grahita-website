@@ -1,10 +1,15 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import "@grahita/ui/tokens.css";
-import "@grahita/ui/base.css";
+// Menyertakan token, reset/utilitas, font Plus Jakarta Sans, dan font ikon
+// Phosphor — semuanya di-self-host lewat bundel (tanpa CDN produksi).
+import { ToastProvider } from "@grahita/ui";
 
 import App from "./App";
+
+// Nilai token yang berbeda antar portal (--h-control, --primary, radius, dst.)
+// dipilih lewat atribut ini; lihat tokens.css.
+document.documentElement.dataset.portal = "customer";
 
 const container = document.getElementById("root");
 if (!container) {
@@ -13,6 +18,8 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <ToastProvider>
+      <App />
+    </ToastProvider>
   </StrictMode>,
 );

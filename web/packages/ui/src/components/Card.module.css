@@ -1,0 +1,29 @@
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: 20px;
+  min-width: 0;
+}
+
+.title {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: var(--card-title-weight);
+  color: var(--ink);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.tools {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}

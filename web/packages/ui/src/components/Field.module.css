@@ -1,0 +1,69 @@
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.err {
+  color: var(--danger-fg);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-subtle);
+}
+
+.formGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.input {
+  height: var(--h-control);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  padding: 0 12px;
+  background: var(--surface);
+  width: 100%;
+  min-width: 0;
+}
+
+.input[readonly] {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+
+.input:disabled {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.invalid {
+  border-color: var(--danger);
+}
+
+textarea.input {
+  height: auto;
+  min-height: 72px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+select.input {
+  appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 256 256'%3E%3Cpath fill='%236D6D72' d='M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32Z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}

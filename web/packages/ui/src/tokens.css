@@ -1,15 +1,19 @@
 /*
- * tokens.css — token desain Grahita Indonesia.
+ * tokens.css — token desain Grahita Indonesia (shared UI kit).
  *
- * Diekstrak apa adanya dari blok :root prototype (customer_v2.html /
+ * Diekstrak apa adanya dari blok :root kedua prototype (customer_v2.html dan
  * admin_v2.html) sesuai Architecture.md §3.2 dan PRD §1. Warna masukan brand
  * tidak boleh diubah tanpa persetujuan:
  *   --brand-primary   #504068
  *   --brand-secondary #906088
  *   --brand-accent    #FFF038
  *
- * Komponen (btn, input, card, table, chip, modal, shell) diport pada kartu
- * F1-03 dan memakai token ini.
+ * Prototype memakai beberapa nilai yang berbeda antar portal. Selisih itu tidak
+ * dibulatkan diam-diam: setiap portal mengaktifkan variannya lewat atribut
+ * `data-portal` pada <html> (di-set oleh main.tsx masing-masing SPA) sehingga
+ * satu set komponen tetap meniru tampilan prototype di kedua shell:
+ *   customer: --h-control 40px, --primary brand-900, radius kartu 16px
+ *   admin:    --h-control 36px, --primary ink,       radius kartu 20px
  */
 :root {
   /* INPUT BRAND — dari logo resmi Grahita Indonesia */
@@ -50,13 +54,56 @@
   --info-bg: #e2ecfa;
   --info-fg: #1f4e95;
   --info: #3a72c9;
+  --chart-critical: #f2a08c;
 
-  --primary: var(--brand-900);
-  --h-control: 40px;
   --shadow-float: 0 8px 24px -8px rgb(20 20 25 / 0.18);
   --font:
-    "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, sans-serif;
-  --radius-card: 16px;
+    "Plus Jakarta Sans Variable", "Plus Jakarta Sans", ui-sans-serif,
+    system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --radius-control: 10px;
+}
+
+/* Varian Customer Portal — nilai persis customer_v2.html */
+:root,
+:root[data-portal="customer"] {
+  --primary: var(--brand-900);
+  --h-control: 40px;
+  --radius-card: 16px;
+  --radius-panel: 24px;
+  --btn-weight: 600;
+  --seg-h: 32px;
+  --seg-bg: var(--brand-100);
+  --row-h: 56px;
+  --card-title-weight: 600;
+  --page-h1-size: 28px;
+  --page-h1-line: 34px;
+  --page-h1-weight: 700;
+  --btn-pad-x: 16px;
+  --brand-size: 18px;
+  --avatar-size: 40px;
+  --avatar-bg: var(--brand-300);
+  --avatar-fg: var(--brand-900);
+  --canvas-bg: var(--brand-900);
+}
+
+/* Varian Admin Portal — nilai persis admin_v2.html */
+:root[data-portal="admin"] {
+  --primary: var(--ink);
+  --h-control: 36px;
+  --radius-card: 20px;
+  --radius-panel: 24px;
+  --btn-weight: 500;
+  --seg-h: 34px;
+  --seg-bg: transparent;
+  --row-h: 52px;
+  --card-title-weight: 500;
+  --page-h1-size: 24px;
+  --page-h1-line: 30px;
+  --page-h1-weight: 500;
+  --btn-pad-x: 14px;
+  --brand-size: 17px;
+  --avatar-size: 36px;
+  --avatar-bg: var(--brand-200);
+  --avatar-fg: var(--ink);
+  --canvas-bg: var(--canvas);
 }

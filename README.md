@@ -3,6 +3,14 @@
 Modular monolith Go + dua SPA React untuk sistem pemesanan cabang Grahita Indonesia.
 Dokumen perencanaan: `docs/PRD.md`, `docs/SystemDesign.md`, `docs/Architecture.md`, `docs/Database.md`.
 
+> **Status (F1-03):** sistem desain shared (`web/packages/ui`) dan shell responsif
+> dua portal selesai diport dari prototype — token, komponen (tombol, form,
+> tabel, chip/badge, modal, notice, segmented, switch, avatar, state kosong,
+> skeleton, toast, accordion), serta `CustomerShell` (sidebar + bottom-nav) dan
+> `AdminShell` (sidebar ciut + drawer) dengan menu yang siap diguard per peran.
+> Font Plus Jakarta Sans dan ikon Phosphor di-self-host (tanpa CDN produksi).
+> Bukti kesesuaian visual dengan prototype ada di `docs/design/f1-03/`.
+>
 > **Status (F1-01):** fondasi aplikasi berdiri — modular monolith dengan aturan
 > lapisan `http → service → repo`, dua SPA yang benar-benar build, API `/api/v1`
 > dengan sesi cookie host-only + otorisasi berbasis role, worker River, skema
@@ -92,12 +100,13 @@ membaca import graph kode sumber. Melanggarnya = CI merah.
 ├─ Makefile
 ├─ docs/                        # PRD, SystemDesign, Architecture, Database
 ├─ docs/prototype/              # customer_v2.html, admin_v2.html (acuan desain)
+├─ docs/design/f1-03/           # snapshot visual + perbandingan vs prototype
 ├─ infra/caddy/                 # Caddyfile.dev & Caddyfile.prod
 ├─ openapi/openapi.yaml         # kontrak API
 ├─ scripts/                     # smoke.sh, check-secrets.sh, pg-dev-shim.sql
 ├─ web/                         # monorepo SPA (npm workspaces)
 │  ├─ packages/api-client/      # klien /api/v1 (amplop data/error, CSRF)
-│  ├─ packages/ui/              # token desain + gaya dasar (diisi penuh di F1-03)
+│  ├─ packages/ui/              # sistem desain: token, komponen, shell (F1-03)
 │  ├─ apps/customer/            # grahita-branch.tiusclaw.com
 │  └─ apps/admin/               # grahita-admin.tiusclaw.com
 └─ api/
@@ -187,6 +196,38 @@ Uji integrasi skema (`go test ./internal/platform/database/...`) mencakup
 migrasi naik/turun pada database bersih, keunikan email (citext) & satu akun per
 cabang, keunikan/format serial, seed pengaturan, penomoran bersamaan (24 submit
 paralel tanpa nomor kembar/bolong) dan penomoran setelah rollback.
+
+## Sistem desain & shell (F1-03)
+
+`web/packages/ui` adalah satu paket sistem desain yang dipakai kedua SPA:
+
+| Isi | Berkas |
+|---|---|
+| Token desain (brand, status, ukuran kontrol) | `src/tokens.css` |
+| Reset + utilitas global (`.muted`, `.num`, `.sr`, `.hatch`, fokus) | `src/base.css` |
+| Komponen | `src/components/*` (Button, Field/Form, Card, Badge/Chip, Table, Modal, Notice, Segmented, Switch, Avatar, EmptyState, Skeleton, Toast, Accordion, AuthLayout, Brand, PageHead) |
+| Shell + model menu | `src/shell/*` (`CustomerShell`, `AdminShell`, `filterNav`/`filterGroups`/`bolehLihat`) |
+
+- **Perbedaan antar portal** (mis. `--h-control` 40px vs 36px, `--primary`
+  brand-900 vs ink, radius kartu 16px vs 20px) dipilih lewat atribut
+  `data-portal` pada `<html>` (di-set `main.tsx`), bukan dengan menyalin
+  komponen. Jadi satu set komponen tetap meniru kedua prototype.
+- **Self-host aset**: font Plus Jakarta Sans (`@fontsource-variable/…`) dan font
+  ikon Phosphor (`@phosphor-icons/web`) diimpor dari `node_modules` dan ikut
+  ter-bundel; `index.html` tidak memuat URL eksternal (diuji di CI).
+- **Guard menu per peran**: item `superadminOnly` (Rekening bank, Reporting,
+  Pengaturan) disaring `AdminShell`, halamannya menolak lewat `PenjagaSuperadmin`,
+  dan API tetap otoritas akhir. Manager melihat metrik jumlah, Superadmin melihat
+  rupiah.
+- **Router**: TanStack Router dengan `beforeLoad`-style guard di layout shell
+  (redirect ke `/masuk` bila belum ada sesi). Shell sendiri lepas dari router —
+  aplikasi memasok komponen `Link`, sehingga shell mudah diuji.
+- **Galeri komponen** `/gaya` di kedua app menampilkan shell + seluruh komponen
+  memakai akun contoh tanpa memanggil API — dipakai perbandingan visual
+  (`docs/design/f1-03/HASIL.md`).
+
+Perintah terkait: `npm run typecheck`, `npm run test`, `npm run build` di `web/`
+(65 tes: api-client 7, ui 44, admin 8, customer 6).
 
 ## Produksi
 

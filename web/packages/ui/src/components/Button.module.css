@@ -1,0 +1,97 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--h-control);
+  padding: 0 var(--btn-pad-x);
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: var(--btn-weight);
+  white-space: nowrap;
+  text-decoration: none;
+  background: none;
+}
+
+.btn :global(.ph) {
+  font-size: 16px;
+}
+
+.primary {
+  background: var(--primary);
+  color: #fff;
+}
+
+.primary:hover {
+  background: color-mix(in oklch, var(--primary) 85%, white);
+}
+
+.secondary {
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+
+.secondary:hover {
+  background: var(--surface-sunken);
+}
+
+.ghost:hover {
+  background: var(--brand-100);
+}
+
+.dangerGhost {
+  color: var(--danger-fg);
+}
+
+.dangerGhost:hover {
+  background: var(--danger-bg);
+}
+
+.block {
+  width: 100%;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.iconBtn {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  flex: none;
+  position: relative;
+  text-decoration: none;
+}
+
+.iconBtn:hover {
+  background: var(--surface-sunken);
+}
+
+.iconBtn :global(.ph) {
+  font-size: 17px;
+}
+
+.iconBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Titik notifikasi "perlu tindakan" pada tombol lonceng admin. */
+.dotred {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 2px solid var(--surface);
+}

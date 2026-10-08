@@ -1,0 +1,56 @@
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.lbl {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.val {
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 4px 0 6px;
+  letter-spacing: -0.01em;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chartWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+@media (max-width: 899px) {
+  .kpis,
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+}

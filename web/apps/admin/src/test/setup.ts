@@ -1,5 +1,5 @@
 import { cleanup } from "@testing-library/react";
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeAll, vi } from "vitest";
 
 /**
  * Setup pengujian komponen.
@@ -9,6 +9,11 @@ import { afterEach, vi } from "vitest";
  * global tiruan antar-tes dilakukan di sini supaya markup tes sebelumnya tidak
  * bocor ke tes berikutnya.
  */
+beforeAll(() => {
+  // jsdom tidak mengimplementasikan scrollTo; router memanggilnya saat navigasi.
+  window.scrollTo = () => undefined;
+});
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();

@@ -1,0 +1,39 @@
+.tut {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: 0 20px;
+}
+
+.tut summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.tut summary::-webkit-details-marker {
+  display: none;
+}
+
+.caret {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+
+.tut[open] .caret {
+  transform: rotate(180deg);
+}
+
+.body {
+  margin: 0 0 18px;
+  padding-left: 22px;
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 20px;
+}

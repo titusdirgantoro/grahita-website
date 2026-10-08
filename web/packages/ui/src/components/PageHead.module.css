@@ -1,0 +1,54 @@
+.pageHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 16px;
+  flex-wrap: wrap;
+}
+
+.pageHead h1 {
+  font-size: var(--page-h1-size);
+  line-height: var(--page-h1-line);
+  font-weight: var(--page-h1-weight);
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.sub {
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.back:hover {
+  color: var(--text);
+}
+
+.crumb {
+  min-width: 0;
+}
+
+/* Di layar sempit judul halaman mengecil (customer_v2.html & admin_v2.html). */
+@media (max-width: 767px) {
+  .pageHead h1 {
+    font-size: 24px;
+    line-height: 30px;
+  }
+}
