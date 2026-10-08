@@ -41,6 +41,23 @@ function fetchAdmin(role: string) {
           ],
         });
       }
+      if (input.endsWith("/admin/users/branch")) {
+        return json({
+          data: [
+            {
+              branch_id: "b1",
+              user_id: "u1",
+              nama: "Grahita Bandung",
+              nama_kepala: "Sri Wahyuni",
+              email: "bandung@example.test",
+              has_account: true,
+              is_active: true,
+              branch_active: true,
+              status: "aktif",
+            },
+          ],
+        });
+      }
       if (input.endsWith("/admin/settings")) {
         return json({ data: { biaya_packaging: 3000, cnc_hari: 7 } });
       }

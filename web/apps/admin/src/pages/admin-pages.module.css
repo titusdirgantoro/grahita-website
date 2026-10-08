@@ -105,6 +105,33 @@
   border-top: 1px solid var(--line);
 }
 
+/* ---------- Blok "Akun & token registrasi" dialog cabang (F1-06b) ---------- */
+
+/* Aksi baris tabel: tombol membungkus ke baris baru tetap rata kanan. */
+.aksi {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* Di kartu mobile (Table.mobileCards) sel aksi memakai lebar penuh agar
+   ketiga tombol rata kanan, bukan tersangkut di kolom pertama grid. */
+@media (max-width: 767px) {
+  .aksiSel {
+    grid-column: 1 / -1;
+  }
+}
+
+.tokenBox {
+  display: grid;
+  gap: 8px;
+  background: var(--surface-sunken);
+  border-radius: 12px;
+  padding: 16px;
+}
+
 @media (max-width: 899px) {
   .kpis,
   .grid2 {

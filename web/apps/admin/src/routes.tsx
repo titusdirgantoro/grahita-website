@@ -15,12 +15,12 @@ import { SessionProvider, useSesi } from "./session";
 import { NAV_ADMIN } from "./nav";
 import { HalamanLupa, HalamanMasuk } from "./pages/auth";
 import {
-  CabangPage,
   DashboardPage,
   PesananAdminPage,
   ProfilAdminPage,
   ReportingPage,
 } from "./pages/shell-pages";
+import { CabangPage } from "./pages/cabang";
 import { KatalogPage } from "./pages/katalog";
 import { RekeningPage } from "./pages/rekening";
 import { PengaturanPage } from "./pages/pengaturan";

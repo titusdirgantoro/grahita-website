@@ -18,7 +18,6 @@ import {
   PageHead,
   Segmented,
   Select,
-  SkeletonList,
   Table,
   labelPeran,
 } from "@grahita/ui";
@@ -40,7 +39,7 @@ const PERIODE = [
   { value: "tahun", label: "Tahun ini" },
 ] as const;
 
-interface Cabang {
+export interface Cabang {
   id: string;
   nama: string;
   nama_kepala: string;
@@ -48,7 +47,11 @@ interface Cabang {
   telepon?: string;
   is_cnc: boolean;
   is_special?: boolean;
+  pajak_in?: boolean;
   is_active: boolean;
+  /** 8 karakter pertama token registrasi aktif (bila ada) — PRD §4.4. */
+  token_prefix?: string;
+  token_expires_at?: string;
 }
 
 /** MiniBars adalah grafik SVG buatan sendiri (bukan library), sesuai §7.2. */
@@ -259,66 +262,6 @@ export function PesananAdminPage() {
             </tr>
           </tbody>
         </Table>
-      </Card>
-    </>
-  );
-}
-
-/** pCabang — /cabang: master cabang dari API. */
-export function CabangPage() {
-  const { data, memuat, galat } = useApi<Cabang[]>("/admin/branches");
-
-  return (
-    <>
-      <PageHead
-        title="Cabang"
-        sub="Master data cabang"
-        actions={
-          <Button variant="primary" icon="plus">
-            Tambah cabang
-          </Button>
-        }
-      />
-      <Card>
-        {memuat ? (
-          <SkeletonList rows={3} />
-        ) : galat ? (
-          <Notice tone="danger">{galat}</Notice>
-        ) : !data || data.length === 0 ? (
-          <EmptyState icon="storefront">Belum ada cabang terdaftar.</EmptyState>
-        ) : (
-          <Table mobileCards caption="Master data cabang">
-            <thead>
-              <tr>
-                <th scope="col">Cabang</th>
-                <th scope="col">Kepala cabang</th>
-                <th scope="col">Email</th>
-                <th scope="col">Flag</th>
-                <th scope="col">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((c) => (
-                <tr key={c.id}>
-                  <td>{c.nama}</td>
-                  <td>{c.nama_kepala}</td>
-                  <td className="muted">{c.email}</td>
-                  <td>
-                    <div className={styles.row}>
-                      {c.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
-                      {c.is_special ? <Badge tone="info">Special</Badge> : null}
-                    </div>
-                  </td>
-                  <td>
-                    <Badge tone={c.is_active ? "success" : "danger"}>
-                      {c.is_active ? "Aktif" : "Nonaktif"}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
       </Card>
     </>
   );
