@@ -52,3 +52,17 @@ func TextOr(t pgtype.Text) string {
 	}
 	return t.String
 }
+
+// Bool mengubah bool menjadi pgtype.Bool (bukan NULL).
+func Bool(b bool) pgtype.Bool {
+	return pgtype.Bool{Bool: b, Valid: true}
+}
+
+// BoolPtr mengubah *bool menjadi pgtype.Bool (NULL bila nil) — dipakai untuk
+// argumen filter opsional sqlc.narg.
+func BoolPtr(p *bool) pgtype.Bool {
+	if p == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *p, Valid: true}
+}

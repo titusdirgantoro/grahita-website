@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -134,6 +135,11 @@ func newAuthServer(t *testing.T, tune func(*Deps)) *authServer {
 	svc.SetResetMailer(mail)
 
 	limit := httpx.NewRateLimiter(5, 15*time.Minute)
+	// Master cabang (F1-06) memakai penyimpanan in-memory berisi cabang yang
+	// sama dengan yang dipakai authStore & fakeBranchCatalog.
+	branchRepo := branch.NewMemory()
+	branchRepo.Put(branch.Branch{ID: "br-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A", Email: "a@example.test", IsActive: true})
+	branchRepo.Put(branch.Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IsActive: true})
 	deps := Deps{
 		Config:        testConfig(),
 		Version:       "test",
@@ -141,6 +147,7 @@ func newAuthServer(t *testing.T, tune func(*Deps)) *authServer {
 		Auth:          svc,
 		Settings:      settings.NewService(&fakeSettingsRepo{values: map[string]string{"biaya_packaging": "3000", "reset_menit": "60"}}),
 		Catalog:       catalog.NewService(fakeBranchCatalog{}),
+		Branches:      branch.NewService(branchRepo, clock.System()),
 		LoginLimiter:  limit,
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),
 	}

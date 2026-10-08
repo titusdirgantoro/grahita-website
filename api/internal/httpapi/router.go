@@ -21,6 +21,9 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(httpx.Logger)
 	r.Use(httpx.Recoverer)
 	r.Use(httpx.SecurityHeaders)
+	// Metadata request (IP klien) dititipkan lebih dulu supaya entri audit
+	// mutasi admin mencatat dari mana permintaan datang.
+	r.Use(a.requestMeta)
 	if len(d.Config.AllowedOrigins) > 0 {
 		r.Use(httpx.CORS(d.Config.AllowedOrigins))
 	}
@@ -63,7 +66,12 @@ func NewRouter(d Deps) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminBranches))
 					r.Get("/branches", a.adapt(a.adminBranches))
+					r.Post("/branches", a.adapt(a.adminBranchCreate))
 					r.Get("/branches/{id}", a.adapt(a.adminBranch))
+					r.Put("/branches/{id}", a.adapt(a.adminBranchUpdate))
+					r.Delete("/branches/{id}", a.adapt(a.adminBranchDelete))
+					// Token registrasi sekali pakai (PRD §4.4 AP-CAB-02).
+					r.Post("/branches/{id}/token", a.adapt(a.adminBranchToken))
 				})
 				// User management akun CABANG: Manager & Superadmin (PRD §2.1).
 				r.Group(func(r chi.Router) {

@@ -359,6 +359,31 @@ paths:
       tags: [admin]
       operationId: listBranches
       summary: Master cabang (Manager & Superadmin)
+      description: |
+        Daftar cabang beserta token registrasi aktifnya (bila ada). Filter
+        opsional: `q` mencari nama/email, `aktif`/`cnc`/`special` menyaring
+        per flag. Nilai asli token TIDAK pernah dikembalikan di sini — hanya
+        `token_prefix` 8 karakter pertamanya.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Cari pada nama atau email cabang (tidak peka huruf besar/kecil).
+          schema: { type: string }
+        - name: aktif
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: cnc
+          in: query
+          required: false
+          description: Saring cabang Cash & Carry.
+          schema: { type: boolean }
+        - name: special
+          in: query
+          required: false
+          description: Saring cabang ber-flag Special.
+          schema: { type: boolean }
       responses:
         "200":
           description: Daftar cabang
@@ -371,10 +396,41 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/Branch" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [admin]
+      operationId: createBranch
+      summary: Tambah cabang (Manager & Superadmin)
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BranchInput" }
+      responses:
+        "201":
+          description: Cabang dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Branch" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /api/v1/admin/branches/{id}:
     get:
@@ -400,6 +456,106 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+    put:
+      tags: [admin]
+      operationId: updateBranch
+      summary: Ubah cabang, termasuk menonaktifkannya (Manager & Superadmin)
+      description: |
+        Semua field opsional. Bila `email` berubah dan cabang sudah punya akun,
+        email login akun cabang itu ikut berubah. Cabang nonaktif langsung
+        kehilangan akses (sesinya gugur) dan tidak muncul di pilihan aktif.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BranchUpdate" }
+      responses:
+        "200":
+          description: Cabang diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Branch" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [admin]
+      operationId: deleteBranch
+      summary: Hapus cabang yang belum punya pesanan (Manager & Superadmin)
+      description: |
+        Cabang yang sudah punya pesanan TIDAK bisa dihapus — hanya boleh
+        dinonaktifkan lewat PUT (PRD AP-CAB-04); permintaannya dijawab
+        409 `BRANCH_HAS_ORDERS`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: Cabang dihapus
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/branches/{id}/token:
+    post:
+      tags: [admin]
+      operationId: createBranchToken
+      summary: Generate token registrasi cabang (Manager & Superadmin)
+      description: |
+        Membuat token registrasi sekali pakai untuk cabang yang belum punya
+        akun; token lama yang belum terpakai otomatis batal (PRD AP-CAB-02).
+        Masa berlaku mengikuti pengaturan `token_hari` (default 14 hari).
+        Nilai asli token hanya ada di respons ini dan tidak bisa dibaca lagi
+        setelahnya.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "200":
+          description: Token registrasi dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/RegistrationToken" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /api/v1/admin/products:
     get:
@@ -804,6 +960,21 @@ components:
                 error:
                   code: ACCOUNT_INACTIVE
                   message: Akun cabang ini sedang nonaktif; aktifkan dulu sebelum mengirim tautan atur ulang.
+            branchHasOrders:
+              value:
+                error:
+                  code: BRANCH_HAS_ORDERS
+                  message: Cabang ini sudah punya pesanan sehingga tidak bisa dihapus; nonaktifkan saja cabangnya.
+            branchHasAccount:
+              value:
+                error:
+                  code: BRANCH_HAS_ACCOUNT
+                  message: Cabang ini sudah punya akun, jadi token registrasi tidak diperlukan lagi. Pemulihan akses lewat lupa kata sandi.
+            branchInactive:
+              value:
+                error:
+                  code: BRANCH_INACTIVE
+                  message: Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.
 
   schemas:
     ErrorEnvelope:
@@ -833,6 +1004,9 @@ components:
                   LAST_SUPERADMIN,
                   NO_ACCOUNT,
                   ACCOUNT_INACTIVE,
+                  BRANCH_HAS_ORDERS,
+                  BRANCH_HAS_ACCOUNT,
+                  BRANCH_INACTIVE,
                   TIMEOUT,
                   METHOD_NOT_ALLOWED,
                   BRANCH_MISSING,
@@ -922,6 +1096,57 @@ components:
         is_special: { type: boolean }
         pajak_in: { type: boolean }
         is_active: { type: boolean }
+        token_prefix:
+          type: string
+          description: 8 karakter pertama token registrasi yang masih berlaku (bila ada).
+        token_expires_at: { type: string, format: date-time }
+
+    BranchInput:
+      type: object
+      description: Body pembuatan cabang (PRD §4.4).
+      required: [nama, nama_kepala, email]
+      additionalProperties: false
+      properties:
+        nama: { type: string, minLength: 2, maxLength: 120 }
+        nama_kepala: { type: string, minLength: 2, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 254 }
+        telepon: { type: string, maxLength: 40 }
+        is_cnc: { type: boolean }
+        is_special: { type: boolean }
+        pajak_in: { type: boolean }
+        is_active:
+          type: boolean
+          description: Kosong berarti aktif (default cabang baru).
+
+    BranchUpdate:
+      type: object
+      description: Body perubahan cabang; hanya field yang dikirim yang diubah.
+      additionalProperties: false
+      properties:
+        nama: { type: string, minLength: 2, maxLength: 120 }
+        nama_kepala: { type: string, minLength: 2, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 254 }
+        telepon: { type: string, maxLength: 40 }
+        is_cnc: { type: boolean }
+        is_special: { type: boolean }
+        pajak_in: { type: boolean }
+        is_active: { type: boolean }
+
+    RegistrationToken:
+      type: object
+      description: |
+        Token registrasi sekali pakai. `token` adalah nilai asli dan hanya
+        ditampilkan pada respons pembuatan; penyimpanan di database hanya
+        memuat hash SHA-256 beserta `prefix`-nya.
+      required: [token, prefix, expires_at]
+      properties:
+        token:
+          type: string
+          example: GRH-7K2M-QW3Z-9TPL-XB4N
+        prefix:
+          type: string
+          description: 8 karakter pertama token, untuk ditampilkan ulang di Admin Portal.
+        expires_at: { type: string, format: date-time }
 
     BranchUser:
       type: object

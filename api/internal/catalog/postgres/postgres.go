@@ -72,23 +72,6 @@ func (r *Repo) ListProductsForBranch(ctx context.Context, branchID string) ([]ca
 	return out, nil
 }
 
-// ListBranches memuat seluruh cabang.
-func (r *Repo) ListBranches(ctx context.Context) ([]catalog.Branch, error) {
-	rows, err := r.q.ListBranches(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("query ListBranches: %w", err)
-	}
-	out := make([]catalog.Branch, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, catalog.Branch{
-			ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
-			Telepon: pgtypes.TextOr(row.Telepon), IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
-			PajakIn: row.PajakIn, IsActive: row.IsActive,
-		})
-	}
-	return out, nil
-}
-
 // GetBranch memuat satu cabang.
 func (r *Repo) GetBranch(ctx context.Context, id string) (catalog.Branch, error) {
 	row, err := r.q.GetBranch(ctx, id)

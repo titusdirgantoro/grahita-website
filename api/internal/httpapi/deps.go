@@ -4,8 +4,8 @@
 //
 //	httpapi -> service -> repository -> database
 //
-// Paket ini boleh mengimpor paket service (auth, settings, catalog) dan
-// platform, tetapi TIDAK boleh mengimpor repository (*/postgres) maupun
+// Paket ini boleh mengimpor paket service (auth, branch, settings, catalog)
+// dan platform, tetapi TIDAK boleh mengimpor repository (*/postgres) maupun
 // paket query hasil sqlc. Aturan ini ditegakkan otomatis oleh pengujian di
 // internal/arch.
 package httpapi
@@ -15,6 +15,7 @@ import (
 	"net/http"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -42,6 +43,7 @@ type Deps struct {
 	Settings *settings.Service
 	Catalog  *catalog.Service
 	Users    *users.Service
+	Branches *branch.Service
 
 	Storage   storage.Store
 	Gotenberg pdf.Renderer

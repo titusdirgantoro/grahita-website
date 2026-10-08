@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -55,6 +56,23 @@ func mapDomainErr(err error) error {
 		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
 	case errors.Is(err, catalog.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
+	case errors.Is(err, branch.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke master cabang.")
+	case errors.Is(err, branch.ErrNotFound):
+		return apierr.NotFound("Cabang yang diminta tidak ditemukan.")
+	case errors.Is(err, branch.ErrEmailTaken):
+		return apierr.Conflict("EMAIL_TAKEN", "Email tersebut sudah dipakai cabang atau akun admin lain.")
+	case errors.Is(err, branch.ErrHasOrders):
+		return apierr.Conflict("BRANCH_HAS_ORDERS",
+			"Cabang ini sudah punya pesanan sehingga tidak bisa dihapus; nonaktifkan saja cabangnya.")
+	case errors.Is(err, branch.ErrHasAccount):
+		return apierr.Conflict("BRANCH_HAS_ACCOUNT",
+			"Cabang ini sudah punya akun, jadi token registrasi tidak diperlukan lagi. Pemulihan akses lewat lupa kata sandi.")
+	case errors.Is(err, branch.ErrInactive):
+		return apierr.Conflict("BRANCH_INACTIVE",
+			"Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.")
+	case errors.Is(err, branch.ErrInvalidData):
+		return apierr.Validation("Data cabang tidak valid.", map[string]string{"cabang": err.Error()})
 	case errors.Is(err, users.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
 	case errors.Is(err, users.ErrNotFound):

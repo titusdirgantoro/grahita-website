@@ -26,6 +26,8 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
+	"github.com/grahita/portal/api/internal/branch"
+	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/platform/clock"
@@ -44,9 +46,11 @@ type pgFixture struct {
 	mail *fakeResetMailer
 
 	// users adalah service pengelolaan akun (F1-05); queue menangkap email
-	// undangan admin yang diantre.
-	users *users.Service
-	queue *fakeUsersQueue
+	// undangan admin yang diantre. branches adalah service master cabang
+	// (F1-06).
+	users    *users.Service
+	queue    *fakeUsersQueue
+	branches *branch.Service
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -191,6 +195,9 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.queue = queue
 	f.users = usersSvc
 
+	branchSvc := branch.NewService(branchpg.New(pool), clock.System())
+	f.branches = branchSvc
+
 	deps := Deps{
 		Config:        testConfig(),
 		Version:       "test-pg",
@@ -199,6 +206,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Settings:      settings.NewService(settingspg.New(pool)),
 		Catalog:       catalog.NewService(catalogpg.New(pool)),
 		Users:         usersSvc,
+		Branches:      branchSvc,
 		LoginLimiter:  httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),
 	}
@@ -239,7 +247,8 @@ func pgEnsureSchema(t *testing.T, ctx context.Context, scopedURL string, pool *d
 }
 
 func kosongkanDomain(ctx context.Context, pool *database.Pool) error {
-	_, err := pool.Exec(ctx, `TRUNCATE branches, admin_users, products, sessions, password_reset_tokens RESTART IDENTITY CASCADE`)
+	_, err := pool.Exec(ctx, `TRUNCATE branches, branch_users, admin_users, products, sessions,
+		registration_tokens, password_reset_tokens, audit_logs RESTART IDENTITY CASCADE`)
 	return err
 }
 

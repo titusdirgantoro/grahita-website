@@ -7,12 +7,70 @@ package sqlc
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createBranch = `-- name: CreateBranch :one
-INSERT INTO branches (nama, nama_kepala, email, telepon, is_cnc, is_special, pajak_in)
+const adminEmailTaken = `-- name: AdminEmailTaken :one
+SELECT EXISTS (SELECT 1 FROM admin_users WHERE email = $1)::boolean
+`
+
+// Login mencari akun admin LEBIH DULU daripada akun cabang, jadi email yang
+// sudah dipakai admin tidak boleh dipakai cabang (kalau tidak, cabang itu
+// tidak akan pernah bisa masuk).
+func (q *Queries) AdminEmailTaken(ctx context.Context, email string) (bool, error) {
+	row := q.db.QueryRow(ctx, adminEmailTaken, email)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const branchEmailTaken = `-- name: BranchEmailTaken :one
+SELECT EXISTS (
+    SELECT 1 FROM branches
+     WHERE email = $1
+       AND ($2::uuid IS NULL OR id <> $2::uuid)
+)::boolean
+`
+
+type BranchEmailTakenParams struct {
+	Email    string      `json:"email"`
+	ExceptID pgtype.UUID `json:"except_id"`
+}
+
+// Email cabang unik; except_id dipakai saat mengubah cabang itu sendiri.
+func (q *Queries) BranchEmailTaken(ctx context.Context, arg BranchEmailTakenParams) (bool, error) {
+	row := q.db.QueryRow(ctx, branchEmailTaken, arg.Email, arg.ExceptID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const branchHasAccount = `-- name: BranchHasAccount :one
+SELECT EXISTS (SELECT 1 FROM branch_users WHERE branch_id = $1)::boolean
+`
+
+func (q *Queries) BranchHasAccount(ctx context.Context, branchID string) (bool, error) {
+	row := q.db.QueryRow(ctx, branchHasAccount, branchID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const branchHasOrders = `-- name: BranchHasOrders :one
+SELECT EXISTS (SELECT 1 FROM orders WHERE branch_id = $1)::boolean
+`
+
+func (q *Queries) BranchHasOrders(ctx context.Context, branchID string) (bool, error) {
+	row := q.db.QueryRow(ctx, branchHasOrders, branchID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const createBranchDetail = `-- name: CreateBranchDetail :one
+INSERT INTO branches (nama, nama_kepala, email, telepon, is_cnc, is_special, pajak_in, is_active)
 VALUES (
     $1,
     $2,
@@ -20,12 +78,13 @@ VALUES (
     $4,
     $5,
     $6,
-    $7
+    $7,
+    $8
 )
 RETURNING id
 `
 
-type CreateBranchParams struct {
+type CreateBranchDetailParams struct {
 	Nama       string      `json:"nama"`
 	NamaKepala string      `json:"nama_kepala"`
 	Email      string      `json:"email"`
@@ -33,10 +92,11 @@ type CreateBranchParams struct {
 	IsCnc      bool        `json:"is_cnc"`
 	IsSpecial  bool        `json:"is_special"`
 	PajakIn    bool        `json:"pajak_in"`
+	IsActive   bool        `json:"is_active"`
 }
 
-func (q *Queries) CreateBranch(ctx context.Context, arg CreateBranchParams) (string, error) {
-	row := q.db.QueryRow(ctx, createBranch,
+func (q *Queries) CreateBranchDetail(ctx context.Context, arg CreateBranchDetailParams) (string, error) {
+	row := q.db.QueryRow(ctx, createBranchDetail,
 		arg.Nama,
 		arg.NamaKepala,
 		arg.Email,
@@ -44,13 +104,90 @@ func (q *Queries) CreateBranch(ctx context.Context, arg CreateBranchParams) (str
 		arg.IsCnc,
 		arg.IsSpecial,
 		arg.PajakIn,
+		arg.IsActive,
 	)
 	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
+const createRegistrationToken = `-- name: CreateRegistrationToken :one
+INSERT INTO registration_tokens (branch_id, token_hash, token_prefix, expires_at, created_by)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5::uuid
+)
+RETURNING expires_at
+`
+
+type CreateRegistrationTokenParams struct {
+	BranchID    string      `json:"branch_id"`
+	TokenHash   []byte      `json:"token_hash"`
+	TokenPrefix string      `json:"token_prefix"`
+	ExpiresAt   time.Time   `json:"expires_at"`
+	CreatedBy   pgtype.UUID `json:"created_by"`
+}
+
+func (q *Queries) CreateRegistrationToken(ctx context.Context, arg CreateRegistrationTokenParams) (time.Time, error) {
+	row := q.db.QueryRow(ctx, createRegistrationToken,
+		arg.BranchID,
+		arg.TokenHash,
+		arg.TokenPrefix,
+		arg.ExpiresAt,
+		arg.CreatedBy,
+	)
+	var expires_at time.Time
+	err := row.Scan(&expires_at)
+	return expires_at, err
+}
+
+const deleteBranch = `-- name: DeleteBranch :exec
+DELETE FROM branches WHERE id = $1
+`
+
+func (q *Queries) DeleteBranch(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteBranch, id)
+	return err
+}
+
+const deleteBranchRegistrationTokens = `-- name: DeleteBranchRegistrationTokens :exec
+DELETE FROM registration_tokens WHERE registration_tokens.branch_id = $1
+`
+
+// Seluruh token cabang ikut terhapus saat cabangnya dihapus (relasi sudah
+// ON DELETE CASCADE; eksplisit di sini supaya niatnya terbaca).
+func (q *Queries) DeleteBranchRegistrationTokens(ctx context.Context, branchID string) error {
+	_, err := q.db.Exec(ctx, deleteBranchRegistrationTokens, branchID)
+	return err
+}
+
+const deleteBranchSessions = `-- name: DeleteBranchSessions :exec
+DELETE FROM sessions
+ WHERE sessions.branch_id = $1
+    OR user_id IN (SELECT id FROM branch_users WHERE branch_users.branch_id = $1)
+`
+
+// Sesi cabang tidak memakai ON DELETE CASCADE, jadi dibersihkan lebih dulu
+// supaya cabang yang benar-benar belum punya pesanan bisa dihapus.
+func (q *Queries) DeleteBranchSessions(ctx context.Context, branchID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteBranchSessions, branchID)
+	return err
+}
+
+const deleteBranchUsers = `-- name: DeleteBranchUsers :exec
+DELETE FROM branch_users WHERE branch_users.branch_id = $1
+`
+
+func (q *Queries) DeleteBranchUsers(ctx context.Context, branchID string) error {
+	_, err := q.db.Exec(ctx, deleteBranchUsers, branchID)
+	return err
+}
+
 const getBranch = `-- name: GetBranch :one
+
 SELECT id, nama, nama_kepala, email::text AS email, telepon,
        is_cnc, is_special, pajak_in, is_active
   FROM branches
@@ -69,6 +206,8 @@ type GetBranchRow struct {
 	IsActive   bool        `json:"is_active"`
 }
 
+// Master cabang (SystemDesign §6, PRD §4.4).
+// Dipakai portal cabang untuk /me/branch (data cabang milik sesi).
 func (q *Queries) GetBranch(ctx context.Context, id string) (GetBranchRow, error) {
 	row := q.db.QueryRow(ctx, getBranch, id)
 	var i GetBranchRow
@@ -86,36 +225,128 @@ func (q *Queries) GetBranch(ctx context.Context, id string) (GetBranchRow, error
 	return i, err
 }
 
-const listBranches = `-- name: ListBranches :many
-
-SELECT id, nama, nama_kepala, email::text AS email, telepon,
-       is_cnc, is_special, pajak_in, is_active
-  FROM branches
- ORDER BY nama
+const getBranchDetail = `-- name: GetBranchDetail :one
+SELECT b.id,
+       b.nama,
+       b.nama_kepala,
+       b.email::text                 AS email,
+       COALESCE(b.telepon, '')       AS telepon,
+       b.is_cnc,
+       b.is_special,
+       b.pajak_in,
+       b.is_active,
+       COALESCE(t.token_prefix, '')  AS token_prefix,
+       t.expires_at                  AS token_expires_at
+  FROM branches b
+  LEFT JOIN registration_tokens t
+         ON t.branch_id = b.id
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+ WHERE b.id = $1
 `
 
-type ListBranchesRow struct {
-	ID         string      `json:"id"`
-	Nama       string      `json:"nama"`
-	NamaKepala string      `json:"nama_kepala"`
-	Email      string      `json:"email"`
-	Telepon    pgtype.Text `json:"telepon"`
-	IsCnc      bool        `json:"is_cnc"`
-	IsSpecial  bool        `json:"is_special"`
-	PajakIn    bool        `json:"pajak_in"`
-	IsActive   bool        `json:"is_active"`
+type GetBranchDetailRow struct {
+	ID             string     `json:"id"`
+	Nama           string     `json:"nama"`
+	NamaKepala     string     `json:"nama_kepala"`
+	Email          string     `json:"email"`
+	Telepon        string     `json:"telepon"`
+	IsCnc          bool       `json:"is_cnc"`
+	IsSpecial      bool       `json:"is_special"`
+	PajakIn        bool       `json:"pajak_in"`
+	IsActive       bool       `json:"is_active"`
+	TokenPrefix    string     `json:"token_prefix"`
+	TokenExpiresAt *time.Time `json:"token_expires_at"`
 }
 
-// Master cabang (SystemDesign §6, PRD §4).
-func (q *Queries) ListBranches(ctx context.Context) ([]ListBranchesRow, error) {
-	rows, err := q.db.Query(ctx, listBranches)
+func (q *Queries) GetBranchDetail(ctx context.Context, id string) (GetBranchDetailRow, error) {
+	row := q.db.QueryRow(ctx, getBranchDetail, id)
+	var i GetBranchDetailRow
+	err := row.Scan(
+		&i.ID,
+		&i.Nama,
+		&i.NamaKepala,
+		&i.Email,
+		&i.Telepon,
+		&i.IsCnc,
+		&i.IsSpecial,
+		&i.PajakIn,
+		&i.IsActive,
+		&i.TokenPrefix,
+		&i.TokenExpiresAt,
+	)
+	return i, err
+}
+
+const listBranchDetails = `-- name: ListBranchDetails :many
+
+SELECT b.id,
+       b.nama,
+       b.nama_kepala,
+       b.email::text                 AS email,
+       COALESCE(b.telepon, '')       AS telepon,
+       b.is_cnc,
+       b.is_special,
+       b.pajak_in,
+       b.is_active,
+       COALESCE(t.token_prefix, '')  AS token_prefix,
+       t.expires_at                  AS token_expires_at
+  FROM branches b
+  LEFT JOIN registration_tokens t
+         ON t.branch_id = b.id
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+ WHERE ($1::text IS NULL
+        OR b.nama ILIKE $1::text
+        OR b.email::text ILIKE $1::text)
+   AND ($2::boolean IS NULL OR b.is_active = $2::boolean)
+   AND ($3::boolean IS NULL OR b.is_cnc = $3::boolean)
+   AND ($4::boolean IS NULL OR b.is_special = $4::boolean)
+ ORDER BY b.nama
+`
+
+type ListBranchDetailsParams struct {
+	Q       pgtype.Text `json:"q"`
+	Aktif   pgtype.Bool `json:"aktif"`
+	Cnc     pgtype.Bool `json:"cnc"`
+	Special pgtype.Bool `json:"special"`
+}
+
+type ListBranchDetailsRow struct {
+	ID             string     `json:"id"`
+	Nama           string     `json:"nama"`
+	NamaKepala     string     `json:"nama_kepala"`
+	Email          string     `json:"email"`
+	Telepon        string     `json:"telepon"`
+	IsCnc          bool       `json:"is_cnc"`
+	IsSpecial      bool       `json:"is_special"`
+	PajakIn        bool       `json:"pajak_in"`
+	IsActive       bool       `json:"is_active"`
+	TokenPrefix    string     `json:"token_prefix"`
+	TokenExpiresAt *time.Time `json:"token_expires_at"`
+}
+
+// ---------- Master cabang: Admin Portal (F1-06) ----------
+//
+// Query di bawah dipakai paket internal/branch. Dua kolom terakhir adalah
+// token registrasi yang MASIH berlaku (belum terpakai dan belum kedaluwarsa)
+// untuk ditampilkan di halaman Cabang (PRD §4.4).
+// Filter opsional memakai sqlc.narg: q (pola ILIKE nama/email), aktif, cnc,
+// special. q dikirim sudah berbentuk pola '%kata%'.
+func (q *Queries) ListBranchDetails(ctx context.Context, arg ListBranchDetailsParams) ([]ListBranchDetailsRow, error) {
+	rows, err := q.db.Query(ctx, listBranchDetails,
+		arg.Q,
+		arg.Aktif,
+		arg.Cnc,
+		arg.Special,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListBranchesRow{}
+	items := []ListBranchDetailsRow{}
 	for rows.Next() {
-		var i ListBranchesRow
+		var i ListBranchDetailsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Nama,
@@ -126,6 +357,8 @@ func (q *Queries) ListBranches(ctx context.Context) ([]ListBranchesRow, error) {
 			&i.IsSpecial,
 			&i.PajakIn,
 			&i.IsActive,
+			&i.TokenPrefix,
+			&i.TokenExpiresAt,
 		); err != nil {
 			return nil, err
 		}
@@ -137,30 +370,75 @@ func (q *Queries) ListBranches(ctx context.Context) ([]ListBranchesRow, error) {
 	return items, nil
 }
 
-const updateBranchFlags = `-- name: UpdateBranchFlags :exec
-UPDATE branches
-   SET is_cnc     = $2,
-       is_special = $3,
-       pajak_in   = $4,
-       is_active  = $5
- WHERE id = $1
+const replaceRegistrationToken = `-- name: ReplaceRegistrationToken :exec
+DELETE FROM registration_tokens WHERE branch_id = $1 AND used_at IS NULL
 `
 
-type UpdateBranchFlagsParams struct {
-	ID        string `json:"id"`
-	IsCnc     bool   `json:"is_cnc"`
-	IsSpecial bool   `json:"is_special"`
-	PajakIn   bool   `json:"pajak_in"`
-	IsActive  bool   `json:"is_active"`
+// Token lama yang belum terpakai digantikan token baru (PRD AP-CAB-02);
+// token yang sudah terpakai dibiarkan sebagai jejak.
+func (q *Queries) ReplaceRegistrationToken(ctx context.Context, branchID string) error {
+	_, err := q.db.Exec(ctx, replaceRegistrationToken, branchID)
+	return err
 }
 
-func (q *Queries) UpdateBranchFlags(ctx context.Context, arg UpdateBranchFlagsParams) error {
-	_, err := q.db.Exec(ctx, updateBranchFlags,
-		arg.ID,
+const updateBranchDetail = `-- name: UpdateBranchDetail :exec
+UPDATE branches
+   SET nama        = $1,
+       nama_kepala = $2,
+       email       = $3,
+       telepon     = $4,
+       is_cnc      = $5,
+       is_special  = $6,
+       pajak_in    = $7,
+       is_active   = $8,
+       updated_at  = now()
+ WHERE id = $9
+`
+
+type UpdateBranchDetailParams struct {
+	Nama       string      `json:"nama"`
+	NamaKepala string      `json:"nama_kepala"`
+	Email      string      `json:"email"`
+	Telepon    pgtype.Text `json:"telepon"`
+	IsCnc      bool        `json:"is_cnc"`
+	IsSpecial  bool        `json:"is_special"`
+	PajakIn    bool        `json:"pajak_in"`
+	IsActive   bool        `json:"is_active"`
+	ID         string      `json:"id"`
+}
+
+// Perubahan penuh satu cabang. Email cabang = email login akun cabang, jadi
+// pemanggil wajib ikut menyelaraskan branch_users.email di transaksi yang sama.
+func (q *Queries) UpdateBranchDetail(ctx context.Context, arg UpdateBranchDetailParams) error {
+	_, err := q.db.Exec(ctx, updateBranchDetail,
+		arg.Nama,
+		arg.NamaKepala,
+		arg.Email,
+		arg.Telepon,
 		arg.IsCnc,
 		arg.IsSpecial,
 		arg.PajakIn,
 		arg.IsActive,
+		arg.ID,
 	)
+	return err
+}
+
+const updateBranchLoginEmail = `-- name: UpdateBranchLoginEmail :exec
+UPDATE branch_users
+   SET email      = $1,
+       updated_at = now()
+ WHERE branch_id = $2
+`
+
+type UpdateBranchLoginEmailParams struct {
+	Email    string `json:"email"`
+	BranchID string `json:"branch_id"`
+}
+
+// Menyelaraskan email login akun cabang dengan email cabang (Database.md §4.1:
+// email cabang = email login).
+func (q *Queries) UpdateBranchLoginEmail(ctx context.Context, arg UpdateBranchLoginEmailParams) error {
+	_, err := q.db.Exec(ctx, updateBranchLoginEmail, arg.Email, arg.BranchID)
 	return err
 }

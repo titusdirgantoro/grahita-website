@@ -59,11 +59,14 @@ type Branch struct {
 }
 
 // Repository memuat data katalog.
+//
+// Master cabang untuk Admin Portal TIDAK ada di sini: sejak F1-06 CRUD cabang
+// beserta token registrasinya dimiliki paket internal/branch. Yang tersisa di
+// sini hanya pembacaan satu cabang untuk /me/branch (portal cabang).
 type Repository interface {
 	ListProducts(ctx context.Context) ([]Product, error)
 	ListActiveProducts(ctx context.Context) ([]Product, error)
 	ListProductsForBranch(ctx context.Context, branchID string) ([]BranchProduct, error)
-	ListBranches(ctx context.Context) ([]Branch, error)
 	GetBranch(ctx context.Context, id string) (Branch, error)
 }
 
@@ -98,18 +101,6 @@ func (s *Service) Products(ctx context.Context, actor auth.Actor) (any, error) {
 	default:
 		return nil, ErrForbidden
 	}
-}
-
-// Branches mengembalikan seluruh cabang — hanya untuk staf Pusat.
-func (s *Service) Branches(ctx context.Context, actor auth.Actor) ([]Branch, error) {
-	if !actor.Can(auth.CapAdminBranches) {
-		return nil, ErrForbidden
-	}
-	rows, err := s.repo.ListBranches(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("daftar cabang: %w", err)
-	}
-	return rows, nil
 }
 
 // Branch mengembalikan satu cabang. Kepemilikan cabang diperiksa di sini

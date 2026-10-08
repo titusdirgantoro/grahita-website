@@ -4,9 +4,20 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/grahita/portal/api/internal/audit"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/platform/apierr"
+	"github.com/grahita/portal/api/internal/platform/httpx"
 )
+
+// requestMeta menitipkan metadata request (IP klien) ke context. Entri audit
+// memakainya untuk mencatat dari mana mutasi berasal (SystemDesign.md §5.4).
+func (a *API) requestMeta(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := audit.WithRequestMeta(r.Context(), audit.RequestMeta{IP: httpx.ClientIP(r)})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // authenticate memuat aktor dari cookie sesi dan menitipkannya ke context.
 //
