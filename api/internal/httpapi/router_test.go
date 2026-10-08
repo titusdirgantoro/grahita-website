@@ -152,7 +152,7 @@ func doJSON(t *testing.T, method, url, body string, cookies []*http.Cookie, csrf
 	if err != nil {
 		t.Fatalf("kirim request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var decoded map[string]any
 	if resp.StatusCode != http.StatusNoContent {

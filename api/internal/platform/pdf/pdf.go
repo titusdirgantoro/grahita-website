@@ -72,7 +72,7 @@ func (g *Gotenberg) HTMLToPDF(ctx context.Context, html []byte) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("hubungi gotenberg: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return nil, fmt.Errorf("gotenberg menolak (%d): %s", resp.StatusCode, string(msg))
@@ -97,7 +97,7 @@ func (g *Gotenberg) Health(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("gotenberg tidak sehat: HTTP %d", resp.StatusCode)
 	}

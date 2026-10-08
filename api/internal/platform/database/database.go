@@ -105,7 +105,7 @@ func Up(ctx context.Context, url string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	return goose.UpContext(ctx, db, MigrateDir)
 }
 
@@ -116,7 +116,7 @@ func DownTo(ctx context.Context, url string, version int64) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	return goose.DownToContext(ctx, db, MigrateDir, version)
 }
 
@@ -126,6 +126,6 @@ func Version(ctx context.Context, url string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	return goose.GetDBVersionContext(ctx, db)
 }
