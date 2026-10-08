@@ -95,7 +95,17 @@ func NewRouter(d Deps) http.Handler {
 				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminCatalog))
+					// Master produk (PRD §4.5 AP-KAT-01).
 					r.Get("/products", a.adapt(a.adminProducts))
+					r.Post("/products", a.adapt(a.adminProductCreate))
+					r.Get("/products/{id}", a.adapt(a.adminProduct))
+					r.Put("/products/{id}", a.adapt(a.adminProductUpdate))
+					r.Delete("/products/{id}", a.adapt(a.adminProductDelete))
+					// Matriks harga Produk × Cabang: baca + batch edit + salin
+					// antar cabang (PRD AP-KAT-02..04).
+					r.Get("/prices", a.adapt(a.adminPrices))
+					r.Put("/prices", a.adapt(a.adminPricesUpdate))
+					r.Post("/prices/copy", a.adapt(a.adminPricesCopy))
 				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminSettings))

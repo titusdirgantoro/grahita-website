@@ -46,15 +46,6 @@ interface Cabang {
   is_active: boolean;
 }
 
-interface Produk {
-  id: string;
-  nama: string;
-  jenis: string;
-  satuan: string;
-  harga_default: number;
-  is_active: boolean;
-}
-
 /** MiniBars adalah grafik SVG buatan sendiri (bukan library), sesuai §7.2. */
 function MiniBars({ nilai, label }: { nilai: number[]; label: string }) {
   const lebarBatang = 10;
@@ -322,85 +313,6 @@ export function CabangPage() {
               ))}
             </tbody>
           </Table>
-        )}
-      </Card>
-    </>
-  );
-}
-
-/** pKatalog (admin) — /katalog: tab Produk & Matriks harga. */
-export function KatalogAdminPage() {
-  const [tab, setTab] = useState<"produk" | "matriks">("produk");
-  const { data, memuat, galat } = useApi<Produk[]>("/admin/products");
-
-  return (
-    <>
-      <PageHead
-        title="Katalog product"
-        sub="Produk dan matriks harga per cabang"
-        actions={
-          <Button variant="primary" icon="plus">
-            Tambah produk
-          </Button>
-        }
-      />
-      <Card>
-        <CardHead
-          title={tab === "produk" ? "Daftar produk" : "Matriks harga"}
-          tools={
-            <Segmented
-              label="Tampilan katalog"
-              options={[
-                { value: "produk", label: "Produk" },
-                { value: "matriks", label: "Matriks harga" },
-              ]}
-              value={tab}
-              onChange={setTab}
-            />
-          }
-        />
-        {tab === "produk" ? (
-          memuat ? (
-            <SkeletonList rows={3} />
-          ) : galat ? (
-            <Notice tone="danger">{galat}</Notice>
-          ) : !data || data.length === 0 ? (
-            <EmptyState icon="tag">Belum ada produk pada katalog.</EmptyState>
-          ) : (
-            <Table mobileCards caption="Daftar produk">
-              <thead>
-                <tr>
-                  <th scope="col">Produk</th>
-                  <th scope="col">Jenis</th>
-                  <th scope="col">Satuan</th>
-                  <th scope="col" className="num">
-                    Harga default
-                  </th>
-                  <th scope="col">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.nama}</td>
-                    <td>{p.jenis}</td>
-                    <td>{p.satuan}</td>
-                    <td className="num">{rupiah.format(p.harga_default)}</td>
-                    <td>
-                      <Badge tone={p.is_active ? "success" : "draft"}>
-                        {p.is_active ? "Aktif" : "Nonaktif"}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          )
-        ) : (
-          <EmptyState icon="squares-four">
-            Matriks harga (Produk × Cabang) dengan edit inline dikerjakan pada kartu katalog admin;
-            sel kosong berarti produk tidak dijual ke cabang tersebut.
-          </EmptyState>
         )}
       </Card>
     </>

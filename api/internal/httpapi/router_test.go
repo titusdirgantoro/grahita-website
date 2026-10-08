@@ -69,7 +69,9 @@ func (r *fakeSettingsRepo) Save(_ context.Context, _ string, changes []settings.
 	return nil
 }
 
-type fakeCatalogRepo struct{}
+// fakeCatalogRepo memakai penyimpanan in-memory katalog; metode baca yang
+// dipakai uji /catalog ditimpa agar nilainya tetap dapat diprediksi.
+type fakeCatalogRepo struct{ *catalog.Memory }
 
 func (fakeCatalogRepo) ListProducts(context.Context) ([]catalog.Product, error) {
 	return []catalog.Product{{ID: "p1", Nama: "Bio Magnetik", HargaDefault: 350000, IsActive: true}}, nil
@@ -124,7 +126,7 @@ func newTestServer(t *testing.T, health fakeHealth) (*httptest.Server, *auth.Mem
 		Health:   health,
 		Auth:     svc,
 		Settings: settings.NewService(&fakeSettingsRepo{values: map[string]string{"biaya_packaging": "3000"}}),
-		Catalog:  catalog.NewService(fakeCatalogRepo{}),
+		Catalog:  catalog.NewService(fakeCatalogRepo{Memory: catalog.NewMemory()}),
 	})
 
 	srv := httptest.NewServer(router)

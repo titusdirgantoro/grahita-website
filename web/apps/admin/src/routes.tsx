@@ -17,11 +17,11 @@ import { HalamanMasuk } from "./pages/auth";
 import {
   CabangPage,
   DashboardPage,
-  KatalogAdminPage,
   PesananAdminPage,
   ProfilAdminPage,
   ReportingPage,
 } from "./pages/shell-pages";
+import { KatalogPage } from "./pages/katalog";
 import { RekeningPage } from "./pages/rekening";
 import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
@@ -108,7 +108,7 @@ const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "shell", c
 const dashboardRoute = createRoute({ getParentRoute: () => shellRoute, path: "/", component: DashboardPage });
 const pesananRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pesanan", component: PesananAdminPage });
 const cabangRoute = createRoute({ getParentRoute: () => shellRoute, path: "/cabang", component: CabangPage });
-const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogAdminPage });
+const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogPage });
 const rekeningRoute = createRoute({ getParentRoute: () => shellRoute, path: "/rekening", component: RekeningPage });
 const reportingRoute = createRoute({ getParentRoute: () => shellRoute, path: "/reporting", component: ReportingPage });
 const penggunaRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pengguna", component: PenggunaPage });

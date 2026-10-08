@@ -50,8 +50,10 @@ func (f *fakeResetMailer) tokenTerakhir(t *testing.T) string {
 }
 
 // fakeBranchCatalog mengembalikan data yang berbeda per cabang sehingga
-// kebocoran lintas cabang langsung terlihat di respons.
-type fakeBranchCatalog struct{}
+// kebocoran lintas cabang langsung terlihat di respons. Sisa metode
+// catalog.Repository (master produk & matriks harga) diambil dari penyimpanan
+// in-memory katalog supaya perubahan interface tidak perlu disalin ke sini.
+type fakeBranchCatalog struct{ *catalog.Memory }
 
 var hargaPerCabang = map[string]int64{"br-a": 100000, "br-b": 200000, "br-c": 300000}
 
@@ -146,7 +148,7 @@ func newAuthServer(t *testing.T, tune func(*Deps)) *authServer {
 		Health:        fakeHealth{migrasi: 1},
 		Auth:          svc,
 		Settings:      settings.NewService(&fakeSettingsRepo{values: map[string]string{"biaya_packaging": "3000", "reset_menit": "60"}}),
-		Catalog:       catalog.NewService(fakeBranchCatalog{}),
+		Catalog:       catalog.NewService(fakeBranchCatalog{Memory: catalog.NewMemory()}),
 		Branches:      branch.NewService(branchRepo, clock.System()),
 		LoginLimiter:  limit,
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),

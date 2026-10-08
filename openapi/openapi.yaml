@@ -666,7 +666,22 @@ paths:
     get:
       tags: [admin]
       operationId: listProducts
-      summary: Katalog produk (Manager & Superadmin)
+      summary: Daftar produk, termasuk nonaktif (Manager & Superadmin)
+      description: |
+        Master produk (PRD §4.5 AP-KAT-01). Produk nonaktif ikut dikembalikan
+        supaya bisa diaktifkan kembali. Filter opsional: `q` (nama/kode),
+        `jenis`, `aktif`.
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Cari pada nama atau kode produk.
+        - name: jenis
+          in: query
+          schema: { type: string, enum: [reguler, sertifikat] }
+        - name: aktif
+          in: query
+          schema: { type: boolean }
       responses:
         "200":
           description: Daftar produk
@@ -679,6 +694,228 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/Product" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [admin]
+      operationId: createProduct
+      summary: Tambah produk (Manager & Superadmin)
+      description: |
+        Produk Sertifikat selalu berharga 0: `harga_default` selain 0 ditolak
+        (PRD CP-SER-01, BR-06). Kode produk opsional tetapi unik bila diisi.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductInput" }
+      responses:
+        "201":
+          description: Produk dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Product" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/products/{id}:
+    get:
+      tags: [admin]
+      operationId: getProduct
+      summary: Satu produk berdasarkan id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Data produk
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Product" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [admin]
+      operationId: updateProduct
+      summary: Ubah produk, termasuk menonaktifkannya (Manager & Superadmin)
+      description: |
+        Semua field opsional. Mengubah produk menjadi `sertifikat` ditolak bila
+        masih ada harga cabang yang bukan 0 — kosongkan selnya lebih dahulu.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductUpdate" }
+      responses:
+        "200":
+          description: Produk diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Product" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [admin]
+      operationId: deleteProduct
+      summary: Hapus produk yang belum dipakai pesanan (Manager & Superadmin)
+      description: |
+        Produk yang sudah dipakai order line TIDAK bisa dihapus — dijawab
+        409 `PRODUCT_IN_USE`; nonaktifkan saja produknya (PRD AP-KAT-01).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: Produk dihapus
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/prices:
+    get:
+      tags: [admin]
+      operationId: listPrices
+      summary: Matriks harga Produk × Cabang (Manager & Superadmin)
+      description: |
+        Grid untuk halaman Matriks harga (PRD AP-KAT-02). `produk` adalah
+        baris, `cabang` adalah kolom, dan `sel` hanya memuat sel yang BERISI
+        harga. Sel tanpa harga berarti produk tidak dijual ke cabang itu
+        (PRD AP-KAT-03) — harga default TIDAK dipakai sebagai cadangan.
+        Filter: `q`/`jenis`/`aktif` untuk produk, `branch_q` untuk pencarian
+        cabang, `branch_id` untuk membatasi sel ke satu cabang.
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: jenis
+          in: query
+          schema: { type: string, enum: [reguler, sertifikat] }
+        - name: aktif
+          in: query
+          schema: { type: boolean }
+        - name: branch_q
+          in: query
+          schema: { type: string }
+          description: Pencarian nama cabang.
+        - name: branch_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Matriks harga
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PriceMatrix" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      tags: [admin]
+      operationId: updatePrices
+      summary: Batch edit sel matriks harga (Manager & Superadmin)
+      description: |
+        Mengubah banyak sel sekaligus; seluruh perubahan dan catatan auditnya
+        ditulis dalam satu transaksi. `harga: null` (atau field kosong)
+        mengosongkan sel sehingga produk tidak lagi dijual ke cabang itu.
+        Harga negatif ditolak dan produk Sertifikat harus 0. Sel yang nilainya
+        sama dengan nilai sekarang diabaikan (tidak menulis audit baru).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PriceBatchInput" }
+      responses:
+        "200":
+          description: Hasil batch edit
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PriceResult" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/prices/copy:
+    post:
+      tags: [admin]
+      operationId: copyPrices
+      summary: Salin harga satu cabang ke cabang lain (Manager & Superadmin)
+      description: |
+        Aksi "salin harga" (PRD AP-KAT-04). Bersifat MENGGANTIKAN: matriks
+        cabang tujuan menjadi persis matriks cabang sumber, sehingga sel yang
+        tidak ada di cabang sumber menjadi kosong. Kirim `to_branch_ids`
+        untuk sejumlah cabang, atau `semua: true` untuk seluruh cabang lain.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PriceCopyInput" }
+      responses:
+        "200":
+          description: Hasil salin harga
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PriceCopyResult" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
 
@@ -1246,6 +1483,8 @@ components:
                   BRANCH_HAS_ACCOUNT,
                   BRANCH_INACTIVE,
                   BANK_DUPLICATE,
+                  KODE_TAKEN,
+                  PRODUCT_IN_USE,
                   TIMEOUT,
                   METHOD_NOT_ALLOWED,
                   BRANCH_MISSING,
@@ -1308,6 +1547,135 @@ components:
         harga_default: { type: integer, format: int64, minimum: 0 }
         urutan: { type: integer }
         is_active: { type: boolean }
+
+    ProductInput:
+      type: object
+      description: Body pembuatan produk (PRD §4.5 AP-KAT-01).
+      required: [nama]
+      additionalProperties: false
+      properties:
+        kode: { type: string, maxLength: 40 }
+        nama: { type: string, minLength: 2, maxLength: 160 }
+        jenis: { type: string, enum: [reguler, sertifikat], default: reguler }
+        satuan: { type: string, minLength: 1, maxLength: 40, default: pcs }
+        deskripsi: { type: string, maxLength: 500 }
+        harga_default:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Wajib 0 untuk produk Sertifikat.
+        urutan: { type: integer, minimum: 0 }
+        is_active:
+          type: boolean
+          description: Kosong berarti aktif (default produk baru).
+
+    ProductUpdate:
+      type: object
+      description: Body perubahan produk; hanya field yang dikirim yang diubah.
+      additionalProperties: false
+      properties:
+        kode: { type: string, maxLength: 40 }
+        nama: { type: string, minLength: 2, maxLength: 160 }
+        jenis: { type: string, enum: [reguler, sertifikat] }
+        satuan: { type: string, minLength: 1, maxLength: 40 }
+        deskripsi: { type: string, maxLength: 500 }
+        harga_default: { type: integer, format: int64, minimum: 0 }
+        urutan: { type: integer, minimum: 0 }
+        is_active: { type: boolean }
+
+    PriceMatrix:
+      type: object
+      description: |
+        Grid Produk × Cabang. `sel` hanya memuat sel yang berisi harga; sel
+        yang tidak ada berarti produk tidak dijual ke cabang tersebut.
+      required: [produk, cabang, sel]
+      properties:
+        produk:
+          type: array
+          items: { $ref: "#/components/schemas/Product" }
+        cabang:
+          type: array
+          items: { $ref: "#/components/schemas/MatrixBranch" }
+        sel:
+          type: array
+          items: { $ref: "#/components/schemas/PriceCell" }
+
+    MatrixBranch:
+      type: object
+      description: Kolom cabang pada matriks harga.
+      required: [id, nama, is_active]
+      properties:
+        id: { type: string, format: uuid }
+        nama: { type: string }
+        is_active: { type: boolean }
+
+    PriceCell:
+      type: object
+      required: [branch_id, product_id, harga]
+      properties:
+        branch_id: { type: string, format: uuid }
+        product_id: { type: string, format: uuid }
+        harga: { type: integer, format: int64, minimum: 0 }
+
+    PriceBatchInput:
+      type: object
+      description: Batch edit sel matriks harga.
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            type: object
+            required: [branch_id, product_id]
+            additionalProperties: false
+            properties:
+              branch_id: { type: string, format: uuid }
+              product_id: { type: string, format: uuid }
+              harga:
+                type: [integer, "null"]
+                format: int64
+                minimum: 0
+                description: Kosong/null berarti sel dikosongkan (tidak dijual).
+
+    PriceResult:
+      type: object
+      required: [diubah, dihapus, diabaikan]
+      properties:
+        diubah: { type: integer, description: Sel baru atau berubah nilainya. }
+        dihapus: { type: integer, description: Sel yang dikosongkan. }
+        diabaikan: { type: integer, description: Sel yang nilainya sama dengan sekarang. }
+
+    PriceCopyInput:
+      type: object
+      required: [from_branch_id]
+      additionalProperties: false
+      properties:
+        from_branch_id: { type: string, format: uuid }
+        to_branch_ids:
+          type: array
+          items: { type: string, format: uuid }
+        semua:
+          type: boolean
+          description: Salin ke seluruh cabang lain. Kosong berarti pakai `to_branch_ids`.
+
+    PriceCopyResult:
+      type: object
+      required: [from_branch_id, jumlah, salinan]
+      properties:
+        from_branch_id: { type: string, format: uuid }
+        jumlah: { type: integer, description: Jumlah sel yang disalin dari sumber. }
+        salinan:
+          type: array
+          items:
+            type: object
+            required: [branch_id, jumlah, diubah]
+            properties:
+              branch_id: { type: string, format: uuid }
+              jumlah: { type: integer }
+              diubah: { type: integer, description: Sel yang nilainya benar-benar berubah. }
 
     BranchProduct:
       type: object

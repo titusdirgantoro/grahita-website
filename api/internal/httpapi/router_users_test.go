@@ -120,7 +120,7 @@ func newUsersServer(t *testing.T, tune func(*Deps)) *usersServer {
 		Health:        fakeHealth{migrasi: 7},
 		Auth:          svc,
 		Settings:      settings.NewService(&fakeSettingsRepo{values: map[string]string{"reset_menit": "60", "token_hari": "14"}}),
-		Catalog:       catalog.NewService(fakeBranchCatalog{}),
+		Catalog:       catalog.NewService(fakeBranchCatalog{Memory: catalog.NewMemory()}),
 		Users:         usersSvc,
 		LoginLimiter:  httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),

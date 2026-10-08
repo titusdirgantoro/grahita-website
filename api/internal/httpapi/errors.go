@@ -64,6 +64,14 @@ func mapDomainErr(err error) error {
 		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
 	case errors.Is(err, catalog.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
+	case errors.Is(err, catalog.ErrKodeTaken):
+		return apierr.Conflict("KODE_TAKEN", "Kode produk tersebut sudah dipakai produk lain.")
+	case errors.Is(err, catalog.ErrProductUsed):
+		return apierr.Conflict("PRODUCT_IN_USE",
+			"Produk ini sudah dipakai pada pesanan sehingga tidak bisa dihapus; nonaktifkan saja produknya.")
+	case errors.Is(err, catalog.ErrInvalidData):
+		return apierr.Validation("Data produk atau harga tidak valid.",
+			map[string]string{"katalog": err.Error()})
 	case errors.Is(err, branch.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke master cabang.")
 	case errors.Is(err, branch.ErrNotFound):

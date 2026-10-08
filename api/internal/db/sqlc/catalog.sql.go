@@ -12,7 +12,7 @@ import (
 )
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (kode, nama, jenis, satuan, deskripsi, harga_default, urutan)
+INSERT INTO products (kode, nama, jenis, satuan, deskripsi, harga_default, urutan, is_active)
 VALUES (
     $1,
     $2,
@@ -20,9 +20,11 @@ VALUES (
     $4,
     $5,
     $6,
-    $7
+    $7,
+    $8
 )
-RETURNING id
+RETURNING id, kode, nama, jenis::text AS jenis, satuan,
+          COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
 `
 
 type CreateProductParams struct {
@@ -33,9 +35,22 @@ type CreateProductParams struct {
 	Deskripsi    pgtype.Text `json:"deskripsi"`
 	HargaDefault int64       `json:"harga_default"`
 	Urutan       int32       `json:"urutan"`
+	IsActive     bool        `json:"is_active"`
 }
 
-func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (string, error) {
+type CreateProductRow struct {
+	ID           string      `json:"id"`
+	Kode         pgtype.Text `json:"kode"`
+	Nama         string      `json:"nama"`
+	Jenis        string      `json:"jenis"`
+	Satuan       string      `json:"satuan"`
+	Deskripsi    string      `json:"deskripsi"`
+	HargaDefault int64       `json:"harga_default"`
+	Urutan       int32       `json:"urutan"`
+	IsActive     bool        `json:"is_active"`
+}
+
+func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (CreateProductRow, error) {
 	row := q.db.QueryRow(ctx, createProduct,
 		arg.Kode,
 		arg.Nama,
@@ -44,10 +59,92 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (s
 		arg.Deskripsi,
 		arg.HargaDefault,
 		arg.Urutan,
+		arg.IsActive,
 	)
-	var id string
-	err := row.Scan(&id)
-	return id, err
+	var i CreateProductRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kode,
+		&i.Nama,
+		&i.Jenis,
+		&i.Satuan,
+		&i.Deskripsi,
+		&i.HargaDefault,
+		&i.Urutan,
+		&i.IsActive,
+	)
+	return i, err
+}
+
+const deleteBranchPrice = `-- name: DeleteBranchPrice :exec
+DELETE FROM branch_prices WHERE branch_id = $1 AND product_id = $2
+`
+
+type DeleteBranchPriceParams struct {
+	BranchID  string `json:"branch_id"`
+	ProductID string `json:"product_id"`
+}
+
+// Menghapus sel = produk tidak lagi dijual ke cabang itu (PRD AP-KAT-03).
+func (q *Queries) DeleteBranchPrice(ctx context.Context, arg DeleteBranchPriceParams) error {
+	_, err := q.db.Exec(ctx, deleteBranchPrice, arg.BranchID, arg.ProductID)
+	return err
+}
+
+const deleteBranchPricesOfBranch = `-- name: DeleteBranchPricesOfBranch :exec
+DELETE FROM branch_prices WHERE branch_id = $1
+`
+
+// Dipakai aksi "salin harga": matriks cabang tujuan digantikan seluruhnya oleh
+// matriks cabang sumber.
+func (q *Queries) DeleteBranchPricesOfBranch(ctx context.Context, branchID string) error {
+	_, err := q.db.Exec(ctx, deleteBranchPricesOfBranch, branchID)
+	return err
+}
+
+const deleteProduct = `-- name: DeleteProduct :exec
+DELETE FROM products WHERE id = $1
+`
+
+func (q *Queries) DeleteProduct(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteProduct, id)
+	return err
+}
+
+const getProductForAdmin = `-- name: GetProductForAdmin :one
+SELECT id, kode, nama, jenis::text AS jenis, satuan,
+       COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
+  FROM products
+ WHERE id = $1
+`
+
+type GetProductForAdminRow struct {
+	ID           string      `json:"id"`
+	Kode         pgtype.Text `json:"kode"`
+	Nama         string      `json:"nama"`
+	Jenis        string      `json:"jenis"`
+	Satuan       string      `json:"satuan"`
+	Deskripsi    string      `json:"deskripsi"`
+	HargaDefault int64       `json:"harga_default"`
+	Urutan       int32       `json:"urutan"`
+	IsActive     bool        `json:"is_active"`
+}
+
+func (q *Queries) GetProductForAdmin(ctx context.Context, id string) (GetProductForAdminRow, error) {
+	row := q.db.QueryRow(ctx, getProductForAdmin, id)
+	var i GetProductForAdminRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kode,
+		&i.Nama,
+		&i.Jenis,
+		&i.Satuan,
+		&i.Deskripsi,
+		&i.HargaDefault,
+		&i.Urutan,
+		&i.IsActive,
+	)
+	return i, err
 }
 
 const listActiveProducts = `-- name: ListActiveProducts :many
@@ -100,7 +197,51 @@ func (q *Queries) ListActiveProducts(ctx context.Context) ([]ListActiveProductsR
 	return items, nil
 }
 
+const listBranchPrices = `-- name: ListBranchPrices :many
+
+SELECT branch_id, product_id, harga
+  FROM branch_prices
+ WHERE ($1::uuid IS NULL OR branch_id = $1::uuid)
+   AND ($2::uuid IS NULL OR product_id = $2::uuid)
+ ORDER BY branch_id, product_id
+`
+
+type ListBranchPricesParams struct {
+	BranchID  pgtype.UUID `json:"branch_id"`
+	ProductID pgtype.UUID `json:"product_id"`
+}
+
+type ListBranchPricesRow struct {
+	BranchID  string `json:"branch_id"`
+	ProductID string `json:"product_id"`
+	Harga     int64  `json:"harga"`
+}
+
+// ---------- Matriks harga per cabang ----------
+// Sel matriks yang BERISI harga. Sel kosong tidak punya baris dan berarti
+// produk tidak dijual ke cabang tersebut (PRD AP-KAT-03).
+func (q *Queries) ListBranchPrices(ctx context.Context, arg ListBranchPricesParams) ([]ListBranchPricesRow, error) {
+	rows, err := q.db.Query(ctx, listBranchPrices, arg.BranchID, arg.ProductID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBranchPricesRow{}
+	for rows.Next() {
+		var i ListBranchPricesRow
+		if err := rows.Scan(&i.BranchID, &i.ProductID, &i.Harga); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProducts = `-- name: ListProducts :many
+
 
 SELECT id, kode, nama, jenis::text AS jenis, satuan,
        COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
@@ -120,7 +261,11 @@ type ListProductsRow struct {
 	IsActive     bool        `json:"is_active"`
 }
 
-// Katalog produk & matriks harga per cabang (SystemDesign §6).
+// Katalog produk & matriks harga per cabang (SystemDesign §6, PRD §3.4/§4.5).
+//
+// Kolom `jenis` bertipe enum product_kind; dikembalikan sebagai teks supaya
+// lapisan repository tidak perlu mengimpor tipe enum hasil generate.
+// ---------- Pembacaan katalog ----------
 func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 	rows, err := q.db.Query(ctx, listProducts)
 	if err != nil {
@@ -130,6 +275,71 @@ func (q *Queries) ListProducts(ctx context.Context) ([]ListProductsRow, error) {
 	items := []ListProductsRow{}
 	for rows.Next() {
 		var i ListProductsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kode,
+			&i.Nama,
+			&i.Jenis,
+			&i.Satuan,
+			&i.Deskripsi,
+			&i.HargaDefault,
+			&i.Urutan,
+			&i.IsActive,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProductsForAdmin = `-- name: ListProductsForAdmin :many
+
+SELECT id, kode, nama, jenis::text AS jenis, satuan,
+       COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
+  FROM products
+ WHERE ($1::text IS NULL
+        OR nama ILIKE $1::text
+        OR COALESCE(kode, '') ILIKE $1::text)
+   AND ($2::product_kind IS NULL OR jenis = $2::product_kind)
+   AND ($3::boolean IS NULL OR is_active = $3::boolean)
+ ORDER BY urutan, nama
+`
+
+type ListProductsForAdminParams struct {
+	Q     pgtype.Text     `json:"q"`
+	Jenis NullProductKind `json:"jenis"`
+	Aktif pgtype.Bool     `json:"aktif"`
+}
+
+type ListProductsForAdminRow struct {
+	ID           string      `json:"id"`
+	Kode         pgtype.Text `json:"kode"`
+	Nama         string      `json:"nama"`
+	Jenis        string      `json:"jenis"`
+	Satuan       string      `json:"satuan"`
+	Deskripsi    string      `json:"deskripsi"`
+	HargaDefault int64       `json:"harga_default"`
+	Urutan       int32       `json:"urutan"`
+	IsActive     bool        `json:"is_active"`
+}
+
+// ---------- Master produk: Admin Portal (F1-08) ----------
+// Daftar produk untuk halaman katalog admin: TERMASUK produk nonaktif supaya
+// bisa diaktifkan kembali. Filter opsional: q (pola ILIKE nama/kode, sudah
+// berbentuk '%kata%'), jenis, aktif.
+func (q *Queries) ListProductsForAdmin(ctx context.Context, arg ListProductsForAdminParams) ([]ListProductsForAdminRow, error) {
+	rows, err := q.db.Query(ctx, listProductsForAdmin, arg.Q, arg.Jenis, arg.Aktif)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProductsForAdminRow{}
+	for rows.Next() {
+		var i ListProductsForAdminRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kode,
@@ -171,6 +381,8 @@ type ListProductsForBranchRow struct {
 }
 
 // Hanya produk yang benar-benar dijual ke cabang tersebut (punya baris harga).
+// Harga default TIDAK dipakai sebagai cadangan: sel kosong = tidak dijual
+// (PRD CP-KAT-01/02).
 func (q *Queries) ListProductsForBranch(ctx context.Context, branchID string) ([]ListProductsForBranchRow, error) {
 	rows, err := q.db.Query(ctx, listProductsForBranch, branchID)
 	if err != nil {
@@ -197,6 +409,110 @@ func (q *Queries) ListProductsForBranch(ctx context.Context, branchID string) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const productHasOrderLines = `-- name: ProductHasOrderLines :one
+SELECT EXISTS (SELECT 1 FROM order_lines WHERE product_id = $1)::boolean
+`
+
+// Produk yang sudah dipakai order line tidak boleh dihapus (order_lines
+// memakai ON DELETE RESTRICT); nonaktifkan saja produknya.
+func (q *Queries) ProductHasOrderLines(ctx context.Context, productID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, productHasOrderLines, productID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const productKodeTaken = `-- name: ProductKodeTaken :one
+SELECT EXISTS (
+    SELECT 1 FROM products
+     WHERE kode = $1
+       AND ($2::uuid IS NULL OR id <> $2::uuid)
+)::boolean
+`
+
+type ProductKodeTakenParams struct {
+	Kode     pgtype.Text `json:"kode"`
+	ExceptID pgtype.UUID `json:"except_id"`
+}
+
+// Kode produk unik (NULL boleh berulang). except_id dipakai saat mengubah
+// produk itu sendiri.
+func (q *Queries) ProductKodeTaken(ctx context.Context, arg ProductKodeTakenParams) (bool, error) {
+	row := q.db.QueryRow(ctx, productKodeTaken, arg.Kode, arg.ExceptID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const updateProduct = `-- name: UpdateProduct :one
+UPDATE products
+   SET kode          = $1,
+       nama          = $2,
+       jenis         = $3::product_kind,
+       satuan        = $4,
+       deskripsi     = $5,
+       harga_default = $6,
+       urutan        = $7,
+       is_active     = $8,
+       updated_at    = now()
+ WHERE id = $9
+RETURNING id, kode, nama, jenis::text AS jenis, satuan,
+          COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
+`
+
+type UpdateProductParams struct {
+	Kode         pgtype.Text `json:"kode"`
+	Nama         string      `json:"nama"`
+	Jenis        ProductKind `json:"jenis"`
+	Satuan       string      `json:"satuan"`
+	Deskripsi    pgtype.Text `json:"deskripsi"`
+	HargaDefault int64       `json:"harga_default"`
+	Urutan       int32       `json:"urutan"`
+	IsActive     bool        `json:"is_active"`
+	ID           string      `json:"id"`
+}
+
+type UpdateProductRow struct {
+	ID           string      `json:"id"`
+	Kode         pgtype.Text `json:"kode"`
+	Nama         string      `json:"nama"`
+	Jenis        string      `json:"jenis"`
+	Satuan       string      `json:"satuan"`
+	Deskripsi    string      `json:"deskripsi"`
+	HargaDefault int64       `json:"harga_default"`
+	Urutan       int32       `json:"urutan"`
+	IsActive     bool        `json:"is_active"`
+}
+
+// Perubahan penuh satu produk. Harga default bukan cadangan katalog: ia hanya
+// dipakai sebagai nilai awal saat mengisi matriks harga.
+func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (UpdateProductRow, error) {
+	row := q.db.QueryRow(ctx, updateProduct,
+		arg.Kode,
+		arg.Nama,
+		arg.Jenis,
+		arg.Satuan,
+		arg.Deskripsi,
+		arg.HargaDefault,
+		arg.Urutan,
+		arg.IsActive,
+		arg.ID,
+	)
+	var i UpdateProductRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kode,
+		&i.Nama,
+		&i.Jenis,
+		&i.Satuan,
+		&i.Deskripsi,
+		&i.HargaDefault,
+		&i.Urutan,
+		&i.IsActive,
+	)
+	return i, err
 }
 
 const upsertBranchPrice = `-- name: UpsertBranchPrice :exec

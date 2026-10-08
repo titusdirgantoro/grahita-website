@@ -19,6 +19,10 @@ const (
 	EntityBranchUser  = "branch_user"
 	EntityBankAccount = "bank_account"
 	EntitySetting     = "setting"
+	EntityProduct     = "product"
+	// EntityBranchPrice mencatat perubahan sel matriks harga Produk × Cabang
+	// (PRD AP-KAT-06). EntityID-nya adalah product_id.
+	EntityBranchPrice = "branch_price"
 )
 
 // Aksi yang dicatat (kolom audit_logs.action).
@@ -30,6 +34,9 @@ const (
 	// ActionRegister mencatat akun cabang yang lahir dari pendaftaran mandiri
 	// lewat token registrasi (F1-07); aktornya akun cabang itu sendiri.
 	ActionRegister = "register"
+	// ActionCopy mencatat aksi "salin harga" dari satu cabang ke cabang lain
+	// (PRD AP-KAT-04); EntityID-nya adalah cabang tujuan.
+	ActionCopy = "copy"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.

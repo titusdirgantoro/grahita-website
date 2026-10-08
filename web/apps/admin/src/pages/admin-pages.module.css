@@ -48,6 +48,63 @@
   overflow-x: auto;
 }
 
+/* ---------- Matriks harga Produk × Cabang (F1-08) ---------- */
+
+.matrixWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.matrix th,
+.matrix td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.matrix thead th {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+}
+
+.matrix tbody th {
+  font-weight: 500;
+  max-width: 280px;
+  white-space: normal;
+}
+
+.offCol {
+  color: var(--text-muted);
+}
+
+.cell {
+  max-width: 140px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.salinBar {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
 @media (max-width: 899px) {
   .kpis,
   .grid2 {
