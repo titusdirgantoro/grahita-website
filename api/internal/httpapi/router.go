@@ -94,6 +94,12 @@ func NewRouter(d Deps) http.Handler {
 				// Superadmin boleh memakainya (PRD §2.1).
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminOrders))
+					// Riwayat pemesanan seluruh cabang (F1-15): pencarian, filter,
+					// grouping, dan paginasi server. Catatan internal hanya hidup
+					// di jalur ini — portal cabang tidak pernah menerimanya.
+					r.Get("/orders", a.adapt(a.adminOrdersList))
+					r.Get("/orders/{id}", a.adapt(a.adminOrderDetail))
+					r.Post("/orders/{id}/notes", a.adapt(a.adminOrderNote))
 					r.Get("/orders/{id}/emails", a.adapt(a.adminOrderEmails))
 					r.Post("/orders/{id}/emails/{kind}/resend", a.adapt(a.adminOrderEmailResend))
 					// Bukti transfer: admin boleh melihat semua cabang dan

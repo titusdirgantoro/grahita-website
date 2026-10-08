@@ -148,6 +148,11 @@ type Store interface {
 	// ActiveExists melaporkan apakah masih ada email status queued/sending
 	// untuk satu pesanan + jenis (penjaga klik ganda kirim ulang).
 	ActiveExists(ctx context.Context, orderID, jenis string) (bool, error)
+	// PesananEmailGagal mengembalikan id pesanan (DISTINCT) yang punya minimal
+	// satu email berstatus `failed`. Dipakai riwayat pemesanan admin (F1-15)
+	// untuk penanda & filter "email gagal" tanpa domain lain membaca
+	// email_outbox.
+	PesananEmailGagal(ctx context.Context) ([]string, error)
 }
 
 // OrderRef adalah data pesanan yang dibutuhkan template dokumen.
@@ -408,6 +413,15 @@ func (s *Service) Kirim(ctx context.Context, e Email) error {
 		return fmt.Errorf("kirim ke %s: %w", strings.Join(msg.To, ", "), err)
 	}
 	return nil
+}
+
+// PesananEmailGagal menyajikan id pesanan yang punya email berstatus gagal.
+//
+// Dipakai riwayat pemesanan admin (F1-15) untuk penanda & filter "email gagal"
+// (PRD AP-ORD-01, Database.md §7.2). Pemanggilnya sudah otorisasi di domainnya
+// sendiri, jadi method ini tidak menerima Actor — ia bukan permukaan publik.
+func (s *Service) PesananEmailGagal(ctx context.Context) ([]string, error) {
+	return s.store.PesananEmailGagal(ctx)
 }
 
 // validJenis melaporkan apakah jenis email dikenal.

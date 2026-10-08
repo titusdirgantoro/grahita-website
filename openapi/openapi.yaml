@@ -1821,6 +1821,181 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/v1/admin/orders:
+    get:
+      tags: [admin]
+      operationId: listAdminOrders
+      summary: Riwayat pemesanan seluruh cabang (Manager & Superadmin)
+      description: |
+        Daftar pesanan SELURUH cabang dengan pencarian, filter, grouping, dan
+        paginasi server (PRD AP-ORD-01..03). Hanya admin Pusat ber-kapabilitas
+        `admin.orders` (Manager dan Superadmin) yang boleh memakainya; akun
+        cabang dijawab `403`.
+
+        Catatan perilaku:
+
+        - **Paginasi server.** `per_halaman` bawaan 25 dan dipagari 100, jadi
+          riwayat besar tidak pernah diunduh seluruhnya ke browser. `total`
+          adalah jumlah SELURUH baris yang cocok filter, bukan panjang halaman.
+        - **Grouping** (`grup`) tidak mengubah isi halaman, ia menambah urutan
+          (per cabang A→Z, per periode terbaru dahulu) dan array `ringkasan`
+          berisi jumlah + nilai per grup untuk seluruh himpunan terfilter.
+        - **Tanggal bisnis** memakai zona Asia/Jakarta, termasuk grouping
+          hari/bulan/tahun dan penanda `terlambat` (C&C yang belum Done dan
+          sudah melewati jatuh tempo).
+        - **`email_gagal`** dibaca dari outbox email domain notification: sebuah
+          pesanan bertanda `email_gagal` bila punya minimal satu email
+          `failed`; filter `email_gagal=true` hanya menyisakan pesanan itu.
+        - Pencarian `cari` mencocokkan nomor invoice, nama cabang, dan serial
+          number (ILIKE).
+      parameters:
+        - name: cari
+          in: query
+          description: Cari nomor, nama cabang, atau serial number.
+          schema: { type: string }
+        - name: cabang
+          in: query
+          description: Filter satu cabang (uuid). Kosong berarti semua cabang.
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          description: Filter status pesanan. `semua`/kosong berarti tanpa filter.
+          schema: { type: string, enum: [semua, draft, submitted, done] }
+        - name: verif
+          in: query
+          description: Filter status verifikasi. `semua`/kosong berarti tanpa filter.
+          schema: { type: string, enum: [semua, belum, cocok, perlu_review] }
+        - name: cnc
+          in: query
+          description: Filter pesanan Cash & Carry (`true`/`false`).
+          schema: { type: boolean }
+        - name: terlambat
+          in: query
+          description: Filter C&C yang sudah melewati jatuh tempo (`true`/`false`).
+          schema: { type: boolean }
+        - name: email_gagal
+          in: query
+          description: Filter pesanan yang punya email gagal (`true`/`false`).
+          schema: { type: boolean }
+        - name: dari
+          in: query
+          description: Tanggal bisnis awal (YYYY-MM-DD, inklusif).
+          schema: { type: string, format: date }
+        - name: sampai
+          in: query
+          description: Tanggal bisnis akhir (YYYY-MM-DD, inklusif).
+          schema: { type: string, format: date }
+        - name: grup
+          in: query
+          description: Mode grouping daftar.
+          schema:
+            type: string
+            enum: [tanpa, cabang, hari, bulan, tahun]
+        - name: halaman
+          in: query
+          description: Nomor halaman, mulai 1.
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_halaman
+          in: query
+          description: Jumlah baris per halaman (bawaan 25, maksimum 100).
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        "200":
+          description: Satu halaman riwayat pemesanan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AdminOrderPage" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [admin]
+      operationId: getAdminOrder
+      summary: Detail pesanan seluruh cabang (Manager & Superadmin)
+      description: |
+        Detail lengkap satu pesanan cabang mana pun (PRD AP-ORD-04): header +
+        data cabang, baris pesanan beserta serial number, timeline
+        (`order_events`), catatan internal (`note_admin`), dokumen, dan log
+        verifikasi.
+
+        Bukti transfer dan riwayat email TIDAK diduplikasi di sini: keduanya
+        punya endpoint sendiri (`/admin/orders/{id}/proofs`,
+        `/admin/orders/{id}/emails`) dengan otorisasi yang sama, dan UI
+        memanggilnya terpisah sehingga satu respons tetap kecil.
+
+        Catatan internal hanya ada di respons admin; endpoint portal cabang
+        tidak pernah mengembalikannya.
+      responses:
+        "200":
+          description: Detail pesanan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AdminOrderDetail" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/admin/orders/{id}/notes:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    post:
+      tags: [admin]
+      operationId: setAdminOrderNote
+      summary: Simpan catatan internal pesanan (Manager & Superadmin)
+      description: |
+        Menyimpan catatan internal pesanan (PRD AP-ORD-05) dan mencatatnya di
+        timeline dalam transaksi yang sama. Skema Database.md §4.4 hanya punya
+        satu kolom `orders.note_admin` (sesuai prototype: satu textarea "Note
+        admin"), jadi penyimpanan MENGGANTI isi catatan; riwayat siapa-kapan-apa
+        hidup di `order_events`.
+
+        Catatan internal tidak pernah muncul di portal cabang. Catatan kosong
+        dijawab `400`; maksimum 2000 karakter.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [catatan]
+              properties:
+                catatan:
+                  type: string
+                  maxLength: 2000
+                  description: Isi catatan internal (tidak dikosongkan).
+      responses:
+        "200":
+          description: Catatan tersimpan; respons berisi detail terbaru
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AdminOrderDetail" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/v1/admin/orders/{id}/emails:
     parameters:
       - name: id
@@ -2286,6 +2461,190 @@ components:
           minItems: 1
           maxItems: 100
           items: { $ref: "#/components/schemas/OrderDraftLineInput" }
+
+    AdminOrderRow:
+      type: object
+      required:
+        [id, versi, branch_id, branch_nama, status, verif_status, is_cnc, is_sertifikat, total, jumlah_item, terlambat, email_gagal, created_at, updated_at]
+      description: Satu baris riwayat pemesanan admin (F1-15).
+      properties:
+        id: { type: string, format: uuid }
+        nomor:
+          type: string
+          description: Nomor invoice `YYYY-MM-XX`; kosong selama masih draft.
+        versi: { type: integer, minimum: 0 }
+        branch_id: { type: string, format: uuid }
+        branch_nama: { type: string }
+        tanggal:
+          type: string
+          format: date
+          description: Tanggal bisnis (WIB) saat submit; kosong untuk draft.
+        jatuh_tempo:
+          type: string
+          format: date
+          description: Tenggat C&C; kosong untuk non-C&C.
+        status: { type: string, enum: [draft, submitted, done] }
+        verif_status: { type: string, enum: [belum, cocok, perlu_review] }
+        is_cnc: { type: boolean }
+        is_sertifikat: { type: boolean }
+        total: { type: integer, format: int64, minimum: 0 }
+        jumlah_item:
+          type: integer
+          format: int64
+          description: Σ qty baris produk (baris packaging tidak dihitung).
+        terlambat:
+          type: boolean
+          description: |
+            C&C yang belum `done` dan sudah melewati `jatuh_tempo` menurut
+            tanggal bisnis Asia/Jakarta (PRD AP-DSH-03).
+        email_gagal:
+          type: boolean
+          description: |
+            Pesanan punya minimal satu email berstatus `failed` di outbox
+            (F1-16); bisa dikirim ulang dari detail.
+        submitted_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AdminOrderGroup:
+      type: object
+      required: [kunci, label, jumlah, total]
+      description: Ringkasan satu grup daftar riwayat (PRD AP-ORD-02).
+      properties:
+        kunci:
+          type: string
+          description: |
+            Kunci grup: id cabang untuk grouping `cabang`, `YYYY-MM-DD` untuk
+            `hari`, `YYYY-MM` untuk `bulan`, `YYYY` untuk `tahun`.
+        label:
+          type: string
+          description: Nama cabang untuk grouping `cabang`; kosong untuk periode.
+        jumlah: { type: integer, format: int64 }
+        total:
+          type: integer
+          format: int64
+          description: Σ nilai pesanan pada grup itu.
+
+    AdminOrderPage:
+      type: object
+      required: [items, total, halaman, per_halaman]
+      description: Satu halaman riwayat pemesanan admin dengan paginasi server.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminOrderRow" }
+        total:
+          type: integer
+          format: int64
+          description: Jumlah SELURUH baris yang cocok filter.
+        halaman: { type: integer, minimum: 1 }
+        per_halaman: { type: integer, minimum: 1, maximum: 100 }
+        grup:
+          type: string
+          enum: ["", cabang, hari, bulan, tahun]
+          description: Mode grouping yang dipakai (kosong = tanpa grup).
+        ringkasan:
+          type: array
+          description: Ringkasan seluruh grup pada himpunan terfilter.
+          items: { $ref: "#/components/schemas/AdminOrderGroup" }
+
+    OrderEvent:
+      type: object
+      required: [at, teks, actor_kind]
+      description: Satu entri timeline pesanan (`order_events`).
+      properties:
+        at: { type: string, format: date-time }
+        icon:
+          type: string
+          description: Nama ikon Phosphor yang dipakai UI.
+        teks: { type: string }
+        actor_kind: { type: string, enum: [branch, admin, system] }
+        actor_id: { type: string, format: uuid }
+
+    OrderDocument:
+      type: object
+      required: [id, jenis, versi, ukuran_byte, created_at]
+      description: |
+        Satu dokumen pesanan (invoice/surat jalan). Kunci object storage TIDAK
+        pernah dikirim; unduhan memakai presigned URL domain dokumen.
+      properties:
+        id: { type: string, format: uuid }
+        jenis: { type: string, enum: [invoice_pdf, surat_jalan_xlsx, surat_jalan_pdf] }
+        versi: { type: integer, minimum: 0 }
+        ukuran_byte: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+
+    VerificationLog:
+      type: object
+      required: [id, metode, total_pesanan, total_terbaca, selisih, hasil, created_at]
+      description: Satu baris log verifikasi pembayaran pesanan.
+      properties:
+        id: { type: string, format: uuid }
+        metode: { type: string, enum: [manual, ai] }
+        total_pesanan: { type: integer, format: int64 }
+        total_terbaca: { type: integer, format: int64 }
+        selisih: { type: integer, format: int64 }
+        hasil: { type: string, enum: [belum, cocok, perlu_review] }
+        alasan:
+          type: string
+          enum: ["", kurang_bayar, lebih_bayar, tidak_terbaca, rekening_beda, lainnya]
+        catatan: { type: string }
+        admin_nama:
+          type: string
+          description: Nama admin pemeriksa; kosong bila diverifikasi AI.
+        created_at: { type: string, format: date-time }
+
+    AdminOrderDetail:
+      type: object
+      required:
+        [id, versi, branch_id, branch_nama, branch_kepala, branch_email, branch_cnc, status, verif_status, is_cnc, is_sertifikat, catatan, note_admin, total, jumlah_item, terlambat, email_gagal, created_at, updated_at, lines, timeline, dokumen, verifikasi]
+      description: |
+        Detail lengkap satu pesanan untuk admin (PRD AP-ORD-04). `note_admin`
+        adalah catatan internal dan hanya muncul di respons admin.
+      properties:
+        id: { type: string, format: uuid }
+        nomor: { type: string }
+        versi: { type: integer, minimum: 0 }
+        branch_id: { type: string, format: uuid }
+        branch_nama: { type: string }
+        branch_kepala: { type: string }
+        branch_email: { type: string, format: email }
+        branch_cnc: { type: boolean }
+        status: { type: string, enum: [draft, submitted, done] }
+        verif_status: { type: string, enum: [belum, cocok, perlu_review] }
+        alasan_review:
+          type: string
+          enum: ["", kurang_bayar, lebih_bayar, tidak_terbaca, rekening_beda, lainnya]
+        is_cnc: { type: boolean }
+        is_sertifikat: { type: boolean }
+        tanggal: { type: string, format: date }
+        jatuh_tempo: { type: string, format: date }
+        submitted_at: { type: string, format: date-time }
+        done_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        catatan:
+          type: string
+          description: Catatan dari cabang (terlihat kedua pihak).
+        note_admin:
+          type: string
+          description: Catatan internal admin — TIDAK pernah dikirim ke portal cabang.
+        total: { type: integer, format: int64, minimum: 0 }
+        jumlah_item: { type: integer, format: int64 }
+        terlambat: { type: boolean }
+        email_gagal: { type: boolean }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/OrderLine" }
+        timeline:
+          type: array
+          items: { $ref: "#/components/schemas/OrderEvent" }
+        dokumen:
+          type: array
+          items: { $ref: "#/components/schemas/OrderDocument" }
+        verifikasi:
+          type: array
+          items: { $ref: "#/components/schemas/VerificationLog" }
 
     ErrorEnvelope:
       type: object

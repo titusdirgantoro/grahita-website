@@ -107,6 +107,10 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, order.ErrInvalidData):
 		return apierr.Validation("Data pesanan tidak valid.",
 			map[string]string{"pesanan": err.Error()})
+	case errors.Is(err, order.ErrAdminFilter):
+		// Parameter daftar riwayat admin (F1-15) tidak valid.
+		return apierr.Validation("Filter daftar pesanan tidak valid.",
+			map[string]string{"filter": err.Error()})
 	// Bukti transfer (F1-13). Tabel keputusan ada di handlers_proofs.go.
 	case errors.Is(err, payment.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke bukti pesanan ini.")

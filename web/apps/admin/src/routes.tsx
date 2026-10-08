@@ -16,10 +16,14 @@ import { NAV_ADMIN } from "./nav";
 import { HalamanLupa, HalamanMasuk } from "./pages/auth";
 import {
   DashboardPage,
-  PesananAdminPage,
   ProfilAdminPage,
   ReportingPage,
 } from "./pages/shell-pages";
+import {
+  PesananAdminPage,
+  PesananDetailAdminPage,
+  type FilterPesanan,
+} from "./pages/pesanan";
 import { CabangPage } from "./pages/cabang";
 import { KatalogPage } from "./pages/katalog";
 import { RekeningPage } from "./pages/rekening";
@@ -122,7 +126,53 @@ const gayaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gaya", 
 
 const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "shell", component: ShellLayout });
 const dashboardRoute = createRoute({ getParentRoute: () => shellRoute, path: "/", component: DashboardPage });
-const pesananRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pesanan", component: PesananAdminPage });
+
+/** teksMungkin menormalkan search param teks (kosong -> undefined). */
+function teksMungkin(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() !== "" ? v : undefined;
+}
+
+/** boolMungkin menormalkan search param boolean ("true"/"false"). */
+function boolMungkin(v: unknown): boolean | undefined {
+  if (v === true || v === "true") return true;
+  if (v === false || v === "false") return false;
+  return undefined;
+}
+
+/** angkaMungkin menormalkan nomor halaman (selalu >= 1). */
+function angkaMungkin(v: unknown): number | undefined {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : Number.NaN;
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined;
+}
+
+/**
+ * /pesanan menyimpan seluruh filter riwayat di URL search param
+ * (SystemDesign.md §7.2) sehingga daftar terfilter bisa di-bookmark/di-share.
+ * Nilai yang tidak dikenal diabaikan, bukan membuat halaman gagal.
+ */
+const pesananRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/pesanan",
+  validateSearch: (search: Record<string, unknown>): FilterPesanan => ({
+    cari: teksMungkin(search.cari),
+    cabang: teksMungkin(search.cabang),
+    status: teksMungkin(search.status),
+    verif: teksMungkin(search.verif),
+    cnc: boolMungkin(search.cnc),
+    terlambat: boolMungkin(search.terlambat),
+    email_gagal: boolMungkin(search.email_gagal),
+    dari: teksMungkin(search.dari),
+    sampai: teksMungkin(search.sampai),
+    grup: teksMungkin(search.grup),
+    halaman: angkaMungkin(search.halaman),
+  }),
+  component: PesananAdminPage,
+});
+const pesananDetailRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/pesanan/$id",
+  component: PesananDetailAdminPage,
+});
 const cabangRoute = createRoute({ getParentRoute: () => shellRoute, path: "/cabang", component: CabangPage });
 const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogPage });
 const rekeningRoute = createRoute({ getParentRoute: () => shellRoute, path: "/rekening", component: RekeningPage });
@@ -138,6 +188,7 @@ const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
     dashboardRoute,
     pesananRoute,
+    pesananDetailRoute,
     cabangRoute,
     katalogRoute,
     rekeningRoute,

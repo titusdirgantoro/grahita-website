@@ -132,6 +132,22 @@ func (f *fakeStore) ByOrder(_ context.Context, orderID string) ([]Email, error) 
 	return out, nil
 }
 
+// PesananEmailGagal meniru query DISTINCT id pesanan ber-email gagal.
+func (f *fakeStore) PesananEmailGagal(_ context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := map[string]bool{}
+	out := []string{}
+	for _, id := range f.urut {
+		row := f.rows[id]
+		if row.Status == StatusFailed && row.OrderID != "" && !seen[row.OrderID] {
+			seen[row.OrderID] = true
+			out = append(out, row.OrderID)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) Latest(_ context.Context, orderID, jenis string) (Email, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

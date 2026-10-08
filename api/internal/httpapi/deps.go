@@ -59,6 +59,10 @@ type Deps struct {
 	// cabang (F1-11).
 	Orders *order.Service
 
+	// AdminOrders melayani riwayat & detail pesanan seluruh cabang untuk admin
+	// Pusat: filter, grouping, paginasi server, dan catatan internal (F1-15).
+	AdminOrders *order.AdminService
+
 	// Payments melayani bukti transfer: unggah multi-berkas, daftar, dan
 	// tautan unduh berumur pendek (F1-13).
 	Payments *payment.Service

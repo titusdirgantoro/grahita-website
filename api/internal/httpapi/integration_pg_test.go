@@ -309,6 +309,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.payments = paySvc
 	f.paymentsRepo = payRepo
 
+	orderRepo := orderpg.New(pool)
 	deps := Deps{
 		Config:              testConfig(),
 		Version:             "test-pg",
@@ -316,7 +317,8 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Auth:                svc,
 		Settings:            settingsSvc,
 		Catalog:             catalogSvc,
-		Orders:              order.NewService(orderpg.New(pool), catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
+		Orders:              order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
+		AdminOrders:         order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,

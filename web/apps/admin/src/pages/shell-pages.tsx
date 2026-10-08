@@ -18,7 +18,6 @@ import {
   PageHead,
   Segmented,
   Select,
-  Table,
   labelPeran,
 } from "@grahita/ui";
 
@@ -211,58 +210,6 @@ export function DashboardPage() {
           </div>
         </Card>
       </div>
-    </>
-  );
-}
-
-/** pPesanan (admin) — /pesanan: filter lanjutan + tabel (data menyusul). */
-export function PesananAdminPage() {
-  return (
-    <>
-      <PageHead title="Riwayat pemesanan" sub="Seluruh cabang" />
-      <Card>
-        <CardHead
-          title="Daftar pesanan"
-          tools={
-            <div className={styles.row}>
-              <Field label="Cari" htmlFor="cari-pesanan">
-                <Input id="cari-pesanan" placeholder="Nomor, cabang, serial…" />
-              </Field>
-            </div>
-          }
-        />
-        <div className={styles.chips} style={{ marginBottom: 12 }}>
-          <Chip pressed onToggle={() => undefined}>
-            C&amp;C
-          </Chip>
-          <Chip pressed={false} onToggle={() => undefined}>
-            Lewat jatuh tempo
-          </Chip>
-          <Chip pressed={false} onToggle={() => undefined}>
-            Email gagal
-          </Chip>
-        </div>
-        <Table mobileCards caption="Riwayat pemesanan seluruh cabang">
-          <thead>
-            <tr>
-              <th scope="col">Nomor</th>
-              <th scope="col">Cabang</th>
-              <th scope="col">Tanggal</th>
-              <th scope="col" className="num">
-                Total
-              </th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colSpan={5}>
-                <EmptyState icon="receipt">Belum ada pesanan untuk filter ini.</EmptyState>
-              </td>
-            </tr>
-          </tbody>
-        </Table>
-      </Card>
     </>
   );
 }

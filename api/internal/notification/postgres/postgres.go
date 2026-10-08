@@ -225,6 +225,31 @@ func (r *Repo) ActiveExists(ctx context.Context, orderID, jenis string) (bool, e
 	return ada, nil
 }
 
+// PesananEmailGagal mengembalikan id pesanan DISTINCT yang punya minimal satu
+// email berstatus `failed`. Hanya id-nya (bukan isi email) yang keluar, dan
+// urutannya deterministik supaya mudah diuji.
+func (r *Repo) PesananEmailGagal(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT DISTINCT order_id::text
+		FROM email_outbox
+		WHERE status = 'failed' AND order_id IS NOT NULL
+		ORDER BY 1`)
+	if err != nil {
+		return nil, fmt.Errorf("daftar pesanan ber-email gagal: %w", err)
+	}
+	defer rows.Close()
+
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("baca id pesanan email gagal: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // Resend menyimpan salinan email baru DAN entri audit dalam SATU transaksi.
 //
 // EntityID entri audit diisi repository dengan id baris yang baru dibuat,
