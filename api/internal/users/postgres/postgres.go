@@ -150,6 +150,17 @@ func (r *Repo) AdminByEmail(ctx context.Context, email string) (users.AdminUser,
 		row.NotifSuratJalan, row.IsActive, row.InvitedAt, row.ActivatedAt, row.LastLoginAt), nil
 }
 
+// EmailTakenByBranch melaporkan apakah email sudah dipakai cabang, baik sebagai
+// email login akun cabang (branch_users) maupun email cabang itu sendiri
+// (branches). Menjaga kesimetrisan dengan branch.AdminEmailTaken (F1-06).
+func (r *Repo) EmailTakenByBranch(ctx context.Context, email string) (bool, error) {
+	taken, err := r.q.EmailTakenByBranch(ctx, users.NormalizeEmail(email))
+	if err != nil {
+		return false, fmt.Errorf("query EmailTakenByBranch: %w", err)
+	}
+	return taken, nil
+}
+
 // CreateAdmin membuat undangan admin: password_hash dan activated_at NULL.
 func (r *Repo) CreateAdmin(ctx context.Context, in users.NewAdmin) (users.AdminUser, error) {
 	row, err := r.q.CreateAdminInvitation(ctx, sqlc.CreateAdminInvitationParams{
@@ -197,11 +208,20 @@ func (r *Repo) UpdateAdmin(ctx context.Context, next users.AdminUser) (users.Adm
 	// Turun role / nonaktifkan superadmin aktif: wajib masih ada superadmin
 	// aktif lain. Pemeriksaan dan UPDATE berada di transaksi yang sama dan
 	// diserialkan kunci penasihat di atas.
+	//
+	// "Superadmin aktif lain" di sini WAJIB benar-benar bisa login
+	// (password_hash DAN activated_at terisi). Superadmin yang masih berstatus
+	// undangan tidak dihitung: ia sendiri tidak bisa masuk, sehingga bila ikut
+	// dihitung sistem bisa ditinggalkan tanpa satu pun superadmin yang bisa
+	// login (temuan QA F1-05).
 	if curRole == string(auth.RoleSuperadmin) && curActive &&
 		(next.Role != auth.RoleSuperadmin || !next.IsActive) {
 		var sisa int
 		if err := tx.QueryRow(ctx,
-			`SELECT count(*) FROM admin_users WHERE role = 'superadmin' AND is_active AND id <> $1`,
+			`SELECT count(*) FROM admin_users
+			  WHERE role = 'superadmin' AND is_active
+			    AND password_hash IS NOT NULL AND activated_at IS NOT NULL
+			    AND id <> $1`,
 			next.ID).Scan(&sisa); err != nil {
 			return users.AdminUser{}, fmt.Errorf("hitung superadmin aktif: %w", err)
 		}

@@ -88,6 +88,24 @@ func (q *Queries) CreateAdminInvitation(ctx context.Context, arg CreateAdminInvi
 	return i, err
 }
 
+const emailTakenByBranch = `-- name: EmailTakenByBranch :one
+SELECT (EXISTS (SELECT 1 FROM branch_users bu WHERE bu.email = $1)
+     OR EXISTS (SELECT 1 FROM branches b WHERE b.email = $1))::boolean
+`
+
+// Email sudah dipakai cabang: baik email login akun cabang (branch_users)
+// maupun email cabang itu sendiri (branches, termasuk cabang yang belum
+// registrasi). Login mencari akun admin lebih dulu, jadi email yang dipegang
+// cabang tidak boleh diundang sebagai admin — kalau tidak, akun cabang itu
+// tidak akan pernah bisa masuk. Cermin dari branch.AdminEmailTaken (F1-06);
+// tanpa keduanya, salah satu arah saja yang aman.
+func (q *Queries) EmailTakenByBranch(ctx context.Context, email string) (bool, error) {
+	row := q.db.QueryRow(ctx, emailTakenByBranch, email)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getAdminUserByEmail = `-- name: GetAdminUserByEmail :one
 
 SELECT id, nama, email::text AS email, password_hash, role::text AS role, is_active,

@@ -289,6 +289,149 @@ func TestPGUndangAdminAktivasiDanPenerimaDokumen(t *testing.T) {
 	assertErrorShape(t, body, "EMAIL_TAKEN")
 }
 
+// TestPGUndangAdminEmailCabangDitolak memastikan POST /admin/users/admin
+// menolak email yang sudah dipakai cabang di database nyata: email login akun
+// cabang (branch_users) maupun email cabang itu sendiri (branches, termasuk
+// cabang yang belum registrasi). Kebalikan dari branch.AdminEmailTaken (F1-06).
+func TestPGUndangAdminEmailCabangDitolak(t *testing.T) {
+	f := newPGFixture(t)
+	cookiesSA, csrfSA := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	// "cabang-a@example.test" = email cabang A (branches), "a@example.test" =
+	// email login akun cabang A (branch_users).
+	for _, email := range []string{"cabang-a@example.test", "a@example.test", "Cabang-B@Example.Test"} {
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/users/admin",
+			`{"nama":"Bentrok","email":"`+email+`","role":"manager"}`, cookiesSA, csrfSA)
+		if status != http.StatusConflict {
+			t.Fatalf("email cabang %s harus 409, dapat %d (%v)", email, status, body)
+		}
+		assertErrorShape(t, body, "EMAIL_TAKEN")
+	}
+	// Tidak ada undangan yang terbuat dari percobaan yang ditolak.
+	var jumlah int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM admin_users WHERE email::text ILIKE 'bentrok%'`).Scan(&jumlah); err != nil {
+		t.Fatalf("hitung admin bentrok: %v", err)
+	}
+	if jumlah != 0 {
+		t.Errorf("tidak boleh ada admin terbuat dari email cabang, dapat %d", jumlah)
+	}
+
+	// Email yang benar-benar bebas tetap boleh diundang.
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/users/admin",
+		`{"nama":"Bebas","email":"bebas@example.test","role":"manager"}`, cookiesSA, csrfSA)
+	if status != http.StatusCreated {
+		t.Fatalf("email bebas harus 201, dapat %d (%v)", status, body)
+	}
+}
+
+// TestPGProteksiSAterakhirTidakDilindungiOlehUndangan menutup temuan QA F1-05:
+// superadmin berstatus UNDANGAN (tidak bisa login) tidak boleh dihitung sebagai
+// pelindung. Setelah undangan diaktivasi lewat tautan, ia barulah menjadi
+// pelindung sehingga penurunan superadmin pertama boleh.
+func TestPGProteksiSAterakhirTidakDilindungiOlehUndangan(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	cookiesSA, csrfSA := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	// Undang superadmin baru: baris terbuat dengan is_active=true tetapi
+	// password_hash/activated_at NULL sehingga tidak bisa login.
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/users/admin",
+		`{"nama":"Bagus Pratama","email":"bagus@example.test","role":"superadmin"}`, cookiesSA, csrfSA)
+	if status != http.StatusCreated {
+		t.Fatalf("undang superadmin harus 201, dapat %d (%v)", status, body)
+	}
+	undangan := body["data"].(map[string]any)
+	if undangan["status"] != "undangan" {
+		t.Fatalf("superadmin baru harus berstatus undangan, dapat %v", undangan["status"])
+	}
+	idUndangan, _ := undangan["id"].(string)
+	// Di database baris undangan belum punya kredensial sama sekali.
+	var hashNull, activatedNull bool
+	if err := f.pool.QueryRow(ctx,
+		`SELECT password_hash IS NULL, activated_at IS NULL FROM admin_users WHERE id = $1`, idUndangan).
+		Scan(&hashNull, &activatedNull); err != nil {
+		t.Fatalf("baca superadmin undangan: %v", err)
+	}
+	if !hashNull || !activatedNull {
+		t.Errorf("undangan harus password_hash dan activated_at NULL: %v/%v", hashNull, activatedNull)
+	}
+
+	// Invariant awal: hanya superadmin pertama (rina) yang benar-benar bisa login.
+	var bisaLogin int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM admin_users
+		  WHERE role = 'superadmin' AND is_active
+		    AND password_hash IS NOT NULL AND activated_at IS NOT NULL`).Scan(&bisaLogin); err != nil {
+		t.Fatalf("hitung superadmin bisa login: %v", err)
+	}
+	if bisaLogin != 1 {
+		t.Fatalf("prasyarat: harus tepat 1 superadmin bisa login, dapat %d", bisaLogin)
+	}
+
+	// PEMBLOKIR QA: superadmin undangan TIDAK boleh menghalangi perlindungan.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		f.srv.URL+"/api/v1/admin/users/admin/"+f.adminSA, `{"role":"manager"}`, cookiesSA, csrfSA)
+	if status != http.StatusConflict {
+		t.Fatalf("menurunkan superadmin satu-satunya yang bisa login harus 409, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "LAST_SUPERADMIN")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		f.srv.URL+"/api/v1/admin/users/admin/"+f.adminSA, `{"is_active":false}`, cookiesSA, csrfSA)
+	if status != http.StatusConflict {
+		t.Fatalf("menonaktifkan superadmin terakhir yang bisa login harus 409, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "LAST_SUPERADMIN")
+	// Baris superadmin pertama masih utuh.
+	var role string
+	var aktif bool
+	if err := f.pool.QueryRow(ctx, `SELECT role::text, is_active FROM admin_users WHERE id = $1`, f.adminSA).
+		Scan(&role, &aktif); err != nil {
+		t.Fatalf("baca superadmin pertama: %v", err)
+	}
+	if role != "superadmin" || !aktif {
+		t.Errorf("percobaan yang ditolak tidak boleh mengubah baris: role=%s aktif=%v", role, aktif)
+	}
+
+	// Aktivasi undangan lewat tautan: password_hash DAN activated_at terisi.
+	antre := f.queue.terakhir(t)
+	tautan, _ := antre.Payload["tautan"].(string)
+	token := tokenDariTautan(t, tautan)
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/auth/password/reset",
+		`{"token":"`+token+`","password":"sandibaru123"}`, nil, "")
+	if status != http.StatusNoContent {
+		t.Fatalf("aktivasi superadmin undangan harus 204, dapat %d (%v)", status, body)
+	}
+	pgLogin(t, f.srv, "bagus@example.test", "sandibaru123")
+
+	// Sesudah aktivasi, superadmin kedua benar-benar menjadi pelindung:
+	// penurunan superadmin pertama kini boleh.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		f.srv.URL+"/api/v1/admin/users/admin/"+f.adminSA, `{"role":"manager"}`, cookiesSA, csrfSA)
+	if status != http.StatusOK {
+		t.Fatalf("penurunan harus boleh setelah undangan diaktivasi, dapat %d (%v)", status, body)
+	}
+
+	// Tetap tersisa tepat satu superadmin yang bisa login (yang baru diaktivasi).
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM admin_users
+		  WHERE role = 'superadmin' AND is_active
+		    AND password_hash IS NOT NULL AND activated_at IS NOT NULL`).Scan(&bisaLogin); err != nil {
+		t.Fatalf("hitung superadmin bisa login sesudah penurunan: %v", err)
+	}
+	if bisaLogin != 1 {
+		t.Fatalf("harus tersisa tepat 1 superadmin yang bisa login, dapat %d", bisaLogin)
+	}
+	var sisaAktif int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM admin_users WHERE role = 'superadmin' AND is_active`).Scan(&sisaAktif); err != nil {
+		t.Fatalf("hitung superadmin aktif: %v", err)
+	}
+	if sisaAktif < 1 {
+		t.Fatalf("sistem tidak boleh ditinggalkan tanpa superadmin aktif, dapat %d", sisaAktif)
+	}
+}
+
 func TestPGProteksiSuperadminAktifTerakhir(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()

@@ -9,6 +9,9 @@
 //     ditentukan flag per admin (AP-USR-01).
 //   - Superadmin aktif TERAKHIR tidak boleh dinonaktifkan atau diturunkan
 //     role-nya, termasuk bila dua permintaan datang bersamaan (AP-USR-03).
+//     "Aktif" di sini berarti akun benar-benar BISA LOGIN (is_active DAN sudah
+//     diaktivasi): superadmin yang masih berstatus undangan tidak dihitung
+//     sebagai pelindung, karena ia sendiri tidak bisa masuk.
 //
 // Email undangan TIDAK dikirim langsung dari paket ini: ia diantre lewat
 // interface EmailQueue yang implementasi produksinya menulis email_outbox
@@ -133,13 +136,19 @@ type BranchRepository interface {
 	ListBranchUsers(ctx context.Context) ([]BranchUser, error)
 	BranchUserByID(ctx context.Context, id string) (BranchUser, error)
 	SetBranchUserActive(ctx context.Context, id string, active bool) (BranchUser, error)
+	// EmailTakenByBranch melaporkan apakah email sudah dipakai cabang, baik
+	// sebagai email login akun cabang (branch_users) maupun email cabang itu
+	// sendiri (branches, termasuk cabang yang belum registrasi).
+	EmailTakenByBranch(ctx context.Context, email string) (bool, error)
 }
 
 // AdminRepository menyimpan dan memutasi akun admin.
 //
 // UpdateAdmin WAJIB atomik dan menegakkan larangan menurunkan/menonaktifkan
 // superadmin aktif terakhir, termasuk untuk permintaan yang datang bersamaan;
-// pelanggaran mengembalikan ErrLastSuperadmin.
+// pelanggaran mengembalikan ErrLastSuperadmin. "Aktif" berarti akun bisa
+// login (is_active DAN sudah diaktivasi) — superadmin berstatus undangan
+// bukan pelindung.
 type AdminRepository interface {
 	ListAdmins(ctx context.Context) ([]AdminUser, error)
 	AdminByID(ctx context.Context, id string) (AdminUser, error)
@@ -333,7 +342,8 @@ func (s *Service) Admins(ctx context.Context, actor auth.Actor) ([]AdminUser, er
 // InviteAdmin mengundang admin baru: akun dibuat TANPA kata sandi (belum bisa
 // login dan belum menerima email dokumen), lalu tautan aktivasi sekali pakai
 // diantre lewat outbox undangan (PRD §4.8, §6.2). ttl adalah masa berlaku
-// tautan aktivasi.
+// tautan aktivasi. Email yang sudah dipakai akun admin MAUPUN cabang ditolak
+// dengan ErrEmailTaken.
 func (s *Service) InviteAdmin(ctx context.Context, actor auth.Actor, in NewAdmin, ttl time.Duration) (AdminUser, error) {
 	if !actor.Can(auth.CapAdminUsersAdmin) {
 		return AdminUser{}, ErrForbidden
@@ -350,6 +360,17 @@ func (s *Service) InviteAdmin(ctx context.Context, actor auth.Actor, in NewAdmin
 		return AdminUser{}, ErrEmailTaken
 	} else if !errors.Is(err, ErrNotFound) {
 		return AdminUser{}, err
+	}
+	// Email yang sudah dipakai cabang juga ditolak: login mencari akun admin
+	// lebih dulu, jadi email milik cabang tidak boleh dipegang admin — kalau
+	// tidak, akun cabang itu tidak akan pernah bisa masuk (kebalikan dari
+	// pemeriksaan branch.AdminEmailTaken pada F1-06).
+	takenBranch, err := s.repo.EmailTakenByBranch(ctx, in.Email)
+	if err != nil {
+		return AdminUser{}, err
+	}
+	if takenBranch {
+		return AdminUser{}, ErrEmailTaken
 	}
 
 	admin, err := s.repo.CreateAdmin(ctx, in)

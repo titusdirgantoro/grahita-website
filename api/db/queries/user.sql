@@ -126,6 +126,16 @@ SELECT id, nama, email::text AS email, role::text AS role,
   FROM admin_users
  WHERE email = $1;
 
+-- name: EmailTakenByBranch :one
+-- Email sudah dipakai cabang: baik email login akun cabang (branch_users)
+-- maupun email cabang itu sendiri (branches, termasuk cabang yang belum
+-- registrasi). Login mencari akun admin lebih dulu, jadi email yang dipegang
+-- cabang tidak boleh diundang sebagai admin — kalau tidak, akun cabang itu
+-- tidak akan pernah bisa masuk. Cermin dari branch.AdminEmailTaken (F1-06);
+-- tanpa keduanya, salah satu arah saja yang aman.
+SELECT (EXISTS (SELECT 1 FROM branch_users bu WHERE bu.email = $1)
+     OR EXISTS (SELECT 1 FROM branches b WHERE b.email = $1))::boolean;
+
 -- name: CreateAdminInvitation :one
 -- Admin undangan: password_hash dan activated_at dibiarkan NULL sehingga tidak
 -- bisa login dan tidak menerima email dokumen (PRD AP-USR-02).

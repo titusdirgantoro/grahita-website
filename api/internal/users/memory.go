@@ -192,15 +192,31 @@ func (m *Memory) UpdateAdmin(_ context.Context, next AdminUser) (AdminUser, erro
 	return next, nil
 }
 
-// adaSuperadminAktifLain melaporkan apakah masih ada superadmin aktif selain id.
+// adaSuperadminAktifLain melaporkan apakah masih ada superadmin yang BENAR-BENAR
+// bisa login (aktif DAN sudah diaktivasi) selain id. Superadmin yang masih
+// berstatus undangan TIDAK dihitung: ia sendiri tidak bisa masuk, jadi ia tidak
+// bisa menjadi penjaga agar sistem tidak ditinggalkan tanpa superadmin.
 // Pemanggil harus sudah memegang mutex.
 func (m *Memory) adaSuperadminAktifLain(id string) bool {
 	for _, a := range m.admins {
-		if a.ID != id && a.Role == auth.RoleSuperadmin && a.IsActive {
+		if a.ID != id && a.Role == auth.RoleSuperadmin && a.IsActive && a.ActivatedAt != nil {
 			return true
 		}
 	}
 	return false
+}
+
+// EmailTakenByBranch melaporkan apakah email sudah dipakai cabang, baik sebagai
+// email login akun cabang maupun email cabang yang belum registrasi.
+func (m *Memory) EmailTakenByBranch(_ context.Context, email string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.branches {
+		if NormalizeEmail(b.Email) == NormalizeEmail(email) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // DocumentRecipients mengembalikan email admin ber-flag yang sudah diaktivasi.

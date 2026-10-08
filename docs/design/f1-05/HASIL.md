@@ -75,11 +75,14 @@ kontrak) oleh `TestKontrakOpenAPIIkutRouter` + `TestApiKontrakPathUserManagement
    Repository menjalankan `UPDATE` di dalam satu transaksi yang lebih dulu
    mengambil kunci penasihat tetap (`pg_advisory_xact_lock`, lihat
    `users/postgres.AdminMutationLockKey`), lalu membaca baris target
-   `FOR UPDATE` dan menghitung superadmin aktif lain. Dua permintaan yang
-   datang bersamaan karena itu berurutan dan yang kedua melihat hasil commit
-   yang pertama. Trigger pengaman di database (0003) tetap menjadi jaring
-   terakhir dan dipetakan ke error yang sama (`ErrLastSuperadmin` → 409
-   `LAST_SUPERADMIN`).
+   `FOR UPDATE` dan menghitung superadmin lain **yang benar-benar bisa login**.
+   Dua permintaan yang datang bersamaan karena itu berurutan dan yang kedua
+   melihat hasil commit yang pertama. Trigger pengaman di database (0003) tetap
+   menjadi jaring terakhir dan dipetakan ke error yang sama
+   (`ErrLastSuperadmin` → 409 `LAST_SUPERADMIN`).
+   **Definisi "aktif" = bisa login** (`is_active` DAN `password_hash` DAN
+   `activated_at` terisi). Superadmin yang masih berstatus undangan tidak
+   dihitung sebagai pelindung — lihat Revisi 2 di bawah.
    **Alasan kunci eksplisit:** trigger saja tidak cukup. Probe mandiri di bawah
    membuktikan dua UPDATE bersamaan pada dua superadmin aktif berbeda sama-sama
    lolos trigger dan meninggalkan NOL superadmin aktif.
@@ -255,6 +258,120 @@ terakhir.
 - Galat 409 `LAST_SUPERADMIN` dari server ditampilkan apa adanya di modal
   "Ubah admin".
 
+## Revisi 2 — perbaikan temuan review QA (putaran 1 → 2)
+
+Reviewer `qa-tiusapp` meminta perubahan pada putaran 1 dengan satu temuan
+pemblokir. Dua hal diperbaiki di revisi ini, keduanya di kode produksi (bukan
+hanya di uji).
+
+### 1) PEMBLOKIR — superadmin UNDANGAN tidak boleh menjadi pelindung
+
+Sebelumnya hitungan "superadmin aktif lain" hanya mensyaratkan `is_active`,
+sehingga superadmin yang masih berstatus undangan (`is_active=true` tetapi
+`password_hash`/`activated_at` NULL ⇒ tidak bisa login) ikut terhitung sebagai
+pelindung. Akibatnya superadmin satu-satunya yang benar-benar bisa login masih
+boleh diturunkan/dinonaktifkan dan sistem bisa ditinggalkan **tanpa satu pun
+superadmin yang bisa masuk** (hanya bisa dipulihkan lewat SQL langsung).
+
+`AdminStatus` di kode yang sama sudah mendefinisikan "aktif" sebagai
+`is_active && activated`, dan PRD AP-USR-02 memisahkan "masih undangan" dari
+"aktif", jadi definisi "superadmin aktif terakhir" (AP-USR-03) disamakan:
+
+- `api/internal/users/postgres/postgres.go` (`UpdateAdmin`) — query `sisa`
+  kini mensyaratkan `is_active AND password_hash IS NOT NULL AND
+  activated_at IS NOT NULL` (tetap di dalam transaksi berkunci penasihat +
+  `FOR UPDATE`).
+- `api/internal/users/memory.go` (`adaSuperadminAktifLain`) — menambah syarat
+  `a.ActivatedAt != nil` supaya repository in-memory sejalan.
+- Trigger DB 0003 tetap memakai predikat lama (`is_active` saja) karena
+  migrasi yang sudah dipakai tidak diubah; lapisan service yang lebih ketat
+  tidak berbahaya — trigger tetap jaring terakhir. Keputusan ini dicatat
+  (lihat Risiko residu).
+
+### 2) Email lintas jenis akun diselaraskan (arahan CEO saat kartu di-review)
+
+Arah cabang→admin sudah ditolak F1-06 (`branch.AdminEmailTaken`), tetapi arah
+admin→cabang belum: `POST /api/v1/admin/users/admin` belum menolak email yang
+sudah dipakai cabang. Karena login mencari akun admin lebih dulu, email milik
+cabang yang dipegang admin membuat akun cabang itu tidak akan pernah bisa masuk.
+
+- `api/db/queries/user.sql` — query baru `EmailTakenByBranch`: email sudah
+  dipakai bila ada di `branch_users` (email login akun cabang) ATAU `branches`
+  (termasuk cabang yang belum registrasi) + hasil `sqlc generate`.
+- `api/internal/users/users.go` — `InviteAdmin` memeriksa
+  `EmailTakenByBranch` sebelum membuat undangan (penolakan terjadi SEBELUM
+  baris admin, tautan, dan email dibuat) dan mengembalikan `ErrEmailTaken`
+  (→ 409 `EMAIL_TAKEN`).
+- `api/internal/users/memory.go` + `users/postgres/postgres.go` —
+  implementasi `EmailTakenByBranch` untuk kedua repository.
+- `openapi/openapi.yaml` — deskripsi POST/PUT user admin diperjelas: definisi
+  "aktif" pada perlindungan superadmin terakhir, dan email cabang yang ditolak.
+
+### Uji yang ditambahkan (semua lulus)
+
+| Uji | Membuktikan |
+|---|---|
+| `internal/users.TestSuperadminUndanganTidakMenjadiPelindung` | SA aktif + SA undangan ⇒ turun/nonaktif = `ErrLastSuperadmin`; setelah ada SA teraktivasi kedua ⇒ turun = boleh; SA undangan tidak bisa menjadi satu-satunya penjaga |
+| `internal/users.TestUndangAdminMenolakEmailCabang` | email akun cabang & email cabang (termasuk beda besar-kecil huruf) ⇒ `ErrEmailTaken`; tidak ada baris/tautan/email yang terbuat; email bebas tetap bisa |
+| `internal/httpapi.TestApiUndangAdminEmailCabangDitolak` | `POST /admin/users/admin` email akun cabang / email cabang belum-registrasi ⇒ 409 `EMAIL_TAKEN`; tidak ada email diantre |
+| `internal/httpapi.TestPGUndangAdminEmailCabangDitolak` | di PostgreSQL nyata: email `branches` & `branch_users` (termasuk citext beda huruf) ⇒ 409; tidak ada admin terbuat; email bebas ⇒ 201 |
+| `internal/httpapi.TestPGProteksiSAterakhirTidakDilindungiOlehUndangan` | undangan SA ⇒ turun/nonaktif SA bisa-login tetap 409 `LAST_SUPERADMIN` & baris utuh; setelah undangan diaktivasi lewat tautan ⇒ turun = 200; tepat 1 SA bisa login tersisa |
+
+Uji lama `TestSuperadminAktifTerakhirDilindungi` dan
+`TestSuperadminTerakhirAmanMeskiPermintaanBersamaan` disesuaikan: admin yang
+dimaksud "aktif" kini diberi `ActivatedAt` (memang itulah arti aktif yang baru).
+
+### Kontrol negatif revisi (bukan lulus karena kebetulan)
+
+Dengan query `sisa` dikembalikan sementara ke predikat lama (`is_active` saja),
+uji `TestPGProteksiSAterakhirTidakDilindungiOlehUndangan` **GAGAL** persis
+seperti temuan QA:
+
+```
+integration_users_pg_test.go:376: menurunkan superadmin satu-satunya yang bisa login
+  harus 409, dapat 200 (map[data:map[... email:rina@example.test ... role:manager ...]])
+--- FAIL: TestPGProteksiSAterakhirTidakDilindungiOlehUndangan
+```
+
+Perbaikan lalu dikembalikan dan uji hijau.
+
+### Gerbang verifikasi revisi
+
+DB uji baru `grahita_f105_r5` (PostgreSQL 16.15 di `127.0.0.1:5455`) +
+`scripts/pg-dev-shim.sql` (uuidv7).
+
+| Perintah | Hasil |
+|---|---|
+| `gofmt -l .` | kosong |
+| `go build ./...` / `go vet ./...` | exit 0 |
+| `sqlc-v1.31.1 generate` | tanpa diff tambahan (idempoten) |
+| `go test -race -p 1 -count=1 ./...` (TEST_DATABASE_URL) | **8 paket ok, 0 FAIL** (arch, auth, branch, httpapi, apierr, database, users, worker) |
+| `go test -race -v ./internal/users/...` | 11 PASS, 0 FAIL (termasuk 2 uji baru) |
+| `go test -race -p 1 -run TestPG -v ./internal/httpapi/...` | 18 PASS, 0 FAIL (termasuk 2 uji baru) |
+| `sh scripts/check-secrets.sh` | exit 0, "Tidak ada rahasia terdeteksi pada berkas yang dilacak" |
+| `npx @redocly/cli@1 lint openapi/openapi.yaml` | valid, 10 warning lama (tanpa warning baru) |
+
+Berkas yang berubah pada revisi ini: `api/db/queries/user.sql`,
+`api/internal/db/sqlc/user.sql.go`, `api/internal/users/users.go`,
+`api/internal/users/memory.go`, `api/internal/users/postgres/postgres.go`,
+`api/internal/users/users_test.go`,
+`api/internal/httpapi/router_users_test.go`,
+`api/internal/httpapi/integration_users_pg_test.go`, `openapi/openapi.yaml`,
+`docs/design/f1-05/HASIL.md`. Tidak ada berkas frontend yang tersentuh pada
+revisi ini.
+
+### Temuan non-pemblokir QA putaran 1 yang BELUM dikerjakan di kartu ini
+
+Semuanya tercatat sebagai kewajiban kartu lain dan tetap terbuka:
+
+- Undangan tidak atomik & tidak ada jalur "kirim ulang undangan" → F1-16.
+- Mailer tanpa deadline setelah handshake (`platform/mailer`) → kode platform.
+- Lost update pada `UpdateAdmin` (menulis seluruh baris) → dampak kecil.
+- UI `/pengguna`: badge "Nonaktif" vs tombol "Nonaktifkan" saat CABANG nonaktif.
+- `audit_logs` belum ditulis untuk mutasi akun → kartu audit (F1-06 sudah
+  menambah paket `internal/audit`; menyambungkannya ke mutasi akun belum
+  dikerjakan di sini).
+
 ## Kewajiban turunan untuk kartu lain
 
 - **F1-16**: sediakan implementasi `users.EmailQueue` yang menulis
@@ -289,4 +406,20 @@ terakhir.
   vet/build/gofmt/uji arsitektur lolos).
 - Database uji `grahita_f105` dan skema `probe105` ditinggalkan di server uji
   (DROP DATABASE diblokir kebijakan shell); skema uji sementara di dalamnya
-  dihapus otomatis oleh uji, dan `probe105` sudah di-`DROP SCHEMA`.
+  dihapus otomatis oleh uji, dan `probe105` sudah di-`DROP SCHEMA`. Revisi 2
+  memakai DB uji baru `grahita_f105_r5` (skema uji per-uji dihapus otomatis).
+- **Trigger DB 0003 masih memakai predikat lama** (`is_active` saja, tanpa
+  `password_hash`/`activated_at`). Trigger sengaja tidak diubah karena migrasi
+  yang sudah dipakai; lapisan service lebih ketat sehingga tidak ada celah baru
+  (trigger hanya bisa MENOLAK lebih banyak, tidak pernah meloloskan). Selisih
+  perilaku hanya pada keadaan ekstrem "satu-satunya superadmin adalah undangan":
+  service & trigger sama-sama menolak penurunannya. Bila kelak trigger ingin
+  disamakan, itu keputusan kartu migrasi, bukan kartu ini.
+- **Undangan belum atomik**: `CreateAdmin` commit lebih dulu, baru token
+  aktivasi + antrean email dibuat. Bila token/antre gagal, baris admin
+  tertinggal sebagai undangan tanpa jalur aplikatif "kirim ulang undangan"
+  (undang ulang → 409 `EMAIL_TAKEN`). Dicatat QA sebagai kewajiban F1-16
+  (outbox + resend), tidak dikerjakan di kartu ini.
+- **Mailer tanpa deadline per operasi** setelah handshake
+  (`api/internal/platform/mailer/mailer.go`): hanya dial yang ber-timeout.
+  Kode platform, di luar cakupan berkas F1-05.

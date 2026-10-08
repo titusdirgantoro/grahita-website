@@ -315,8 +315,9 @@ func TestAdminFlagSajaMenerimaDokumen(t *testing.T) {
 
 func TestSuperadminAktifTerakhirDilindungi(t *testing.T) {
 	h := newHarness(t)
-	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true})
-	h.repo.PutAdmin(users.AdminUser{ID: "adm-mgr", Nama: "Budi", Email: "budi@example.test", Role: auth.RoleManager, IsActive: true})
+	aktif := time.Now().UTC()
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-mgr", Nama: "Budi", Email: "budi@example.test", Role: auth.RoleManager, IsActive: true, ActivatedAt: &aktif})
 	demote := auth.RoleManager
 
 	if _, err := h.svc.UpdateAdmin(context.Background(), adminActor(auth.RoleSuperadmin), "adm-sa", users.AdminPatch{Role: &demote}); !errors.Is(err, users.ErrLastSuperadmin) {
@@ -334,7 +335,7 @@ func TestSuperadminAktifTerakhirDilindungi(t *testing.T) {
 	}
 
 	// Setelah ada superadmin aktif kedua, penurunan boleh.
-	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa2", Nama: "Andi", Email: "andi@example.test", Role: auth.RoleSuperadmin, IsActive: true})
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa2", Nama: "Andi", Email: "andi@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
 	if _, err := h.svc.UpdateAdmin(context.Background(), adminActor(auth.RoleSuperadmin), "adm-sa", users.AdminPatch{Role: &demote}); err != nil {
 		t.Errorf("penurunan harus boleh saat masih ada superadmin lain: %v", err)
 	}
@@ -342,8 +343,9 @@ func TestSuperadminAktifTerakhirDilindungi(t *testing.T) {
 
 func TestSuperadminTerakhirAmanMeskiPermintaanBersamaan(t *testing.T) {
 	h := newHarness(t)
-	h.repo.PutAdmin(users.AdminUser{ID: "adm-a", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true})
-	h.repo.PutAdmin(users.AdminUser{ID: "adm-b", Nama: "Andi", Email: "andi@example.test", Role: auth.RoleSuperadmin, IsActive: true})
+	aktif := time.Now().UTC()
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-a", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-b", Nama: "Andi", Email: "andi@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
 	demote := auth.RoleManager
 
 	var wg sync.WaitGroup
@@ -384,5 +386,74 @@ func TestSuperadminTerakhirAmanMeskiPermintaanBersamaan(t *testing.T) {
 	}
 	if sisa != 1 {
 		t.Fatalf("harus tersisa tepat 1 superadmin aktif, dapat %d", sisa)
+	}
+}
+
+// TestSuperadminUndanganTidakMenjadiPelindung memastikan superadmin yang masih
+// berstatus UNDANGAN (is_active=true tetapi belum diaktivasi sehingga tidak bisa
+// login) TIDAK dihitung sebagai penjaga: menurunkan/menonaktifkan superadmin
+// satu-satunya yang benar-benar bisa login harus tetap ditolak, supaya sistem
+// tidak pernah ditinggalkan tanpa superadmin yang bisa masuk (temuan QA F1-05).
+func TestSuperadminUndanganTidakMenjadiPelindung(t *testing.T) {
+	h := newHarness(t)
+	aktif := time.Now().UTC()
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
+	// Superadmin UNDANGAN: is_active=true, activated_at masih kosong.
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-undang", Nama: "Bagus", Email: "bagus@example.test", Role: auth.RoleSuperadmin, IsActive: true})
+
+	demote := auth.RoleManager
+	if _, err := h.svc.UpdateAdmin(context.Background(), adminActor(auth.RoleSuperadmin), "adm-sa", users.AdminPatch{Role: &demote}); !errors.Is(err, users.ErrLastSuperadmin) {
+		t.Errorf("superadmin undangan tidak boleh dihitung sebagai pelindung; mau ErrLastSuperadmin, dapat %v", err)
+	}
+	mati := false
+	if _, err := h.svc.UpdateAdmin(context.Background(), adminActor(auth.RoleSuperadmin), "adm-sa", users.AdminPatch{IsActive: &mati}); !errors.Is(err, users.ErrLastSuperadmin) {
+		t.Errorf("menonaktifkan superadmin terakhir yang bisa login harus ditolak, dapat %v", err)
+	}
+
+	// Superadmin KEDUA yang sudah diaktivasi (bisa login) barulah pelindung.
+	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa2", Nama: "Andi", Email: "andi@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
+	if _, err := h.svc.UpdateAdmin(context.Background(), adminActor(auth.RoleSuperadmin), "adm-sa", users.AdminPatch{Role: &demote}); err != nil {
+		t.Fatalf("penurunan harus boleh saat ada superadmin teraktivasi lain: %v", err)
+	}
+
+	// Sisa superadmin yang bisa login: adm-sa2 (adm-undang masih undangan),
+	// jadi adm-sa2 pun masih dilindungi.
+	matiAtas := false
+	if _, err := h.svc.UpdateAdmin(context.Background(), adminActor(auth.RoleSuperadmin), "adm-sa2", users.AdminPatch{IsActive: &matiAtas}); !errors.Is(err, users.ErrLastSuperadmin) {
+		t.Errorf("superadmin undangan tidak boleh menjadi satu-satunya penjaga; mau ErrLastSuperadmin, dapat %v", err)
+	}
+}
+
+// TestUndangAdminMenolakEmailCabang memastikan email yang sudah dipakai cabang
+// (email login akun cabang maupun email cabang yang belum registrasi) ditolak
+// saat mengundang admin — kebalikan dari pemeriksaan F1-06.
+func TestUndangAdminMenolakEmailCabang(t *testing.T) {
+	h := newHarness(t)
+	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", Email: "a@example.test", IsActive: true, BranchActive: true})
+	h.repo.PutBranch(users.BranchUser{BranchID: "br-b", Nama: "Grahita B", Email: "b@example.test", BranchActive: true})
+
+	for _, email := range []string{"a@example.test", "A@Example.Test", "b@example.test"} {
+		_, err := h.svc.InviteAdmin(context.Background(), adminActor(auth.RoleSuperadmin),
+			users.NewAdmin{Nama: "Bentrok", Email: email, Role: auth.RoleManager}, time.Hour)
+		if !errors.Is(err, users.ErrEmailTaken) {
+			t.Errorf("email cabang %q harus ErrEmailTaken, dapat %v", email, err)
+		}
+	}
+	// Tidak ada admin yang terbuat dari percobaan yang ditolak.
+	rows, err := h.repo.ListAdmins(context.Background())
+	if err != nil {
+		t.Fatalf("daftar admin: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("tidak boleh ada admin terbuat dari email cabang, dapat %d baris", len(rows))
+	}
+	if len(h.resetter.issued) != 0 || len(h.queue.queued) != 0 {
+		t.Errorf("penolakan harus terjadi sebelum tautan/email dibuat: issued=%d antre=%d", len(h.resetter.issued), len(h.queue.queued))
+	}
+
+	// Email yang benar-benar bebas tetap boleh diundang.
+	if _, err := h.svc.InviteAdmin(context.Background(), adminActor(auth.RoleSuperadmin),
+		users.NewAdmin{Nama: "Bebas", Email: "bebas@example.test", Role: auth.RoleManager}, time.Hour); err != nil {
+		t.Fatalf("email bebas harus boleh diundang: %v", err)
 	}
 }

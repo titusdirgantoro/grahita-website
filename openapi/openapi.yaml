@@ -787,6 +787,11 @@ paths:
         pakai dan diantre lewat email_outbox (F1-16) — tautan aslinya tidak
         pernah dikembalikan endpoint ini. Tautan berlaku `token_hari` (default
         14 hari).
+
+        Email yang sudah dipakai akun admin LAIN maupun akun/email cabang
+        ditolak dengan `409 EMAIL_TAKEN`: login mencari akun admin lebih dulu,
+        jadi email milik cabang tidak boleh dipegang admin (kalau tidak, akun
+        cabang itu tidak akan pernah bisa masuk).
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -829,6 +834,13 @@ paths:
         Field yang tidak dikirim tidak diubah. Superadmin aktif TERAKHIR tidak
         boleh dinonaktifkan atau diturunkan menjadi Manager, termasuk bila dua
         permintaan datang bersamaan (`409 LAST_SUPERADMIN`, PRD AP-USR-03).
+
+        "Aktif" di sini berarti superadmin yang benar-benar BISA LOGIN
+        (`is_active` DAN sudah diaktivasi). Superadmin yang masih berstatus
+        undangan (belum mengaktivasi akunnya sehingga tidak bisa masuk) TIDAK
+        dihitung sebagai pelindung, supaya sistem tidak pernah ditinggalkan
+        tanpa satu pun superadmin yang bisa login.
+
         Menonaktifkan admin mencabut seluruh sesinya.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"

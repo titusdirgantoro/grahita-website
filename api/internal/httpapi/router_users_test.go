@@ -373,6 +373,30 @@ func TestApiUndangAdminLaluAktivasi(t *testing.T) {
 	assertErrorShape(t, body, "EMAIL_TAKEN")
 }
 
+// TestApiUndangAdminEmailCabangDitolak memastikan POST /admin/users/admin
+// menolak email yang sudah dipakai cabang — email login akun cabang maupun email
+// cabang yang belum registrasi — bukan hanya email admin lain (kebalikan dari
+// pemeriksaan F1-06 pada master cabang).
+func TestApiUndangAdminEmailCabangDitolak(t *testing.T) {
+	us := newUsersServer(t, nil)
+	cookiesSA, csrfSA := login(t, us.srv, "rina@example.test")
+
+	// "a@example.test" = email akun cabang A, "d@example.test" = email cabang D
+	// yang belum registrasi.
+	for _, email := range []string{"a@example.test", "d@example.test"} {
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, us.srv.URL+"/api/v1/admin/users/admin",
+			`{"nama":"Bentrok","email":"`+email+`","role":"manager"}`, cookiesSA, csrfSA)
+		if status != http.StatusConflict {
+			t.Fatalf("email cabang %s harus 409, dapat %d (%v)", email, status, body)
+		}
+		assertErrorShape(t, body, "EMAIL_TAKEN")
+	}
+	// Penolakan terjadi sebelum undangan dibuat: tidak ada email yang diantre.
+	if len(us.queue.queued) != 0 {
+		t.Errorf("email undangan tidak boleh diantre saat email ditolak, dapat %d", len(us.queue.queued))
+	}
+}
+
 func TestApiSuperadminTerakhirDilindungiDiApi(t *testing.T) {
 	us := newUsersServer(t, nil)
 	cookiesSA, csrfSA := login(t, us.srv, "rina@example.test")
