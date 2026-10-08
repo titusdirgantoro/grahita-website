@@ -14,8 +14,24 @@
 
 -- name: CountPaymentProofs :one
 -- Jumlah bukti satu pesanan; dipakai menegakkan batas `max_file` SERVER
--- (bukan hanya validasi klien di UI).
+-- (bukan hanya validasi klien di UI). Selalu dipanggil DI DALAM transaksi
+-- CommitProofs, setelah baris pesanan dikunci (LockOrderForProof), supaya
+-- hitung-dan-tulis tidak bisa dilampaui unggahan paralel.
 SELECT count(*)::bigint FROM payment_proofs WHERE order_id = sqlc.arg(order_id)::uuid;
+
+-- name: Sha256PaymentProofs :many
+-- Sidik jari isi seluruh bukti satu pesanan, terlama dulu. Dibaca SEBELUM
+-- berkas ditulis ke object storage supaya duplikat ditolak tanpa menyentuh
+-- storage; indeks unik (order_id, sha256) tetap menjadi benteng terakhir.
+SELECT sha256 FROM payment_proofs
+ WHERE order_id = sqlc.arg(order_id)::uuid
+ ORDER BY created_at, id;
+
+-- name: LockOrderForProof :one
+-- Mengunci baris pesanan selama transaksi unggah bukti: hitung + insert jadi
+-- aman-balapan per pesanan (dua permintaan bersamaan tidak bisa sama-sama
+-- membaca hitungan di bawah batas).
+SELECT o.id FROM orders o WHERE o.id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: InsertPaymentProof :one
 -- Menyimpan metadata satu bukti. sha256 NOT NULL sehingga duplikat isi pada

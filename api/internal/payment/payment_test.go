@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,21 +51,15 @@ func shaHex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// timelineSpy menangkap peristiwa timeline yang dicatat service.
-type timelineSpy struct{ events []string }
-
-func (t *timelineSpy) RecordProofUpload(_ context.Context, orderID, nama, kind, actorID string) error {
-	t.events = append(t.events, orderID+"|"+kind+"|"+nama+"|"+actorID)
-	return nil
-}
-
+// Alamat pesanan uji. Repository & storage in-memory sudah cukup untuk menguji
+// seluruh aturan domain.
 const (
 	orderA = "0193c0de-0000-7000-8000-00000000000a"
 	orderB = "0193c0de-0000-7000-8000-00000000000b"
 )
 
 // setup menyiapkan service dengan repository & storage in-memory.
-func setup(t *testing.T, maxFile, maxMB int64, orders ...OrderRef) (*Service, *Memory, *storage.Memory, *timelineSpy) {
+func setup(t *testing.T, maxFile, maxMB int64, orders ...OrderRef) (*Service, *Memory, *storage.Memory) {
 	t.Helper()
 	repo := NewMemory()
 	src := NewMemoryOrderSource()
@@ -71,9 +67,8 @@ func setup(t *testing.T, maxFile, maxMB int64, orders ...OrderRef) (*Service, *M
 		src.Put(o)
 	}
 	store := storage.NewMemory("/files")
-	tl := &timelineSpy{}
-	svc := NewService(repo, src, store, configBatas(maxFile, maxMB), WithTimeline(tl))
-	return svc, repo, store, tl
+	svc := NewService(repo, src, store, configBatas(maxFile, maxMB))
+	return svc, repo, store
 }
 
 func branchActor(id, branchID string) auth.Actor {
@@ -89,7 +84,7 @@ func input(nama string, isi []byte) FileInput {
 }
 
 func TestKenaliMagicBytesDanEkstensiPalsu(t *testing.T) {
-	svc, _, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svc, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	actor := branchActor("u1", "br-a")
 
 	kasus := []struct {
@@ -135,7 +130,7 @@ func TestKenaliMagicBytesDanEkstensiPalsu(t *testing.T) {
 }
 
 func TestUploadMenyimpanKunciAcakDanSha256(t *testing.T) {
-	svc, repo, store, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svc, repo, store := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	isi := berkasPNG("gambar-bukti")
 	got, err := svc.Upload(context.Background(), branchActor("u1", "br-a"), orderA,
 		[]FileInput{input("../../etc/passwd.png", isi)})
@@ -186,7 +181,7 @@ func TestUploadMenyimpanKunciAcakDanSha256(t *testing.T) {
 }
 
 func TestUploadMenolakDuplikatDanBatasJumlah(t *testing.T) {
-	svc, _, _, _ := setup(t, 2, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svc, _, _ := setup(t, 2, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	actor := branchActor("u1", "br-a")
 
 	isi := berkasJPEG("sama")
@@ -200,13 +195,13 @@ func TestUploadMenolakDuplikatDanBatasJumlah(t *testing.T) {
 	}
 	// Duplikat di dalam SATU permintaan juga ditolak sebelum apa pun tersimpan
 	// (batas jumlah dilepas supaya yang diuji benar-benar pemeriksaan sha256).
-	svcLonggar, _, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svcLonggar, repoLonggar, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	_, err = svcLonggar.Upload(context.Background(), actor, orderA,
 		[]FileInput{input("c.jpg", berkasJPEG("ccc")), input("d.jpg", berkasJPEG("ccc"))})
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("duplikat dalam satu permintaan harus ErrDuplicate, dapat %v", err)
 	}
-	if sisa, _ := svcLonggar.List(context.Background(), actor, orderA); len(sisa) != 0 {
+	if sisa, _ := repoLonggar.ListByOrder(context.Background(), orderA); len(sisa) != 0 {
 		t.Errorf("permintaan yang gagal tidak boleh menyisakan bukti, dapat %d", len(sisa))
 	}
 	// Batas max_file=2: tersimpan 1, minta 2 lagi → ErrTooMany.
@@ -227,7 +222,7 @@ func TestUploadMenolakDuplikatDanBatasJumlah(t *testing.T) {
 }
 
 func TestUploadMenolakUkuranMelebihiMaxMB(t *testing.T) {
-	svc, _, _, _ := setup(t, 5, 1, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svc, _, _ := setup(t, 5, 1, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	actor := branchActor("u1", "br-a")
 
 	// 1 MB + 1 byte → ditolak; tepat 1 MB → diterima.
@@ -245,7 +240,7 @@ func TestUploadMenolakUkuranMelebihiMaxMB(t *testing.T) {
 }
 
 func TestUploadIsolasiCabangDanPenguncianStatus(t *testing.T) {
-	svc, _, _, _ := setup(t, 5, 5,
+	svc, _, _ := setup(t, 5, 5,
 		OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted},
 		OrderRef{ID: orderB, BranchID: "br-b", Status: StatusSubmitted},
 	)
@@ -269,7 +264,7 @@ func TestUploadIsolasiCabangDanPenguncianStatus(t *testing.T) {
 	}
 
 	// Cabang tidak boleh menambah bukti ke pesanan Done; admin tetap boleh.
-	svc2, _, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusDone})
+	svc2, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusDone})
 	if _, err := svc2.Upload(context.Background(), branchActor("u1", "br-a"), orderA, []FileInput{input("x.pdf", isi)}); !errors.Is(err, ErrLocked) {
 		t.Fatalf("pesanan Done untuk cabang harus ErrLocked, dapat %v", err)
 	}
@@ -282,7 +277,7 @@ func TestUploadIsolasiCabangDanPenguncianStatus(t *testing.T) {
 }
 
 func TestUploadAdminMenandaiNamaDanTimeline(t *testing.T) {
-	svc, _, _, tl := setup(t, 5, 5,
+	svc, repo, _ := setup(t, 5, 5,
 		OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted},
 		OrderRef{ID: orderB, BranchID: "br-b", Status: StatusDraft},
 	)
@@ -296,26 +291,27 @@ func TestUploadAdminMenandaiNamaDanTimeline(t *testing.T) {
 		t.Errorf("penanda pengunggah admin salah: %+v", got[0])
 	}
 	// Draft belum punya timeline (keputusan kartu F1-11/F1-14).
-	if len(tl.events) != 0 {
-		t.Errorf("draft tidak boleh menghasilkan event timeline, dapat %v", tl.events)
+	if ev := repo.Events(); len(ev) != 0 {
+		t.Errorf("draft tidak boleh menghasilkan event timeline, dapat %v", ev)
 	}
 	// Pesanan Submitted → tiap bukti mencatat satu event dengan nama pengunggah.
 	if _, err := svc.Upload(context.Background(), adminActor("sa", "Rina"), orderA,
 		[]FileInput{input("a.jpg", berkasJPEG("a")), input("b.jpg", berkasJPEG("b"))}); err != nil {
 		t.Fatalf("unggah admin 2 berkas: %v", err)
 	}
-	if len(tl.events) != 2 {
-		t.Fatalf("event timeline = %d, mau 2: %v", len(tl.events), tl.events)
+	ev := repo.Events()
+	if len(ev) != 2 {
+		t.Fatalf("event timeline = %d, mau 2: %v", len(ev), ev)
 	}
-	for _, e := range tl.events {
-		if !strings.Contains(e, "|admin|Rina|sa") {
-			t.Errorf("event timeline tidak menandai nama admin: %q", e)
+	for _, e := range ev {
+		if e.OrderID != orderA || e.Kind != "admin" || e.Nama != "Rina" || e.ActorID != "sa" {
+			t.Errorf("event timeline tidak menandai pengunggah admin: %+v", e)
 		}
 	}
 }
 
 func TestDownloadURLAmanDanBerumurPendek(t *testing.T) {
-	svc, _, _, _ := setup(t, 5, 5,
+	svc, _, _ := setup(t, 5, 5,
 		OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted},
 		OrderRef{ID: orderB, BranchID: "br-b", Status: StatusSubmitted},
 	)
@@ -362,7 +358,7 @@ func TestDownloadURLAmanDanBerumurPendek(t *testing.T) {
 }
 
 func TestUploadTanpaBerkasDanBatasPermintaan(t *testing.T) {
-	svc, _, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svc, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	if _, err := svc.Upload(context.Background(), branchActor("u1", "br-a"), orderA, nil); !errors.Is(err, ErrNoFile) {
 		t.Fatalf("tanpa berkas harus ErrNoFile, dapat %v", err)
 	}
@@ -394,7 +390,7 @@ func TestUploadStorageBelumSiap(t *testing.T) {
 }
 
 func TestUploadBersihkanNamaBerkas(t *testing.T) {
-	svc, _, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svc, _, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	got, err := svc.Upload(context.Background(), branchActor("u1", "br-a"), orderA,
 		[]FileInput{input("/tmp/a\x00b\r\n.jpg", berkasJPEG("foto"))})
 	if err != nil {
@@ -418,13 +414,13 @@ func TestUploadBersihkanNamaBerkas(t *testing.T) {
 }
 
 func TestTimelinePesananDraftTidakDicatat(t *testing.T) {
-	svc, _, _, tl := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusDraft})
+	svc, repo, _ := setup(t, 5, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusDraft})
 	if _, err := svc.Upload(context.Background(), branchActor("u1", "br-a"), orderA,
 		[]FileInput{input("modal.jpg", berkasJPEG("m"))}); err != nil {
 		t.Fatalf("unggah pada draft (modal submit F1-14): %v", err)
 	}
-	if len(tl.events) != 0 {
-		t.Errorf("draft tidak boleh menulis timeline, dapat %v", tl.events)
+	if ev := repo.Events(); len(ev) != 0 {
+		t.Errorf("draft tidak boleh menulis timeline, dapat %v", ev)
 	}
 }
 
@@ -444,7 +440,7 @@ func TestKunciAcakSelaluUnik(t *testing.T) {
 
 func TestBatasDariSetelanBukanKonstanta(t *testing.T) {
 	// max_file=1 → unggahan kedua ditolak, walau default PRD 5.
-	svc, _, _, _ := setup(t, 1, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	svc, _, _ := setup(t, 1, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
 	actor := branchActor("u1", "br-a")
 	if _, err := svc.Upload(context.Background(), actor, orderA, []FileInput{input("a.jpg", berkasJPEG("a"))}); err != nil {
 		t.Fatalf("unggah pertama: %v", err)
@@ -471,5 +467,193 @@ func TestPresignTTLBisaDiubah(t *testing.T) {
 	}
 	if dl.ExpiresIn != 60 {
 		t.Errorf("expires_in = %d, mau 60", dl.ExpiresIn)
+	}
+}
+
+// storeUji membungkus storage.Memory dan mencatat kunci objek yang benar-benar
+// tersimpan, supaya pengujian bisa memastikan tidak ada objek yatim.
+type storeUji struct {
+	*storage.Memory
+	mu    sync.Mutex
+	kunci map[string]bool
+}
+
+func newStoreUji() *storeUji {
+	return &storeUji{Memory: storage.NewMemory("/files"), kunci: map[string]bool{}}
+}
+
+func (s *storeUji) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if err := s.Memory.Put(ctx, key, body, size, contentType); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.kunci[key] = true
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *storeUji) Delete(ctx context.Context, key string) error {
+	if err := s.Memory.Delete(ctx, key); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.kunci, key)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *storeUji) jumlah() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.kunci)
+}
+
+// storeGagal meniru object storage yang gagal di tengah penulisan: berkas
+// ke-`gagalMulai` dan seterusnya tidak pernah masuk.
+type storeGagal struct {
+	*storeUji
+	gagalMulai int
+	ke         int
+}
+
+func (s *storeGagal) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	s.ke++
+	if s.ke >= s.gagalMulai {
+		return errors.New("storage penuh")
+	}
+	return s.storeUji.Put(ctx, key, body, size, contentType)
+}
+
+// repoGagalCommit selalu gagal saat komit metadata: dipakai memastikan service
+// membersihkan SELURUH objek yang sudah ditulis, bukan hanya yang terakhir.
+type repoGagalCommit struct{ *Memory }
+
+func (repoGagalCommit) CommitProofs(context.Context, CommitRequest) ([]Proof, error) {
+	return nil, ErrStorageUnavailable
+}
+
+// TestUploadPermintaanGagalTidakMenyisakanApaPun mengulang temuan QA: satu
+// permintaan berisi berkas BARU + berkas yang isinya sudah tersimpan harus
+// ditolak tanpa menambah baris maupun objek apa pun. Dulu berkas baru itu
+// ikut tersimpan permanen walau responsnya 409.
+func TestUploadPermintaanGagalTidakMenyisakanApaPun(t *testing.T) {
+	repo := NewMemory()
+	src := NewMemoryOrderSource()
+	src.Put(OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	store := newStoreUji()
+	svc := NewService(repo, src, store, configBatas(5, 5))
+	actor := branchActor("u1", "br-a")
+	ctx := context.Background()
+
+	isiLama := berkasJPEG("sudah-ada")
+	if _, err := svc.Upload(ctx, actor, orderA, []FileInput{input("a.jpg", isiLama)}); err != nil {
+		t.Fatalf("unggah pertama: %v", err)
+	}
+	// Satu permintaan: satu berkas baru + satu berkas yang isinya duplikat.
+	_, err := svc.Upload(ctx, actor, orderA,
+		[]FileInput{input("b.jpg", berkasJPEG("baru")), input("c.jpg", isiLama)})
+	if !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplikat dalam satu permintaan harus ErrDuplicate, dapat %v", err)
+	}
+	list, err := repo.ListByOrder(ctx, orderA)
+	if err != nil {
+		t.Fatalf("daftar bukti: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("permintaan gagal tidak boleh menambah baris, dapat %d", len(list))
+	}
+	if n := store.jumlah(); n != 1 {
+		t.Errorf("storage harus tetap berisi 1 objek, dapat %d", n)
+	}
+	if ev := repo.Events(); len(ev) != 1 {
+		t.Errorf("timeline tidak boleh bertambah dari permintaan gagal, dapat %d", len(ev))
+	}
+}
+
+// TestUploadGagalDiTengahStorageMembersihkanSemuaObjek memastikan kegagalan
+// penulisan berkas ke-2 membersihkan berkas ke-1 yang sudah terlanjur ditulis.
+func TestUploadGagalDiTengahStorageMembersihkanSemuaObjek(t *testing.T) {
+	repo := NewMemory()
+	src := NewMemoryOrderSource()
+	src.Put(OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	store := &storeGagal{storeUji: newStoreUji(), gagalMulai: 2}
+	svc := NewService(repo, src, store, configBatas(5, 5))
+
+	_, err := svc.Upload(context.Background(), branchActor("u1", "br-a"), orderA,
+		[]FileInput{input("a.jpg", berkasJPEG("a")), input("b.jpg", berkasJPEG("b"))})
+	if !errors.Is(err, ErrStorageUnavailable) {
+		t.Fatalf("kegagalan storage harus ErrStorageUnavailable, dapat %v", err)
+	}
+	if n := store.jumlah(); n != 0 {
+		t.Errorf("objek yatim tersisa setelah kegagalan storage: %d", n)
+	}
+	if list, _ := repo.ListByOrder(context.Background(), orderA); len(list) != 0 {
+		t.Errorf("kegagalan storage tidak boleh menyisakan baris bukti: %d", len(list))
+	}
+}
+
+// TestUploadGagalCommitMembersihkanSemuaObjek menutup celah object orphan:
+// bila transaksi metadata batal, seluruh objek yang sudah ditulis dihapus.
+func TestUploadGagalCommitMembersihkanSemuaObjek(t *testing.T) {
+	repo := repoGagalCommit{Memory: NewMemory()}
+	src := NewMemoryOrderSource()
+	src.Put(OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	store := newStoreUji()
+	svc := NewService(repo, src, store, configBatas(5, 5))
+
+	_, err := svc.Upload(context.Background(), branchActor("u1", "br-a"), orderA,
+		[]FileInput{input("a.jpg", berkasJPEG("a")), input("b.jpg", berkasJPEG("b"))})
+	if !errors.Is(err, ErrStorageUnavailable) {
+		t.Fatalf("commit gagal harus diteruskan sebagai ErrStorageUnavailable, dapat %v", err)
+	}
+	if n := store.jumlah(); n != 0 {
+		t.Errorf("semua objek harus dibersihkan saat commit batal, sisa %d", n)
+	}
+}
+
+// TestUploadParalelTidakMelampauiMaxFile menuntut batas jumlah tidak bisa
+// dilampaui unggahan serentak: 2×max_file permintaan bersamaan harus
+// menyisakan tepat max_file baris.
+func TestUploadParalelTidakMelampauiMaxFile(t *testing.T) {
+	const maxFile = 3
+	total := 2 * maxFile
+	svc, repo, _ := setup(t, maxFile, 5, OrderRef{ID: orderA, BranchID: "br-a", Status: StatusSubmitted})
+	actor := branchActor("u1", "br-a")
+
+	errs := make([]error, total)
+	var wg sync.WaitGroup
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			nama := fmt.Sprintf("paralel-%d.jpg", i)
+			_, errs[i] = svc.Upload(context.Background(), actor, orderA,
+				[]FileInput{input(nama, berkasJPEG(nama))})
+		}(i)
+	}
+	wg.Wait()
+
+	var sukses, ditolak int
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			sukses++
+		case errors.Is(err, ErrTooMany):
+			ditolak++
+		default:
+			t.Errorf("unggahan ke-%d gagal tak terduga: %v", i, err)
+		}
+	}
+	list, err := repo.ListByOrder(context.Background(), orderA)
+	if err != nil {
+		t.Fatalf("daftar bukti: %v", err)
+	}
+	if len(list) != maxFile {
+		t.Fatalf("tepat %d bukti harus tersimpan, dapat %d (sukses=%d ditolak=%d)",
+			maxFile, len(list), sukses, ditolak)
+	}
+	if sukses != maxFile || ditolak != total-maxFile {
+		t.Errorf("sebaran hasil salah: sukses=%d ditolak=%d (mau %d/%d)",
+			sukses, ditolak, maxFile, total-maxFile)
 	}
 }

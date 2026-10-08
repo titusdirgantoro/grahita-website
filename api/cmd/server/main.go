@@ -270,13 +270,13 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// daftar dan detail (F1-11 + F1-12).
 	orderSvc := order.NewService(orderpg.New(pool), catalogSvc, settingsSvc)
 
-	// Bukti transfer pesanan (F1-13). Satu repository melayani tiga peran:
-	// metadata bukti, konteks pesanan untuk otorisasi, dan timeline pesanan.
-	// Batas unggah (max_file/max_mb) dibaca dari setelan yang sama dengan
-	// pengaturan sistem, jadi angka di UI dan server tidak pernah berbeda.
+	// Bukti transfer pesanan (F1-13). Satu repository melayani dua peran:
+	// metadata bukti (termasuk komit atomik + timeline) dan konteks pesanan
+	// untuk otorisasi. Batas unggah (max_file/max_mb) dibaca dari setelan yang
+	// sama dengan pengaturan sistem, jadi angka di UI dan server tidak pernah
+	// berbeda.
 	paymentRepo := paymentpg.New(pool)
-	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc,
-		payment.WithTimeline(paymentRepo))
+	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc)
 
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Config:              cfg,

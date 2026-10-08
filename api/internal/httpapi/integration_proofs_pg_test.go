@@ -14,11 +14,157 @@ package httpapi
 // Uji dilewati bila TEST_DATABASE_URL tidak diisi.
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
+	"mime/multipart"
 	"net/http"
+	"sync"
 	"testing"
+
+	"github.com/grahita/portal/api/internal/platform/httpx"
 )
+
+// TestPGPermintaanGagalTidakMenyisakanBaris mengulang temuan QA #1 pada
+// PostgreSQL nyata: satu permintaan berisi berkas BARU + berkas duplikat harus
+// dijawab 409 TANPA menambah baris (maupun objek storage).
+func TestPGPermintaanGagalTidakMenyisakanBaris(t *testing.T) {
+	f := newPGFixture(t)
+	pesanan := insertOrder(t, f, f.branchA, "submitted", "2026-10-0016")
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	url := f.srv.URL + "/api/v1/orders/" + pesanan + "/proofs"
+
+	isiLama := berkasJPEGUji("isi-yang-sudah-ada")
+	if resp, body := multipartUnggah(t, url, cookies, csrf,
+		map[string][]byte{"a.jpg": isiLama}); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("unggah pertama: %d (%v)", resp.StatusCode, body)
+	}
+	// Satu permintaan: berkas baru (b.jpg) + berkas yang isinya sudah tersimpan.
+	resp, body := multipartUnggah(t, url, cookies, csrf, map[string][]byte{
+		"b.jpg": berkasJPEGUji("isi-baru"),
+		"c.jpg": isiLama,
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("permintaan berisi duplikat harus 409, dapat %d (%v)", resp.StatusCode, body)
+	}
+	assertErrorShape(t, body, "PROOF_DUPLICATE")
+
+	var jumlah int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM payment_proofs WHERE order_id = $1`, pesanan).Scan(&jumlah); err != nil {
+		t.Fatalf("hitung bukti: %v", err)
+	}
+	if jumlah != 1 {
+		t.Errorf("permintaan yang gagal tidak boleh menambah baris, dapat %d", jumlah)
+	}
+	var events int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM order_events WHERE order_id = $1`, pesanan).Scan(&events); err != nil {
+		t.Fatalf("hitung order_events: %v", err)
+	}
+	if events != 1 {
+		t.Errorf("permintaan yang gagal tidak boleh menambah timeline, dapat %d", events)
+	}
+	if n := f.objek.jumlah(); n != 1 {
+		t.Errorf("storage harus tetap berisi 1 objek, dapat %d", n)
+	}
+}
+
+// TestPGBatasJumlahAmanBalapan menuntut batas max_file tidak bisa dilampaui
+// unggahan serentak: 2×max_file permintaan paralel pada satu pesanan harus
+// menyisakan tepat max_file baris (temuan QA #2).
+func TestPGBatasJumlahAmanBalapan(t *testing.T) {
+	f := newPGFixture(t)
+	pesanan := insertOrder(t, f, f.branchA, "submitted", "2026-10-0017")
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	url := f.srv.URL + "/api/v1/orders/" + pesanan + "/proofs"
+
+	// max_file bawaan seed PRD §4.9 = 5.
+	const maxFile = 5
+	total := 2 * maxFile
+	kode := make([]int, total)
+	var wg sync.WaitGroup
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			nama := fmt.Sprintf("paralel-%d.jpg", i)
+			kode[i] = unggahBuktiParalel(url, cookies, csrf, nama, berkasJPEGUji(nama))
+		}(i)
+	}
+	wg.Wait()
+
+	var sukses, ditolak int
+	for i, c := range kode {
+		switch c {
+		case http.StatusCreated:
+			sukses++
+		case http.StatusConflict:
+			ditolak++
+		default:
+			t.Errorf("unggahan ke-%d menjawab %d, mau 201 atau 409", i, c)
+		}
+	}
+	if sukses != maxFile || ditolak != total-maxFile {
+		t.Errorf("sebaran jawaban salah: 201=%d 409=%d (mau %d/%d)", sukses, ditolak, maxFile, total-maxFile)
+	}
+
+	var jumlah int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM payment_proofs WHERE order_id = $1`, pesanan).Scan(&jumlah); err != nil {
+		t.Fatalf("hitung bukti: %v", err)
+	}
+	if jumlah != maxFile {
+		t.Fatalf("tepat %d baris bukti harus tersimpan, dapat %d", maxFile, jumlah)
+	}
+	var events int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM order_events WHERE order_id = $1`, pesanan).Scan(&events); err != nil {
+		t.Fatalf("hitung order_events: %v", err)
+	}
+	if events != maxFile {
+		t.Errorf("tepat %d peristiwa timeline harus tercatat, dapat %d", maxFile, events)
+	}
+	if n := f.objek.jumlah(); n != maxFile {
+		t.Errorf("tepat %d objek storage harus tersisa, dapat %d", maxFile, n)
+	}
+}
+
+// unggahBuktiParalel mengirim satu berkas bukti tanpa memanggil t.Fatal,
+// sehingga aman dipanggil dari banyak goroutine; hanya kode status yang
+// dikembalikan.
+func unggahBuktiParalel(url string, cookies []*http.Cookie, csrf, nama string, isi []byte) int {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, err := w.CreateFormFile("file", nama)
+	if err != nil {
+		return 0
+	}
+	if _, err := fw.Write(isi); err != nil {
+		return 0
+	}
+	if err := w.Close(); err != nil {
+		return 0
+	}
+	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	if csrf != "" {
+		req.Header.Set(httpx.CSRFHeader, csrf)
+	}
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
 
 // insertOrder membuat pesanan uji langsung di database: satu baris produk,
 // status sesuai permintaan. Draft sengaja tanpa nomor/tanggal (constraint),

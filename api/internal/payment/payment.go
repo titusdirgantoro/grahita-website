@@ -21,6 +21,16 @@
 //   - SHA-256 isi berkas dicatat dan wajib unik per pesanan: mengunggah berkas
 //     yang sama dua kali ditolak 409 (SystemDesign.md §5.3) — ditegakkan juga
 //     oleh indeks unik (order_id, sha256) di database.
+//   - SATU permintaan unggah = SATU unit kerja. Seluruh berkas divalidasi dan
+//     diperiksa terhadap data yang sudah ada LEBIH DAHULU; isinya baru ditulis
+//     ke object storage setelah semuanya lolos, lalu seluruh metadata dan
+//     peristiwa timeline-nya masuk dalam SATU transaksi yang sekaligus
+//     mengunci baris pesanan. Bila transaksi batal, semua objek yang sudah
+//     ditulis dihapus lagi: permintaan yang dijawab gagal tidak boleh
+//     menyisakan satu baris pun maupun objek yatim di storage.
+//   - Batas `max_file` ditegakkan di dalam transaksi yang sama (baris pesanan
+//     dikunci), sehingga unggahan paralel tidak bisa melampaui batas — bukan
+//     sekadar membaca hitungan lalu menulis.
 //   - Unduhan selalu lewat presigned URL berumur pendek (Architecture.md §6,
 //     SystemDesign.md §8) dengan Content-Disposition attachment bernama asli.
 //     Kunci storage TIDAK pernah diberikan lewat API: satu-satunya tempat ia
@@ -156,16 +166,45 @@ type OrderRef struct {
 
 // Repository memuat dan menyimpan metadata bukti. Semua pencarian dibatasi
 // order_id supaya bukti tidak pernah bisa diambil lewat pesanan lain.
+//
+// Penulisan HANYA lewat CommitProofs: satu permintaan unggah = satu unit kerja
+// atomik (metadata + batas jumlah + timeline sekaligus).
 type Repository interface {
-	// CountByOrder menghitung bukti yang sudah tersimpan pada satu pesanan.
-	CountByOrder(ctx context.Context, orderID string) (int64, error)
-	// Add menyimpan metadata satu bukti; duplikat (order_id, sha256)
-	// dikembalikan sebagai ErrDuplicate.
-	Add(ctx context.Context, p Proof) (Proof, error)
+	// Sha256ByOrder mengembalikan sidik jari isi seluruh bukti pesanan yang
+	// sudah tersimpan. Dipakai memeriksa duplikat SEBELUM berkas ditulis ke
+	// object storage, sehingga permintaan berisi berkas yang sudah ada gagal
+	// tanpa menyentuh storage sama sekali.
+	Sha256ByOrder(ctx context.Context, orderID string) ([]string, error)
+	// CommitProofs menulis seluruh metadata bukti beserta peristiwa
+	// timeline-nya dalam SATU transaksi, sambil menegakkan batas MaxFile
+	// secara aman-balapan terhadap pesanan yang sama. Bila satu bagian
+	// gagal, tidak ada baris maupun peristiwa yang tersisa.
+	CommitProofs(ctx context.Context, req CommitRequest) ([]Proof, error)
 	// ListByOrder mengembalikan seluruh bukti satu pesanan, terlama dulu.
 	ListByOrder(ctx context.Context, orderID string) ([]Proof, error)
 	// Get mengembalikan satu bukti milik pesanan tersebut, atau ErrNotFound.
 	Get(ctx context.Context, id, orderID string) (Proof, error)
+}
+
+// Event adalah satu peristiwa timeline pesanan yang menyertai unggahan bukti
+// (PRD CP-ORD-08, AP-ORD-06). Aktornya dicatat apa adanya.
+type Event struct {
+	Nama    string
+	Kind    string
+	ActorID string
+}
+
+// CommitRequest adalah satu unit kerja unggah bukti: seluruh Proofs (dengan
+// StorageKey yang sudah terisi) beserta Events-nya ditulis bersama dalam satu
+// transaksi. MaxFile adalah batas jumlah bukti satu pesanan dari setelan
+// server, diperiksa ulang di dalam transaksi.
+type CommitRequest struct {
+	OrderID string
+	MaxFile int64
+	Proofs  []Proof
+	// Events berisi satu peristiwa per bukti yang dicatat; kosong berarti
+	// unggahan tidak menghasilkan timeline (mis. pesanan masih draft).
+	Events []Event
 }
 
 // OrderSource membaca konteks pesanan (pemilik + status). Ia sengaja berupa
@@ -173,12 +212,6 @@ type Repository interface {
 // pesanan; implementasinya ada di payment/postgres.
 type OrderSource interface {
 	OrderForProof(ctx context.Context, orderID string) (OrderRef, error)
-}
-
-// Timeline mencatat peristiwa unggahan bukti pada timeline pesanan
-// (PRD CP-ORD-08, AP-ORD-06). Aktornya dicatat apa adanya.
-type Timeline interface {
-	RecordProofUpload(ctx context.Context, orderID, nama, kind string, actorID string) error
 }
 
 // Config adalah sudut pandang domain pengaturan yang dibutuhkan batas unggah
@@ -203,17 +236,11 @@ type Service struct {
 	orders OrderSource
 	store  storage.Store
 	cfg    Config
-	// timeline boleh nil (mis. pada pengujian domain): pencatatan timeline
-	// adalah efek samping, bukan syarat tersimpannya bukti.
-	timeline Timeline
-	ttl      time.Duration
+	ttl    time.Duration
 }
 
 // Option mengubah perilaku service.
 type Option func(*Service)
-
-// WithTimeline memasang pencatat timeline pesanan.
-func WithTimeline(t Timeline) Option { return func(s *Service) { s.timeline = t } }
 
 // WithPresignTTL mengubah umur tautan unduh (detik).
 func WithPresignTTL(d time.Duration) Option { return func(s *Service) { s.ttl = d } }
@@ -229,8 +256,18 @@ func NewService(repo Repository, orders OrderSource, store storage.Store, cfg Co
 }
 
 // Upload memvalidasi, menyimpan, dan mencatat seluruh berkas bukti satu
-// permintaan. Seluruh berkas divalidasi LEBIH DAHULU: bila ada satu yang tidak
-// lolos, tidak ada yang tersimpan (all-or-nothing di sisi berkas).
+// permintaan sebagai SATU unit kerja.
+//
+// Urutannya penting dan disengaja:
+//
+//  1. validasi jenis/ukuran seluruh berkas (tanpa menyentuh storage);
+//  2. pra-cek sidik jari + batas jumlah terhadap data yang sudah ada;
+//  3. tulis SELURUH isi ke object storage;
+//  4. commit seluruh metadata + timeline dalam satu transaksi yang mengunci
+//     baris pesanan (batas jumlah diperiksa ulang di dalamnya).
+//
+// Kegagalan di langkah 3 atau 4 menghapus semua objek yang sempat ditulis pada
+// langkah 3, jadi permintaan yang dijawab gagal tidak meninggalkan jejak.
 func (s *Service) Upload(ctx context.Context, actor auth.Actor, orderID string, files []FileInput) ([]Proof, error) {
 	if len(files) == 0 {
 		return nil, ErrNoFile
@@ -245,16 +282,70 @@ func (s *Service) Upload(ctx context.Context, actor auth.Actor, orderID string, 
 		return nil, err
 	}
 
-	ada, err := s.repo.CountByOrder(ctx, ref.ID)
+	// Langkah 1 — validasi & sidik jari seluruh berkas, tanpa menulis apa pun.
+	disiapkan, err := siapkan(files, maxBytes)
 	if err != nil {
-		return nil, fmt.Errorf("hitung bukti tersimpan: %w", err)
-	}
-	if ada+int64(len(files)) > maxFile {
-		return nil, fmt.Errorf("%w: maksimal %d berkas per pesanan (tersimpan %d)",
-			ErrTooMany, maxFile, ada)
+		return nil, err
 	}
 
-	// Tahap 1 — validasi & sidik jari seluruh berkas, tanpa menulis apa pun.
+	// Langkah 2 — pra-cek terhadap yang SUDAH tersimpan: duplikat isi maupun
+	// kelebihan jumlah ditolak sebelum satu byte pun masuk storage. Pemeriksaan
+	// yang mengikat ada di dalam transaksi commit (langkah 4) karena hanya di
+	// sana baris pesanan terkunci.
+	terpakai, err := s.repo.Sha256ByOrder(ctx, ref.ID)
+	if err != nil {
+		return nil, fmt.Errorf("baca sidik jari bukti tersimpan: %w", err)
+	}
+	if int64(len(terpakai))+int64(len(disiapkan)) > maxFile {
+		return nil, fmt.Errorf("%w: maksimal %d berkas per pesanan (tersimpan %d)",
+			ErrTooMany, maxFile, len(terpakai))
+	}
+	ada := make(map[string]bool, len(terpakai))
+	for _, sum := range terpakai {
+		ada[sum] = true
+	}
+	for i, p := range disiapkan {
+		if ada[p.sha256Hex] {
+			return nil, fmt.Errorf("berkas ke-%d: %w", i+1, ErrDuplicate)
+		}
+	}
+
+	// Langkah 3 — tulis seluruh isi ke object storage.
+	kunci := make([]string, 0, len(disiapkan))
+	for _, p := range disiapkan {
+		key, err := kunciAcak(ref.ID, p.kind)
+		if err != nil {
+			s.hapusObjek(ctx, kunci)
+			return nil, err
+		}
+		if err := s.store.Put(ctx, key, bytes.NewReader(p.isi), int64(len(p.isi)), p.mime); err != nil {
+			s.hapusObjek(ctx, kunci)
+			return nil, fmt.Errorf("%w: %v", ErrStorageUnavailable, err)
+		}
+		kunci = append(kunci, key)
+	}
+
+	// Langkah 4 — satu transaksi: metadata + timeline, batas jumlah diperiksa
+	// ulang sambil baris pesanan dikunci.
+	out, err := s.repo.CommitProofs(ctx, CommitRequest{
+		OrderID: ref.ID,
+		MaxFile: maxFile,
+		Proofs:  metadatas(ref, actor, disiapkan, kunci),
+		Events:  eventsUnggah(ref, actor, len(disiapkan)),
+	})
+	if err != nil {
+		// Transaksi batal: seluruh objek yang sudah ditulis dibuang lagi
+		// supaya storage tidak menyimpan objek yatim.
+		s.hapusObjek(ctx, kunci)
+		return nil, err
+	}
+	return out, nil
+}
+
+// siapkan memvalidasi seluruh berkas satu permintaan sekaligus: jenis dari
+// magic bytes, ukuran, ekstensi, dan duplikat DI DALAM permintaan itu sendiri.
+// Tidak ada berkas yang lolos diam-diam bila ada satu yang tidak sah.
+func siapkan(files []FileInput, maxBytes int64) ([]prepared, error) {
 	disiapkan := make([]prepared, 0, len(files))
 	terlihat := map[string]bool{}
 	for i, f := range files {
@@ -268,20 +359,16 @@ func (s *Service) Upload(ctx context.Context, actor auth.Actor, orderID string, 
 		terlihat[p.sha256Hex] = true
 		disiapkan = append(disiapkan, p)
 	}
+	return disiapkan, nil
+}
 
-	// Tahap 2 — simpan isi ke object storage, lalu catat metadatanya.
+// metadatas menyusun metadata seluruh berkas yang sudah ditulis ke storage.
+func metadatas(ref OrderRef, actor auth.Actor, disiapkan []prepared, kunci []string) []Proof {
 	out := make([]Proof, 0, len(disiapkan))
 	for i, p := range disiapkan {
-		key, err := kunciAcak(ref.ID, p.kind)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.store.Put(ctx, key, bytes.NewReader(p.isi), int64(len(p.isi)), p.mime); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStorageUnavailable, err)
-		}
-		saved, err := s.repo.Add(ctx, Proof{
+		out = append(out, Proof{
 			OrderID:        ref.ID,
-			StorageKey:     key,
+			StorageKey:     kunci[i],
 			NamaFile:       p.namaFile,
 			MimeType:       p.mime,
 			UkuranByte:     int64(len(p.isi)),
@@ -290,28 +377,35 @@ func (s *Service) Upload(ctx context.Context, actor auth.Actor, orderID string, 
 			UploadedByID:   actor.UserID,
 			UploadedByNama: namaPengunggah(actor),
 		})
-		if err != nil {
-			// Metadata gagal dicatat: berkas yang baru ditulis dibuang lagi
-			// supaya storage tidak menyimpan objek yatim.
-			_ = s.store.Delete(ctx, key)
-			if errors.Is(err, ErrDuplicate) {
-				return nil, fmt.Errorf("berkas ke-%d: %w", i+1, ErrDuplicate)
-			}
-			return nil, err
-		}
-		out = append(out, saved)
 	}
+	return out
+}
 
-	// Timeline hanya untuk pesanan yang sudah dikirim: draft belum punya
-	// timeline (keputusan kartu F1-11/F1-14).
-	if s.timeline != nil && ref.Status != StatusDraft {
-		for _, p := range out {
-			if err := s.timeline.RecordProofUpload(ctx, ref.ID, p.UploadedByNama, p.UploadedByKind, p.UploadedByID); err != nil {
-				return nil, fmt.Errorf("catat timeline bukti: %w", err)
-			}
-		}
+// eventsUnggah menyusun peristiwa timeline unggahan: satu per berkas, dengan
+// nama pengunggahnya (PRD CP-ORD-08, AP-ORD-06). Draft belum punya timeline
+// (keputusan kartu F1-11/F1-14), jadi tidak ada peristiwa yang dicatat.
+func eventsUnggah(ref OrderRef, actor auth.Actor, jumlah int) []Event {
+	if ref.Status == StatusDraft {
+		return nil
 	}
-	return out, nil
+	out := make([]Event, 0, jumlah)
+	for i := 0; i < jumlah; i++ {
+		out = append(out, Event{
+			Nama:    namaPengunggah(actor),
+			Kind:    string(actor.Kind),
+			ActorID: actor.UserID,
+		})
+	}
+	return out
+}
+
+// hapusObjek membuang objek yang sudah terlanjur ditulis (best-effort): dipakai
+// saat penyimpanan atau transaksi gagal di tengah jalan. Semua kunci dibersihkan,
+// bukan hanya yang terakhir, supaya tidak ada objek yatim yang tertinggal.
+func (s *Service) hapusObjek(ctx context.Context, kunci []string) {
+	for _, k := range kunci {
+		_ = s.store.Delete(ctx, k)
+	}
 }
 
 // List mengembalikan seluruh bukti satu pesanan yang boleh dilihat aktor.

@@ -31,7 +31,9 @@ SELECT count(*)::bigint FROM payment_proofs WHERE order_id = $1::uuid
 // Nama query memakai awalan `PaymentProof`/`Proof` supaya tidak bertabrakan
 // dengan query domain pesanan (mis. `InsertOrderEvent` milik F1-14).
 // Jumlah bukti satu pesanan; dipakai menegakkan batas `max_file` SERVER
-// (bukan hanya validasi klien di UI).
+// (bukan hanya validasi klien di UI). Selalu dipanggil DI DALAM transaksi
+// CommitProofs, setelah baris pesanan dikunci (LockOrderForProof), supaya
+// hitung-dan-tulis tidak bisa dilampaui unggahan paralel.
 func (q *Queries) CountPaymentProofs(ctx context.Context, orderID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countPaymentProofs, orderID)
 	var column_1 int64
@@ -263,6 +265,49 @@ func (q *Queries) ListPaymentProofs(ctx context.Context, orderID string) ([]List
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockOrderForProof = `-- name: LockOrderForProof :one
+SELECT o.id FROM orders o WHERE o.id = $1::uuid FOR UPDATE
+`
+
+// Mengunci baris pesanan selama transaksi unggah bukti: hitung + insert jadi
+// aman-balapan per pesanan (dua permintaan bersamaan tidak bisa sama-sama
+// membaca hitungan di bawah batas).
+func (q *Queries) LockOrderForProof(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, lockOrderForProof, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const sha256PaymentProofs = `-- name: Sha256PaymentProofs :many
+SELECT sha256 FROM payment_proofs
+ WHERE order_id = $1::uuid
+ ORDER BY created_at, id
+`
+
+// Sidik jari isi seluruh bukti satu pesanan, terlama dulu. Dibaca SEBELUM
+// berkas ditulis ke object storage supaya duplikat ditolak tanpa menyentuh
+// storage; indeks unik (order_id, sha256) tetap menjadi benteng terakhir.
+func (q *Queries) Sha256PaymentProofs(ctx context.Context, orderID string) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, sha256PaymentProofs, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := [][]byte{}
+	for rows.Next() {
+		var sha256 []byte
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

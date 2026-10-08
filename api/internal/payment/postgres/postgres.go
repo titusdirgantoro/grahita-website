@@ -1,12 +1,12 @@
 // Package postgres adalah implementasi repository bukti transfer di
 // PostgreSQL.
 //
-// Paket ini memenuhi tiga kontrak domain sekaligus (pola yang sama dipakai
-// domain email): Repository (metadata bukti), OrderSource (konteks pesanan yang
-// dibutuhkan untuk otorisasi), dan Timeline (menandai unggahan di timeline
-// pesanan). Membaca `orders`/menulis `order_events` dari sini sah karena
-// domain bukti memang milik kartu bukti transfer, dan querynya terpisah dari
-// repository pesanan sehingga tidak ada ketergantungan paket.
+// Paket ini memenuhi dua kontrak domain sekaligus (pola yang sama dipakai
+// domain email): Repository (metadata bukti + komit atomik beserta timeline)
+// dan OrderSource (konteks pesanan yang dibutuhkan untuk otorisasi). Membaca
+// `orders`/menulis `order_events` dari sini sah karena domain bukti memang
+// milik kartu bukti transfer, dan querynya terpisah dari repository pesanan
+// sehingga tidak ada ketergantungan paket.
 package postgres
 
 import (
@@ -35,44 +35,109 @@ type Repo struct {
 // New membuat repository bukti transfer.
 func New(pool *database.Pool) *Repo { return &Repo{pool: pool, q: sqlc.New(pool)} }
 
-// CountByOrder menghitung bukti yang sudah tersimpan pada satu pesanan.
-func (r *Repo) CountByOrder(ctx context.Context, orderID string) (int64, error) {
-	n, err := r.q.CountPaymentProofs(ctx, orderID)
+// Sha256ByOrder mengembalikan sidik jari isi seluruh bukti satu pesanan,
+// terlama dulu. Dipakai domain memeriksa duplikat SEBELUM berkas ditulis ke
+// object storage.
+func (r *Repo) Sha256ByOrder(ctx context.Context, orderID string) ([]string, error) {
+	rows, err := r.q.Sha256PaymentProofs(ctx, orderID)
 	if err != nil {
-		return 0, fmt.Errorf("query CountPaymentProofs: %w", err)
+		return nil, fmt.Errorf("query Sha256PaymentProofs: %w", err)
 	}
-	return n, nil
+	out := make([]string, 0, len(rows))
+	for _, sum := range rows {
+		out = append(out, hex.EncodeToString(sum))
+	}
+	return out, nil
 }
 
-// Add menyimpan metadata satu bukti.
+// CommitProofs menyimpan seluruh metadata bukti satu permintaan beserta
+// peristiwa timeline-nya dalam SATU transaksi.
 //
-// Indeks unik (order_id, sha256) di database adalah benteng terakhir anti
-// duplikat: pelanggarannya (SQLSTATE 23505) diterjemahkan menjadi
-// payment.ErrDuplicate supaya lapisan atas tidak pernah menyentuh kode pgx.
-func (r *Repo) Add(ctx context.Context, p payment.Proof) (payment.Proof, error) {
-	sum, err := hex.DecodeString(p.Sha256)
+// Baris pesanan dikunci (`FOR UPDATE`) sebelum hitungan dibaca, sehingga
+// hitung-dan-tulis menjadi aman-balapan: dua unggahan paralel pada pesanan yang
+// sama berbaris rapi dan batas `max_file` tidak bisa dilampaui. Bila ada satu
+// baris yang ditolak (duplikat, batas, atau error lain), transaksi dibatalkan
+// dan tidak ada metadata/timeline yang tersisa.
+func (r *Repo) CommitProofs(ctx context.Context, req payment.CommitRequest) ([]payment.Proof, error) {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return payment.Proof{}, fmt.Errorf("sha256 %q bukan hex: %w", p.Sha256, err)
+		return nil, fmt.Errorf("mulai transaksi bukti: %w", err)
 	}
-	row, err := r.q.InsertPaymentProof(ctx, sqlc.InsertPaymentProofParams{
-		OrderID:        p.OrderID,
-		StorageKey:     p.StorageKey,
-		NamaFile:       p.NamaFile,
-		MimeType:       p.MimeType,
-		UkuranByte:     p.UkuranByte,
-		Sha256:         sum,
-		UploadedByKind: sqlc.ActorKind(p.UploadedByKind),
-		UploadedByID:   pgtypes.UUID(p.UploadedByID),
-		UploadedByNama: pgtypes.Text(p.UploadedByNama),
-	})
-	if err != nil {
-		if isDuplicate(err) {
-			return payment.Proof{}, payment.ErrDuplicate
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := r.q.WithTx(tx)
+
+	// Kunci baris pesanan lebih dulu: hanya satu unggahan per pesanan yang
+	// boleh menghitung + menulis dalam satu waktu.
+	if _, err := q.LockOrderForProof(ctx, req.OrderID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, payment.ErrNotFound
 		}
-		return payment.Proof{}, fmt.Errorf("query InsertPaymentProof: %w", err)
+		return nil, fmt.Errorf("query LockOrderForProof: %w", err)
 	}
-	return toProof(row.ID, row.OrderID, row.StorageKey, row.NamaFile, row.MimeType,
-		row.UkuranByte, row.Sha256, row.UploadedByKind, row.UploadedByID, row.UploadedByNama, row.CreatedAt), nil
+	ada, err := q.CountPaymentProofs(ctx, req.OrderID)
+	if err != nil {
+		return nil, fmt.Errorf("query CountPaymentProofs: %w", err)
+	}
+	if ada+int64(len(req.Proofs)) > req.MaxFile {
+		return nil, fmt.Errorf("%w: maksimal %d berkas per pesanan (tersimpan %d)",
+			payment.ErrTooMany, req.MaxFile, ada)
+	}
+
+	out := make([]payment.Proof, 0, len(req.Proofs))
+	for i, p := range req.Proofs {
+		sum, err := hex.DecodeString(p.Sha256)
+		if err != nil {
+			return nil, fmt.Errorf("sha256 %q bukan hex: %w", p.Sha256, err)
+		}
+		row, err := q.InsertPaymentProof(ctx, sqlc.InsertPaymentProofParams{
+			OrderID:        p.OrderID,
+			StorageKey:     p.StorageKey,
+			NamaFile:       p.NamaFile,
+			MimeType:       p.MimeType,
+			UkuranByte:     p.UkuranByte,
+			Sha256:         sum,
+			UploadedByKind: sqlc.ActorKind(p.UploadedByKind),
+			UploadedByID:   pgtypes.UUID(p.UploadedByID),
+			UploadedByNama: pgtypes.Text(p.UploadedByNama),
+		})
+		if err != nil {
+			if isDuplicate(err) {
+				return nil, fmt.Errorf("berkas ke-%d: %w", i+1, payment.ErrDuplicate)
+			}
+			return nil, fmt.Errorf("query InsertPaymentProof: %w", err)
+		}
+		out = append(out, toProof(row.ID, row.OrderID, row.StorageKey, row.NamaFile, row.MimeType,
+			row.UkuranByte, row.Sha256, row.UploadedByKind, row.UploadedByID, row.UploadedByNama, row.CreatedAt))
+	}
+
+	for _, e := range req.Events {
+		if err := q.InsertProofOrderEvent(ctx, sqlc.InsertProofOrderEventParams{
+			OrderID:   req.OrderID,
+			Icon:      pgtypes.Text("upload"),
+			Teks:      teksEvent(e.Kind, e.Nama),
+			ActorKind: sqlc.ActorKind(e.Kind),
+			ActorID:   pgtypes.UUID(e.ActorID),
+		}); err != nil {
+			return nil, fmt.Errorf("query InsertProofOrderEvent: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit bukti: %w", err)
+	}
+	return out, nil
+}
+
+// teksEvent menyusun kalimat timeline unggahan bukti: nama pengunggah admin
+// ditulis apa adanya (PRD AP-ORD-06), unggahan cabang ditandai sebagai cabang.
+func teksEvent(kind, nama string) string {
+	if kind != "admin" {
+		return "Bukti transfer diunggah oleh cabang"
+	}
+	if nama == "" {
+		nama = "admin Pusat"
+	}
+	return "Bukti transfer diunggah oleh " + nama + " (admin Pusat)"
 }
 
 // ListByOrder mengembalikan seluruh bukti satu pesanan, terlama dulu.
@@ -117,30 +182,6 @@ func (r *Repo) OrderForProof(ctx context.Context, orderID string) (payment.Order
 		Status:   row.Status,
 		Nomor:    pgtypes.TextOr(row.Nomor),
 	}, nil
-}
-
-// RecordProofUpload menandai unggahan bukti di timeline pesanan. Nama
-// pengunggah admin ditulis apa adanya (PRD AP-ORD-06); unggahan cabang
-// ditandai sebagai datang dari cabang.
-func (r *Repo) RecordProofUpload(ctx context.Context, orderID, nama, kind, actorID string) error {
-	teks := "Bukti transfer diunggah oleh cabang"
-	if kind == "admin" {
-		if nama == "" {
-			nama = "admin Pusat"
-		}
-		teks = "Bukti transfer diunggah oleh " + nama + " (admin Pusat)"
-	}
-	err := r.q.InsertProofOrderEvent(ctx, sqlc.InsertProofOrderEventParams{
-		OrderID:   orderID,
-		Icon:      pgtypes.Text("upload"),
-		Teks:      teks,
-		ActorKind: sqlc.ActorKind(kind),
-		ActorID:   pgtypes.UUID(actorID),
-	})
-	if err != nil {
-		return fmt.Errorf("query InsertProofOrderEvent: %w", err)
-	}
-	return nil
 }
 
 // isDuplicate mengenali pelanggaran indeks unik PostgreSQL (SQLSTATE 23505).

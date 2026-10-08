@@ -64,16 +64,25 @@ mengubah status pesanan.
    `max_file × max_mb + 1 MB` di lapisan transport supaya tidak ada unggahan
    raksasa yang menahan memori/disk sebelum validasi. Batas laju unggah 30
    permintaan / 15 menit **per akun** (`429 RATE_LIMITED`).
-4. **Seluruh berkas divalidasi lebih dulu, baru ditulis** (all-or-nothing di
-   sisi berkas): satu berkas cacat membatalkan seluruh permintaan tanpa
-   menyisakan objek di storage. Bila pencatatan metadata gagal (mis. duplikat
-   ditolak database), objek yang baru ditulis **dihapus lagi** — terbukti di
-   log object storage pada probe (PUT diikuti DELETE).
+4. **Satu permintaan unggah = satu unit kerja.** Seluruh berkas divalidasi
+   lebih dulu dan dipra-cek terhadap sidik jari yang sudah tersimpan; isinya
+   baru ditulis ke object storage setelah semuanya lolos, lalu seluruh metadata
+   **dan peristiwa timeline** masuk dalam SATU transaksi database (dengan baris
+   pesanan dikunci `FOR UPDATE`) — bukan lagi satu tulisan per berkas. Bila ada
+   satu berkas ditolak, tidak ada baris/peristiwa yang tersisa dan **semua**
+   objek yang sempat ditulis dihapus lagi (bukan hanya yang terakhir). Ini
+   menutup temuan QA putaran 1: dulu permintaan berisi `[berkas baru, berkas
+   duplikat]` dijawab `409` tetapi berkas baru itu tetap tersimpan permanen.
 5. **SHA-256 unik per pesanan.** Duplikat isi pada satu pesanan ditolak `409
-   PROOF_DUPLICATE`, dicek dua kali: sebelum menulis (termasuk duplikat di
-   dalam satu permintaan) dan oleh indeks unik `(order_id, sha256)` di database
-   — benteng terakhir bila service dilewati (SystemDesign.md §5.3). Isi yang
-   sama pada pesanan BERBEDA tetap sah (cek per pesanan, bukan global).
+   PROOF_DUPLICATE`, dicek tiga lapis: (a) di dalam permintaan itu sendiri,
+   (b) terhadap seluruh sidik jari pesanan SEBELUM satu byte pun masuk storage,
+   dan (c) oleh indeks unik `(order_id, sha256)` di dalam transaksi commit —
+   benteng terakhir bila service dilewati (SystemDesign.md §5.3). Isi yang sama
+   pada pesanan BERBEDA tetap sah (cek per pesanan, bukan global).
+   Batas `max_file` juga diperiksa di dalam transaksi commit yang sama, setelah
+   baris pesanan dikunci, sehingga unggahan **paralel** tidak bisa
+   melampaui batas (temuan QA putaran 1 #2: dulu 12 unggahan paralel dengan
+   `max_file=5` menyisakan 9 baris; sekarang tepat 5).
 6. **Otorisasi di layer service, bukan di UI.** Akun cabang hanya boleh
    menyentuh pesanan milik cabang SESI-nya; pesanan cabang lain dijawab `404`
    (bukan `403`) supaya keberadaannya tidak bocor, dan id yang bukan UUID juga
@@ -180,10 +189,10 @@ Uji baru kartu ini:
 
 | Berkas | Uji | Cakupan |
 |---|---|---|
-| `internal/payment/payment_test.go` | 11 | magic bytes 11 kasus (JPG/PNG/PDF sah, 3 ekstensi palsu, skrip berkedok `.jpg`, ekstensi asing, tanpa ekstensi, kosong), kunci acak + nama kiriman tidak bocor, sha256 tersimpan & isi bisa dibaca ulang, duplikat (antar permintaan, dalam satu permintaan, DB) + tidak menyisakan bukti, batas jumlah dari setelan, batas ukuran tepat di ambang, isolasi cabang (`ErrNotFound`), penguncian `done` (cabang vs admin), penanda nama admin + timeline hanya untuk non-draft, tautan unduh berumur pendek + `ErrNotFound` lintas cabang/pesanan, `MaxRequestBytes`, storage belum siap tidak menyisakan baris, pembersihan nama berkas, 200 kunci acak unik, TTL dapat diubah |
+| `internal/payment/payment_test.go` | 18 | magic bytes 11 kasus (JPG/PNG/PDF sah, 3 ekstensi palsu, skrip berkedok `.jpg`, ekstensi asing, tanpa ekstensi, kosong), kunci acak + nama kiriman tidak bocor, sha256 tersimpan & isi bisa dibaca ulang, duplikat (antar permintaan, dalam satu permintaan, DB) + tidak menyisakan bukti, batas jumlah dari setelan, batas ukuran tepat di ambang, isolasi cabang (`ErrNotFound`), penguncian `done` (cabang vs admin), penanda nama admin + timeline hanya untuk non-draft, tautan unduh berumur pendek + `ErrNotFound` lintas cabang/pesanan, `MaxRequestBytes`, storage belum siap tidak menyisakan baris, pembersihan nama berkas, 200 kunci acak unik, TTL dapat diubah, **permintaan gagal tidak menyisakan baris/objek/timeline**, **kegagalan storage di tengah membersihkan semua objek**, **commit batal membersihkan semua objek**, **2×max_file unggahan paralel menyisakan tepat max_file** |
 | `internal/platform/storage/s3_test.go` | 5 | Put/Get/Delete/Health terhadap server S3 in-process (membuktikan klien mengirim PUT/GET/DELETE dengan path & Content-Type benar), presign GET memuat `X-Amz-Signature`/`X-Amz-Expires=300`/`X-Amz-Credential`, presign unduh menyetel `response-content-disposition` attachment + sanitasi nama berbahaya, konfigurasi setengah ditolak, Memory memenuhi kontrak presign |
 | `internal/httpapi/router_proofs_test.go` | 8 | lewat HTTP: unggah multi-berkas 201 + metadata tanpa `storage_key` + daftar + tautan unduh 300 detik; isolasi cabang 404 (unggah/daftar/unduh) + id non-UUID 404 + `done` 409 + tanpa sesi 403 CSRF/401 GET; ekstensi palsu & skrip 400 dengan field `file`, tanpa berkas 400, bukan multipart 400; duplikat 409 `PROOF_DUPLICATE` + `PROOF_LIMIT` 409; `max_mb` → 413; pembatas laju 429; admin unggah atas nama cabang (kind `admin` + nama) + boleh pada `done` + melihat pesanan cabang lain; storage belum siap 503 |
-| `internal/httpapi/integration_proofs_pg_test.go` | 5 | di PostgreSQL: baris `payment_proofs` lengkap (kind dari sesi, `uploaded_by_nama` NULL untuk cabang, sha256 32 byte, `storage_key` berawalan `proofs/`), 2 event timeline, isi objek benar-benar tersimpan; duplikat 409 + INSERT duplikat ditolak database (23505); isolasi cabang tidak menyisakan baris; admin pada `done` 201 dengan nama di baris + timeline (`admin`), cabang 409 `ORDER_LOCKED`; `max_file` dari setelan DB (PUT `/admin/settings`) menolak unggahan kedua 409 `PROOF_LIMIT` |
+| `internal/httpapi/integration_proofs_pg_test.go` | 7 | di PostgreSQL: baris `payment_proofs` lengkap (kind dari sesi, `uploaded_by_nama` NULL untuk cabang, sha256 32 byte, `storage_key` berawalan `proofs/`), 2 event timeline, isi objek benar-benar tersimpan; duplikat 409 + INSERT duplikat ditolak database (23505); isolasi cabang tidak menyisakan baris; admin pada `done` 201 dengan nama di baris + timeline (`admin`), cabang 409 `ORDER_LOCKED`; `max_file` dari setelan DB (PUT `/admin/settings`) menolak unggahan kedua 409 `PROOF_LIMIT`; **permintaan `[berkas baru + duplikat]` 409 tanpa menambah baris/timeline/objek**; **2×max_file (10) unggahan paralel menyisakan tepat 5 baris + 5 event + 5 objek** |
 
 ### Uji & build frontend
 
@@ -232,6 +241,59 @@ dijalankan lewat API nyata:
 | retensi | 9 baris bukti tersimpan; tidak ada kolom `expire*`/`deleted*` dan tidak ada job pembersih |
 | regresi | `GET /orders/{id}` tetap `200` dengan baris utuh |
 
+## Perbaikan putaran 2 (temuan QA putaran 1)
+
+QA mereproduksi dua cacat pada commit `1435cd5` di salinan bersih + PG16; dua-duanya
+diperbaiki di commit ini:
+
+1. **Commit multi-berkas tidak atomik.** Dulu `Service.Upload` menulis objek +
+   baris **per berkas di dalam loop**, sehingga satu permintaan berisi
+   `[B baru, A duplikat]` dijawab `409 PROOF_DUPLICATE` tetapi B tetap tersimpan
+   permanen (dan responsnya membuat UI mengulang batch yang sama selamanya).
+   Sekarang: (a) seluruh berkas divalidasi, (b) sidik jari pesanan dipra-cek
+   (`Repository.Sha256ByOrder`) sehingga duplikat — termasuk terhadap baris lama
+   — gagal **sebelum** satu byte pun masuk storage, (c) seluruh metadata +
+   peristiwa timeline ditulis dalam **satu transaksi**
+   (`Repository.CommitProofs`), dan (d) bila penyimpanan atau transaksi gagal,
+   `hapusObjek` membuang **semua** kunci yang sempat ditulis, bukan hanya yang
+   terakhir.
+2. **Batas `max_file` tidak aman-balapan.** Dulu `CountByOrder` lalu `Add` tanpa
+   kunci apa pun: 12 unggahan paralel dengan `max_file=5` menyisakan 9 baris.
+   Sekarang `CommitProofs` mengunci baris pesanan lebih dulu
+   (`SELECT id FROM orders WHERE id=$1 FOR UPDATE`, query baru
+   `LockOrderForProof`) lalu menghitung dan menyisipkan di transaksi yang sama,
+   sehingga batas tidak bisa dilampaui unggahan serentak. Uji regresi paralel
+   ditambahkan di dua level: unit in-memory `2×max_file` dan integrasi PG
+   (10 unggahan paralel → tepat 5 baris + 5 event + 5 objek).
+
+Perubahan kontrak internal (bukan HTTP): `Repository` tidak lagi menyediakan
+`CountByOrder`/`Add`; penulisan hanya lewat `CommitProofs(CommitRequest)`, dan
+interface `Timeline` yang terpisah dihapus karena peristiwa timeline kini
+bagian dari unit kerja yang sama (`Event`) — `main.go` dan fixture uji tidak lagi
+memakai `payment.WithTimeline`. Endpoint, kode status, dan badan respons tidak
+berubah, jadi klien/frontend tidak terpengaruh.
+
+Verifikasi putaran ini (PG 16.15 + shim, DB baru `grahita_f113r2`):
+
+```
+$ gofmt -l .                       -> (kosong)
+$ go build ./... ; go vet ./...    -> exit 0
+$ ./scripts/check-secrets.sh       -> exit 0
+$ TEST_DATABASE_URL=…/grahita_f113r2 go test -race -p 1 -count=1 ./...
+ok  internal/payment 1.8s | ok  internal/httpapi 99.7s | … seluruh paket ok (EXIT 0, 0 FAIL/0 SKIP)
+$ go test -race -count=3 -run 'TestPGPermintaanGagalTidakMenyisakanBaris|TestPGBatasJumlahAmanBalapan' ./internal/httpapi/
+ok  internal/httpapi 15.6s
+$ go test -race -count=5 ./internal/payment/...
+ok  internal/payment 2.3s
+```
+
+Uji integrasi baru benar-benar dieksekusi (bukan skip):
+
+```
+--- PASS: TestPGPermintaanGagalTidakMenyisakanBaris (2.23s)
+--- PASS: TestPGBatasJumlahAmanBalapan (2.22s)
+```
+
 ## Catatan & risiko sisa (non-pemblokir)
 
 - **Duplikat dicek per pesanan, bukan global.** Isi berkas yang sama boleh
@@ -243,6 +305,13 @@ dijalankan lewat API nyata:
   max_mb` = 25 MB dengan default) supaya sidik jari dan penyimpanan memakai
   byte yang sama. Untuk batas jauh lebih besar, alurnya perlu streaming +
   penulisan ke berkas sementara — belum diperlukan sekarang (batas PRD kecil).
+- **Objek storage yatim bila pesanan draft dihapus.** Cascade DB hanya menghapus
+  baris `payment_proofs`; objeknya tetap ada di bucket (tidak ada kunci
+  penghapusan per-pesanan di kartu ini). Dengan retensi tanpa batas ini tidak
+  menghilangkan data pengguna, tetapi menyisakan sampah storage — pekerjaan
+  pembersihan/backup adalah kewajiban **F1-21 (backup)** dan/atau kartu dokumen
+  F1-18, bukan kartu ini. Jalur kegagalan yang bisa dikendalikan kartu ini
+  (permintaan ditolak / transaksi batal) sudah membersihkan objeknya.
 - **Unggahan F1-14 belum atomik dengan transisi status.** F1-14 dapat memanggil
   `POST /orders/{id}/proofs` sebelum transisi Draft→Submitted (draft boleh
   diunggah — keputusan 7). Bila transisi gagal, bukti tetap menempel pada draft

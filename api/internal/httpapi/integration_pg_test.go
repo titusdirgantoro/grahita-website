@@ -16,11 +16,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,6 +52,48 @@ import (
 	userspg "github.com/grahita/portal/api/internal/users/postgres"
 )
 
+// objekHitung membungkus storage.Memory sekaligus menghitung objek yang
+// tersimpan, sehingga pengujian integrasi bisa memastikan tidak ada objek
+// yatim (mis. unggahan bukti yang gagal di tengah jalan).
+type objekHitung struct {
+	*storage.Memory
+	mu    sync.Mutex
+	kunci map[string]bool
+}
+
+func newObjekHitung() *objekHitung {
+	return &objekHitung{Memory: storage.NewMemory("/files"), kunci: map[string]bool{}}
+}
+
+// Put menyimpan objek lalu mencatat kuncinya.
+func (o *objekHitung) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if err := o.Memory.Put(ctx, key, body, size, contentType); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	o.kunci[key] = true
+	o.mu.Unlock()
+	return nil
+}
+
+// Delete membuang objek dan kuncinya.
+func (o *objekHitung) Delete(ctx context.Context, key string) error {
+	if err := o.Memory.Delete(ctx, key); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	delete(o.kunci, key)
+	o.mu.Unlock()
+	return nil
+}
+
+// jumlah mengembalikan banyaknya objek yang saat ini tersimpan.
+func (o *objekHitung) jumlah() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.kunci)
+}
+
 // pgFixture adalah satu dunia uji lengkap di atas database nyata.
 type pgFixture struct {
 	srv  *httptest.Server
@@ -68,10 +112,11 @@ type pgFixture struct {
 
 	// Email outbox (F1-16): notif adalah service outbox produksi, kirim
 	// menangkap email yang benar-benar dikirim worker, objek adalah object
-	// storage in-memory untuk lampiran dokumen.
+	// storage in-memory untuk lampiran dokumen (sekaligus menghitung objek
+	// supaya kebocoran storage terlihat).
 	notif *notification.Service
 	kirim *fakeSender
-	objek *storage.Memory
+	objek *objekHitung
 
 	// Bukti transfer (F1-13): repository dan service nyata di atas PostgreSQL,
 	// memakai object storage in-memory yang sama.
@@ -212,7 +257,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 	// pengirim palsu yang menangkap email, dan object storage in-memory untuk
 	// lampiran dokumen.
 	notifStore := notificationpg.New(pool)
-	objek := storage.NewMemory("/files")
+	objek := newObjekHitung()
 	kirim := &fakeSender{}
 	notifSvc := notification.New(notifStore, kirim,
 		notification.WithObjectStore(objek),
@@ -260,7 +305,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 	// Bukti transfer (F1-13): repository nyata di atas PostgreSQL, object
 	// storage in-memory, batas unggah dari setelan yang sama dengan produksi.
 	payRepo := paymentpg.New(pool)
-	paySvc := payment.NewService(payRepo, payRepo, objek, settingsSvc, payment.WithTimeline(payRepo))
+	paySvc := payment.NewService(payRepo, payRepo, objek, settingsSvc)
 	f.payments = paySvc
 	f.paymentsRepo = payRepo
 

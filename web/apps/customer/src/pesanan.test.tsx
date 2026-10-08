@@ -433,7 +433,9 @@ describe("Customer Portal — bukti transfer (F1-13)", () => {
     render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
 
     expect(await screen.findByRole("heading", { name: "Bukti transfer" })).toBeDefined();
-    expect(screen.getByText("transfer-cicilan-1.jpg")).toBeDefined();
+    // Baris bukti dimuat lewat permintaan terpisah dari detail pesanan, jadi
+    // ditunggu dulu — bukan diasumsikan sudah ada saat heading muncul.
+    expect(await screen.findByText("transfer-cicilan-1.jpg")).toBeDefined();
     expect(screen.getByText("koreksi-admin.pdf")).toBeDefined();
     // Unggahan cabang tidak bernama; unggahan admin menandai namanya (AP-ORD-06).
     expect(screen.getByText("Cabang")).toBeDefined();
