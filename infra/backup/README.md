@@ -12,7 +12,7 @@ atau berkas milik operator (Architecture.md §6).
 |---|---|---|---|
 | `postgres` | `pg_dump -Fc` **terenkripsi age** | Harian 02:00 WIB | 30 terbaru + 1 terbaru/bulan selama 12 bulan |
 | `storage` | bukti transfer + dokumen dari object storage, **terenkripsi age**, sinkronisasi inkremental + manifest | Harian | **Tanpa batas** (bukti transfer tidak pernah dihapus) |
-| `wal` | arsip WAL untuk PITR (bila aktif) | Harian (mengikuti arsip) | 7 hari di tujuan |
+| `wal` | arsip WAL untuk PITR (bila aktif), tiap segmen **terenkripsi age** (`wal/<segmen>.age`) | Harian (mengikuti arsip) | 7 hari di tujuan |
 
 Setiap pekerjaan menulis satu baris `backup_runs` (jenis, mulai, selesai,
 sukses, ukuran_byte, tujuan, pesan). Kegagalan mengirim **email ke semua
@@ -80,8 +80,12 @@ postgres/grahita-YYYY-MM-DD.dump.age
 storage/proofs/<order_id>/<nama>.<ext>.age
 storage/documents/<order_id>/<jenis>-<versi>.<ext>.age
 storage/_manifest.json
-wal/<berkas WAL>
+wal/<berkas WAL>.age
 ```
+
+Semua berkas di tujuan berakhiran `.age`: **tidak ada satu pun jalur yang
+menulis byte polos** (dump, salinan bukti/dokumen, maupun segmen WAL) —
+Architecture.md §6.
 
 ## 5. Menjadwalkan
 
@@ -105,15 +109,39 @@ menjalankan ulang cadangan yang gagal di luar jadwal.
 PITR diaktifkan di PostgreSQL, bukan di aplikasi:
 
 ```
-# postgresql.conf
+# postgresql.conf (server SUMBER)
 archive_mode   = on
 archive_command = 'test ! -f /var/lib/postgresql/wal-arsip/%f && cp %p /var/lib/postgresql/wal-arsip/%f'
-# restore (pada server pemulihan):
-restore_command = 'cp /var/lib/postgresql/wal-arsip/%f %p'
 ```
 
 Lalu isi `BACKUP_WAL_DIR=/var/lib/postgresql/wal-arsip` agar arsipnya ikut
 dibawa ke tujuan (retensi 7 hari di tujuan, Architecture.md §7).
+
+**Di tujuan, arsip itu terenkripsi age** (`wal/<berkas WAL>.age`), sama seperti
+dump: WAL memuat seluruh perubahan baris, termasuk hash kata sandi, sehingga
+tidak ada satu byte pun yang boleh mendarat polos di Drive. Pada server
+PEMULIHAN, dekripsi dulu arsipnya lalu arahkan `restore_command` ke direktori
+hasil dekripsi:
+
+```sh
+# 1) Unduh + dekripsi arsip WAL dari tujuan ke direktori lokal.
+#    Butuh BACKUP_AGE_IDENTITY_FILE (kunci privat milik operator).
+#    Langkah ini TIDAK menyentuh database: drill/PITR sering dijalankan justru
+#    ketika database sumber tidak tersedia.
+/usr/local/bin/api --mode=backup-pulih-wal \
+  --dir-wal /var/lib/postgresql/wal-arsip-pulih \
+  --laporan /srv/grahita/restore-uji/wal-$(date +%F).json
+
+# 2) postgresql.conf (server PEMULIHAN)
+#    restore_command = 'cp /var/lib/postgresql/wal-arsip-pulih/%f %p'
+```
+
+Perintah dekripsi itu **menolak** berkas yang bukan hasil age, jadi WAL polos
+tidak pernah bisa lolos ke jalur pemulihan. Bila di tujuan masih ada arsip polos
+dari versi lama (tanpa `.age`), pekerjaan `wal` melaporkannya sebagai
+`PERINGATAN` di `backup_runs.pesan` dan tidak pernah memakainya; operator
+memutuskan sendiri nasibnya (konfigurasi lama: hapus setelah dipastikan tidak
+diperlukan).
 
 ## 7. Uji pulih kuartalan (WAJIB)
 
@@ -166,6 +194,11 @@ batas), kunci yang tidak mengikuti pola `documents/{order}/{jenis}-{versi}.{ext}
 dengan jenis dikenal, dan objek yang belum melewati `BACKUP_SWEEP_GRACE`
 (melindungi berkas yang sedang ditulis render aktif). Setiap tindakan sapu
 tercatat di `audit_logs` (entity `backup_sweep`).
+
+Penghapusan **hanya** bisa dipersenjatai lewat flag CLI eksplisit `--sweep` di
+atas; tidak ada variabel lingkungan yang mengaktifkannya diam-diam (knop
+`BACKUP_SWEEP_HAPUS` yang dulu ada dihapus karena tidak pernah dibaca domain
+cadangan — operator mengira sapu otomatis aktif padahal tidak).
 
 ## 9. RPO / RTO
 

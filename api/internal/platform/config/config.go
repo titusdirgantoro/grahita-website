@@ -111,7 +111,6 @@ type Config struct {
 	BackupWALDir         string
 	BackupJamWIB         int
 	BackupInterval       time.Duration
-	BackupSweepHapus     bool
 	BackupSweepGrace     time.Duration
 	BackupRestoreDSN     string
 
@@ -192,7 +191,6 @@ func Load() (Config, error) {
 		BackupWALHari:        envInt("BACKUP_WAL_HARI", 7),
 		BackupWALDir:         env("BACKUP_WAL_DIR", ""),
 		BackupJamWIB:         envInt("BACKUP_JAM_WIB", 2),
-		BackupSweepHapus:     envBool("BACKUP_SWEEP_HAPUS", false),
 		BackupRestoreDSN:     env("BACKUP_RESTORE_DSN", ""),
 		WorkerShutdown:       20 * time.Second,
 		JobPollInterval:      15 * time.Second,

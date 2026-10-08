@@ -266,7 +266,7 @@ func (s *Service) salinObjek(ctx context.Context, key, nama string) (int64, stri
 
 // NamaCadanganObjek menyusun nama salinan satu objek di tujuan.
 func NamaCadanganObjek(key string) string {
-	return PrefixStorage + key + ".age"
+	return PrefixStorage + key + SufiksAge
 }
 
 // StatusObjek adalah hasil pemeriksaan satu objek (DB vs salinan cadangan).

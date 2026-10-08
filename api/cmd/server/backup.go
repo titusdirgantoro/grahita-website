@@ -7,6 +7,7 @@ package main
 //	--mode=backup              menjalankan pekerjaan cadangan sekali lalu keluar
 //	--mode=backup-rekonsiliasi membandingkan DB↔object storage (dry-run bawaan)
 //	--mode=backup-restore      uji restore ke database anonim (staging)
+//	--mode=backup-pulih-wal    mendekripsi arsip WAL ke direktori lokal (PITR/drill)
 //
 // Worker (--mode=worker) memakai service yang sama lewat job terjadwal
 // `backup_jadwal`; halaman Pengaturan admin membacanya lewat HTTP.
@@ -65,7 +66,6 @@ func buildBackup(cfg config.Config, pool *database.Pool, store storage.Store, lo
 		RetensiHarian:  cfg.BackupRetensiHarian,
 		RetensiBulanan: cfg.BackupRetensiBulanan,
 		RetensiWALHari: cfg.BackupWALHari,
-		SweepHapus:     cfg.BackupSweepHapus,
 		SweepGrace:     cfg.BackupSweepGrace,
 		JamHarian:      cfg.BackupJamWIB,
 	}, repo,
@@ -88,6 +88,7 @@ type opsiCadangan struct {
 	bersih    bool
 	paksa     bool
 	laporan   string
+	dirWal    string
 }
 
 // jalankanModeCadangan menjalankan mode cadangan yang dipilih.
@@ -191,6 +192,43 @@ func jalankanUjiRestore(ctx context.Context, svc *backup.Service, o opsiCadangan
 			return errTulis
 		}
 		slog.Default().Info("laporan uji restore ditulis", "berkas", o.laporan)
+	}
+	return err
+}
+
+// jalankanPulihWALMandiri mendekripsi arsip WAL TANPA koneksi database.
+//
+// Drill/PITR sering dijalankan justru ketika database sumber tidak tersedia
+// (mis. server produksi mati), jadi langkah pemulihan ini hanya butuh tujuan
+// cadangan + kunci age. Repo kosong (backup.TanpaRepo) memastikan tidak ada
+// pekerjaan yang diam-diam menyentuh database.
+func jalankanPulihWALMandiri(ctx context.Context, cfg config.Config, logger *slog.Logger, o opsiCadangan) error {
+	target, err := buildBackupTarget(cfg)
+	if err != nil {
+		return err
+	}
+	svc := backup.New(backup.Config{
+		Kerja:     cfg.BackupWorkDir,
+		Recipient: cfg.BackupAgeRecipient,
+		Identity:  cfg.BackupAgeIdentity,
+	}, backup.TanpaRepo{},
+		backup.WithTarget(target),
+		backup.WithLogger(logger),
+	)
+	return jalankanPulihWAL(ctx, svc, o)
+}
+
+// jalankanPulihWAL mendekripsi arsip WAL di tujuan ke direktori lokal: jalur
+// PITR/drill (README infra/backup §6). Direktori hasil dipakai sebagai
+// `restore_command` pada server pemulihan; berkas yang bukan hasil age DITOLAK.
+func jalankanPulihWAL(ctx context.Context, svc *backup.Service, o opsiCadangan) error {
+	laporan, err := svc.PulihkanWAL(ctx, o.dirWal)
+	cetakJSON(laporan)
+	if o.laporan != "" {
+		if errTulis := tulisLaporanJSON(o.laporan, laporan); errTulis != nil {
+			return errTulis
+		}
+		slog.Default().Info("laporan pemulihan WAL ditulis", "berkas", o.laporan)
 	}
 	return err
 }

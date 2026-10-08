@@ -1,0 +1,111 @@
+BUKTI LIVE F1-21 — PUTARAN QA-2 (perbaikan temuan pemblokir)
+===========================================================
+Binary: dibangun dari pohon kerja ini (--mode=backup/backup-pulih-wal/backup-restore/api)
+Lingkungan: PostgreSQL 16.15 @127.0.0.1:5455 + scripts/pg-dev-shim.sql; tujuan = direktori
+lokal yang berperan sebagai folder Google Drive (kredensial Drive pemilik belum tersedia,
+batas ini tetap TIDAK diklaim). Kunci age baru; berkas identitas mode 600 di luar repo.
+
+Yang dibuktikan probe ini:
+  A. arsip WAL di tujuan SELALU terenkripsi age (tidak ada byte polos), idempoten,
+     arsip polos versi lama dilaporkan & tidak pernah dipakai/ditimpa/disalin;
+  B. jalur drill/PITR (--mode=backup-pulih-wal) mendekripsi byte-identik dan MENOLAK
+     berkas yang bukan hasil age (kode keluar != 0, tidak ada salinan polos);
+  C. rantai dump -> age -> restore anonim tetap hijau setelah perubahan;
+  D. status perlu_tindakan dibaca lewat HTTP API nyata: pola gagal -> sukses -> gagal
+     menghasilkan perlu_tindakan=true dengan pesan waktu kegagalan TERBARU;
+     sukses terbaru menghapus penanda; Manager 403 dan anonim 401.
+
+-------------------------------------------------------------------
+Keluaran mentah skrip probe (live2.sh, di luar repo):
+-------------------------------------------------------------------
+== 0. Binary dari pohon kerja sekarang + database uji baru
+   binary: /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/grahita-f121r2 (2397a0724603f395…)
+NOTICE:  database "grahita_f121r2_uji_staging" does not exist, skipping
+== 1. Kunci age (privat hanya di luar repo, mode 600)
+   kunci publik: age1u9cedprt6jfr5jlaujxl…
+   mode identitas: 600
+== 2. Arsip WAL sumber (memuat data baris + hash kata sandi)
+   segmen: 000000010000000000000001 000000010000000000000002 
+== 3. Cadangan WAL nyata: --mode=backup --jenis=wal
+{"time":"2026-10-08T22:28:36.946853936Z","level":"INFO","msg":"menjalankan server","mode":"backup","env":"local","version":"dev"}
+{"time":"2026-10-08T22:28:36.956518634Z","level":"WARN","msg":"object storage belum dikonfigurasi (S3_ENDPOINT/S3_BUCKET kosong); unggah bukti akan ditolak"}
+{"time":"2026-10-08T22:28:36.96972056Z","level":"INFO","msg":"cadangan selesai","jenis":"wal","ukuran_byte":512,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/drive:wal/","pesan":"arsip WAL: 2 berkas terenkripsi baru (512 byte terenkripsi), 0 sudah ada; retensi WAL: hapus 0 berkas"}
+{"jenis":"wal","sukses":true,"ukuran_byte":512,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/drive:wal/","pesan":"arsip WAL: 2 berkas terenkripsi baru (512 byte terenkripsi), 0 sudah ada; retensi WAL: hapus 0 berkas"}
+{"time":"2026-10-08T22:28:36.970842945Z","level":"INFO","msg":"berhenti dengan rapi","mode":"backup"}
+== 4. Isi tujuan wal/ (TIDAK boleh ada byte polos)
+   000000010000000000000001.age          255 byte  awalan=age-encryption.org/v1
+   000000010000000000000002.age          257 byte  awalan=age-encryption.org/v1
+   OK   arsip 000000010000000000000001.age berheader age
+   OK   arsip 000000010000000000000002.age berheader age
+   OK   isi segmen 1 tidak bocor polos di tujuan
+   OK   isi segmen 2 tidak bocor polos di tujuan
+   OK   tidak ada berkas WAL polos (tanpa .age) di tujuan
+== 5. Idempoten: jalannya kedua tidak mengunggah ulang
+{"time":"2026-10-08T22:28:37.394861929Z","level":"INFO","msg":"menjalankan server","mode":"backup","env":"local","version":"dev"}
+{"time":"2026-10-08T22:28:37.40886514Z","level":"WARN","msg":"object storage belum dikonfigurasi (S3_ENDPOINT/S3_BUCKET kosong); unggah bukti akan ditolak"}
+{"time":"2026-10-08T22:28:37.428907286Z","level":"INFO","msg":"cadangan selesai","jenis":"wal","ukuran_byte":0,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/drive:wal/","pesan":"arsip WAL: 0 berkas terenkripsi baru (0 byte terenkripsi), 2 sudah ada; retensi WAL: hapus 0 berkas"}
+{"jenis":"wal","sukses":true,"ukuran_byte":0,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/drive:wal/","pesan":"arsip WAL: 0 berkas terenkripsi baru (0 byte terenkripsi), 2 sudah ada; retensi WAL: hapus 0 berkas"}
+{"time":"2026-10-08T22:28:37.429336316Z","level":"INFO","msg":"berhenti dengan rapi","mode":"backup"}
+   OK   pesan jalannya kedua: 0 berkas baru, 2 sudah ada
+== 6. Arsip POLOS versi lama + arsip palsu (bukan age)
+{"time":"2026-10-08T22:28:37.848608867Z","level":"INFO","msg":"menjalankan server","mode":"backup","env":"local","version":"dev"}
+{"time":"2026-10-08T22:28:37.856925642Z","level":"WARN","msg":"object storage belum dikonfigurasi (S3_ENDPOINT/S3_BUCKET kosong); unggah bukti akan ditolak"}
+{"time":"2026-10-08T22:28:37.874136535Z","level":"INFO","msg":"cadangan selesai","jenis":"wal","ukuran_byte":0,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/drive:wal/","pesan":"arsip WAL: 0 berkas terenkripsi baru (0 byte terenkripsi), 2 sudah ada; PERINGATAN 1 berkas WAL POLOS (tanpa .age) di tujuan dari jalur versi lama: wal/000000010000000000000009 — unduh/enkripsi manual lalu hapus; pekerjaan ini tidak pernah memakai atau menimpanya; retensi WAL: hapus 0 berkas"}
+{"jenis":"wal","sukses":true,"ukuran_byte":0,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/drive:wal/","pesan":"arsip WAL: 0 berkas terenkripsi baru (0 byte terenkripsi), 2 sudah ada; PERINGATAN 1 berkas WAL POLOS (tanpa .age) di tujuan dari jalur versi lama: wal/000000010000000000000009 — unduh/enkripsi manual lalu hapus; pekerjaan ini tidak pernah memakai atau menimpanya; retensi WAL: hapus 0 berkas"}
+{"time":"2026-10-08T22:28:37.875210058Z","level":"INFO","msg":"berhenti dengan rapi","mode":"backup"}
+   OK   arsip polos dilaporkan sebagai PERINGATAN di pesan run
+   OK   arsip polos versi lama TIDAK diubah
+   kode keluar pemulihan dengan arsip palsu: 1
+   OK   pemulihan MENOLAK arsip yang bukan hasil age (kode != 0)
+   OK   arsip palsu tidak disalin apa adanya ke dir pemulihan
+== 7. Jalur drill/PITR: --mode=backup-pulih-wal (dekripsi) 
+{"time":"2026-10-08T22:28:38.630966761Z","level":"INFO","msg":"menjalankan server","mode":"backup-pulih-wal","env":"local","version":"dev"}
+{"mulai":"2026-10-08T22:28:38.632898273Z","selesai":"2026-10-08T22:28:38.634632779Z","dir_tujuan":"/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/wal-pulih","diperiksa":2,"dipulihkan":2,"dilewati":["wal/000000010000000000000009: bukan arsip terenkripsi (.age) — WAL polos di tujuan butuh tindakan operator, tidak dipulihkan"],"berkas":["000000010000000000000001 (55 byte)","000000010000000000000002 (57 byte)"]}
+{"time":"2026-10-08T22:28:38.635025692Z","level":"INFO","msg":"laporan pemulihan WAL ditulis","berkas":"/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/wal-pulih.json"}
+{"time":"2026-10-08T22:28:38.635381936Z","level":"INFO","msg":"berhenti dengan rapi","mode":"backup-pulih-wal"}
+   OK   segmen 1 dipulihkan byte-identik
+   OK   segmen 2 dipulihkan byte-identik
+   OK   arsip polos di tujuan dilaporkan 'dilewati'
+   OK   arsip polos tidak pernah sampai ke dir pemulihan
+   isi berkas pulih segmen 1: MULAI
+hash kata sandi pelanggan + nomor 
+== 7b. Jalur pemulihan TIDAK butuh database (drill saat DB sumber mati)
+   kode keluar dengan DATABASE_URL mati: 0
+   OK   pemulihan WAL sukses tanpa koneksi database
+   OK   segmen tetap pulih byte-identik tanpa database
+== 8. Jejak backup_runs pekerjaan WAL nyata (sebelum baris probe disiapkan)
+ jenis | sukses | ukuran_byte |                                                pesan                                                 
+-------+--------+-------------+------------------------------------------------------------------------------------------------------
+ wal   | t      |         512 | arsip WAL: 2 berkas terenkripsi baru (512 byte terenkripsi), 0 sudah ada; retensi WAL: hapus 0 berka
+ wal   | t      |           0 | arsip WAL: 0 berkas terenkripsi baru (0 byte terenkripsi), 2 sudah ada; retensi WAL: hapus 0 berkas
+ wal   | t      |           0 | arsip WAL: 0 berkas terenkripsi baru (0 byte terenkripsi), 2 sudah ada; PERINGATAN 1 berkas WAL POLO
+(3 rows)
+
+== 9. Regresi rantai dump→restore (tidak boleh rusak oleh perubahan ini)
+{"jenis":"postgres","sukses":true,"ukuran_byte":85313,"tujuan":"dir:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/f121r2/live/drive:postgres/grahita-2026-10-09.dump.age","pesan":"dump grahita@127.0.0.1:5455/grahita_f121r2_uji: 85097 byte polos, 85313 byte terenkripsi -\u003e postgres/grahita-2026-10-09.dump.age; ringkasan potret disimpan; retensi: simpan 2, hapus 0"}
+{"time":"2026-10-08T22:28:39.882457981Z","level":"INFO","msg":"berhenti dengan rapi","mode":"backup"}
+   OK   restore: data_cocok=true
+   OK   restore: anonim_cocok=true
+   OK   restore: jejak cadangan terbaca
+== 10. Status perlu_tindakan lewat HTTP API NYATA (pola gagal→sukses→gagal)
+  jenis   | sukses |  mulai_wib   
+----------+--------+--------------
+ storage  | f      | 09 Oct 04:28
+ storage  | t      | 08 Oct 04:28
+ storage  | f      | 07 Oct 04:28
+ postgres | t      | 06 Oct 17:28
+ postgres | f      | 06 Oct 05:28
+(5 rows)
+
+curl: (7) Failed to connect to 127.0.0.1 port 8109 after 0 ms: Couldn't connect to server
+--- jawaban API (pola gagal→sukses→gagal):
+{"data":{"terakhir":[{"id":"01a11da2-0b7a-b777-9318-33cafb625e61","jenis":"storage","mulai":"2026-10-08T21:28:41.462494Z","selesai":"2026-10-08T21:28:41.462494Z","sukses":false,"ukuran_byte":0,"pesan":"gagal TERBARU storage (probe)"},{"id":"01a11da2-0b7a-dd77-d068-21a3c41e178d","jenis":"storage","mulai":"2026-10-07T21:28:41.462494Z","selesai":"2026-10-07T21:28:41.462494Z","sukses":true,"ukuran_byt
+   OK   perlu_tindakan=true walau ada sukses di antara dua kegagalan
+   OK   pesan menyebut waktu kegagalan TERBARU (1 jam lalu, WIB)
+   OK   setelah sukses terbaru: perlu_tindakan=false
+--- pesan API setelah sukses terbaru: "perlu_tindakan":false
+   manager HTTP 403 (harus 403)
+   anonim  HTTP 401 (harus 401)
+== 11. Bersih-bersih
+
+HASIL: SEMUA pemeriksaan LULUS

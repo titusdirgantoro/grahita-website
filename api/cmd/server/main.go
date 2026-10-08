@@ -8,6 +8,7 @@
 //	--mode=backup             menjalankan cadangan terenkripsi sekali lalu keluar
 //	--mode=backup-rekonsiliasi memeriksa DB↔object storage (dry-run bawaan)
 //	--mode=backup-restore     uji restore ke database uji (staging anonim)
+//	--mode=backup-pulih-wal   dekripsi arsip WAL ke direktori lokal (PITR/drill)
 //	--mode=healthcheck        memanggil /healthz lokal (dipakai Docker healthcheck)
 //	--mode=version            mencetak versi build
 package main
@@ -63,7 +64,7 @@ import (
 var version = "dev"
 
 func main() {
-	mode := flag.String("mode", "api", "api | worker | migrate | migrate-down | seed | backup | backup-rekonsiliasi | backup-restore | healthcheck | version")
+	mode := flag.String("mode", "api", "api | worker | migrate | migrate-down | seed | backup | backup-rekonsiliasi | backup-restore | backup-pulih-wal | healthcheck | version")
 	// Flag mode cadangan (F1-21).
 	jenis := flag.String("jenis", "semua", "backup: postgres | storage | wal | semua")
 	sweep := flag.Bool("sweep", false, "backup-rekonsiliasi: hapus objek yatim (bawaan: hanya melaporkan)")
@@ -74,7 +75,8 @@ func main() {
 	anonim := flag.Bool("anonim", false, "backup-restore: samarkan data pribadi (staging anonim)")
 	bersih := flag.Bool("bersih", false, "backup-restore: hapus & buat ulang database tujuan")
 	paksa := flag.Bool("paksa", false, "backup-restore: izinkan --bersih pada nama database non-uji")
-	laporan := flag.String("laporan", "", "backup-restore: berkas JSON laporan bukti uji restore")
+	laporan := flag.String("laporan", "", "backup-restore|backup-pulih-wal: berkas JSON laporan bukti")
+	dirWal := flag.String("dir-wal", "", "backup-pulih-wal: direktori lokal hasil dekripsi arsip WAL (restore_command PITR)")
 	flag.Parse()
 
 	switch *mode {
@@ -113,6 +115,7 @@ func main() {
 		bersih:    *bersih,
 		paksa:     *paksa,
 		laporan:   *laporan,
+		dirWal:    *dirWal,
 	}
 
 	if err := run(ctx, *mode, cfg, logger, opsi); err != nil {
@@ -149,6 +152,14 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 		}
 		defer pool.Close()
 		return seed.Run(ctx, pool)
+	case "backup-pulih-wal":
+		// Pemulihan arsip WAL hanya butuh tujuan + kunci age: tidak menyentuh
+		// database sama sekali supaya drill/PITR tetap bisa dijalankan saat
+		// database sumber tidak tersedia.
+		if !cfg.CadanganAktif() {
+			return fmt.Errorf("mode %s butuh tujuan cadangan: isi BACKUP_TARGET_DIR atau BACKUP_RCLONE_REMOTE beserta BACKUP_AGE_RECIPIENT", mode)
+		}
+		return jalankanPulihWALMandiri(ctx, cfg, logger, opsi)
 	case "backup", "backup-rekonsiliasi", "backup-restore":
 		if !cfg.CadanganAktif() {
 			return fmt.Errorf("mode %s butuh tujuan cadangan: isi BACKUP_TARGET_DIR atau BACKUP_RCLONE_REMOTE beserta BACKUP_AGE_RECIPIENT", mode)

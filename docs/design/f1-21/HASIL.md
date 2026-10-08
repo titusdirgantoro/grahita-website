@@ -22,8 +22,8 @@ halaman Pengaturan, runbook operator, dan tambahan konfigurasi.
 
 | Permukaan | Isi |
 |---|---|
-| `api/internal/backup` | `backup.go` (domain, jadwal 02:00 WIB, ringkasan, pencatatan run), `kripto.go` (age), `dump.go` (`pg_dump`/`pg_restore` lewat environment, bukan argumen), `target.go` (`Dir` & `Rclone`), `postgres.go` (dump harian + potret jumlah baris + retensi), `storage.go` (sinkronisasi objek + manifest + verifikasi byte), `wal.go` (arsip WAL bila PITR aktif), `rekonsiliasi.go` (DB↔storage + sapu objek yatim konservatif), `restore.go` (uji restore + penyamaran staging), `notify.go` (alarm) |
-| CLI (`cmd/server`) | `--mode=backup [--jenis=postgres\|storage\|wal\|semua]`, `--mode=backup-rekonsiliasi [--sweep]`, `--mode=backup-restore [--dsn-tujuan --bersih --anonim --objek-dir --laporan --paksa]` |
+| `api/internal/backup` | `backup.go` (domain, jadwal 02:00 WIB, ringkasan, pencatatan run), `kripto.go` (age), `dump.go` (`pg_dump`/`pg_restore` lewat environment, bukan argumen), `target.go` (`Dir` & `Rclone`), `postgres.go` (dump harian + potret jumlah baris + retensi), `storage.go` (sinkronisasi objek + manifest + verifikasi byte), `wal.go` (arsip WAL **terenkripsi age** bila PITR aktif + dekripsi jalur PITR/drill), `rekonsiliasi.go` (DB↔storage + sapu objek yatim konservatif), `restore.go` (uji restore + penyamaran staging), `notify.go` (alarm) |
+| CLI (`cmd/server`) | `--mode=backup [--jenis=postgres\|storage\|wal\|semua]`, `--mode=backup-rekonsiliasi [--sweep]`, `--mode=backup-restore [--dsn-tujuan --bersih --anonim --objek-dir --laporan --paksa]`, `--mode=backup-pulih-wal [--dir-wal --laporan]` |
 | Worker | job periodik `backup_jadwal` (bawaan tiap 15 menit) yang hanya menjalankan pekerjaan yang memang sudah waktunya |
 | HTTP | `GET /api/v1/admin/backup-runs` (Superadmin) → run terbaru + `perlu_tindakan` (dipakai halaman Pengaturan; F1-20 dapat memakainya sebagai chip) |
 | Web admin | bagian **Backup harian** di `/pengaturan`: tujuan, jadwal, retensi, tabel riwayat (Sukses/Gagal/Berjalan), dan Notice merah bila perlu tindakan |
@@ -82,6 +82,12 @@ halaman Pengaturan, runbook operator, dan tambahan konfigurasi.
    Setiap tindakan sapu tercatat di `audit_logs` (entity `backup_sweep`,
    aktor `system`). Bukti: `TestRekonsiliasiKonservatifTidakMenyentuhBukti`
    (dry-run, sapu hanya dokumen yatim tua, bukti/kunci asing/versi lama selamat).
+   *Putaran QA-2:* knop `BACKUP_SWEEP_HAPUS` **dihapus** dari `config`/
+   `.env.example`/`docker-compose.yml` karena tidak pernah dibaca domain
+   cadangan (operator bisa mengira sapu otomatis aktif). Satu-satunya saklar
+   penghapusan adalah flag CLI `--sweep` yang terlihat di command line; tidak
+   ada variabel lingkungan yang bisa mempersenjatai penghapusan diam-diam.
+
 7. **Sinkronisasi objek inkremental + manifest + verifikasi byte.** Salinan
    terenkripsi per objek (`storage/<kunci>.age`) dengan `storage/_manifest.json`
    (ukuran + sha256 objek asli). Objek yang ukurannya sama dan sudah ada di
@@ -126,6 +132,42 @@ halaman Pengaturan, runbook operator, dan tambahan konfigurasi.
     membaca objek. Konfigurasi setengah jadi tetap menghentikan start (perilaku
     lama yang sudah terdokumentasi).
 
+14. **Arsip WAL terenkripsi age, sama seperti dump (perbaikan putaran QA-2).**
+    Temuan pemblokir QA putaran 1: `wal.go` mengunggah segmen WAL APA ADANYA,
+    sehingga jalur itu menulis data seluruh baris (termasuk hash kata sandi)
+    polos ke tujuan persis saat runbook §6 (PITR) diikuti. Sekarang setiap
+    segmen dienkripsi age ke berkas sementara DI DIREKTORI KERJA lalu diunggah
+    sebagai `wal/<berkas WAL>.age`; tanpa `BACKUP_AGE_RECIPIENT` pekerjaan WAL
+    **menolak berjalan** (fail closed, `TestWALTanpaKunciAgeTidakMengunggahApaPun`).
+    Idempotensi memakai keberadaan berkas di tujuan (ukuran hasil enkripsi tidak
+    bisa dibandingkan dengan ukuran polos) dan setiap unggahan diverifikasi ada
+    dengan ukuran sama. Retensi 7 hari tetap, tetapi hanya menyentuh berkas
+    `.age` miliknya sendiri. Jalur pemulihan ditambahkan:
+    `--mode=backup-pulih-wal --dir-wal <dir>` mendekripsi arsip ke direktori
+    lokal untuk `restore_command` (drill/PITR) dan **menolak** berkas yang bukan
+    hasil age. Mode itu sengaja **tidak menyentuh database** (`backup.TanpaRepo`):
+    drill/PITR dijalankan justru ketika database sumber tidak tersedia, jadi
+    langkah dekripsi tidak boleh bergantung padanya (dibuktikan probe live
+    dengan `DATABASE_URL` mati → tetap berhasil). WAL polos sisa versi lama
+    dilaporkan sebagai `PERINGATAN` di pesan run, tidak pernah
+    dipakai/ditimpa/disalin. Bukti:
+    `TestWALArsipSelaluTerenkripsiDanDapatDipulihkan`,
+    `TestWALPulihMenolakArsipBukanAge`,
+    `TestWALRetensiTujuhHariMempertahankanBerkasAsing`,
+    `TestWALPulihTanpaDatabase`, plus probe live binary nyata
+    (`BUKTI-LIVE-PUTARAN2.txt`).
+15. **Status "perlu tindakan" memakai kegagalan TERBARU per jenis (perbaikan
+    putaran QA-2).** `Ringkasan` sebelumnya menimpa `gagalTerakhir[jenis]` pada
+    SETIAP baris gagal, padahal repository mengembalikan run terbaru-dulu
+    (`ORDER BY mulai DESC`) — nilai akhirnya adalah kegagalan TERTUA di jendela,
+    sehingga pola gagal → sukses → gagal membuat dashboard/Pengaturan berbunyi
+    "aman" tepat setelah cadangan terakhir gagal. Sekarang kegagalan PERTAMA
+    yang ditemui per jenis (yaitu yang terbaru) yang dipakai, dan urutan
+    pemeriksaan jenis dibuat deterministik. Bukti:
+    `TestRingkasanMemakaiKegagalanTerbaruPerJenis` (memeriksa waktu kegagalan
+    yang disebut pesan memang yang terbaru) +
+    `TestRingkasanMengabaikanRunBelumSelesai`.
+
 Endpoint/skema baru: `GET /api/v1/admin/backup-runs` (Superadmin, kapabilitas
 `admin.settings` yang sudah ada) dan skema `BackupRun` di `openapi/openapi.yaml`;
 kontrak OpenAPI ↔ router dijaga `TestKontrakOpenAPIIkutRouter`.
@@ -157,6 +199,13 @@ Uji fokus F1-21 yang baru:
 | `TestBentukKunciDokumenMenyaringKunciAsing` | hanya kunci dokumen yang sah yang boleh dipertimbangkan sapu |
 | `TestPerluJalanSesuaiJadwalWIB` | 01:59 belum jalan, 02:00+ jalan sekali/hari, hari berikutnya mengejar |
 | `TestRingkasanMenandaiPerluTindakan` | gagal terakhir → `perlu_tindakan`; sukses sesudahnya menghapusnya |
+| `TestRingkasanMemakaiKegagalanTerbaruPerJenis` | pola gagal → sukses → gagal menandai perlu tindakan dengan waktu kegagalan TERBARU (regresi QA-2) |
+| `TestRingkasanMengabaikanRunBelumSelesai` | baris `sukses NULL` (sedang berjalan) bukan kegagalan |
+| `TestWALArsipSelaluTerenkripsiDanDapatDipulihkan` | segmen WAL terenkripsi age di tujuan (`wal/*.age`, 0 byte polos), idempoten, polos versi lama dilaporkan & tidak disentuh, dekripsi drill byte-identik |
+| `TestWALTanpaKunciAgeTidakMengunggahApaPun` | fail closed jalur WAL: tanpa kunci publik tidak ada byte yang mendarat, run tercatat gagal |
+| `TestWALPulihMenolakArsipBukanAge` | jalur dekripsi PITR menolak berkas bukan hasil age |
+| `TestWALPulihTanpaDatabase` | dekripsi drill/PITR jalan dengan repo kosong (`TanpaRepo`); pekerjaan yang butuh data ditolak jelas |
+| `TestWALRetensiTujuhHariMempertahankanBerkasAsing` | retensi 7 hari hanya menghapus arsip `.age` miliknya; berkas asing/polos selamat |
 | `TestRingkasanPotretRoundTrip` | potret jumlah baris tersimpan/terbaca; dump tanpa potret dikenali |
 | `TestSinkronObjekInkrementalDanByteUtuh` | sinkronisasi inkremental, byte identik, kerusakan salinan terdeteksi |
 | `TestRekonsiliasiKonservatifTidakMenyentuhBukti` | dry-run bawaan; hanya dokumen yatim tua disapu; bukti asli aman |
@@ -166,7 +215,8 @@ Uji fokus F1-21 yang baru:
 ### Probe live (binary nyata, PostgreSQL nyata, tujuan nyata)
 
 Skrip probe dan keluaran mentahnya ada di workspace kartu
-(`BUKTI-LIVE-F121.txt`, `laporan-restore-uji.json`, `api-backup-runs.json`).
+(`BUKTI-LIVE-F121.txt`, `laporan-restore-uji.json`, `api-backup-runs.json`);
+bukti putaran QA-2 ada di `docs/design/f1-21/BUKTI-LIVE-PUTARAN2.txt`.
 Database sumber `grahita_f121_live` (migrasi + seed PRD, 4 cabang, 1 pesanan,
 1 bukti, 1 dokumen), tujuan `dir:.../live/drive` (berperan sebagai folder
 Drive), kunci age baru dengan identitas di luar repo (mode 600).
@@ -191,6 +241,24 @@ Drive), kunci age baru dengan identitas di luar repo (mode 600).
 | RPO | ≤ 24 jam (`≤ 5 menit` bila PITR aktif) | cadangan harian 02:00 WIB + pengejaran bila worker terlewat; `wal` mencadangkan arsip WAL bila `BACKUP_WAL_DIR` diisi |
 | RTO | ≤ 4 jam | drill kuartalan mengembalikan DB + objek ke lingkungan uji; pada data contoh (dump 85 KB) drill selesai 1,15 detik; waktu restore produksi (dump besar + unduh dari Drive) harus diukur pada drill pertama **di server**, bukan disimpulkan dari data contoh |
 
+### Putaran QA-2 — perbaikan temuan putaran 1
+
+QA putaran 1 meminta perubahan dengan 2 temuan pemblokir + 1 minor. Semuanya
+dikerjakan dan dibuktikan ulang (bukti mentah:
+`docs/design/f1-21/BUKTI-LIVE-PUTARAN2.txt`, probe di luar repo):
+
+| Temuan QA | Perbaikan | Bukti |
+|---|---|---|
+| **[Pemblokir]** `Ringkasan` memakai kegagalan TERTUA (loop menimpa) → status "aman" bisa muncul tepat setelah cadangan terakhir gagal | kegagalan TERBARU per jenis (baris pertama per jenis dari daftar terbaru-dulu) + urutan jenis deterministik | `TestRingkasanMemakaiKegagalanTerbaruPerJenis`; probe live: API nyata pada pola gagal→sukses→gagal mengembalikan `perlu_tindakan=true` + `"Cadangan storage gagal pada 09 Oct 2026 04:22 WIB …"` (jam kegagalan terbaru), dan `perlu_tindakan=false` setelah sukses terbaru |
+| **[Pemblokir]** arsip WAL diunggah POLOS ke tujuan | tiap segmen dienkripsi age ke berkas sementara di direktori kerja lalu diunggah sebagai `wal/<segmen>.age`; fail closed tanpa kunci; retensi 7 hari hanya menyentuh berkas miliknya; jalur pemulihan `--mode=backup-pulih-wal` menolak berkas non-age dan TIDAK butuh koneksi database | `TestWALArsipSelaluTerenkripsiDanDapatDipulihkan`, `TestWALTanpaKunciAgeTidakMengunggahApaPun`, `TestWALPulihMenolakArsipBukanAge`, `TestWALRetensiTujuhHariMempertahankanBerkasAsing`, `TestWALPulihTanpaDatabase`; probe live: `wal/*.age` berheader `age-encryption.org/v1`, 0 byte penanda polos, idempoten (`0 berkas terenkripsi baru, 2 sudah ada`), pemulihan byte-identik (sha256 cocok) termasuk dengan `DATABASE_URL` mati, arsip palsu → kode keluar 1 dan tidak ada salinan polos |
+| **[Minor]** `BACKUP_SWEEP_HAPUS` tidak pernah dibaca domain cadangan | knop dihapus dari `config`/`.env.example`/`docker-compose.yml` dan field `Config.SweepHapus` dihapus; satu-satunya saklar adalah flag CLI `--sweep` | `grep -rn BACKUP_SWEEP_HAPUS api cmd web .env.example docker-compose.yml` = 0 hasil (hanya tersisa catatan sejarah di README/HASIL); `TestRekonsiliasiKonservatifTidakMenyentuhBukti` menegakkan dry-run bawaan |
+
+Regresi yang dijaga ulang pada putaran ini: rantai `pg_dump` → age → `pg_restore`
+→ penyamaran staging (probe live `data_cocok=true`, `anonim_cocok=true`,
+`jejak_cadangan=1`), otorisasi `GET /admin/backup-runs` (Superadmin 200,
+Manager 403, anonim 401), `gofmt`/`vet`/`build`/`check-secrets`/`sqlc`/suite
+penuh `-race -p 1` (lihat serah terima kartu untuk angka lengkapnya).
+
 ## Batas yang TIDAK diklaim
 
 1. **Google Drive dan MinIO/R2 nyata belum dijalankan.** Kredensial dimiliki
@@ -205,8 +273,13 @@ Drive), kunci age baru dengan identitas di luar repo (mode 600).
    inkremental + verifikasi byte dibuktikan uji dengan object store nyata
    in-process dan jumlah baris `payment_proofs`/`documents` yang dirujuk.
 3. **PITR belum aktif** (tidak ada `archive_mode`/`archive_command` di
-   lingkungan ini), jadi `jenis=wal` hanya membuktikan no-op yang jujur; konfigurasi
-   dan retensi 7 hari ada di runbook.
+   lingkungan ini), jadi tidak ada WAL yang benar-benar diproduksi PostgreSQL
+   yang ikut dibuktikan. Yang SUDAH dibuktikan: jalur arsip WAL terenkripsi
+   (dengan direktori arsip berisi segmen nyata di disk), fail-closed tanpa
+   kunci, idempotensi, retensi 7 hari, dan dekripsi jalur drill/PITR
+   (`--mode=backup-pulih-wal`) byte-identik serta penolakan berkas non-age —
+   uji unit + probe live. Konfigurasi `archive_command` dan RPO ≤ 5 menit tetap
+   tanggung jawab operasi di server (runbook §6).
 4. **PostgreSQL 18 asli dan `golangci-lint`** tidak dijalankan di sesi ini
    (PG 16.15 + shim `uuidv7`, sama seperti kartu lain di gelombang ini).
    `pg_dump`/`pg_restore` juga harus ber-versi mayor ≥ server (pg_dump 16
@@ -222,7 +295,7 @@ Drive), kunci age baru dengan identitas di luar repo (mode 600).
    sebelum salinan apa pun dihapus.
 8. **Sapu objek yatim** default dry-run; menghapus objek yatim (termasuk
    dokumen versi dari render yang gagal) butuh keputusan operator lewat
-   `--sweep`.
+   `--sweep` (satu-satunya saklar; tidak ada env yang bisa mengaktifkannya).
 
 ## Serah terima ke kartu lain
 

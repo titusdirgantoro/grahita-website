@@ -65,6 +65,11 @@ type LaporanRekonsiliasi struct {
 //   - menghapus objek yang belum melewati grace period (kemungkinan sedang
 //     ditulis render yang belum commit — risiko yang dibawa dari F1-17);
 //   - menghapus objek yang masih dirujuk baris `documents` mana pun.
+//
+// Penghapusan HANYA terjadi bila pemanggil memintanya eksplisit
+// (`OpsiRekonsiliasi.Hapus`, dari flag CLI `--sweep`). Tidak ada variabel
+// lingkungan yang bisa mempersenjatai penghapusan diam-diam: satu-satunya
+// saklar adalah tindakan operator yang terlihat di command line.
 func (s *Service) Rekonsiliasi(ctx context.Context, opsi OpsiRekonsiliasi) (LaporanRekonsiliasi, error) {
 	if s.objek == nil {
 		return LaporanRekonsiliasi{}, errCadanganTanpaObjek

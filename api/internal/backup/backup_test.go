@@ -882,6 +882,390 @@ func TestUjiRestoreTanpaCadanganMenolakJelas(t *testing.T) {
 	}
 }
 
+// ---------- regresi QA putaran 1: kegagalan TERBARU per jenis ----------
+
+// TestRingkasanMemakaiKegagalanTerbaruPerJenis menegakkan regresi putaran QA-1.
+// Repository mengembalikan run terbaru-dulu (ORDER BY mulai DESC); status
+// "perlu tindakan" harus dibandingkan dengan kegagalan TERBARU per jenis, bukan
+// kegagalan tertua di jendela. Pola gagal → sukses → gagal sebelumnya membuat
+// dashboard berbunyi "aman" tepat setelah cadangan terakhir gagal.
+func TestRingkasanMemakaiKegagalanTerbaruPerJenis(t *testing.T) {
+	ctx := context.Background()
+	sekarang := time.Now().UTC().Truncate(time.Second)
+	gagal, sukses := false, true
+
+	// Salinan repo (yang membalik urutan) menyimpan run LAMA-DULU, sehingga
+	// Terakhir() mengembalikannya seperti ORDER BY mulai DESC.
+	repo := &repoPalsu{runs: []backup.Run{
+		{ID: "postgres-gagal-lama", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-72 * time.Hour), Sukses: &gagal},
+		{ID: "postgres-sukses", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-60 * time.Hour), Sukses: &sukses},
+		{ID: "storage-gagal-tertua", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-49 * time.Hour), Sukses: &gagal},
+		{ID: "storage-sukses-selang", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-25 * time.Hour), Sukses: &sukses},
+		{ID: "storage-gagal-terbaru", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-1 * time.Hour), Sukses: &gagal},
+	}}
+	svc := serviceUji(t, repo, backup.Nol{}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir()})
+
+	ringkasan, err := svc.Ringkasan(ctx, 20)
+	if err != nil {
+		t.Fatalf("Ringkasan: %v", err)
+	}
+	if !ringkasan.PerluTindakan {
+		t.Fatal("kegagalan TERBARU (1 jam lalu) tanpa sukses sesudahnya harus menandai perlu tindakan, walau ada sukses di antara dua kegagalan")
+	}
+	if !strings.Contains(ringkasan.Pesan, "storage") {
+		t.Errorf("pesan harus menyebut jenis yang gagal: %q", ringkasan.Pesan)
+	}
+	// Pesan wajib memakai waktu kegagalan TERBARU, bukan kegagalan tertua.
+	waktuTerbaru := sekarang.Add(-1 * time.Hour).In(clock.Jakarta()).Format("02 Jan 2006 15:04 WIB")
+	if !strings.Contains(ringkasan.Pesan, waktuTerbaru) {
+		t.Errorf("pesan = %q, mau memuat waktu kegagalan terbaru %q", ringkasan.Pesan, waktuTerbaru)
+	}
+	waktuTertua := sekarang.Add(-49 * time.Hour).In(clock.Jakarta()).Format("02 Jan 2006 15:04 WIB")
+	if strings.Contains(ringkasan.Pesan, waktuTertua) {
+		t.Errorf("pesan = %q, tidak boleh memakai kegagalan TERTUA %q", ringkasan.Pesan, waktuTertua)
+	}
+	if len(ringkasan.SuksesTerakhir) != 2 {
+		t.Errorf("sukses terakhir harus tercatat per jenis: %v", ringkasan.SuksesTerakhir)
+	}
+
+	// Sukses yang lebih baru dari kegagalan terbaru menghapus penanda.
+	repo.runs = append(repo.runs, backup.Run{ID: "storage-sukses-baru", Jenis: backup.JenisStorage, Mulai: sekarang, Sukses: &sukses})
+	ringkasan, err = svc.Ringkasan(ctx, 20)
+	if err != nil {
+		t.Fatalf("Ringkasan: %v", err)
+	}
+	if ringkasan.PerluTindakan {
+		t.Errorf("sukses terbaru harus menghapus penanda perlu tindakan (pesan: %q)", ringkasan.Pesan)
+	}
+}
+
+// TestRingkasanMengabaikanRunBelumSelesai memastikan baris "sedang berjalan"
+// (sukses NULL) tidak pernah dianggap kegagalan.
+func TestRingkasanMengabaikanRunBelumSelesai(t *testing.T) {
+	sekarang := time.Now().UTC()
+	repo := &repoPalsu{runs: []backup.Run{
+		{ID: "selesai", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-30 * time.Hour)},
+	}}
+	svc := serviceUji(t, repo, backup.Nol{}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir()})
+	ringkasan, err := svc.Ringkasan(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("Ringkasan: %v", err)
+	}
+	if ringkasan.PerluTindakan {
+		t.Error("run yang belum selesai bukan kegagalan")
+	}
+}
+
+// ---------- arsip WAL: selalu terenkripsi (regresi QA putaran 1) ----------
+
+// siapkanArsipWAL membuat direktori arsip WAL berisi segmen uji dengan isi
+// yang mudah dikenali bila bocor polos.
+func siapkanArsipWAL(t *testing.T, segmen map[string][]byte) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "wal-arsip")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("buat direktori arsip WAL: %v", err)
+	}
+	for nama, isi := range segmen {
+		if err := os.WriteFile(filepath.Join(dir, nama), isi, 0o600); err != nil {
+			t.Fatalf("tulis segmen WAL %s: %v", nama, err)
+		}
+	}
+	return dir
+}
+
+// TestWALArsipSelaluTerenkripsiDanDapatDipulihkan adalah regresi temuan
+// pemblokir putaran QA-1: arsip WAL sebelumnya diunggah POLOS ke tujuan. Setiap
+// segmen (yang memuat seluruh perubahan baris, termasuk hash kata sandi) wajib
+// terenkripsi age, idempoten, dan bisa didekripsi kembali untuk jalur PITR.
+func TestWALArsipSelaluTerenkripsiDanDapatDipulihkan(t *testing.T) {
+	recipient, berkasIdentitas := kunciUji(t)
+	ctx := context.Background()
+	segmen := map[string][]byte{
+		"000000010000000000000001": []byte("hash kata sandi super rahasia dan data pelanggan\n" + strings.Repeat("a", 48)),
+		"000000010000000000000002": bytes.Repeat([]byte("WAL polos pelanggan\n"), 100),
+	}
+	walDir := siapkanArsipWAL(t, segmen)
+
+	dirTarget := t.TempDir()
+	target, err := backup.NewDir(dirTarget)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	svc := serviceUji(t, &repoPalsu{}, target, storage.NewMemory(""), backup.Config{
+		Kerja:     t.TempDir(),
+		Recipient: recipient,
+		Identity:  berkasIdentitas,
+		WALDir:    walDir,
+	})
+
+	hasil := svc.Jalankan(ctx, backup.JenisWAL)
+	if !hasil.Sukses {
+		t.Fatalf("cadangan WAL gagal: %v (%s)", hasil.Err, hasil.Pesan)
+	}
+	if !strings.Contains(hasil.Pesan, "2 berkas terenkripsi baru") {
+		t.Errorf("pesan = %q, mau memuat '2 berkas terenkripsi baru'", hasil.Pesan)
+	}
+
+	for nama, isi := range segmen {
+		jalurTujuan := filepath.Join(dirTarget, filepath.FromSlash(backup.NamaWALTerEnkripsi(nama)))
+		raw, err := os.ReadFile(jalurTujuan)
+		if err != nil {
+			t.Fatalf("arsip WAL %s tidak ada di tujuan: %v", jalurTujuan, err)
+		}
+		if !bytes.HasPrefix(raw, []byte("age-encryption.org/v1")) {
+			t.Errorf("arsip WAL %s tidak berheader age di tujuan", nama)
+		}
+		if bytes.Contains(raw, isi) {
+			t.Errorf("arsip WAL %s memuat byte POLOS di tujuan", nama)
+		}
+		if jalurPolos := filepath.Join(dirTarget, filepath.FromSlash(backup.PrefixWAL+nama)); fileAda(jalurPolos) {
+			t.Errorf("berkas WAL polos %s ikut mendarat di tujuan", jalurPolos)
+		}
+	}
+
+	// Idempoten: tidak ada yang diunggah ulang.
+	kedua := svc.Jalankan(ctx, backup.JenisWAL)
+	if !kedua.Sukses {
+		t.Fatalf("cadangan WAL kedua gagal: %v", kedua.Err)
+	}
+	if !strings.Contains(kedua.Pesan, "0 berkas terenkripsi baru") || !strings.Contains(kedua.Pesan, "2 sudah ada") {
+		t.Errorf("pesan jalannya kedua = %q, mau '0 berkas terenkripsi baru ... 2 sudah ada'", kedua.Pesan)
+	}
+	if kedua.UkuranByte != 0 {
+		t.Errorf("byte baru pada jalan kedua = %d, mau 0", kedua.UkuranByte)
+	}
+
+	// Arsip POLOS dari jalur versi lama: dilaporkan, tidak dipakai/ditimpa.
+	namaLama := "000000010000000000000009"
+	jalurLama := filepath.Join(dirTarget, filepath.FromSlash(backup.PrefixWAL+namaLama))
+	if err := os.WriteFile(jalurLama, []byte("arsip WAL polos versi lama"), 0o600); err != nil {
+		t.Fatalf("tulis arsip polos versi lama: %v", err)
+	}
+	ketiga := svc.Jalankan(ctx, backup.JenisWAL)
+	if !ketiga.Sukses {
+		t.Fatalf("cadangan WAL ketiga gagal: %v", ketiga.Err)
+	}
+	if !strings.Contains(ketiga.Pesan, "PERINGATAN") || !strings.Contains(ketiga.Pesan, namaLama) {
+		t.Errorf("arsip polos di tujuan harus dilaporkan: %q", ketiga.Pesan)
+	}
+	if raw, err := os.ReadFile(jalurLama); err != nil || string(raw) != "arsip WAL polos versi lama" {
+		t.Errorf("arsip polos versi lama tidak boleh diubah: %v (%q)", err, raw)
+	}
+	if fileAda(jalurLama + backup.SufiksAge) {
+		t.Error("pekerjaan ini tidak boleh membuat salinan terenkripsi dari berkas asing")
+	}
+
+	// Jalur drill/PITR: dekripsi kembali ke direktori lokal, byte identik.
+	dirPulih := filepath.Join(t.TempDir(), "wal-pulih")
+	laporan, err := svc.PulihkanWAL(ctx, dirPulih)
+	if err != nil {
+		t.Fatalf("PulihkanWAL: %v", err)
+	}
+	if laporan.Dipulihkan != len(segmen) || laporan.Diperiksa != len(segmen) {
+		t.Fatalf("pemulihan WAL: diperiksa=%d dipulihkan=%d, mau %d keduanya", laporan.Diperiksa, laporan.Dipulihkan, len(segmen))
+	}
+	for nama, isi := range segmen {
+		kembali, err := os.ReadFile(filepath.Join(dirPulih, nama))
+		if err != nil {
+			t.Fatalf("berkas hasil pemulihan %s tidak ada: %v", nama, err)
+		}
+		if !bytes.Equal(kembali, isi) {
+			t.Errorf("byte hasil pemulihan %s berbeda dari segmen asli", nama)
+		}
+	}
+	laporPolos := false
+	for _, d := range laporan.Dilewati {
+		if strings.Contains(d, namaLama) {
+			laporPolos = true
+		}
+	}
+	if !laporPolos {
+		t.Errorf("arsip polos di tujuan harus dilaporkan sebagai dilewati: %v", laporan.Dilewati)
+	}
+	if fileAda(filepath.Join(dirPulih, namaLama)) {
+		t.Error("arsip polos di tujuan tidak boleh disalin apa adanya ke direktori pemulihan")
+	}
+}
+
+// TestWALTanpaKunciAgeTidakMengunggahApaPun menegakkan fail-closed pada jalur
+// WAL: tanpa kunci publik age, tidak ada satu byte pun yang mendarat di tujuan.
+func TestWALTanpaKunciAgeTidakMengunggahApaPun(t *testing.T) {
+	ctx := context.Background()
+	walDir := siapkanArsipWAL(t, map[string][]byte{"000000010000000000000001": []byte("WAL rahasia")})
+	dirTarget := t.TempDir()
+	target, err := backup.NewDir(dirTarget)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	repo := &repoPalsu{}
+	svc := serviceUji(t, repo, target, storage.NewMemory(""), backup.Config{
+		Kerja:  t.TempDir(),
+		WALDir: walDir,
+	})
+
+	hasil := svc.Jalankan(ctx, backup.JenisWAL)
+	if hasil.Sukses {
+		t.Fatal("tanpa kunci age pekerjaan WAL harus menolak berjalan")
+	}
+	if !errors.Is(hasil.Err, backup.ErrKunciEnkripsi) {
+		t.Errorf("err = %v, mau ErrKunciEnkripsi", hasil.Err)
+	}
+	daftar, err := target.Daftar(ctx, backup.PrefixWAL)
+	if err != nil {
+		t.Fatalf("Daftar: %v", err)
+	}
+	if len(daftar) != 0 {
+		t.Errorf("tidak boleh ada apa pun di tujuan tanpa kunci age: %v", daftar)
+	}
+	if run, ada := repo.runTerakhir(); !ada || run.Sukses == nil || *run.Sukses {
+		t.Errorf("kegagalan WAL harus tercatat di backup_runs: %+v", run)
+	}
+}
+
+// TestWALPulihMenolakArsipBukanAge memastikan jalur dekripsi PITR tidak pernah
+// menyalin byte non-age: berkas `.age` yang isinya bukan hasil age ditolak.
+func TestWALPulihMenolakArsipBukanAge(t *testing.T) {
+	recipient, berkasIdentitas := kunciUji(t)
+	dirTarget := t.TempDir()
+	subdir := filepath.Join(dirTarget, "wal")
+	if err := os.MkdirAll(subdir, 0o700); err != nil {
+		t.Fatalf("buat subdirektori wal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "000000010000000000000003.age"), []byte("ini sebenarnya WAL polos"), 0o600); err != nil {
+		t.Fatalf("tulis arsip palsu: %v", err)
+	}
+	target, err := backup.NewDir(dirTarget)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	svc := serviceUji(t, &repoPalsu{}, target, storage.NewMemory(""), backup.Config{
+		Kerja:     t.TempDir(),
+		Recipient: recipient,
+		Identity:  berkasIdentitas,
+	})
+	if _, err := svc.PulihkanWAL(context.Background(), filepath.Join(t.TempDir(), "pulih")); err == nil {
+		t.Error("arsip yang bukan hasil age harus ditolak oleh PulihkanWAL")
+	}
+}
+
+// TestWALRetensiTujuhHariMempertahankanBerkasAsing menegakkan retensi 7 hari di
+// tujuan: hanya arsip `.age` tua yang dihapus; berkas yang bukan buatan
+// pekerjaan ini (termasuk WAL polos versi lama) selalu selamat.
+func TestWALRetensiTujuhHariMempertahankanBerkasAsing(t *testing.T) {
+	ctx := context.Background()
+	recipient, berkasIdentitas := kunciUji(t)
+	dirTarget := t.TempDir()
+	subdir := filepath.Join(dirTarget, "wal")
+	if err := os.MkdirAll(subdir, 0o700); err != nil {
+		t.Fatalf("buat subdirektori wal: %v", err)
+	}
+	tua := time.Now().Add(-30 * 24 * time.Hour)
+	arsipTua := filepath.Join(subdir, "00000001000000000000000A.age")
+	arsipSegar := filepath.Join(subdir, "00000001000000000000000B.age")
+	polosTua := filepath.Join(subdir, "00000001000000000000000C")
+	for _, f := range []string{arsipTua, arsipSegar, polosTua} {
+		if err := os.WriteFile(f, []byte("age-encryption.org/v1 contoh"), 0o600); err != nil {
+			t.Fatalf("tulis %s: %v", f, err)
+		}
+	}
+	if err := os.Chtimes(arsipTua, tua, tua); err != nil {
+		t.Fatalf("ubah waktu arsip tua: %v", err)
+	}
+	if err := os.Chtimes(polosTua, tua, tua); err != nil {
+		t.Fatalf("ubah waktu arsip polos: %v", err)
+	}
+
+	target, err := backup.NewDir(dirTarget)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	svc := serviceUji(t, &repoPalsu{}, target, storage.NewMemory(""), backup.Config{
+		Kerja:     t.TempDir(),
+		Recipient: recipient,
+		Identity:  berkasIdentitas,
+		WALDir:    t.TempDir(), // PITR aktif, tetapi belum ada segmen baru
+	})
+	hasil := svc.Jalankan(ctx, backup.JenisWAL)
+	if !hasil.Sukses {
+		t.Fatalf("cadangan WAL gagal: %v (%s)", hasil.Err, hasil.Pesan)
+	}
+	if !strings.Contains(hasil.Pesan, "retensi WAL: hapus 1 berkas") {
+		t.Errorf("pesan = %q, mau 'retensi WAL: hapus 1 berkas'", hasil.Pesan)
+	}
+	if fileAda(arsipTua) {
+		t.Error("arsip .age lebih tua dari 7 hari harus dihapus dari tujuan")
+	}
+	if !fileAda(arsipSegar) {
+		t.Error("arsip .age yang masih segar tidak boleh dihapus")
+	}
+	if !fileAda(polosTua) {
+		t.Error("berkas yang bukan buatan pekerjaan ini tidak boleh dihapus retensi")
+	}
+	if !strings.Contains(hasil.Pesan, "PERINGATAN") {
+		t.Errorf("arsip polos di tujuan harus dilaporkan: %q", hasil.Pesan)
+	}
+}
+
+// TestWALPulihTanpaDatabase membuktikan jalur dekripsi drill/PITR berjalan
+// dengan repo kosong (TanpaRepo): pemulihan arsip WAL tidak boleh bergantung
+// pada database yang justru mungkin sedang tidak tersedia saat bencana.
+func TestWALPulihTanpaDatabase(t *testing.T) {
+	recipient, berkasIdentitas := kunciUji(t)
+	ctx := context.Background()
+	isi := []byte("segmen WAL untuk drill PITR tanpa database\n")
+
+	dirTarget := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dirTarget, "wal"), 0o700); err != nil {
+		t.Fatalf("buat subdirektori wal: %v", err)
+	}
+	sumber := filepath.Join(t.TempDir(), "segmen")
+	if err := os.WriteFile(sumber, isi, 0o600); err != nil {
+		t.Fatalf("tulis segmen sumber: %v", err)
+	}
+	kripto := backup.NewKripto(recipient, berkasIdentitas)
+	if _, err := kripto.EnkripsiBerkas(filepath.Join(dirTarget, "wal", "000000010000000000000005.age"), sumber); err != nil {
+		t.Fatalf("enkripsi segmen uji: %v", err)
+	}
+	target, err := backup.NewDir(dirTarget)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	svc := backup.New(backup.Config{
+		Kerja:     t.TempDir(),
+		Recipient: recipient,
+		Identity:  berkasIdentitas,
+	}, backup.TanpaRepo{}, backup.WithTarget(target), backup.WithClock(clock.System()))
+
+	dirPulih := filepath.Join(t.TempDir(), "pulih")
+	laporan, err := svc.PulihkanWAL(ctx, dirPulih)
+	if err != nil {
+		t.Fatalf("PulihkanWAL tanpa database: %v", err)
+	}
+	if laporan.Dipulihkan != 1 {
+		t.Fatalf("dipulihkan = %d, mau 1", laporan.Dipulihkan)
+	}
+	kembali, err := os.ReadFile(filepath.Join(dirPulih, "000000010000000000000005"))
+	if err != nil {
+		t.Fatalf("baca hasil pemulihan: %v", err)
+	}
+	if !bytes.Equal(kembali, isi) {
+		t.Error("byte hasil pemulihan berbeda dari segmen asli")
+	}
+
+	// Repo kosong harus MENOLAK pekerjaan yang butuh data — bukan diam-diam
+	// melaporkan status kosong.
+	if _, err := svc.Ringkasan(ctx, 5); !errors.Is(err, backup.ErrTanpaDatabase) {
+		t.Errorf("Ringkasan dengan TanpaRepo = %v, mau ErrTanpaDatabase", err)
+	}
+}
+
+// fileAda melaporkan apakah satu jalur ada.
+func fileAda(jalur string) bool {
+	_, err := os.Stat(jalur)
+	return err == nil
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

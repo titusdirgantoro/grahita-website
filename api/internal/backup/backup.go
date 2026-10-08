@@ -8,6 +8,9 @@
 //   - Dump database SELALU `pg_dump -Fc` yang dienkripsi age SEBELUM
 //     meninggalkan host. Tidak ada jalur yang menulis dump polos ke tujuan,
 //     dan target tidak boleh dikonfigurasi tanpa kunci publik age.
+//   - Hal yang sama berlaku untuk arsip WAL (bila PITR aktif): setiap segmen
+//     dienkripsi age sebelum diunggah (`wal/<segmen>.age`), dan jalur
+//     pemulihannya (PulihkanWAL) menolak berkas yang bukan hasil age.
 //   - Setiap pekerjaan meninggalkan jejak di tabel `backup_runs`
 //     (jenis, mulai, selesai, sukses, ukuran_byte, tujuan, pesan).
 //   - Kegagalan memicu pemberitahuan: email ke seluruh Superadmin aktif +
@@ -58,6 +61,18 @@ const (
 	NamaManifest = PrefixStorage + "_manifest.json"
 )
 
+// SufiksAge adalah sufiks WAJIB berkas terenkripsi age di tujuan cadangan:
+// setiap byte yang meninggalkan host (dump, salinan bukti/dokumen, segmen WAL)
+// berakhiran `.age` (Architecture.md §6).
+const SufiksAge = ".age"
+
+// NamaWALTerEnkripsi menyusun nama arsip satu segmen WAL di tujuan:
+// `wal/<berkas WAL>.age`. Sufiks `.age` menandai bahwa berkas DI TUJUAN selalu
+// terenkripsi — tidak ada nama yang menjanjikan WAL polos.
+func NamaWALTerEnkripsi(namaBerkasWAL string) string {
+	return PrefixWAL + namaBerkasWAL + SufiksAge
+}
+
 // AktorSistem adalah actor_id untuk entri audit dari pekerjaan latar (backup
 // bukan tindakan manusia): actor_kind 'system', actor_id UUID nol.
 const AktorSistem = "00000000-0000-0000-0000-000000000000"
@@ -81,7 +96,48 @@ var (
 	ErrCadanganKosong = errors.New("belum ada cadangan di tujuan")
 	// ErrBentukKunci: kunci objek tidak mengikuti pola yang dikenal.
 	ErrBentukKunci = errors.New("bentuk kunci objek tidak dikenal")
+	// ErrTanpaDatabase: pekerjaan berkas murni (mis. dekripsi arsip WAL untuk
+	// drill/PITR) tidak boleh menyentuh database sama sekali.
+	ErrTanpaDatabase = errors.New("pekerjaan ini tidak memakai database")
 )
+
+// TanpaRepo adalah Repo kosong untuk pekerjaan yang MURNI berkas.
+//
+// Dipakai jalur pemulihan arsip WAL: drill/PITR sering justru dijalankan ketika
+// database sumber tidak tersedia, jadi langkah dekripsi tidak boleh bergantung
+// pada koneksi database. Seluruh metode menolak dengan jelas supaya tidak ada
+// pekerjaan yang diam-diam "berhasil" tanpa data.
+type TanpaRepo struct{}
+
+// Mulai selalu menolak.
+func (TanpaRepo) Mulai(context.Context, string, time.Time) (Run, error) {
+	return Run{}, ErrTanpaDatabase
+}
+
+// Selesai selalu menolak.
+func (TanpaRepo) Selesai(context.Context, string, time.Time, bool, int64, string, string) error {
+	return ErrTanpaDatabase
+}
+
+// Terakhir selalu menolak.
+func (TanpaRepo) Terakhir(context.Context, int) ([]Run, error) { return nil, ErrTanpaDatabase }
+
+// Sejak selalu menolak.
+func (TanpaRepo) Sejak(context.Context, string, time.Time) (Run, bool, error) {
+	return Run{}, false, ErrTanpaDatabase
+}
+
+// SuperadminEmails selalu menolak.
+func (TanpaRepo) SuperadminEmails(context.Context) ([]string, error) { return nil, ErrTanpaDatabase }
+
+// KunciProofs selalu menolak.
+func (TanpaRepo) KunciProofs(context.Context) ([]string, error) { return nil, ErrTanpaDatabase }
+
+// KunciDokumen selalu menolak.
+func (TanpaRepo) KunciDokumen(context.Context) ([]string, error) { return nil, ErrTanpaDatabase }
+
+// Audit selalu menolak.
+func (TanpaRepo) Audit(context.Context, audit.Entry) error { return ErrTanpaDatabase }
 
 // Run adalah satu baris tabel backup_runs.
 type Run struct {
@@ -148,9 +204,6 @@ type Config struct {
 	RetensiHarian  int
 	RetensiBulanan int
 	RetensiWALHari int
-	// SweepHapus menentukan apakah sapu objek yatim boleh MENGHAPUS
-	// (bawaan false = hanya melaporkan).
-	SweepHapus bool
 	// SweepGrace adalah umur minimum objek yatim sebelum boleh disapu.
 	SweepGrace time.Duration
 	// JamHarian adalah jam (WIB) jadwal harian, default 02:00 (Architecture.md §7).
@@ -402,15 +455,28 @@ func (s *Service) Ringkasan(ctx context.Context, limit int) (Ringkasan, error) {
 			}
 		}
 	}
-	// Baris paling baru yang GAGAL (belum ditutup sukses setelahnya) berarti
-	// masih perlu tindakan.
+	// Baris paling baru yang GAGAL per jenis (belum ditutup sukses setelahnya)
+	// berarti masih perlu tindakan.
+	//
+	// `runs` datang TERBARU-DULU dari repository (ORDER BY mulai DESC), jadi
+	// kegagalan PERTAMA yang ditemui untuk satu jenis adalah kegagalan yang
+	// terbaru. Nilai itu tidak boleh ditimpa kegagalan yang lebih tua: putaran
+	// QA-1 menemukan loop yang menimpa terus sehingga nilai akhirnya adalah
+	// kegagalan TERTUA di jendela, dan status bisa berbunyi "aman" tepat
+	// setelah cadangan terakhir gagal (pola gagal → sukses → gagal).
 	gagalTerakhir := map[string]time.Time{}
 	for _, run := range runs {
-		if run.Sukses != nil && !*run.Sukses {
+		if run.Sukses == nil || *run.Sukses {
+			continue
+		}
+		if _, sudah := gagalTerakhir[run.Jenis]; !sudah {
 			gagalTerakhir[run.Jenis] = run.Mulai
 		}
 	}
-	for jenis, waktuGagal := range gagalTerakhir {
+	// Urutan tetap (jenis pekerjaan harian lebih dahulu, sisanya alfabetis)
+	// supaya pesan ringkasan tidak berubah-ubah antar pemanggilan.
+	for _, jenis := range urutanJenis(gagalTerakhir) {
+		waktuGagal := gagalTerakhir[jenis]
 		sukses, ada := r.SuksesTerakhir[jenis]
 		if !ada || sukses.Before(waktuGagal) {
 			r.PerluTindakan = true
@@ -420,6 +486,27 @@ func (s *Service) Ringkasan(ctx context.Context, limit int) (Ringkasan, error) {
 		}
 	}
 	return r, nil
+}
+
+// urutanJenis mengurutkan jenis yang muncul di peta: urutan pekerjaan harian
+// (SemuaJenis) lebih dahulu, sisa jenis lain menyusul secara alfabetis.
+func urutanJenis(peta map[string]time.Time) []string {
+	out := make([]string, 0, len(peta))
+	terpakai := map[string]bool{}
+	for _, jenis := range SemuaJenis {
+		if _, ada := peta[jenis]; ada {
+			out = append(out, jenis)
+			terpakai[jenis] = true
+		}
+	}
+	sisa := make([]string, 0, len(peta))
+	for jenis := range peta {
+		if !terpakai[jenis] {
+			sisa = append(sisa, jenis)
+		}
+	}
+	sort.Strings(sisa)
+	return append(out, sisa...)
 }
 
 // gabungPesan menggabungkan pesan dan sebab kegagalan.
