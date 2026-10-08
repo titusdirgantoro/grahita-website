@@ -259,6 +259,24 @@ func (s *Service) Products(ctx context.Context, actor auth.Actor) (any, error) {
 	}
 }
 
+// BranchProducts mengembalikan produk yang benar-benar dijual ke satu cabang
+// beserta harga khususnya (PRD CP-KAT-01/02).
+//
+// Metode ini dipakai domain pesanan (F1-11) untuk mengambil harga order line:
+// daftarnya adalah INNER JOIN products × branch_prices, jadi produk tanpa baris
+// harga cabang tidak pernah ada di sini dan harga_default tidak pernah menjadi
+// cadangan. branchID berasal dari SESI pemanggil, bukan dari permintaan klien.
+func (s *Service) BranchProducts(ctx context.Context, branchID string) ([]BranchProduct, error) {
+	if strings.TrimSpace(branchID) == "" {
+		return nil, ErrNoBranch
+	}
+	rows, err := s.repo.ListProductsForBranch(ctx, branchID)
+	if err != nil {
+		return nil, fmt.Errorf("produk cabang: %w", err)
+	}
+	return rows, nil
+}
+
 // Branch mengembalikan satu cabang. Kepemilikan cabang diperiksa di sini
 // lewat Actor (bukan dari parameter klien): akun cabang hanya boleh membaca
 // cabangnya sendiri (isolasi data cabang, Architecture.md §6).

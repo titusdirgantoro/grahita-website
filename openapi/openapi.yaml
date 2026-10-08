@@ -475,6 +475,162 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/orders:
+    get:
+      tags: [customer]
+      operationId: listOrders
+      summary: Daftar pesanan cabang yang sedang masuk
+      description: |
+        Pesanan difilter dengan `branch_id` dari SESI, jadi akun cabang tidak
+        pernah bisa melihat pesanan cabang lain (isolasi data cabang,
+        Architecture.md §6). Filter `status` opsional: `draft`, `submitted`,
+        `done`, atau `semua`/kosong (tanpa filter). Draft belum punya nomor dan
+        tanggal; kolom `jumlah_item` adalah Σ qty baris produk dan `total` adalah
+        nilai yang dihitung server (PRD CP-ORD-01).
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [semua, draft, submitted, done]
+      responses:
+        "200":
+          description: Daftar pesanan cabang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Order" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [customer]
+      operationId: createOrderDraft
+      summary: Buat draft pesanan
+      description: |
+        Body HANYA memuat catatan dan daftar baris (`product_id`, `qty`); harga
+        satuan, subtotal, dan total dihitung server dari harga cabang di
+        `branch_prices` sehingga angka kiriman klien tidak pernah dipakai
+        (BR-05, BR-10). Produk tanpa baris harga untuk cabang sesi ditolak
+        `400` — `harga_default` bukan cadangan (PRD CP-KAT-02). Draft selalu
+        tanpa nomor, tanggal, dan serial number; keduanya lahir saat submit
+        (BR-04, BR-09).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderDraftInput" }
+      responses:
+        "201":
+          description: Draft tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Order" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [customer]
+      operationId: getOrder
+      summary: Detail satu pesanan milik cabang sesi
+      description: |
+        Pesanan cabang lain dijawab `404` (bukan `403`) supaya keberadaannya
+        tidak bocor. Detail memuat baris pesanan beserta snapshot nama, satuan,
+        harga satuan, dan subtotal.
+      responses:
+        "200":
+          description: Detail pesanan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Order" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [customer]
+      operationId: updateOrderDraft
+      summary: Ubah draft pesanan milik cabang sesi
+      description: |
+        Hanya draft milik cabang pemanggil yang bisa diubah (PRD CP-ORD-03).
+        Pesanan `submitted`/`done` dijawab `409 ORDER_LOCKED` (PRD CP-ORD-09),
+        dan pemeriksaan status diulang di klausa `WHERE` repository sehingga
+        submit yang berjalan bersamaan tidak bisa ditembus.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderDraftInput" }
+      responses:
+        "200":
+          description: Draft terbaru
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Order" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [customer]
+      operationId: deleteOrderDraft
+      summary: Hapus draft pesanan milik cabang sesi
+      description: |
+        Hanya draft milik cabang pemanggil yang bisa dihapus (PRD CP-ORD-03).
+        Pesanan `submitted`/`done` dijawab `409 ORDER_LOCKED` (PRD CP-ORD-09).
+        Belum ada status Batal: pembatalan pesanan Submitted masih pertanyaan
+        terbuka PRD §8 no.4 dan sengaja tidak disediakan.
+      responses:
+        "204":
+          description: Draft terhapus
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /api/v1/bank-accounts:
     get:
       tags: [customer, admin]
@@ -1490,6 +1646,87 @@ components:
                   message: Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.
 
   schemas:
+    OrderLine:
+      type: object
+      required: [line_no, jenis, nama, satuan, qty, harga_satuan, subtotal]
+      properties:
+        line_no: { type: integer }
+        jenis: { type: string, enum: [product, packaging] }
+        product_id: { type: string, format: uuid }
+        nama:
+          type: string
+          description: Snapshot nama produk saat dipesan (BR-05).
+        satuan: { type: string }
+        qty: { type: integer, minimum: 1 }
+        harga_satuan:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Harga khusus cabang yang diambil server dari branch_prices.
+        subtotal: { type: integer, format: int64 }
+        serial_number:
+          type: string
+          description: Hanya terisi setelah submit (BR-02); draft tanpa serial.
+
+    Order:
+      type: object
+      required:
+        [id, status, verif_status, versi, is_cnc, is_sertifikat, catatan, total, jumlah_item, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        nomor:
+          type: string
+          description: Kosong selama masih draft (BR-09); berisi YYYY-MM-XX setelah submit.
+        status: { type: string, enum: [draft, submitted, done] }
+        verif_status: { type: string, enum: [belum, cocok, perlu_review] }
+        versi: { type: integer }
+        is_cnc: { type: boolean }
+        is_sertifikat: { type: boolean }
+        tanggal:
+          type: string
+          description: Tanggal submit (WIB) YYYY-MM-DD; kosong selama draft (BR-04).
+        jatuh_tempo: { type: string }
+        catatan: { type: string }
+        total:
+          type: integer
+          format: int64
+          description: Dihitung server dari baris pesanan, bukan dari klien (BR-10).
+        jumlah_item: { type: integer, format: int64 }
+        submitted_at: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/OrderLine" }
+
+    OrderDraftLineInput:
+      type: object
+      description: |
+        Satu baris editor pesanan. Hanya product_id dan qty yang diterima:
+        harga satuan, subtotal, dan total dihitung server, dan field lain
+        (mis. "harga" atau "total") ditolak `400` oleh dekoder JSON.
+      required: [product_id, qty]
+      additionalProperties: false
+      properties:
+        product_id:
+          type: string
+          format: uuid
+          description: Harus produk yang punya baris harga untuk cabang sesi.
+        qty: { type: integer, minimum: 1 }
+
+    OrderDraftInput:
+      type: object
+      description: Body POST/PUT draft pesanan (PRD CP-ORD-02/03).
+      required: [lines]
+      additionalProperties: false
+      properties:
+        catatan: { type: string, maxLength: 500 }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/OrderDraftLineInput" }
+
     ErrorEnvelope:
       type: object
       required: [error]
@@ -1526,6 +1763,7 @@ components:
                   BANK_DUPLICATE,
                   KODE_TAKEN,
                   PRODUCT_IN_USE,
+                  ORDER_LOCKED,
                   TIMEOUT,
                   METHOD_NOT_ALLOWED,
                   BRANCH_MISSING,

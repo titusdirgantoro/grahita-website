@@ -17,7 +17,6 @@ import {
   Modal,
   Notice,
   PageHead,
-  Segmented,
   Skeleton,
   SkeletonList,
   Table,
@@ -212,57 +211,6 @@ export function KatalogPage() {
             ))}
           </div>
         )}
-      </Card>
-    </>
-  );
-}
-
-const FILTER_STATUS = [
-  { value: "semua", label: "Semua" },
-  { value: "draft", label: "Draft" },
-  { value: "submitted", label: "Menunggu" },
-  { value: "done", label: "Selesai" },
-] as const;
-
-/** pPesanan — /pesanan: daftar + filter status (data menyusul pada kartu fitur). */
-export function PesananPage() {
-  const [filter, setFilter] = useState<(typeof FILTER_STATUS)[number]["value"]>("semua");
-
-  return (
-    <>
-      <PageHead
-        title="Pesanan"
-        sub="Draft, pesanan menunggu verifikasi, dan yang sudah selesai"
-        actions={
-          <Button variant="primary" icon="plus">
-            Buat pesanan
-          </Button>
-        }
-      />
-      <Card>
-        <CardHead title="Daftar pesanan" tools={<Segmented label="Status pesanan" options={FILTER_STATUS} value={filter} onChange={setFilter} />} />
-        <Table mobileCards caption="Daftar pesanan cabang">
-          <thead>
-            <tr>
-              <th scope="col">Nomor</th>
-              <th scope="col">Tanggal</th>
-              <th scope="col" className="num">
-                Item
-              </th>
-              <th scope="col" className="num">
-                Total
-              </th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colSpan={5}>
-                <EmptyState icon="receipt">Belum ada pesanan pada filter ini.</EmptyState>
-              </td>
-            </tr>
-          </tbody>
-        </Table>
       </Card>
     </>
   );

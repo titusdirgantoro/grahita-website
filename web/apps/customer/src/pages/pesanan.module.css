@@ -1,0 +1,208 @@
+/*
+ * Gaya halaman pesanan portal cabang (F1-11).
+ *
+ * Nilai grid, radius, dan tipografinya disalin dari prototype
+ * `customer_v2.html` (blok "Editor pesanan" & "Detail") memakai token desain
+ * bersama, termasuk perilaku mobile: baris editor menjadi dua kolom dengan
+ * label kecil (`m-lbl`) dan bar total menempel di atas bottom-nav.
+ */
+
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
+.tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.back:hover {
+  color: var(--text);
+}
+
+.nomor {
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.nomor:hover {
+  text-decoration: underline;
+  color: var(--brand-primary);
+}
+
+/* ------------------------------------------------------------- editor ---- */
+
+.linesHead,
+.line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px 130px 130px 36px;
+  gap: 12px;
+  align-items: center;
+}
+
+.linesHead {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.line {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  height: 40px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.stepper input {
+  width: 52px;
+  height: 100%;
+  border: none;
+  text-align: center;
+  background: none;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.mLbl {
+  display: none;
+}
+
+.lQty {
+  min-width: 0;
+}
+
+.lHarga,
+.lSub {
+  text-align: right;
+}
+
+.lDel {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.stickyTotal {
+  scroll-margin-bottom: 96px;
+}
+
+.totalBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.totalNilai {
+  display: block;
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 2px 0 4px;
+}
+
+/* ------------------------------------------------------------- detail ---- */
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.metaGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.metaGrid dt {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.metaGrid dd {
+  font-weight: 600;
+  margin: 2px 0 0;
+}
+
+@media (max-width: 1100px) {
+  .detailGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .linesHead {
+    display: none;
+  }
+
+  .line {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+    padding: 14px 0;
+    position: relative;
+  }
+
+  .lProd {
+    grid-column: 1 / -1;
+    padding-right: 44px;
+  }
+
+  .lDel {
+    position: absolute;
+    right: 0;
+    top: 12px;
+  }
+
+  .mLbl {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .lHarga,
+  .lSub {
+    text-align: left;
+  }
+
+  .stickyTotal {
+    position: sticky;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-radius: 16px;
+    box-shadow: var(--shadow-float);
+    z-index: 10;
+  }
+}

@@ -18,10 +18,14 @@ import {
   BerandaPage,
   InvoicePage,
   KatalogPage,
-  PesananPage,
   ProfilPage,
   TutorialPage,
 } from "./pages/shell-pages";
+import {
+  PesananDetailPage,
+  PesananEditorPage,
+  PesananPage,
+} from "./pages/pesanan";
 import { GayaPage } from "./pages/gaya";
 
 /** RouterLink menyambungkan shell (yang lepas router) ke <Link> TanStack. */
@@ -98,7 +102,46 @@ const gayaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gaya", 
 const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "shell", component: ShellLayout });
 const berandaRoute = createRoute({ getParentRoute: () => shellRoute, path: "/", component: BerandaPage });
 const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogPage });
-const pesananRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pesanan", component: PesananPage });
+/**
+ * Rute pesanan (F1-11): daftar, editor baru/ubah, dan detail.
+ *
+ * Filter status disimpan di URL search param `/pesanan?status=draft` supaya
+ * dapat di-bookmark (SystemDesign.md §7.2). Detail memakai `/pesanan/{id}`
+ * persis peta layar SystemDesign.md §7.1; draft hanya bisa diubah lewat
+ * `/pesanan/{id}/ubah` dan API menolak bila statusnya bukan draft lagi.
+ */
+const pesananRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/pesanan",
+  validateSearch: (search: Record<string, unknown>): { status?: string } => ({
+    status: typeof search.status === "string" ? search.status : undefined,
+  }),
+  component: function PesananRoute() {
+    const { status } = pesananRoute.useSearch();
+    return <PesananPage statusAwal={status} />;
+  },
+});
+const pesananBaruRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/pesanan/baru",
+  component: PesananEditorPage,
+});
+const pesananUbahRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/pesanan/$id/ubah",
+  component: function PesananUbahRoute() {
+    const { id } = pesananUbahRoute.useParams();
+    return <PesananEditorPage id={id} />;
+  },
+});
+const pesananDetailRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/pesanan/$id",
+  component: function PesananDetailRoute() {
+    const { id } = pesananDetailRoute.useParams();
+    return <PesananDetailPage id={id} />;
+  },
+});
 const invoiceRoute = createRoute({ getParentRoute: () => shellRoute, path: "/invoice", component: InvoicePage });
 const tutorialRoute = createRoute({ getParentRoute: () => shellRoute, path: "/tutorial", component: TutorialPage });
 const profilRoute = createRoute({ getParentRoute: () => shellRoute, path: "/profil", component: ProfilPage });
@@ -112,6 +155,9 @@ const routeTree = rootRoute.addChildren([
     berandaRoute,
     katalogRoute,
     pesananRoute,
+    pesananBaruRoute,
+    pesananUbahRoute,
+    pesananDetailRoute,
     invoiceRoute,
     tutorialRoute,
     profilRoute,

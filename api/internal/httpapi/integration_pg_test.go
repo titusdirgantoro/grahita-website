@@ -32,6 +32,8 @@ import (
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
+	"github.com/grahita/portal/api/internal/order"
+	orderpg "github.com/grahita/portal/api/internal/order/postgres"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -212,13 +214,18 @@ func newPGFixture(t *testing.T) *pgFixture {
 	registrationSvc := registration.NewService(registrationpg.New(pool), clock.System())
 	f.registration = registrationSvc
 
+	// Katalog sekaligus menjadi sumber harga order line domain pesanan:
+	// harga selalu diambil dari branch_prices cabang sesi (F1-11).
+	catalogSvc := catalog.NewService(catalogpg.New(pool))
+
 	deps := Deps{
 		Config:              testConfig(),
 		Version:             "test-pg",
 		Health:              fakeHealth{migrasi: 9},
 		Auth:                svc,
 		Settings:            settings.NewService(settingspg.New(pool)),
-		Catalog:             catalog.NewService(catalogpg.New(pool)),
+		Catalog:             catalogSvc,
+		Orders:              order.NewService(orderpg.New(pool), catalogSvc),
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,

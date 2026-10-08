@@ -67,6 +67,14 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/auth/password/change", a.adapt(a.changePassword))
 			r.Get("/catalog", a.adapt(a.catalog))
 			r.Get("/me/branch", a.adapt(a.myBranch))
+			// Pesanan cabang (F1-11): draft + editor order line + daftar/detail.
+			// Semua endpoint dibatasi branch_id SESI di layer service, dan
+			// harga selalu diambil server dari branch_prices cabang itu.
+			r.Get("/orders", a.adapt(a.ordersList))
+			r.Post("/orders", a.adapt(a.orderCreate))
+			r.Get("/orders/{id}", a.adapt(a.orderGet))
+			r.Put("/orders/{id}", a.adapt(a.orderUpdate))
+			r.Delete("/orders/{id}", a.adapt(a.orderDelete))
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
 			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))

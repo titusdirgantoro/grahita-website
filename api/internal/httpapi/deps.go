@@ -4,10 +4,10 @@
 //
 //	httpapi -> service -> repository -> database
 //
-// Paket ini boleh mengimpor paket service (auth, branch, settings, catalog)
-// dan platform, tetapi TIDAK boleh mengimpor repository (*/postgres) maupun
-// paket query hasil sqlc. Aturan ini ditegakkan otomatis oleh pengujian di
-// internal/arch.
+// Paket ini boleh mengimpor paket service (auth, branch, settings, catalog,
+// order) dan platform, tetapi TIDAK boleh mengimpor repository (*/postgres)
+// maupun paket query hasil sqlc. Aturan ini ditegakkan otomatis oleh pengujian
+// di internal/arch.
 package httpapi
 
 import (
@@ -18,6 +18,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/platform/mailer"
@@ -47,6 +48,10 @@ type Deps struct {
 	Users    *users.Service
 	Branches *branch.Service
 	Bank     *bank.Service
+
+	// Orders melayani draft, editor order line, daftar dan detail pesanan
+	// cabang (F1-11).
+	Orders *order.Service
 
 	// Registration melayani pendaftaran akun cabang dua langkah lewat token
 	// registrasi sekali pakai (F1-07).

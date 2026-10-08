@@ -8,6 +8,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/registration"
@@ -76,6 +77,24 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, catalog.ErrInvalidData):
 		return apierr.Validation("Data produk atau harga tidak valid.",
 			map[string]string{"katalog": err.Error()})
+	case errors.Is(err, order.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke pesanan ini.")
+	case errors.Is(err, order.ErrNotFound):
+		return apierr.NotFound("Pesanan yang diminta tidak ditemukan.")
+	case errors.Is(err, order.ErrLocked):
+		return apierr.Conflict("ORDER_LOCKED",
+			"Pesanan yang sudah dikirim tidak dapat diubah atau dihapus. Hubungi admin Pusat.")
+	case errors.Is(err, order.ErrProductNotSold):
+		return apierr.Validation("Produk tidak dijual ke cabang ini.",
+			map[string]string{"lines": err.Error()})
+	case errors.Is(err, order.ErrEmptyLines):
+		return apierr.Validation("Pesanan belum punya baris produk.",
+			map[string]string{"lines": "minimal satu baris produk"})
+	case errors.Is(err, order.ErrNoBranch):
+		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
+	case errors.Is(err, order.ErrInvalidData):
+		return apierr.Validation("Data pesanan tidak valid.",
+			map[string]string{"pesanan": err.Error()})
 	case errors.Is(err, branch.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke master cabang.")
 	case errors.Is(err, branch.ErrNotFound):

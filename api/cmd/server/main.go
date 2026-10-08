@@ -30,6 +30,8 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/httpapi"
+	"github.com/grahita/portal/api/internal/order"
+	orderpg "github.com/grahita/portal/api/internal/order/postgres"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -196,13 +198,20 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// keduanya dibatasi per IP (Architecture.md §6).
 	registrationLimiter := httpx.NewRateLimiter(10, 15*time.Minute)
 
+	// Katalog dipakai kedua portal sekaligus menjadi sumber harga order line
+	// domain pesanan: harga selalu diambil dari branch_prices cabang sesi.
+	catalogSvc := catalog.NewService(catalogpg.New(pool))
+	// Pesanan cabang: draft, editor order line, daftar dan detail (F1-11).
+	orderSvc := order.NewService(orderpg.New(pool), catalogSvc)
+
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Config:              cfg,
 		Version:             version,
 		Health:              health{pool: pool, dsn: cfg.DatabaseURL},
 		Auth:                authSvc,
 		Settings:            settings.NewService(settingspg.New(pool)),
-		Catalog:             catalog.NewService(catalogpg.New(pool)),
+		Catalog:             catalogSvc,
+		Orders:              orderSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,
