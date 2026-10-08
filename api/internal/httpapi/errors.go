@@ -93,6 +93,12 @@ func mapDomainErr(err error) error {
 			map[string]string{"lines": "minimal satu baris produk"})
 	case errors.Is(err, order.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
+	case errors.Is(err, order.ErrCNCNotAllowed):
+		// Cabang tanpa flag Cash & Carry tidak boleh memakai C&C (CP-CNC-01).
+		// Jawabannya 400 VALIDATION_FAILED seperti aturan domain lain, dengan
+		// penjelasan yang bisa ditampilkan UI.
+		return apierr.Validation("Cash & Carry tidak tersedia untuk cabang ini.",
+			map[string]string{"is_cnc": "cabang ini tidak berflag Cash & Carry"})
 	case errors.Is(err, order.ErrInvalidData):
 		return apierr.Validation("Data pesanan tidak valid.",
 			map[string]string{"pesanan": err.Error()})

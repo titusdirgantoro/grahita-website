@@ -54,6 +54,28 @@ func seedDuaCabang(m *Memory) {
 	m.Put(Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IsActive: false, IsSpecial: true})
 }
 
+// TestIsCNCFlagCabang memverifikasi pembacaan flag Cash & Carry lintas-domain
+// (dipakai aturan C&C domain pesanan, F1-12): flag dibaca dari master cabang
+// tanpa menuntut aktor, dan cabang tak dikenal menghasilkan ErrNotFound.
+func TestIsCNCFlagCabang(t *testing.T) {
+	svc, repo := newUji(t)
+	seedDuaCabang(repo)
+	ctx := context.Background()
+
+	if cnc, err := svc.IsCNC(ctx, "br-a"); err != nil || !cnc {
+		t.Errorf("cabang A harus berflag C&C, dapat %v (%v)", cnc, err)
+	}
+	if cnc, err := svc.IsCNC(ctx, "br-b"); err != nil || cnc {
+		t.Errorf("cabang B tidak berflag C&C, dapat %v (%v)", cnc, err)
+	}
+	if _, err := svc.IsCNC(ctx, "br-tidak-ada"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cabang tak dikenal harus ErrNotFound, dapat %v", err)
+	}
+	if _, err := svc.IsCNC(ctx, ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("branch_id kosong harus ErrNotFound, dapat %v", err)
+	}
+}
+
 func TestLayananMasterCabangDibatasiKapabilitas(t *testing.T) {
 	svc, mem := newUji(t)
 	seedDuaCabang(mem)

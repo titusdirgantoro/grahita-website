@@ -140,6 +140,35 @@ func (q *Queries) GetOrderForBranch(ctx context.Context, arg GetOrderForBranchPa
 	return i, err
 }
 
+const insertOrderLinePackaging = `-- name: InsertOrderLinePackaging :exec
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
+VALUES ($1, $2, 'packaging', NULL, $3, $4, 1, $5)
+`
+
+type InsertOrderLinePackagingParams struct {
+	OrderID        string `json:"order_id"`
+	LineNo         int32  `json:"line_no"`
+	NamaSnapshot   string `json:"nama_snapshot"`
+	SatuanSnapshot string `json:"satuan_snapshot"`
+	HargaSatuan    int64  `json:"harga_satuan"`
+}
+
+// Baris biaya packaging pesanan sertifikat (PRD CP-SER-02): tanpa product_id,
+// qty SELALU 1, dan tanpa serial number (constraint packaging_tanpa_serial).
+// Harga packaging adalah snapshot `biaya_packaging` yang dibaca server dari
+// domain pengaturan — tidak pernah datang dari klien. Indeks unik parsial
+// order_lines_satu_packaging menjaga agar baris ini tetap tunggal per pesanan.
+func (q *Queries) InsertOrderLinePackaging(ctx context.Context, arg InsertOrderLinePackagingParams) error {
+	_, err := q.db.Exec(ctx, insertOrderLinePackaging,
+		arg.OrderID,
+		arg.LineNo,
+		arg.NamaSnapshot,
+		arg.SatuanSnapshot,
+		arg.HargaSatuan,
+	)
+	return err
+}
+
 const insertOrderLineProduct = `-- name: InsertOrderLineProduct :exec
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
 VALUES ($1, $2, 'product', $3, $4, $5, $6, $7)

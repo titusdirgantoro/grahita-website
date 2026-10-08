@@ -47,6 +47,9 @@ func (m *Memory) putLocked(o Order) Order {
 		o.CreatedAt, o.UpdatedAt = now, now
 	}
 	o.Total, o.JumlahItem = hitung(o.Lines)
+	// is_sertifikat diturunkan dari isi baris, sama seperti trigger
+	// order_lines_recalc di PostgreSQL — bukan disetel dari luar.
+	o.IsSertifikat = adaPackaging(o.Lines)
 	m.orders = append(m.orders, o)
 	return o
 }
@@ -135,6 +138,7 @@ func (m *Memory) UpdateDraft(_ context.Context, id, branchID, catatan string, li
 	m.orders[idx].Catatan = catatan
 	m.orders[idx].Lines = lines
 	m.orders[idx].Total, m.orders[idx].JumlahItem = hitung(lines)
+	m.orders[idx].IsSertifikat = adaPackaging(lines)
 	m.orders[idx].UpdatedAt = time.Now().UTC()
 	return m.publik(m.orders[idx]), nil
 }
@@ -180,6 +184,19 @@ func hitung(lines []Line) (int64, int64) {
 		}
 	}
 	return total, item
+}
+
+// adaPackaging melaporkan apakah baris pesanan memuat baris biaya packaging.
+// Baris packaging hanya pernah lahir untuk pesanan Sertifikat (CP-SER-02),
+// jadi keberadaannya menjadi penanda is_sertifikat yang sama dengan yang
+// dihitung trigger order_lines_recalc dari products.jenis di PostgreSQL.
+func adaPackaging(lines []Line) bool {
+	for _, l := range lines {
+		if l.Jenis == JenisPackaging {
+			return true
+		}
+	}
+	return false
 }
 
 // kunciUrut adalah waktu pengurutan daftar: tanggal submit bila ada (draft

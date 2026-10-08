@@ -245,17 +245,19 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.registration = registrationSvc
 
 	// Katalog sekaligus menjadi sumber harga order line domain pesanan:
-	// harga selalu diambil dari branch_prices cabang sesi (F1-11).
+	// harga selalu diambil dari branch_prices cabang sesi (F1-11), dan setelan
+	// server menjadi snapshot biaya packaging pesanan Sertifikat (F1-12).
 	catalogSvc := catalog.NewService(catalogpg.New(pool))
+	settingsSvc := settings.NewService(settingspg.New(pool))
 
 	deps := Deps{
 		Config:              testConfig(),
 		Version:             "test-pg",
 		Health:              fakeHealth{migrasi: 9},
 		Auth:                svc,
-		Settings:            settings.NewService(settingspg.New(pool)),
+		Settings:            settingsSvc,
 		Catalog:             catalogSvc,
-		Orders:              order.NewService(orderpg.New(pool), catalogSvc),
+		Orders:              order.NewService(orderpg.New(pool), catalogSvc, settingsSvc),
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,

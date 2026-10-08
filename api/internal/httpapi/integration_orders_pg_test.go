@@ -351,3 +351,147 @@ func TestPGPesananSubmittedTidakBisaDiubahCabang(t *testing.T) {
 		t.Fatalf("qty pesanan Submitted tidak boleh berubah, dapat %d", qty)
 	}
 }
+
+// TestPGSertifikatPackagingDanSnapshotSetelan menempuh jalur Sertifikat di
+// PostgreSQL nyata (F1-12): harga produk Sertifikat 0 berapa pun qty, tepat
+// satu baris biaya packaging qty 1 dari setelan server, invariant ditegakkan
+// database (trigger campur + indeks unik packaging), dan mengubah setelan
+// TIDAK menyentuh snapshot pesanan lama sementara pesanan berikutnya memakai
+// nilai baru (CP-SER-01/02/03/05, BR-05).
+func TestPGSertifikatPackagingDanSnapshotSetelan(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	saCookies, saCsrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	var produkA string
+	if err := f.pool.QueryRow(ctx, `SELECT id FROM products WHERE kode = 'P-01'`).Scan(&produkA); err != nil {
+		t.Fatalf("baca produk reguler: %v", err)
+	}
+	// Produk Sertifikat (harga_default 0 sesuai PRD) dijual ke cabang A.
+	sertifikat := insertProdukFull(t, ctx, f.pool, "P-07", "Sertifikat Psikotes", "sertifikat", 0, 7)
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO branch_prices (branch_id, product_id, harga) VALUES ($1,$2,0)`, f.branchA, sertifikat); err != nil {
+		t.Fatalf("seed harga sertifikat cabang A: %v", err)
+	}
+
+	// 1) Draft Sertifikat: harga produk 0 (berapa pun qty) + satu baris biaya
+	// packaging 3000 dari setelan server.
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":25}]}`, sertifikat), cookiesA, csrfA)
+	if status != http.StatusCreated {
+		t.Fatalf("buat draft sertifikat harus 201, dapat %d (%v)", status, body)
+	}
+	draft := dataMap(t, body)
+	id, _ := draft["id"].(string)
+	if id == "" || draft["is_sertifikat"] != true || draft["total"] != float64(3000) || draft["jumlah_item"] != float64(25) {
+		t.Fatalf("draft sertifikat tidak sesuai: %v", draft)
+	}
+	lines := draft["lines"].([]any)
+	if len(lines) != 2 {
+		t.Fatalf("harus 2 baris (produk + packaging), dapat %v", draft["lines"])
+	}
+	if p := lines[0].(map[string]any); p["jenis"] != "product" || p["harga_satuan"] != float64(0) || p["subtotal"] != float64(0) {
+		t.Errorf("baris sertifikat harus harga 0: %v", p)
+	}
+	if pk := lines[1].(map[string]any); pk["jenis"] != "packaging" || pk["qty"] != float64(1) ||
+		pk["harga_satuan"] != float64(3000) || pk["nama"] != "Biaya packaging" {
+		t.Errorf("baris packaging salah: %v", pk)
+	}
+
+	// Keadaan baris di database: harga 0, serial NULL, packaging tanpa produk.
+	var jenisPack string
+	var qtyPack int
+	var hargaPack int64
+	var produkPack *string
+	var serialPack *string
+	if err := f.pool.QueryRow(ctx,
+		`SELECT jenis::text, qty, harga_satuan, product_id::text, serial_number
+		   FROM order_lines WHERE order_id = $1 AND jenis = 'packaging'`, id).
+		Scan(&jenisPack, &qtyPack, &hargaPack, &produkPack, &serialPack); err != nil {
+		t.Fatalf("baca baris packaging: %v", err)
+	}
+	if jenisPack != "packaging" || qtyPack != 1 || hargaPack != 3000 || produkPack != nil || serialPack != nil {
+		t.Fatalf("baris packaging di database salah: jenis=%s qty=%d harga=%d produk=%v serial=%v",
+			jenisPack, qtyPack, hargaPack, produkPack, serialPack)
+	}
+	var hargaProduk int64
+	var serialProduk *string
+	if err := f.pool.QueryRow(ctx,
+		`SELECT harga_satuan, serial_number FROM order_lines WHERE order_id = $1 AND jenis = 'product'`, id).
+		Scan(&hargaProduk, &serialProduk); err != nil {
+		t.Fatalf("baca baris produk: %v", err)
+	}
+	if hargaProduk != 0 || serialProduk != nil {
+		t.Fatalf("baris sertifikat harus harga 0 tanpa serial draft: harga=%d serial=%v", hargaProduk, serialProduk)
+	}
+
+	// 2) Database menolak baris packaging kedua (indeks unik parsial) dan
+	// menolak pencampuran produk reguler ke pesanan Sertifikat (trigger).
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO order_lines (order_id, line_no, jenis, nama_snapshot, satuan_snapshot, qty, harga_satuan)
+		 VALUES ($1, 3, 'packaging', 'Biaya packaging', 'paket', 1, 5000)`, id); err == nil {
+		t.Error("baris packaging kedua harus ditolak database")
+	}
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
+		 VALUES ($1, 4, $2, 'Bio Magnetik', 'pcs', 1, 100000)`, id, produkA); err == nil {
+		t.Error("mencampur produk reguler ke pesanan sertifikat harus ditolak trigger")
+	}
+	var jumlahBaris int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM order_lines WHERE order_id = $1`, id).Scan(&jumlahBaris); err != nil {
+		t.Fatalf("hitung baris: %v", err)
+	}
+	if jumlahBaris != 2 {
+		t.Fatalf("baris pesanan harus tetap 2 setelah percobaan yang ditolak, dapat %d", jumlahBaris)
+	}
+
+	// 3) Superadmin mengubah biaya_packaging menjadi 5000.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/settings",
+		`{"values":{"biaya_packaging":5000}}`, saCookies, saCsrf)
+	if status != http.StatusOK {
+		t.Fatalf("ubah setelan harus 200, dapat %d (%v)", status, body)
+	}
+
+	// Pesanan lama TIDAK berubah (snapshot BR-05/CP-SER-05).
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/orders/"+id, "", cookiesA, "")
+	if status != http.StatusOK {
+		t.Fatalf("detail pesanan lama harus 200, dapat %d", status)
+	}
+	lama := dataMap(t, body)
+	if lama["total"] != float64(3000) {
+		t.Errorf("total pesanan lama harus tetap 3000, dapat %v", lama["total"])
+	}
+	if pk := lama["lines"].([]any)[1].(map[string]any); pk["harga_satuan"] != float64(3000) {
+		t.Errorf("snapshot biaya packaging lama harus tetap 3000: %v", pk)
+	}
+	if err := f.pool.QueryRow(ctx,
+		`SELECT harga_satuan FROM order_lines WHERE order_id = $1 AND jenis = 'packaging'`, id).Scan(&hargaPack); err != nil {
+		t.Fatalf("baca biaya packaging lama: %v", err)
+	}
+	if hargaPack != 3000 {
+		t.Errorf("biaya packaging lama di database harus 3000, dapat %d", hargaPack)
+	}
+
+	// Pesanan berikutnya memakai setelan baru.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1}]}`, sertifikat), cookiesA, csrfA)
+	if status != http.StatusCreated {
+		t.Fatalf("buat draft sertifikat berikutnya harus 201, dapat %d (%v)", status, body)
+	}
+	baru := dataMap(t, body)
+	if baru["total"] != float64(5000) {
+		t.Errorf("pesanan baru harus memakai biaya packaging 5000, dapat %v", baru["total"])
+	}
+	if pk := baru["lines"].([]any)[1].(map[string]any); pk["harga_satuan"] != float64(5000) {
+		t.Errorf("baris packaging baru harus 5000: %v", pk)
+	}
+
+	// Pencampuran lewat HTTP juga ditolak dan tidak menyisakan pesanan.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1},{"product_id":%q,"qty":1}]}`, sertifikat, produkA), cookiesA, csrfA)
+	if status != http.StatusBadRequest {
+		t.Fatalf("campuran sertifikat+reguler lewat HTTP harus 400, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "VALIDATION_FAILED")
+}

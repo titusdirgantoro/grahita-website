@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/settings"
 )
 
 // catalogUnavailable adalah jawaban bila layanan katalog belum terpasang.
@@ -25,6 +27,12 @@ func branchesUnavailable() error {
 
 // catalog mengembalikan katalog sesuai sudut pandang aktor. Akun cabang hanya
 // melihat produk yang punya baris harga untuk cabangnya (PRD CP-KAT-01/02).
+//
+// Produk Sertifikat ditandai catatan biaya packaging-nya (CP-KAT-04): nilai
+// `biaya_packaging` yang sedang berlaku diambil dari domain pengaturan di sini,
+// di lapisan transport, lalu ditempelkan ke produk Sertifikat. Portal cabang
+// memakainya untuk menampilkan catatan dan menghitung total editor; angka
+// final tetap dihitung server saat draft disimpan dan saat submit.
 func (a *API) catalog(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Catalog == nil {
 		return catalogUnavailable()
@@ -33,7 +41,25 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return mapDomainErr(err)
 	}
-	httpx.OK(w, data(list))
+	// Hanya katalog portal cabang ([]BranchProduct) yang membawa catatan biaya
+	// packaging; katalog admin memakai daftar produk master.
+	rows, ok := list.([]catalog.BranchProduct)
+	if !ok {
+		httpx.OK(w, data(list))
+		return nil
+	}
+	if a.d.Settings != nil {
+		biaya, err := a.d.Settings.Int(r.Context(), settings.BiayaPackaging)
+		if err != nil {
+			return fmt.Errorf("baca biaya packaging: %w", err)
+		}
+		for i := range rows {
+			if rows[i].Jenis == catalog.JenisSertifikat {
+				rows[i].BiayaPackaging = biaya
+			}
+		}
+	}
+	httpx.OK(w, data(rows))
 	return nil
 }
 

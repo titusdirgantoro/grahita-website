@@ -524,6 +524,14 @@ paths:
         `400` — `harga_default` bukan cadangan (PRD CP-KAT-02). Draft selalu
         tanpa nomor, tanggal, dan serial number; keduanya lahir saat submit
         (BR-04, BR-09).
+
+        Aturan Sertifikat (PRD §3.6) ditegakkan server: harga baris produk
+        Sertifikat dipaksa 0 berapa pun qty-nya (CP-SER-01), pesanannya
+        mendapat TEPAT SATU baris `packaging` qty 1 senilai setelan
+        `biaya_packaging` yang berlaku (CP-SER-02), dan pencampuran Sertifikat
+        dengan produk reguler ditolak `400` (CP-SER-03). Baris packaging dibuat
+        server, jadi klien tidak bisa menambah, mengubah, menghapus, atau
+        menduplikasinya.
       requestBody:
         required: true
         content:
@@ -585,6 +593,10 @@ paths:
         Pesanan `submitted`/`done` dijawab `409 ORDER_LOCKED` (PRD CP-ORD-09),
         dan pemeriksaan status diulang di klausa `WHERE` repository sehingga
         submit yang berjalan bersamaan tidak bisa ditembus.
+
+        Baris dikirim ulang UTUH (bukan diff) sehingga baris biaya packaging
+        pesanan Sertifikat selalu disusun ulang server — tepat satu baris, qty
+        1, tanpa serial — dan tidak pernah bisa digandakan klien (CP-SER-02).
       requestBody:
         required: true
         content:
@@ -1777,8 +1789,18 @@ components:
       required: [line_no, jenis, nama, satuan, qty, harga_satuan, subtotal]
       properties:
         line_no: { type: integer }
-        jenis: { type: string, enum: [product, packaging] }
-        product_id: { type: string, format: uuid }
+        jenis:
+          type: string
+          enum: [product, packaging]
+          description: |
+            `product` = baris produk pesanan; `packaging` = baris biaya
+            packaging yang ditambahkan server pada pesanan Sertifikat (tepat
+            satu baris, qty 1, tanpa product_id) dan tidak bisa diedit atau
+            dihapus klien (PRD CP-SER-02).
+        product_id:
+          type: string
+          format: uuid
+          description: Kosong pada baris `packaging`.
         nama:
           type: string
           description: Snapshot nama produk saat dipesan (BR-05).
@@ -1788,11 +1810,15 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: Harga khusus cabang yang diambil server dari branch_prices.
+          description: |
+            Harga khusus cabang yang diambil server dari branch_prices. Untuk
+            produk Sertifikat nilainya selalu 0 berapa pun qty-nya (CP-SER-01).
         subtotal: { type: integer, format: int64 }
         serial_number:
           type: string
-          description: Hanya terisi setelah submit (BR-02); draft tanpa serial.
+          description: |
+            Hanya terisi setelah submit (BR-02); draft tanpa serial, dan baris
+            `packaging` tidak pernah mendapat serial number.
 
     Order:
       type: object
@@ -2094,6 +2120,15 @@ components:
         deskripsi: { type: string }
         harga: { type: integer, format: int64, minimum: 0 }
         urutan: { type: integer }
+        biaya_packaging:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Hanya ada pada produk Sertifikat: biaya packaging per pesanan yang
+            ditambahkan otomatis, senilai setelan `biaya_packaging` yang sedang
+            berlaku (PRD CP-KAT-04, CP-SER-02). Angka final tetap dihitung
+            server saat draft disimpan dan saat submit.
 
     BankAccount:
       type: object

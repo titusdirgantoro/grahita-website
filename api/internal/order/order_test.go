@@ -3,11 +3,13 @@ package order
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/settings"
 )
 
 // fakeCatalog adalah sudut pandang katalog untuk pengujian: hanya produk yang
@@ -22,6 +24,29 @@ func (f fakeCatalog) BranchProducts(_ context.Context, branchID string) ([]catal
 		return nil, f.err
 	}
 	return f.perBranch[branchID], nil
+}
+
+// fakeConfig adalah sudut pandang domain pengaturan untuk pengujian: nilai
+// bilangan bulat per kunci yang bisa diubah di tengah uji untuk membuktikan
+// snapshot biaya packaging.
+type fakeConfig struct {
+	values map[string]int64
+}
+
+func (f *fakeConfig) Int(_ context.Context, key string) (int64, error) {
+	v, ok := f.values[key]
+	if !ok {
+		return 0, fmt.Errorf("kunci pengaturan %q tidak ada", key)
+	}
+	return v, nil
+}
+
+// cfgUji menyiapkan setelan uji dengan nilai bawaan PRD §4.9.
+func cfgUji() *fakeConfig {
+	return &fakeConfig{values: map[string]int64{
+		settings.BiayaPackaging: 3000,
+		settings.CNCHari:        7,
+	}}
 }
 
 // cabangA menyiapkan katalog uji: p1 & p4 dijual ke cabang A (100000/5000), p2
@@ -46,7 +71,15 @@ func aktorCabang(branchID string) auth.Actor {
 
 func newUjiService() (*Service, *Memory) {
 	repo := NewMemory()
-	return NewService(repo, katalogUji()), repo
+	return NewService(repo, katalogUji(), cfgUji()), repo
+}
+
+// newUjiServiceCfg sama seperti newUjiService, tetapi juga mengembalikan
+// setelannya supaya uji snapshot biaya packaging bisa mengubah nilainya.
+func newUjiServiceCfg() (*Service, *Memory, *fakeConfig) {
+	repo := NewMemory()
+	cfg := cfgUji()
+	return NewService(repo, katalogUji(), cfg), repo, cfg
 }
 
 // TestBuatDraftMemakaiHargaCabangDanTotalServer memverifikasi invarian inti
@@ -176,7 +209,7 @@ func TestDraftHanyaMilikPemiliknya(t *testing.T) {
 // catatan kartu F1-02: penguncian pesanan non-draft ada di layer service.
 func TestPesananSubmittedTidakBisaDiubahAtauDihapus(t *testing.T) {
 	repo := NewMemory()
-	svc := NewService(repo, katalogUji())
+	svc := NewService(repo, katalogUji(), cfgUji())
 	ctx := context.Background()
 
 	kirim := repo.Put(Order{
@@ -232,7 +265,7 @@ func TestSertifikatTidakBolehDicampurReguler(t *testing.T) {
 		t.Errorf("alasan harus menjelaskan pemisahan pesanan: %v", err)
 	}
 
-	// Sertifikat sendirian tetap boleh (aturan packaging menyusul di F1-12).
+	// Sertifikat sendirian tetap boleh dan mendapat baris biaya packaging.
 	if _, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{
 		Lines: []LineInput{{ProductID: "p3", Qty: 10}},
 	}); err != nil {
@@ -336,7 +369,7 @@ func TestHapusDraftMilikSendiri(t *testing.T) {
 // TestListMemfilterStatusDanCabang memeriksa daftar pesanan cabang sesi.
 func TestListMemfilterStatusDanCabang(t *testing.T) {
 	repo := NewMemory()
-	svc := NewService(repo, katalogUji())
+	svc := NewService(repo, katalogUji(), cfgUji())
 	ctx := context.Background()
 
 	repo.Put(Order{ID: "d-a", BranchID: "br-a", Status: StatusDraft, Lines: []Line{{Jenis: JenisProduct, Qty: 2, HargaSatuan: 1000}}})

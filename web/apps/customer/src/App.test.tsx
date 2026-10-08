@@ -36,7 +36,14 @@ function fetchAndalan() {
         return json({
           data: [
             { id: "p1", nama: "Bio Magnetik", jenis: "reguler", satuan: "pcs", harga: 340000 },
-            { id: "p7", nama: "Sertifikat Psikotes", jenis: "sertifikat", satuan: "lembar", harga: 0 },
+            {
+              id: "p7",
+              nama: "Sertifikat Psikotes",
+              jenis: "sertifikat",
+              satuan: "lembar",
+              harga: 0,
+              biaya_packaging: 3000,
+            },
           ],
         });
       }
@@ -80,6 +87,8 @@ describe("Customer Portal — shell & navigasi", () => {
     // Harga khusus cabang diformat Rupiah, sertifikat diberi badge.
     expect(screen.getByText(/Rp\s?340\.000/)).toBeDefined();
     expect(screen.getByText("Sertifikat")).toBeDefined();
+    // CP-KAT-04: produk Sertifikat mencantumkan biaya packaging yang berlaku.
+    expect(screen.getByText(/Biaya packaging Rp\s?3\.000 ditambahkan otomatis per pesanan\./)).toBeDefined();
   });
 
   it("rute /tutorial merender shell dan isi accordion", async () => {

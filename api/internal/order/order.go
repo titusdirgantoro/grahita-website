@@ -21,10 +21,27 @@
 //   - Belum ada status Batal dan tidak ada pembatalan pesanan Submitted
 //     (keputusan kartu F1-11; PRD §8 no.4 masih terbuka).
 //   - Draft tidak punya nomor, tanggal, serial number, maupun bukti transfer;
-//     semuanya lahir saat submit (F1-14). Aturan Sertifikat (satu baris biaya
-//     packaging) dan Cash & Carry datang di F1-12; di sini campuran Sertifikat
-//     dengan produk reguler sudah ditolak dengan penjelasan supaya invariant
-//     Database.md §8 (order_lines_guard_kind) tidak pernah dilanggar.
+//     semuanya lahir saat submit (F1-14).
+//
+// Aturan Sertifikat dan Cash & Carry (kartu F1-12, PRD §3.6–3.7):
+//
+//   - Produk Sertifikat selalu berharga 0 berapa pun qty-nya (CP-SER-01). Harga
+//     dari branch_prices tidak dipakai untuk jenis ini, jadi data harga yang
+//     menyimpang tidak bisa membuat sertifikat berbayar.
+//   - Pesanan yang memuat Sertifikat mendapat TEPAT SATU baris `packaging`
+//     (qty 1, tanpa produk, tanpa serial) senilai `biaya_packaging` yang
+//     berlaku di setelan server saat baris itu disusun (CP-SER-02, CP-SER-05).
+//     Baris ini dibuat server dari daftar produk kiriman editor, sehingga
+//     klien tidak punya cara menambah, mengubah, menghapus, atau menduplikasi
+//     baris packaging — setiap simpan draft menyusunnya ulang dari nol.
+//   - Pesanan Sertifikat tidak boleh dicampur produk reguler (CP-SER-03).
+//   - C&C hanya sah bila cabang SESI berflag `cash_and_carry` (CP-CNC-01).
+//     Flag dibaca server, bukan dari klien, sehingga cabang tanpa flag tidak
+//     bisa memalsukan C&C: ValidateCNC menolaknya. Tenggat C&C = tanggal
+//     submit WIB + `cnc_hari` (CP-CNC-04) lewat TanggalWIB + JatuhTempo.
+//     Ketiga fungsi ini adalah satu-satunya sumber aturan C&C dan WAJIB dipakai
+//     transaksi submit (F1-14) — draft sendiri tidak menyimpan pilihan C&C
+//     (prototype menaruh centang C&C di modal kirim, bukan di editor).
 package order
 
 import (
@@ -38,6 +55,8 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/platform/clock"
+	"github.com/grahita/portal/api/internal/settings"
 )
 
 // Sentinel error domain. Pemetaan ke kode HTTP ada di lapisan transport.
@@ -61,6 +80,9 @@ var (
 	ErrProductNotSold = errors.New("produk tidak dijual ke cabang ini")
 	// ErrNoBranch dikembalikan bila akun cabang tidak terhubung ke cabang.
 	ErrNoBranch = errors.New("akun tidak terhubung ke cabang")
+	// ErrCNCNotAllowed dikembalikan bila pesanan meminta Cash & Carry padahal
+	// cabangnya tidak berflag cash_and_carry (PRD CP-CNC-01).
+	ErrCNCNotAllowed = errors.New("Cash & Carry tidak diizinkan untuk cabang ini")
 )
 
 // Status pesanan (Database.md §3, enum order_status).
@@ -77,6 +99,13 @@ const (
 const (
 	JenisProduct   = "product"
 	JenisPackaging = "packaging"
+)
+
+// Baris biaya packaging pesanan Sertifikat (PRD CP-SER-02). Nama dan satuannya
+// adalah snapshot: begitu tersimpan, teksnya tidak berubah lagi.
+const (
+	NamaBiayaPackaging   = "Biaya packaging"
+	SatuanBiayaPackaging = "paket"
 )
 
 // Batas satu permintaan editor supaya transaksinya tetap pendek dan
@@ -96,8 +125,8 @@ const TanggalLayout = "2006-01-02"
 
 // Line adalah satu baris pesanan.
 //
-// Jenis "packaging" belum pernah dibuat di sini (F1-12), tetapi tipenya sudah
-// disiapkan supaya bentuk jawabannya tidak berubah saat F1-12 mendarat.
+// Jenis "packaging" dipakai untuk baris biaya packaging pesanan Sertifikat:
+// qty 1, tanpa product_id, dan tanpa serial number (PRD CP-SER-02).
 type Line struct {
 	LineNo       int    `json:"line_no"`
 	Jenis        string `json:"jenis"`
@@ -163,6 +192,16 @@ type Catalog interface {
 	BranchProducts(ctx context.Context, branchID string) ([]catalog.BranchProduct, error)
 }
 
+// Config adalah sudut pandang domain pengaturan yang dibutuhkan aturan
+// pesanan: nilai bilangan bulat yang sedang berlaku untuk satu kunci
+// (biaya_packaging, cnc_hari). Implementasinya adalah settings.Service, dan
+// nilainya dibaca SERVER — bukan dari klien — sehingga snapshot biaya
+// packaging dan tenggat C&C selalu mengikuti setelan yang berlaku
+// (PRD CP-SER-05, CP-CNC-04).
+type Config interface {
+	Int(ctx context.Context, key string) (int64, error)
+}
+
 // Repository memuat dan menyimpan pesanan cabang. Setiap metode menerima
 // branchID dari SESI dan wajib memakainya sebagai syarat query.
 type Repository interface {
@@ -184,11 +223,14 @@ type Repository interface {
 type Service struct {
 	repo Repository
 	cat  Catalog
+	cfg  Config
 }
 
-// NewService membuat service pesanan.
-func NewService(repo Repository, cat Catalog) *Service {
-	return &Service{repo: repo, cat: cat}
+// NewService membuat service pesanan. cfg menyajikan setelan operasional
+// server (biaya packaging pesanan sertifikat); ia tidak boleh nil karena biaya
+// packaging tidak pernah diambil dari klien.
+func NewService(repo Repository, cat Catalog, cfg Config) *Service {
+	return &Service{repo: repo, cat: cat, cfg: cfg}
 }
 
 // List mengembalikan daftar pesanan cabang sesuai filter status (PRD CP-ORD-01).
@@ -297,6 +339,17 @@ func (s *Service) DeleteDraft(ctx context.Context, actor auth.Actor, id string) 
 //
 // Produk yang tidak ada di daftar "dijual ke cabang ini" ditolak — termasuk
 // produk nonaktif dan produk yang hanya punya harga_default (PRD CP-KAT-02).
+//
+// Aturan Sertifikat (PRD §3.6) diterapkan di sini, di server:
+//
+//   - baris produk Sertifikat berharga 0 berapa pun qty-nya (CP-SER-01);
+//   - Sertifikat tidak boleh dicampur produk reguler (CP-SER-03);
+//   - pesanan Sertifikat mendapat tepat satu baris `packaging` qty 1 senilai
+//     `biaya_packaging` yang berlaku (CP-SER-02/05). Baris itu SELALU disusun
+//     server dari daftar produk kiriman editor, sehingga klien tidak bisa
+//     menambah, mengubah, menghapus, atau menduplikasinya: mengirim ulang
+//     draft menyusunnya ulang dari nol, dan satu-satunya bentuk baris yang
+//     diterima klien adalah product_id yang benar-benar dijual ke cabangnya.
 func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput) (string, []Line, error) {
 	catatan := strings.TrimSpace(in.Catatan)
 	if len([]rune(catatan)) > 500 {
@@ -318,7 +371,7 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 		dijual[p.ID] = p
 	}
 
-	lines := make([]Line, 0, len(in.Lines))
+	lines := make([]Line, 0, len(in.Lines)+1)
 	dipakai := map[string]bool{}
 	var sertifikat, reguler int
 	for i, baris := range in.Lines {
@@ -342,7 +395,11 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 		if p.Harga > 0 && int64(baris.Qty) > math.MaxInt64/p.Harga {
 			return "", nil, fmt.Errorf("%w: nilai baris %d terlalu besar", ErrInvalidData, i+1)
 		}
+
+		harga := p.Harga
 		if p.Jenis == catalog.JenisSertifikat {
+			// CP-SER-01/BR-06: harga Sertifikat SELALU 0 berapa pun qty.
+			harga = 0
 			sertifikat++
 		} else {
 			reguler++
@@ -355,19 +412,75 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 			Nama:        p.Nama,
 			Satuan:      p.Satuan,
 			Qty:         baris.Qty,
-			HargaSatuan: p.Harga,
-			Subtotal:    int64(baris.Qty) * p.Harga,
+			HargaSatuan: harga,
+			Subtotal:    int64(baris.Qty) * harga,
 		})
 	}
 
 	// PRD CP-SER-03 / Database.md §8: satu pesanan tidak boleh mencampur
-	// Sertifikat dengan produk reguler. Penambahan baris biaya packaging dan
-	// penandaan sertifikat dikerjakan F1-12.
+	// Sertifikat dengan produk reguler (trigger order_lines_guard_kind juga
+	// menolaknya di database).
 	if sertifikat > 0 && reguler > 0 {
 		return "", nil, fmt.Errorf("%w: Sertifikat dipesan terpisah dan tidak boleh dicampur produk reguler", ErrInvalidData)
 	}
 
+	// CP-SER-02: tepat satu baris biaya packaging untuk pesanan Sertifikat,
+	// senilai setelan `biaya_packaging` yang berlaku saat draft disimpan.
+	if sertifikat > 0 {
+		biaya, err := s.cfg.Int(ctx, settings.BiayaPackaging)
+		if err != nil {
+			return "", nil, fmt.Errorf("baca biaya packaging: %w", err)
+		}
+		if biaya < 0 {
+			return "", nil, fmt.Errorf("%w: biaya packaging tidak valid", ErrInvalidData)
+		}
+		lines = append(lines, packagingLine(len(lines)+1, biaya))
+	}
+
 	return catatan, lines, nil
+}
+
+// packagingLine menyusun baris biaya packaging pesanan Sertifikat: qty 1,
+// tanpa product_id, tanpa serial number (Database.md §6), harga snapshot
+// setelan server saat baris itu dibuat.
+func packagingLine(lineNo int, biaya int64) Line {
+	return Line{
+		LineNo:      lineNo,
+		Jenis:       JenisPackaging,
+		Nama:        NamaBiayaPackaging,
+		Satuan:      SatuanBiayaPackaging,
+		Qty:         1,
+		HargaSatuan: biaya,
+		Subtotal:    biaya,
+	}
+}
+
+// TanggalWIB mengembalikan tanggal bisnis (tengah malam WIB) dari sebuah waktu.
+// Batas harinya adalah zona Asia/Jakarta (UTC+7, tanpa DST) — bukan UTC —
+// sehingga submit pukul 00:30 WIB tercatat pada hari yang benar, bukan pada
+// hari UTC sebelumnya (PRD CP-ORD-06, BR-04).
+func TanggalWIB(t time.Time) time.Time {
+	y, m, d := t.In(clock.Jakarta()).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, clock.Jakarta())
+}
+
+// JatuhTempo menghitung tenggat pembayaran Cash & Carry: tanggal pesanan +
+// `cnc_hari` hari (PRD CP-CNC-04, BR-08). Nilainya hanya dipakai bila pesanan
+// benar-benar C&C; pesanan non-C&C tidak punya jatuh tempo.
+func JatuhTempo(tanggal time.Time, cncHari int) time.Time {
+	return tanggal.In(clock.Jakarta()).AddDate(0, 0, cncHari)
+}
+
+// ValidateCNC menegakkan CP-CNC-01: pilihan/penanda C&C hanya sah bila cabang
+// benar-benar berflag `cash_and_carry`. Flag dibaca server dari master cabang,
+// bukan dari masukan klien, sehingga cabang tanpa flag tidak bisa memalsukan
+// C&C. Transaksi submit (F1-14) WAJIB memanggil fungsi ini sebelum menetapkan
+// orders.is_cnc dan jatuh_tempo.
+func ValidateCNC(branchIsCNC, requested bool) error {
+	if requested && !branchIsCNC {
+		return ErrCNCNotAllowed
+	}
+	return nil
 }
 
 // branchActor memastikan aktor adalah akun cabang yang boleh menulis pesanan

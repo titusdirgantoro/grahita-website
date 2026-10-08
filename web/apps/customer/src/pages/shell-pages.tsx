@@ -40,6 +40,8 @@ interface Produk {
   satuan: string;
   deskripsi?: string;
   harga: number;
+  /** Hanya pada produk Sertifikat: biaya packaging per pesanan (CP-KAT-04). */
+  biaya_packaging?: number;
 }
 
 interface Cabang {
@@ -206,7 +208,12 @@ export function KatalogPage() {
                   {p.jenis === "sertifikat" ? <Badge tone="info">Sertifikat</Badge> : null}
                 </div>
                 <span className={styles.price}>{rupiah.format(p.harga)}</span>
-                <span className={styles.desc}>{p.deskripsi ?? `Satuan ${p.satuan}`}</span>
+                <span className={styles.desc}>
+                  {p.deskripsi ?? `Satuan ${p.satuan}`}
+                  {p.jenis === "sertifikat" && p.biaya_packaging !== undefined
+                    ? ` Biaya packaging ${rupiah.format(p.biaya_packaging)} ditambahkan otomatis per pesanan.`
+                    : ""}
+                </span>
               </div>
             ))}
           </div>

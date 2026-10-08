@@ -110,6 +110,18 @@
   justify-content: flex-end;
 }
 
+/* Baris biaya packaging pesanan Sertifikat (F1-12): dibuat dan dikunci server,
+   jadi tidak ada tombol hapus dan nilainya tidak bisa diubah dari editor. */
+.linePack {
+  color: var(--text-muted);
+}
+
+.linePack .lProd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .stickyTotal {
   scroll-margin-bottom: 96px;
 }

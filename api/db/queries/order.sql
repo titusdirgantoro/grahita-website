@@ -94,6 +94,15 @@ DELETE FROM order_lines WHERE order_id = $1;
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
 VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
 
+-- name: InsertOrderLinePackaging :exec
+-- Baris biaya packaging pesanan sertifikat (PRD CP-SER-02): tanpa product_id,
+-- qty SELALU 1, dan tanpa serial number (constraint packaging_tanpa_serial).
+-- Harga packaging adalah snapshot `biaya_packaging` yang dibaca server dari
+-- domain pengaturan — tidak pernah datang dari klien. Indeks unik parsial
+-- order_lines_satu_packaging menjaga agar baris ini tetap tunggal per pesanan.
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
+VALUES ($1, $2, 'packaging', NULL, $3, $4, 1, $5);
+
 -- name: ListOrderLines :many
 SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, satuan_snapshot,
        qty, harga_satuan, subtotal, serial_number

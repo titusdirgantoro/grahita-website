@@ -29,7 +29,14 @@ const penggunaCabang = {
 
 const katalog = [
   { id: "p1", nama: "Bio Magnetik", jenis: "reguler", satuan: "pcs", harga: 100000 },
-  { id: "p7", nama: "Sertifikat Psikotes", jenis: "sertifikat", satuan: "lembar", harga: 0 },
+  {
+    id: "p7",
+    nama: "Sertifikat Psikotes",
+    jenis: "sertifikat",
+    satuan: "lembar",
+    harga: 0,
+    biaya_packaging: 3000,
+  },
 ];
 
 const draft = {
@@ -91,6 +98,47 @@ interface Panggilan {
   url: string;
   init?: RequestInit;
 }
+
+/**
+ * sertifikatCNC adalah pesanan Sertifikat ber-flag Cash & Carry dengan jatuh
+ * tempo hasil hitungan server (tanggal submit WIB + cnc_hari) — dipakai untuk
+ * memeriksa penanda C&C dan baris biaya packaging pada halaman detail.
+ */
+const sertifikatCNC = {
+  id: "o3",
+  status: "submitted",
+  verif_status: "belum",
+  is_cnc: true,
+  is_sertifikat: true,
+  nomor: "2026-10-02",
+  tanggal: "2026-10-08",
+  jatuh_tempo: "2026-10-15",
+  catatan: "",
+  total: 3000,
+  jumlah_item: 10,
+  created_at: "2026-10-08T01:00:00Z",
+  lines: [
+    {
+      line_no: 1,
+      jenis: "product",
+      product_id: "p7",
+      nama: "Sertifikat Psikotes",
+      satuan: "lembar",
+      qty: 10,
+      harga_satuan: 0,
+      subtotal: 0,
+    },
+    {
+      line_no: 2,
+      jenis: "packaging",
+      nama: "Biaya packaging",
+      satuan: "paket",
+      qty: 1,
+      harga_satuan: 3000,
+      subtotal: 3000,
+    },
+  ],
+};
 
 /**
  * fetchPesanan memasang fetch palsu untuk portal cabang: sesi, katalog, dan
@@ -291,5 +339,56 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
         lines: [{ product_id: "p1", qty: 4 }],
       });
     });
+  });
+
+  it("menampilkan baris biaya packaging terkunci dan ikut menghitung total", async () => {
+    fetchPesanan();
+
+    render(<RouterProvider router={buatRouter("/pesanan/baru")} />);
+    const pilih = await screen.findByLabelText("Produk baris 1");
+    fireEvent.change(pilih, { target: { value: "p7" } });
+
+    // Baris biaya packaging ditampilkan sebagai baris terkunci: dibuat server,
+    // tidak bisa diubah atau dihapus dari editor (PRD CP-SER-02).
+    const pack = await screen.findByTestId("baris-packaging");
+    expect(within(pack).getByText("Biaya packaging")).toBeDefined();
+    expect(within(pack).getAllByText(/3\.000/).length).toBeGreaterThan(0);
+    expect(within(pack).queryByRole("button")).toBeNull();
+    expect(within(pack).queryByRole("checkbox")).toBeNull();
+
+    // Total editor sudah termasuk biaya packaging (0 × qty + 3.000).
+    expect(screen.getByTestId("total-draft").textContent).toMatch(/3\.000/);
+    expect(await screen.findByText(/ditambahkan otomatis per pesanan/)).toBeDefined();
+  });
+
+  it("tidak menampilkan baris packaging untuk pesanan reguler", async () => {
+    fetchPesanan();
+
+    render(<RouterProvider router={buatRouter("/pesanan/baru")} />);
+    const pilih = await screen.findByLabelText("Produk baris 1");
+    fireEvent.change(pilih, { target: { value: "p1" } });
+
+    await screen.findByTestId("total-draft");
+    expect(screen.queryByTestId("baris-packaging")).toBeNull();
+  });
+});
+
+describe("Customer Portal — Sertifikat & Cash and Carry (F1-12)", () => {
+  it("menandai C&C, menampilkan jatuh tempo, dan mengunci baris packaging di detail", async () => {
+    fetchPesanan({ detail: sertifikatCNC });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+
+    expect(await screen.findByRole("heading", { name: "2026-10-02" })).toBeDefined();
+    // Penanda C&C (PRD CP-CNC-03) dan jatuh tempo hasil hitungan server.
+    expect(screen.getByText("Cash & Carry")).toBeDefined();
+    expect(screen.getByText("Sertifikat")).toBeDefined();
+    expect(screen.getByText("Jatuh tempo C&C")).toBeDefined();
+    expect(screen.getByText("15 Okt 2026")).toBeDefined();
+    // Baris biaya packaging tampil di rincian dengan harga snapshot-nya.
+    expect(screen.getByText("Biaya packaging")).toBeDefined();
+    expect(screen.getAllByText(/3\.000/).length).toBeGreaterThan(0);
+    // Pesanan yang sudah dikirim tetap terkunci untuk cabang.
+    expect(screen.queryByRole("button", { name: "Ubah" })).toBeNull();
   });
 });

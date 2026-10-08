@@ -135,6 +135,33 @@ func (s *Service) Get(ctx context.Context, key string) (json.RawMessage, error) 
 	return json.RawMessage(raw), nil
 }
 
+// Int mengembalikan nilai bilangan BULAT yang sedang berlaku untuk satu kunci
+// pengaturan: nilai tersimpan bila ada, selain itu nilai bawaannya.
+//
+// Dipakai domain lain yang butuh setelan operasional tanpa permukaan HTTP
+// pengaturan — mis. domain pesanan mengambil `biaya_packaging` dan `cnc_hari`
+// untuk snapshot order line (PRD CP-SER-02/CP-CNC-04). Pembacaan ini TIDAK
+// membuka akses tulis: pengaturan tetap hanya bisa diubah Superadmin
+// (PRD §2.1) dan tidak ada endpoint lintas-role (keputusan kartu F1-09).
+func (s *Service) Int(ctx context.Context, key string) (int64, error) {
+	sp, ok := specs[key]
+	if !ok {
+		return 0, ErrNotFound
+	}
+	if sp.kind != kindInt || sp.isFloat {
+		return 0, fmt.Errorf("%w: %s bukan bilangan bulat", ErrInvalidValue, key)
+	}
+	raw, err := s.effective(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return 0, fmt.Errorf("%w: nilai %s tidak dapat dibaca sebagai bilangan bulat", ErrInvalidValue, key)
+	}
+	return n, nil
+}
+
 // Default mengembalikan nilai bawaan satu kunci, atau ErrNotFound.
 func Default(key string) (json.RawMessage, error) {
 	sp, ok := specs[key]

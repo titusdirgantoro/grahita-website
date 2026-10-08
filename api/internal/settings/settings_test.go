@@ -381,3 +381,29 @@ func TestGetKunciTidakDikenal(t *testing.T) {
 		t.Fatalf("Get belum tersimpan harus ErrNotFound, dapat %v", err)
 	}
 }
+
+// TestIntNilaiBerlakuDanBawaan memverifikasi pembacaan bilangan bulat yang
+// dipakai domain lain (mis. pesanan mengambil biaya_packaging dan cnc_hari):
+// nilai tersimpan menang, kunci yang belum pernah disimpan memakai bawaan PRD,
+// dan kunci non-bilangan-bulat ditolak.
+func TestIntNilaiBerlakuDanBawaan(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(newFakeRepo(map[string]string{BiayaPackaging: "4000"}))
+
+	if got, err := svc.Int(ctx, BiayaPackaging); err != nil || got != 4000 {
+		t.Errorf("nilai tersimpan harus 4000, dapat %d (%v)", got, err)
+	}
+	// Belum pernah disimpan: nilai bawaannya yang dipakai (PRD §4.9).
+	if got, err := svc.Int(ctx, CNCHari); err != nil || got != 7 {
+		t.Errorf("cnc_hari bawaan harus 7, dapat %d (%v)", got, err)
+	}
+	if _, err := svc.Int(ctx, "karangan"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("kunci tak dikenal harus ErrNotFound, dapat %v", err)
+	}
+	if _, err := svc.Int(ctx, ManagerBolehRevisi); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("kunci boolean harus ditolak sebagai bilangan bulat, dapat %v", err)
+	}
+	if _, err := svc.Int(ctx, "ai"); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("kunci objek harus ditolak sebagai bilangan bulat, dapat %v", err)
+	}
+}

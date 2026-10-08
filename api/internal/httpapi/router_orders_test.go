@@ -73,14 +73,22 @@ func newOrdersServer(t *testing.T) *ordersServer {
 	})
 
 	svc := auth.NewService(store, store, store, clock.System(), 8*time.Hour, 30*24*time.Hour)
+	// Setelan server dipakai bersama oleh katalog (catatan biaya packaging
+	// produk Sertifikat) dan domain pesanan (snapshot baris packaging) — persis
+	// seperti main.go.
+	settingsSvc := settings.NewService(&fakeSettingsRepo{values: map[string]string{
+		"biaya_packaging": "3000",
+		"cnc_hari":        "7",
+	}})
+	catSvc := catalog.NewService(catRepo)
 	deps := Deps{
 		Config:       testConfig(),
 		Version:      "test-orders",
 		Health:       fakeHealth{migrasi: 11},
 		Auth:         svc,
-		Settings:     settings.NewService(&fakeSettingsRepo{values: map[string]string{"biaya_packaging": "3000"}}),
-		Catalog:      catalog.NewService(catRepo),
-		Orders:       order.NewService(ordRepo, catalog.NewService(catRepo)),
+		Settings:     settingsSvc,
+		Catalog:      catSvc,
+		Orders:       order.NewService(ordRepo, catSvc, settingsSvc),
 		LoginLimiter: httpx.NewRateLimiter(50, 15*time.Minute),
 	}
 	srv := httptest.NewServer(NewRouter(deps))
@@ -380,5 +388,137 @@ func TestApiValidasiBodyDraft(t *testing.T) {
 	}
 	if os.ord.Count() != 2 {
 		t.Errorf("tidak boleh ada pesanan baru dari body tidak valid, dapat %d", os.ord.Count())
+	}
+}
+
+// ---------- Aturan Sertifikat, packaging dan C&C (F1-12) ----------
+
+// TestApiSertifikatBarisPackagingOtomatis menempuh jalur HTTP penuh: draft
+// Sertifikat lahir dengan tepat satu baris biaya packaging qty 1 senilai
+// biaya_packaging server, harga produknya 0 berapa pun qty, dan mengubah draft
+// tidak menggandakan baris packaging itu.
+func TestApiSertifikatBarisPackagingOtomatis(t *testing.T) {
+	os := newOrdersServer(t)
+	cookies, csrf := login(t, os.srv, "a@example.test")
+
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
+		`{"lines":[{"product_id":"p3","qty":12}]}`, cookies, csrf)
+	if status != http.StatusCreated {
+		t.Fatalf("buat draft sertifikat harus 201, dapat %d (%v)", status, body)
+	}
+	draft := dataMap(t, body)
+	if draft["is_sertifikat"] != true {
+		t.Errorf("draft sertifikat harus bertanda is_sertifikat: %v", draft)
+	}
+	if draft["total"] != float64(3000) || draft["jumlah_item"] != float64(12) {
+		t.Errorf("total harus 3000 (packaging) dan item 12: %v", draft)
+	}
+	lines := draft["lines"].([]any)
+	if len(lines) != 2 {
+		t.Fatalf("harus 2 baris (produk + packaging), dapat %v", draft["lines"])
+	}
+	produk := lines[0].(map[string]any)
+	if produk["jenis"] != "product" || produk["harga_satuan"] != float64(0) || produk["subtotal"] != float64(0) {
+		t.Errorf("baris sertifikat harus harga 0: %v", produk)
+	}
+	pack := lines[1].(map[string]any)
+	if pack["jenis"] != "packaging" || pack["nama"] != "Biaya packaging" {
+		t.Errorf("baris kedua harus biaya packaging: %v", pack)
+	}
+	if pack["qty"] != float64(1) || pack["harga_satuan"] != float64(3000) || pack["subtotal"] != float64(3000) {
+		t.Errorf("baris packaging harus qty 1 senilai 3000: %v", pack)
+	}
+	if pid, ada := pack["product_id"]; ada && pid != "" {
+		t.Errorf("baris packaging tidak boleh punya produk: %v", pid)
+	}
+	if _, ada := pack["serial_number"]; ada {
+		t.Errorf("baris packaging tidak boleh punya serial: %v", pack)
+	}
+	id := draft["id"].(string)
+
+	// Ubah draft: baris packaging tetap satu (disusun ulang server).
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, os.srv.URL+"/api/v1/orders/"+id,
+		`{"lines":[{"product_id":"p3","qty":20}]}`, cookies, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("ubah draft sertifikat harus 200, dapat %d (%v)", status, body)
+	}
+	ubah := dataMap(t, body)
+	if len(ubah["lines"].([]any)) != 2 || ubah["total"] != float64(3000) {
+		t.Errorf("setelah diubah harus tetap 2 baris dan total 3000: %v", ubah)
+	}
+
+	// Pesanan non-Sertifikat tidak boleh punya baris packaging.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
+		`{"lines":[{"product_id":"p1","qty":1}]}`, cookies, csrf)
+	if status != http.StatusCreated {
+		t.Fatalf("buat draft reguler harus 201, dapat %d (%v)", status, body)
+	}
+	reguler := dataMap(t, body)
+	if len(reguler["lines"].([]any)) != 1 || reguler["is_sertifikat"] == true {
+		t.Errorf("pesanan reguler tidak boleh punya packaging: %v", reguler)
+	}
+}
+
+// TestApiKlienTidakBisaMenyisipkanBarisPackaging menegaskan baris packaging
+// tidak bisa dikarang dari klien: satu-satunya bentuk baris yang diterima
+// adalah product_id yang benar-benar dijual ke cabang.
+func TestApiKlienTidakBisaMenyisipkanBarisPackaging(t *testing.T) {
+	os := newOrdersServer(t)
+	cookies, csrf := login(t, os.srv, "a@example.test")
+
+	kasus := []string{
+		// Baris tanpa produk (bentuk terdekat dengan packaging).
+		`{"lines":[{"product_id":"","qty":1}]}`,
+		// Id karangan.
+		`{"lines":[{"product_id":"packaging","qty":1}]}`,
+		// Percobaan menyatakan jenis baris sendiri.
+		`{"lines":[{"product_id":"p3","qty":1,"jenis":"packaging"}]}`,
+		// Percobaan mengirim harga baris packaging.
+		`{"lines":[{"product_id":"p3","qty":1,"harga_satuan":0,"subtotal":3000}]}`,
+	}
+	for _, k := range kasus {
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders", k, cookies, csrf)
+		if status != http.StatusBadRequest {
+			t.Errorf("body %.60q harus 400, dapat %d (%v)", k, status, body)
+		}
+	}
+	if os.ord.Count() != 2 {
+		t.Errorf("tidak boleh ada pesanan baru dari body tidak valid, dapat %d", os.ord.Count())
+	}
+}
+
+// TestApiCatalogCatatanBiayaPackaging memverifikasi CP-KAT-04: katalog cabang
+// menandai produk Sertifikat dengan biaya packaging yang sedang berlaku,
+// sementara produk reguler tidak membawa field itu.
+func TestApiCatalogCatatanBiayaPackaging(t *testing.T) {
+	os := newOrdersServer(t)
+	cookies, _ := login(t, os.srv, "a@example.test")
+
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, os.srv.URL+"/api/v1/catalog", "", cookies, "")
+	if status != http.StatusOK {
+		t.Fatalf("katalog harus 200, dapat %d (%v)", status, body)
+	}
+	list := dataList(t, body)
+	var sertifikat, reguler map[string]any
+	for _, it := range list {
+		m := it.(map[string]any)
+		switch m["jenis"] {
+		case "sertifikat":
+			sertifikat = m
+		case "reguler":
+			reguler = m
+		}
+	}
+	if sertifikat == nil {
+		t.Fatalf("katalog harus memuat produk Sertifikat: %v", list)
+	}
+	if sertifikat["biaya_packaging"] != float64(3000) {
+		t.Errorf("produk Sertifikat harus membawa biaya_packaging 3000: %v", sertifikat)
+	}
+	if reguler == nil {
+		t.Fatalf("katalog harus memuat produk reguler: %v", list)
+	}
+	if _, ada := reguler["biaya_packaging"]; ada {
+		t.Errorf("produk reguler tidak boleh membawa biaya_packaging: %v", reguler)
 	}
 }

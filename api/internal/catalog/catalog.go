@@ -85,6 +85,12 @@ type BranchProduct struct {
 	Deskripsi string `json:"deskripsi,omitempty"`
 	Harga     int64  `json:"harga"`
 	Urutan    int    `json:"urutan"`
+	// BiayaPackaging hanya terisi untuk produk Sertifikat: biaya packaging per
+	// pesanan yang ditambahkan otomatis (PRD CP-KAT-04, CP-SER-02). Nilainya
+	// diisi lapisan transport dari setelan server yang berlaku supaya portal
+	// cabang bisa menampilkan catatan biaya dan menghitung total editor sebelum
+	// draft disimpan — cabang tidak pernah membaca setelan langsung.
+	BiayaPackaging int64 `json:"biaya_packaging,omitempty"`
 }
 
 // Branch adalah data cabang (master data) untuk /me/branch portal cabang.

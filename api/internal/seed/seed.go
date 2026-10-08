@@ -71,12 +71,16 @@ func Run(ctx context.Context, pool *database.Pool) error {
 		}
 	}
 
-	// Matriks harga: semua produk dijual ke semua cabang dengan harga default.
+	// Matriks harga contoh: semua produk dijual ke semua cabang dengan harga
+	// default. Produk Sertifikat ikut disertakan dengan harga 0 — tanpanya
+	// produk Sertifikat tidak punya baris harga cabang, sehingga katalog tidak
+	// menampilkannya dan aturan Sertifikat (F1-12) tidak bisa dipakai sama
+	// sekali di lingkungan contoh. `harga_default` Sertifikat dijamin 0 oleh
+	// constraint `sertifikat_gratis` (PRD CP-SER-01).
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO branch_prices (branch_id, product_id, harga)
 		SELECT b.id, p.id, p.harga_default
 		  FROM branches b CROSS JOIN products p
-		 WHERE p.jenis = 'reguler'
 		ON CONFLICT (branch_id, product_id) DO NOTHING`); err != nil {
 		return fmt.Errorf("seed harga cabang: %w", err)
 	}

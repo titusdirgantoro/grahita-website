@@ -154,8 +154,25 @@ func (r *Repo) DeleteDraft(ctx context.Context, id, branchID string) error {
 
 // insertLines menulis ulang seluruh baris draft. subtotal tidak diisi karena
 // kolomnya GENERATED ALWAYS.
+//
+// Baris `packaging` (biaya packaging pesanan Sertifikat) ditulis lewat query
+// tersendiri: tanpa product_id, qty selalu 1, dan tanpa serial number. Baris
+// itu disusun server di domain pesanan — repository tidak pernah menerimanya
+// dari klien.
 func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []order.Line) error {
 	for _, l := range lines {
+		if l.Jenis == order.JenisPackaging {
+			if err := q.InsertOrderLinePackaging(ctx, sqlc.InsertOrderLinePackagingParams{
+				OrderID:        orderID,
+				LineNo:         int32(l.LineNo),
+				NamaSnapshot:   l.Nama,
+				SatuanSnapshot: l.Satuan,
+				HargaSatuan:    l.HargaSatuan,
+			}); err != nil {
+				return fmt.Errorf("query InsertOrderLinePackaging: %w", err)
+			}
+			continue
+		}
 		if err := q.InsertOrderLineProduct(ctx, sqlc.InsertOrderLineProductParams{
 			OrderID:        orderID,
 			LineNo:         int32(l.LineNo),

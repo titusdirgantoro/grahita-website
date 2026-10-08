@@ -176,6 +176,24 @@ func (s *Service) Get(ctx context.Context, actor auth.Actor, id string) (Branch,
 	return s.repo.Get(ctx, id)
 }
 
+// IsCNC melaporkan apakah satu cabang berflag Cash & Carry (PRD CP-CNC-01).
+//
+// Metode ini SENGAJA tidak menuntut aktor: ia bukan permukaan HTTP, melainkan
+// pembacaan lintas-domain (SystemDesign.md §2) yang dipakai domain pesanan
+// untuk menentukan aturan C&C dari flag cabang SESI — bukan dari masukan
+// klien. Aturan C&C yang bergantung pada nilai ini (penolakan permintaan C&C
+// oleh cabang tanpa flag) ditegakkan di domain pesanan.
+func (s *Service) IsCNC(ctx context.Context, branchID string) (bool, error) {
+	if branchID == "" {
+		return false, ErrNotFound
+	}
+	b, err := s.repo.Get(ctx, branchID)
+	if err != nil {
+		return false, err
+	}
+	return b.IsCNC, nil
+}
+
 // Create menambahkan cabang baru.
 func (s *Service) Create(ctx context.Context, actor auth.Actor, in NewBranch) (Branch, error) {
 	if !actor.Can(auth.CapAdminBranches) {

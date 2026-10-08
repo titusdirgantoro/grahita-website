@@ -39,6 +39,8 @@ export interface ProdukKatalog {
   satuan: string;
   deskripsi?: string;
   harga: number;
+  /** Hanya pada produk Sertifikat: biaya packaging per pesanan (PRD CP-KAT-04). */
+  biaya_packaging?: number;
 }
 
 export interface BarisPesanan {
@@ -62,6 +64,7 @@ export interface Pesanan {
   is_cnc: boolean;
   is_sertifikat?: boolean;
   tanggal?: string;
+  jatuh_tempo?: string;
   catatan?: string;
   total: number;
   jumlah_item: number;
@@ -101,6 +104,17 @@ function tanggalTampil(o: Pesanan): string {
   if (!sumber) return "—";
   const t = new Date(o.tanggal ? `${sumber}T00:00:00` : sumber);
   if (Number.isNaN(t.getTime())) return sumber;
+  return t.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+/**
+ * tanggalWIB menampilkan tanggal bisnis (YYYY-MM-DD dari server) dalam format
+ * Indonesia tanpa menggeser harinya — dipakai untuk jatuh tempo C&C, yang
+ * sudah dihitung server memakai zona Asia/Jakarta (PRD CP-CNC-04).
+ */
+function tanggalWIB(tanggal: string): string {
+  const t = new Date(`${tanggal}T00:00:00`);
+  if (Number.isNaN(t.getTime())) return tanggal;
   return t.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
 }
 
@@ -335,6 +349,12 @@ export function PesananDetailPage({ id }: { id: string }) {
                 <dt>{draft ? "Dibuat" : "Tanggal pesanan"}</dt>
                 <dd>{tanggalTampil(data)}</dd>
               </div>
+              {data.jatuh_tempo ? (
+                <div>
+                  <dt>Jatuh tempo C&amp;C</dt>
+                  <dd>{tanggalWIB(data.jatuh_tempo)}</dd>
+                </div>
+              ) : null}
               <div>
                 <dt>Catatan</dt>
                 <dd className={styles.muted}>{data.catatan || "—"}</dd>
@@ -363,7 +383,14 @@ export function PesananDetailPage({ id }: { id: string }) {
               <tbody>
                 {(data.lines ?? []).map((l) => (
                   <tr key={l.line_no}>
-                    <td>{l.nama}</td>
+                    <td>
+                      {l.jenis === "packaging" ? (
+                        <>
+                          <i className="ph ph-lock-simple muted" aria-hidden="true" />{" "}
+                        </>
+                      ) : null}
+                      {l.nama}
+                    </td>
                     {tampilSerial ? <td className={styles.muted}>{l.serial_number || "—"}</td> : null}
                     <td className="num">{l.qty}</td>
                     <td className="num">{rupiah.format(l.harga_satuan)}</td>
@@ -453,10 +480,18 @@ export function PesananEditorPage({ id }: { id?: string }) {
     const p = perId.get(b.productId);
     return p !== undefined && p.jenis !== "sertifikat";
   });
-  const total = baris.reduce((s, b) => {
-    const p = perId.get(b.productId);
-    return s + (p ? p.harga * (Number(b.qty) || 0) : 0);
-  }, 0);
+  // Biaya packaging pesanan Sertifikat (CP-SER-02): nilainya datang dari
+  // katalog server (setelan `biaya_packaging` yang berlaku), dan barisnya
+  // dibuat server saat draft disimpan — editor hanya menampilkannya sebagai
+  // baris terkunci agar totalnya sama dengan perhitungan server.
+  const biayaPackaging = adaSertifikat
+    ? produk.find((p) => p.jenis === "sertifikat")?.biaya_packaging ?? 0
+    : 0;
+  const total =
+    baris.reduce((s, b) => {
+      const p = perId.get(b.productId);
+      return s + (p ? p.harga * (Number(b.qty) || 0) : 0);
+    }, 0) + biayaPackaging;
 
   const bolehTambah = !adaSertifikat && baris.length < 100;
 
@@ -544,6 +579,9 @@ export function PesananEditorPage({ id }: { id?: string }) {
             <Notice tone="info">
               Sertifikat dipesan terpisah dan tidak boleh dicampur produk reguler. Untuk produk lain,
               buat pesanan baru.
+              {biayaPackaging > 0
+                ? ` Biaya packaging ${rupiah.format(biayaPackaging)} ditambahkan otomatis per pesanan.`
+                : " Biaya packaging ditambahkan otomatis per pesanan."}
             </Notice>
           ) : null}
 
@@ -639,6 +677,26 @@ export function PesananEditorPage({ id }: { id?: string }) {
                   </div>
                 );
               })}
+              {adaSertifikat ? (
+                <div className={`${styles.line} ${styles.linePack}`} data-testid="baris-packaging">
+                  <div className={styles.lProd}>
+                    <i className="ph ph-lock-simple" aria-hidden="true" />
+                    Biaya packaging
+                  </div>
+                  <div className={styles.lQty}>
+                    <span className={styles.mLbl}>Qty</span>1
+                  </div>
+                  <div className={`${styles.lHarga} num`}>
+                    <span className={styles.mLbl}>Harga satuan</span>
+                    {rupiah.format(biayaPackaging)}
+                  </div>
+                  <div className={`${styles.lSub} num`}>
+                    <span className={styles.mLbl}>Subtotal</span>
+                    <b>{rupiah.format(biayaPackaging)}</b>
+                  </div>
+                  <div className={styles.lDel} />
+                </div>
+              ) : null}
               <div className={styles.tools}>
                 <Button variant="secondary" icon="plus" disabled={!bolehTambah} onClick={tambahBaris}>
                   Tambah produk

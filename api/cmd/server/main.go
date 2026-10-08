@@ -236,15 +236,19 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// Katalog dipakai kedua portal sekaligus menjadi sumber harga order line
 	// domain pesanan: harga selalu diambil dari branch_prices cabang sesi.
 	catalogSvc := catalog.NewService(catalogpg.New(pool))
-	// Pesanan cabang: draft, editor order line, daftar dan detail (F1-11).
-	orderSvc := order.NewService(orderpg.New(pool), catalogSvc)
+	// Setelan sistem (F1-09) sekaligus sumber angka server untuk pesanan:
+	// biaya_packaging pesanan Sertifikat dan cnc_hari tenggat C&C (F1-12).
+	settingsSvc := settings.NewService(settingspg.New(pool))
+	// Pesanan cabang: draft, editor order line, aturan Sertifikat/packaging,
+	// daftar dan detail (F1-11 + F1-12).
+	orderSvc := order.NewService(orderpg.New(pool), catalogSvc, settingsSvc)
 
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Config:              cfg,
 		Version:             version,
 		Health:              health{pool: pool, dsn: cfg.DatabaseURL},
 		Auth:                authSvc,
-		Settings:            settings.NewService(settingspg.New(pool)),
+		Settings:            settingsSvc,
 		Catalog:             catalogSvc,
 		Orders:              orderSvc,
 		Users:               usersSvc,
