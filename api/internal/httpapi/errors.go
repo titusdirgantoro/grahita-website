@@ -10,6 +10,7 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
+	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/registration"
@@ -102,6 +103,24 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, order.ErrInvalidData):
 		return apierr.Validation("Data pesanan tidak valid.",
 			map[string]string{"pesanan": err.Error()})
+	// Bukti transfer (F1-13). Tabel keputusan ada di handlers_proofs.go.
+	case errors.Is(err, payment.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke bukti pesanan ini.")
+	case errors.Is(err, payment.ErrNotFound):
+		return apierr.NotFound("Pesanan atau bukti yang diminta tidak ditemukan.")
+	case errors.Is(err, payment.ErrNoBranch):
+		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
+	case errors.Is(err, payment.ErrLocked):
+		return apierr.Conflict("ORDER_LOCKED",
+			"Pesanan yang sudah selesai tidak dapat ditambah bukti oleh cabang. Hubungi admin Pusat.")
+	case errors.Is(err, payment.ErrStorageUnavailable):
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
+			"Penyimpanan berkas belum siap sehingga bukti tidak dapat disimpan.")
+	case errors.Is(err, payment.ErrTooLarge), errors.Is(err, payment.ErrTooMany),
+		errors.Is(err, payment.ErrDuplicate), errors.Is(err, payment.ErrUnsupported),
+		errors.Is(err, payment.ErrFakeExt), errors.Is(err, payment.ErrNoFile):
+		status, code, pesan, fields := buktiKodeValidasi(err)
+		return apierr.New(status, code, pesan).WithFields(fields)
 	case errors.Is(err, branch.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke master cabang.")
 	case errors.Is(err, branch.ErrNotFound):

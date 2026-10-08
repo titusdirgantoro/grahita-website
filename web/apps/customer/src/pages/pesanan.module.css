@@ -169,6 +169,36 @@
   margin: 2px 0 0;
 }
 
+/* Unggah bukti transfer (F1-13): kolom berkas + tombol unggah. */
+.unggahBukti {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* Pratinjau bukti di dalam modal; klik gambar untuk zoom. */
+.buktiPratinjau,
+.buktiZoom {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  background: var(--surface-2, var(--surface));
+  cursor: zoom-in;
+}
+
+.buktiPratinjau {
+  max-height: 60vh;
+  object-fit: contain;
+}
+
+.buktiZoom {
+  max-height: none;
+  cursor: zoom-out;
+}
+
 @media (max-width: 1100px) {
   .detailGrid {
     grid-template-columns: 1fr;

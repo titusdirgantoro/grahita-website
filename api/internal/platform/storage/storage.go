@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -110,6 +111,21 @@ func (m *Memory) PresignGet(_ context.Context, key string, _ time.Duration) (str
 		return "", fmt.Errorf("objek %q tidak ada", key)
 	}
 	return m.baseURL + "/" + key, nil
+}
+
+// PresignDownload memenuhi kontrak payment.DownloadSigner: tautan unduh
+// dengan paksaan nama berkas (Content-Disposition attachment). URL yang
+// dikembalikan tetap URL statis in-memory; parameter nama hanya memengaruhi
+// bentuk tautan agar bisa diperiksa pengujian.
+func (m *Memory) PresignDownload(_ context.Context, key, namaFile string, ttl time.Duration) (string, error) {
+	u, err := m.PresignGet(context.Background(), key, ttl)
+	if err != nil {
+		return "", err
+	}
+	if namaFile == "" {
+		return u, nil
+	}
+	return u + "?download=" + url.QueryEscape(namaFile), nil
 }
 
 // Delete menghapus objek.

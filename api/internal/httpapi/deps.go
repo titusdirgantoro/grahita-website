@@ -20,6 +20,7 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
+	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/platform/mailer"
@@ -58,6 +59,10 @@ type Deps struct {
 	// cabang (F1-11).
 	Orders *order.Service
 
+	// Payments melayani bukti transfer: unggah multi-berkas, daftar, dan
+	// tautan unduh berumur pendek (F1-13).
+	Payments *payment.Service
+
 	// Registration melayani pendaftaran akun cabang dua langkah lewat token
 	// registrasi sekali pakai (F1-07).
 	Registration *registration.Service
@@ -77,6 +82,10 @@ type Deps struct {
 	// RegistrationLimiter membatasi permintaan validasi token registrasi dan
 	// pendaftaran akun per IP; keduanya endpoint publik (Architecture.md §6).
 	RegistrationLimiter *httpx.RateLimiter
+
+	// ProofLimiter membatasi laju unggahan bukti transfer per akun
+	// (Architecture.md §6: unggahan dibatasi).
+	ProofLimiter *httpx.RateLimiter
 }
 
 // API memegang dependensi untuk handler.

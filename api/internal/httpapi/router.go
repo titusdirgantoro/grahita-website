@@ -75,6 +75,12 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/orders/{id}", a.adapt(a.orderGet))
 			r.Put("/orders/{id}", a.adapt(a.orderUpdate))
 			r.Delete("/orders/{id}", a.adapt(a.orderDelete))
+			// Bukti transfer pesanan (F1-13): multi-berkas, dibatasi cabang
+			// sesi di layer service. Unduhan selalu lewat presigned URL
+			// berumur pendek — kunci storage tidak pernah dikirim ke klien.
+			r.Get("/orders/{id}/proofs", a.adapt(a.orderProofs))
+			r.Post("/orders/{id}/proofs", a.adapt(a.orderProofUpload))
+			r.Get("/orders/{id}/proofs/{proofId}/download", a.adapt(a.orderProofDownload))
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
 			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
@@ -86,6 +92,12 @@ func NewRouter(d Deps) http.Handler {
 					r.Use(a.requireCap(auth.CapAdminOrders))
 					r.Get("/orders/{id}/emails", a.adapt(a.adminOrderEmails))
 					r.Post("/orders/{id}/emails/{kind}/resend", a.adapt(a.adminOrderEmailResend))
+					// Bukti transfer: admin boleh melihat semua cabang dan
+					// mengunggah atas nama cabang — pengunggahnya ditandai
+					// nama admin (PRD AP-ORD-06).
+					r.Get("/orders/{id}/proofs", a.adapt(a.adminOrderProofs))
+					r.Post("/orders/{id}/proofs", a.adapt(a.adminOrderProofUpload))
+					r.Get("/orders/{id}/proofs/{proofId}/download", a.adapt(a.adminOrderProofDownload))
 				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminBranches))

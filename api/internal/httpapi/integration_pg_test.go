@@ -36,6 +36,8 @@ import (
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
 	"github.com/grahita/portal/api/internal/order"
 	orderpg "github.com/grahita/portal/api/internal/order/postgres"
+	"github.com/grahita/portal/api/internal/payment"
+	paymentpg "github.com/grahita/portal/api/internal/payment/postgres"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -70,6 +72,11 @@ type pgFixture struct {
 	notif *notification.Service
 	kirim *fakeSender
 	objek *storage.Memory
+
+	// Bukti transfer (F1-13): repository dan service nyata di atas PostgreSQL,
+	// memakai object storage in-memory yang sama.
+	payments     *payment.Service
+	paymentsRepo *paymentpg.Repo
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -250,6 +257,13 @@ func newPGFixture(t *testing.T) *pgFixture {
 	catalogSvc := catalog.NewService(catalogpg.New(pool))
 	settingsSvc := settings.NewService(settingspg.New(pool))
 
+	// Bukti transfer (F1-13): repository nyata di atas PostgreSQL, object
+	// storage in-memory, batas unggah dari setelan yang sama dengan produksi.
+	payRepo := paymentpg.New(pool)
+	paySvc := payment.NewService(payRepo, payRepo, objek, settingsSvc, payment.WithTimeline(payRepo))
+	f.payments = paySvc
+	f.paymentsRepo = payRepo
+
 	deps := Deps{
 		Config:              testConfig(),
 		Version:             "test-pg",
@@ -258,14 +272,17 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Settings:            settingsSvc,
 		Catalog:             catalogSvc,
 		Orders:              order.NewService(orderpg.New(pool), catalogSvc, settingsSvc),
+		Payments:            paySvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,
 		Registration:        registrationSvc,
 		Emails:              notifSvc,
+		Storage:             objek,
 		LoginLimiter:        httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter:       httpx.NewRateLimiter(5, 15*time.Minute),
 		RegistrationLimiter: httpx.NewRateLimiter(50, 15*time.Minute),
+		ProofLimiter:        httpx.NewRateLimiter(500, 15*time.Minute),
 	}
 	f.srv = httptest.NewServer(NewRouter(deps))
 	t.Cleanup(f.srv.Close)

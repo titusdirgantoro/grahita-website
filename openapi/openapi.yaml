@@ -643,6 +643,147 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/v1/orders/{id}/proofs:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [customer]
+      operationId: listOrderProofs
+      summary: Daftar bukti transfer pesanan cabang sesi
+      description: |
+        Mengembalikan metadata seluruh bukti transfer pesanan itu (terlama
+        dulu): nama berkas asli, MIME, ukuran, sidik jari SHA-256, dan
+        pengunggahnya (`uploaded_by_kind`: `branch` atau `admin` beserta
+        `uploaded_by_nama`). Isi berkasnya TIDAK di sini — unduh selalu lewat
+        tautan berumur pendek di endpoint download (Architecture.md §6).
+
+        Pesanan cabang lain dijawab `404` supaya keberadaannya tidak bocor, dan
+        id yang bukan UUID juga `404` (bukan `500`).
+      responses:
+        "200":
+          description: Daftar bukti transfer
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PaymentProof" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [customer]
+      operationId: uploadOrderProofs
+      summary: Tambah bukti transfer (multipart, boleh beberapa berkas)
+      description: |
+        Bukti transfer tidak disimpan di database: isinya masuk object storage
+        S3-compatible dengan kunci ACAK (`proofs/{order_id}/{acak}.{ext}`),
+        sementara nama aslinya hanya menjadi metadata. Karena itu tidak ada
+        Content-Type yang dipercaya dari klien.
+
+        Aturan yang ditegakkan server:
+
+        - field multipart bernama `file`, boleh diulang. Jumlah total bukti
+          satu pesanan dibatasi setelan `max_file` dan tiap berkas dibatasi
+          setelan `max_mb` (default 5 × 5 MB, PRD §4.9);
+        - hanya JPG, PNG, dan PDF. Jenis ditentukan MAGIC BYTES isi berkas,
+          bukan ekstensinya; ekstensi yang tidak cocok dengan isi (mis.
+          `.jpg` berisi PDF) atau di luar daftar ditolak `400` (CP-ORD-04);
+        - isi berkas yang sama tidak boleh diunggah dua kali pada satu pesanan
+          (SHA-256 unik per pesanan, SystemDesign.md §5.3) → `409
+          PROOF_DUPLICATE`;
+        - bukti boleh ditambah pada pesanan `submitted` (pembayaran
+          cicilan/terpisah, CP-ORD-07) dan pada `draft` (modal submit F1-14).
+          Pesanan `done` ditolak `409 ORDER_LOCKED` untuk cabang; admin tetap
+          boleh menambah (koreksi);
+        - tiap unggahan dicatat di timeline pesanan beserta NAMA pengunggah
+          (CP-ORD-08). Draft belum punya timeline.
+
+        Berlaku batas laju per akun (`429 RATE_LIMITED`) dan batas ukuran
+        badan permintaan (`413 PAYLOAD_TOO_LARGE`).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: array
+                  items: { type: string, format: binary }
+      responses:
+        "201":
+          description: Bukti tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PaymentProof" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/orders/{id}/proofs/{proofId}/download:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+      - name: proofId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [customer]
+      operationId: downloadOrderProof
+      summary: Tautan unduh berumur pendek untuk satu bukti
+      description: |
+        Mengembalikan presigned URL yang masa berlakunya pendek (default 300
+        detik) dan memaksa browser MENGUNDUH dengan nama berkas asli
+        (`Content-Disposition: attachment`). Tautan hanya dibuat untuk bukti
+        MILIK pesanan itu; pesanan/bukti cabang lain dijawab `404`.
+      responses:
+        "200":
+          description: Tautan unduh
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PaymentProofDownload" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
   /api/v1/bank-accounts:
     get:
       tags: [customer, admin]
@@ -1675,6 +1816,116 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/v1/admin/orders/{id}/proofs:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [admin]
+      operationId: adminListOrderProofs
+      summary: Daftar bukti transfer satu pesanan (Manager & Superadmin)
+      description: |
+        Sama seperti sisi cabang, tetapi tanpa batas cabang: admin melihat
+        bukti pesanan cabang mana pun (PRD §2.1, AP-ORD-04).
+      responses:
+        "200":
+          description: Daftar bukti transfer
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PaymentProof" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [admin]
+      operationId: adminUploadOrderProofs
+      summary: Unggah bukti transfer ATAS NAMA cabang (Manager & Superadmin)
+      description: |
+        Aturan berkas identik dengan unggahan cabang (magic bytes, batas
+        `max_file`/`max_mb`, SHA-256 unik per pesanan). Yang membedakan: baris
+        bukti mencatat pengunggahnya sebagai `uploaded_by_kind: admin` beserta
+        NAMA admin, dan peristiwanya masuk timeline pesanan dengan penanda nama
+        itu (PRD AP-ORD-06).
+
+        Admin boleh menambah bukti pada pesanan berstatus apa pun (termasuk
+        `done`) karena revisi/koreksi adalah hak Pusat (BR-07).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: array
+                  items: { type: string, format: binary }
+      responses:
+        "201":
+          description: Bukti tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PaymentProof" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/admin/orders/{id}/proofs/{proofId}/download:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+      - name: proofId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [admin]
+      operationId: adminDownloadOrderProof
+      summary: Tautan unduh berumur pendek satu bukti (Manager & Superadmin)
+      description: |
+        Presigned URL berumur pendek untuk pratinjau/zoom bukti di admin —
+        termasuk untuk pesanan cabang mana pun (AP-ORD-04).
+      responses:
+        "200":
+          description: Tautan unduh
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PaymentProofDownload" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -1692,6 +1943,12 @@ components:
       required: true
       description: Nilai cookie `grahita_csrf` (double-submit).
       schema: { type: string }
+    OrderIdPath:
+      name: id
+      in: path
+      required: true
+      description: id pesanan (UUID).
+      schema: { type: string, format: uuid }
 
   responses:
     ValidationError:
@@ -1741,6 +1998,24 @@ components:
             error:
               code: RATE_LIMITED
               message: Terlalu banyak percobaan masuk. Coba lagi beberapa saat lagi.
+    PayloadTooLarge:
+      description: Badan permintaan melebihi batas unggahan
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: PAYLOAD_TOO_LARGE
+              message: Total ukuran berkas bukti melebihi batas unggahan.
+    Unavailable:
+      description: Layanan pendukung (object storage) belum siap
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: UNAVAILABLE
+              message: Penyimpanan berkas belum siap sehingga bukti tidak dapat disimpan.
     Conflict:
       description: Permintaan bertentangan dengan aturan data
       content:
@@ -1784,6 +2059,46 @@ components:
                   message: Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.
 
   schemas:
+    PaymentProof:
+      type: object
+      required: [id, order_id, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, created_at]
+      description: |
+        Metadata satu bukti transfer. Isi berkasnya tidak pernah ada di sini —
+        hanya tautan unduh berumur pendek dari endpoint `.../download`.
+      properties:
+        id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        nama_file:
+          type: string
+          description: Nama berkas asli (sudah dibersihkan dari komponen direktori dan karakter kendali).
+        mime_type:
+          type: string
+          enum: [image/jpeg, image/png, application/pdf]
+        ukuran_byte: { type: integer, format: int64 }
+        sha256:
+          type: string
+          description: |
+            Sidik jari SHA-256 isi berkas (hex). Wajib unik per pesanan: berkas
+            dengan isi sama tidak bisa diunggah dua kali (SystemDesign.md §5.3).
+        uploaded_by_kind: { type: string, enum: [branch, admin] }
+        uploaded_by_id: { type: string, format: uuid }
+        uploaded_by_nama:
+          type: string
+          description: Nama admin pengunggah (PRD AP-ORD-06); kosong untuk unggahan cabang.
+        created_at: { type: string, format: date-time }
+    PaymentProofDownload:
+      type: object
+      required: [url, expires_in]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Presigned URL berumur pendek dengan Content-Disposition attachment.
+        expires_in:
+          type: integer
+          description: Masa berlaku tautan dalam detik.
+        nama_file: { type: string }
+        mime_type: { type: string }
     OrderLine:
       type: object
       required: [line_no, jenis, nama, satuan, qty, harga_satuan, subtotal]
@@ -1916,6 +2231,9 @@ components:
                   KODE_TAKEN,
                   PRODUCT_IN_USE,
                   ORDER_LOCKED,
+                  PROOF_LIMIT,
+                  PROOF_DUPLICATE,
+                  PAYLOAD_TOO_LARGE,
                   TIMEOUT,
                   METHOD_NOT_ALLOWED,
                   BRANCH_MISSING,

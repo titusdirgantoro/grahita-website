@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { ApiClientError, api } from "@grahita/api-client";
@@ -71,6 +71,45 @@ export interface Pesanan {
   created_at: string;
   updated_at?: string;
   lines?: BarisPesanan[];
+}
+
+/**
+ * BuktiTransfer adalah metadata satu bukti transfer (F1-13). Isi berkasnya
+ * tidak pernah ada di sini: unduhan selalu lewat tautan berumur pendek dari
+ * endpoint `.../download`.
+ */
+export interface BuktiTransfer {
+  id: string;
+  order_id: string;
+  nama_file: string;
+  mime_type: string;
+  ukuran_byte: number;
+  sha256: string;
+  uploaded_by_kind: "branch" | "admin";
+  uploaded_by_nama?: string;
+  created_at: string;
+}
+
+/** TautanBukti adalah presigned URL berumur pendek untuk pratinjau/unduh. */
+export interface TautanBukti {
+  url: string;
+  expires_in: number;
+  nama_file: string;
+  mime_type: string;
+}
+
+/** penandaUnggah menampilkan siapa yang mengunggah bukti (cabang atau admin). */
+export function penandaUnggah(b: Pick<BuktiTransfer, "uploaded_by_kind" | "uploaded_by_nama">): string {
+  if (b.uploaded_by_kind === "admin") {
+    return b.uploaded_by_nama ? `Admin ${b.uploaded_by_nama}` : "Admin Pusat";
+  }
+  return "Cabang";
+}
+
+/** ukuranTampil menampilkan ukuran berkas secara ringkas. */
+export function ukuranTampil(byte: number): string {
+  if (byte >= 1024 * 1024) return `${(byte / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(byte / 1024))} KB`;
 }
 
 const FILTER_STATUS = [
@@ -408,6 +447,10 @@ export function PesananDetailPage({ id }: { id: string }) {
               </tfoot>
             </Table>
           </Card>
+
+          {data.status !== "draft" ? (
+            <KartuBukti id={data.id} bolehUnggah={data.status === "submitted"} />
+          ) : null}
         </div>
       </div>
 
@@ -432,6 +475,159 @@ export function PesananDetailPage({ id }: { id: string }) {
         </p>
       </Modal>
     </>
+  );
+}
+
+// -------------------------------------------------------------- bukti ------
+
+/**
+ * KartuBukti menampilkan bukti transfer pesanan beserta pengunggahnya dan
+ * memberi pratinjau/zoom lewat tautan unduh berumur pendek (F1-13).
+ *
+ * Berkas hanya boleh ditambah oleh cabang pada pesanan yang sudah dikirim
+ * (pembayaran cicilan/C&C, PRD CP-ORD-07). Validasi ukuran/jumlah yang
+ * mengikat tetap di server: batas `max_file`/`max_mb` dibaca dari setelan
+ * server, dan UI hanya menampilkan pesan kesalahan yang dikembalikan API
+ * (tidak ada angka batas yang ditulis ulang di klien).
+ */
+function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
+  const { data, memuat, galat, muatUlang } = useApi<BuktiTransfer[]>(`/orders/${id}/proofs`);
+  const [pratinjau, setPratinjau] = useState<TautanBukti | null>(null);
+  const [zoom, setZoom] = useState(false);
+  const [galatLihat, setGalatLihat] = useState<string | null>(null);
+  const [berkas, setBerkas] = useState<File[]>([]);
+  const [galatUnggah, setGalatUnggah] = useState<string | null>(null);
+  const [mengunggah, setMengunggah] = useState(false);
+
+  const daftar = data ?? [];
+
+  async function lihat(b: BuktiTransfer) {
+    setGalatLihat(null);
+    try {
+      const tautan = await api.get<TautanBukti>(`/orders/${id}/proofs/${b.id}/download`);
+      setZoom(false);
+      setPratinjau(tautan);
+    } catch (err) {
+      setGalatLihat(galatPesan(err));
+    }
+  }
+
+  async function unggah(e: FormEvent) {
+    e.preventDefault();
+    if (berkas.length === 0) {
+      setGalatUnggah("Pilih minimal satu berkas bukti (JPG, PNG, atau PDF).");
+      return;
+    }
+    setMengunggah(true);
+    setGalatUnggah(null);
+    try {
+      const form = new FormData();
+      for (const f of berkas) form.append("file", f);
+      await api.postForm<BuktiTransfer[]>(`/orders/${id}/proofs`, form);
+      setBerkas([]);
+      muatUlang();
+    } catch (err) {
+      setGalatUnggah(galatPesan(err));
+    } finally {
+      setMengunggah(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHead title="Bukti transfer" />
+      {memuat ? <SkeletonList rows={2} /> : null}
+      {galat ? <Notice tone="danger">{galat}</Notice> : null}
+      {galatLihat ? <Notice tone="danger">{galatLihat}</Notice> : null}
+      {!memuat && !galat && daftar.length === 0 ? (
+        <p className="muted small" data-testid="bukti-kosong">
+          Belum ada bukti transfer pada pesanan ini.
+        </p>
+      ) : null}
+      {daftar.length > 0 ? (
+        <Table caption="Bukti transfer">
+          <thead>
+            <tr>
+              <th scope="col">Berkas</th>
+              <th scope="col">Pengunggah</th>
+              <th scope="col" className="num">
+                Ukuran
+              </th>
+              <th scope="col">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {daftar.map((b) => (
+              <tr key={b.id} data-testid="baris-bukti">
+                <td>{b.nama_file}</td>
+                <td className={styles.muted}>{penandaUnggah(b)}</td>
+                <td className="num">{ukuranTampil(b.ukuran_byte)}</td>
+                <td>
+                  <Button variant="ghost" icon="magnifying-glass-plus" onClick={() => void lihat(b)}>
+                    Lihat
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      ) : null}
+
+      {bolehUnggah ? (
+        <form className={styles.unggahBukti} onSubmit={(e) => void unggah(e)}>
+          <Field
+            label="Tambah bukti (JPG/PNG/PDF, boleh beberapa)"
+            htmlFor="berkas-bukti"
+            error={galatUnggah}
+          >
+            <Input
+              id="berkas-bukti"
+              type="file"
+              multiple
+              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+              onChange={(e) => setBerkas(Array.from(e.target.files ?? []))}
+            />
+          </Field>
+          <Button variant="primary" type="submit" icon="upload-simple" disabled={mengunggah}>
+            {mengunggah ? "Mengunggah…" : "Unggah bukti"}
+          </Button>
+        </form>
+      ) : null}
+
+      <Modal
+        open={pratinjau !== null}
+        onClose={() => setPratinjau(null)}
+        title={pratinjau?.nama_file ?? "Bukti transfer"}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPratinjau(null)}>
+              Tutup
+            </Button>
+            {pratinjau ? (
+              <a className="btn btn-primary" href={pratinjau.url} target="_blank" rel="noreferrer">
+                Unduh
+              </a>
+            ) : null}
+          </>
+        }
+      >
+        {pratinjau && pratinjau.mime_type === "application/pdf" ? (
+          <p className="muted small">
+            Berkas PDF dibuka di tab baru lewat tautan unduh berumur pendek (
+            {Math.round(pratinjau.expires_in / 60)} menit).
+          </p>
+        ) : null}
+        {pratinjau && pratinjau.mime_type !== "application/pdf" ? (
+          <img
+            src={pratinjau.url}
+            alt={pratinjau.nama_file}
+            className={zoom ? styles.buktiZoom : styles.buktiPratinjau}
+            onClick={() => setZoom((z) => !z)}
+            data-testid="pratinjau-bukti"
+          />
+        ) : null}
+      </Modal>
+    </Card>
   );
 }
 

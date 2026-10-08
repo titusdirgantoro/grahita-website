@@ -145,9 +145,10 @@ const sertifikatCNC = {
  * endpoint pesanan. Setiap panggilan dicatat supaya tes dapat memeriksa URL,
  * metode, dan body yang benar-benar dikirim UI.
  */
-function fetchPesanan(opsi: { daftar?: unknown[]; detail?: unknown } = {}) {
+function fetchPesanan(opsi: { daftar?: unknown[]; detail?: unknown; bukti?: unknown[] } = {}) {
   const panggilan: Panggilan[] = [];
   const daftar = opsi.daftar ?? [draft, terkirim];
+  const bukti = opsi.bukti ?? [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -173,7 +174,15 @@ function fetchPesanan(opsi: { daftar?: unknown[]; detail?: unknown } = {}) {
       if (input.endsWith("/orders/o1") && init?.method === "DELETE") {
         return new Response(null, { status: 204 });
       }
-      if (input.endsWith("/orders/o2")) return json({ data: terkirim });
+      if (input.endsWith("/orders/o2")) return json({ data: opsi.detail ?? terkirim });
+      // Bukti transfer (F1-13): daftar bukti, unggah multipart, dan tautan unduh.
+      if (input.endsWith("/proofs") && init?.method === "POST") {
+        return json({ data: bukti }, 201);
+      }
+      if (input.endsWith("/proofs")) return json({ data: bukti });
+      if (input.includes("/proofs/") && input.endsWith("/download")) {
+        return json({ data: { url: "https://storage.test/bukti/abc.jpg?sig=1", expires_in: 300, nama_file: "transfer.jpg", mime_type: "image/jpeg" } });
+      }
       return json({ error: { code: "NOT_FOUND", message: "tidak ada" } }, 404);
     }),
   );
@@ -390,5 +399,107 @@ describe("Customer Portal — Sertifikat & Cash and Carry (F1-12)", () => {
     expect(screen.getAllByText(/3\.000/).length).toBeGreaterThan(0);
     // Pesanan yang sudah dikirim tetap terkunci untuk cabang.
     expect(screen.queryByRole("button", { name: "Ubah" })).toBeNull();
+  });
+});
+
+describe("Customer Portal — bukti transfer (F1-13)", () => {
+  const buktiDua = [
+    {
+      id: "pf1",
+      order_id: "o2",
+      nama_file: "transfer-cicilan-1.jpg",
+      mime_type: "image/jpeg",
+      ukuran_byte: 204800,
+      sha256: "a".repeat(64),
+      uploaded_by_kind: "branch",
+      created_at: "2026-10-08T02:00:00Z",
+    },
+    {
+      id: "pf2",
+      order_id: "o2",
+      nama_file: "koreksi-admin.pdf",
+      mime_type: "application/pdf",
+      ukuran_byte: 1024,
+      sha256: "b".repeat(64),
+      uploaded_by_kind: "admin",
+      uploaded_by_nama: "Budi",
+      created_at: "2026-10-08T03:00:00Z",
+    },
+  ];
+
+  it("menampilkan bukti beserta penanda pengunggah cabang/admin", async () => {
+    fetchPesanan({ bukti: buktiDua });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+
+    expect(await screen.findByRole("heading", { name: "Bukti transfer" })).toBeDefined();
+    expect(screen.getByText("transfer-cicilan-1.jpg")).toBeDefined();
+    expect(screen.getByText("koreksi-admin.pdf")).toBeDefined();
+    // Unggahan cabang tidak bernama; unggahan admin menandai namanya (AP-ORD-06).
+    expect(screen.getByText("Cabang")).toBeDefined();
+    expect(screen.getByText("Admin Budi")).toBeDefined();
+    expect(screen.getByText("200 KB")).toBeDefined();
+  });
+
+  it("pratinjau memakai tautan unduh berumur pendek dan bisa di-zoom", async () => {
+    const panggilan = fetchPesanan({ bukti: buktiDua });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+    await screen.findByText("transfer-cicilan-1.jpg");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Lihat" })[0]);
+
+    expect(await screen.findByTestId("pratinjau-bukti")).toBeDefined();
+    expect(panggilan.some((p) => p.url.endsWith("/proofs/pf1/download"))).toBe(true);
+    const gambar = screen.getByTestId("pratinjau-bukti");
+    expect(gambar.getAttribute("src")).toContain("?sig=1");
+
+    // Klik gambar menyalakan zoom (kelas berubah).
+    const kelasAwal = gambar.className;
+    fireEvent.click(gambar);
+    expect(screen.getByTestId("pratinjau-bukti").className).not.toBe(kelasAwal);
+  });
+
+  it("mengunggah berkas bukti sebagai multipart ke endpoint proofs", async () => {
+    const panggilan = fetchPesanan({ bukti: [] });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+    await screen.findByTestId("bukti-kosong");
+
+    const berkas = new File(["data"], "transfer.jpg", { type: "image/jpeg" });
+    fireEvent.change(screen.getByLabelText(/Tambah bukti/), { target: { files: [berkas] } });
+    fireEvent.click(screen.getByRole("button", { name: "Unggah bukti" }));
+
+    await waitFor(() => {
+      const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders/o2/proofs"));
+      expect(kirim).toBeDefined();
+    });
+    const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders/o2/proofs"));
+    expect(kirim?.init?.body instanceof FormData).toBe(true);
+    const form = kirim?.init?.body as FormData;
+    expect(form.getAll("file").length).toBe(1);
+    // Content-Type TIDAK disetel manual supaya boundary multipart tetap sah.
+    const headers = kirim?.init?.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBeUndefined();
+  });
+
+  it("pesanan selesai tidak menampilkan form unggah", async () => {
+    fetchPesanan({ detail: { ...terkirim, status: "done" }, bukti: buktiDua });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+    await screen.findByRole("heading", { name: "Bukti transfer" });
+
+    expect(screen.queryByRole("button", { name: "Unggah bukti" })).toBeNull();
+    expect(screen.queryByLabelText(/Tambah bukti/)).toBeNull();
+  });
+
+  it("draft tidak punya bagian bukti sama sekali", async () => {
+    const panggilan = fetchPesanan();
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+
+    expect(screen.queryByRole("heading", { name: "Bukti transfer" })).toBeNull();
+    expect(panggilan.some((p) => p.url.includes("/proofs"))).toBe(false);
   });
 });

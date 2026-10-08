@@ -94,6 +94,15 @@ func Validation(message string, fields map[string]string) *Error {
 	return &Error{status: http.StatusBadRequest, code: CodeValidationFailed, message: message, fields: fields}
 }
 
+// WithFields melampirkan detail per-field pada error yang sudah dibuat.
+// Dipakai handler yang punya tabel keputusan status/kode sendiri.
+func (e *Error) WithFields(fields map[string]string) *Error {
+	if len(fields) > 0 {
+		e.fields = fields
+	}
+	return e
+}
+
 // Unauthenticated adalah 401 — belum login atau sesi kedaluwarsa.
 func Unauthenticated(message string) *Error {
 	return New(http.StatusUnauthorized, CodeUnauthenticated, message)

@@ -34,6 +34,8 @@ import (
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
 	"github.com/grahita/portal/api/internal/order"
 	orderpg "github.com/grahita/portal/api/internal/order/postgres"
+	"github.com/grahita/portal/api/internal/payment"
+	paymentpg "github.com/grahita/portal/api/internal/payment/postgres"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -135,6 +137,33 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 	return runAPI(ctx, pool, cfg, logger)
 }
 
+// buildStorage menyusun object storage S3-compatible dari konfigurasi.
+//
+// Storage belum dikonfigurasi berarti unggah bukti/dokumen akan ditolak
+// (503) — bukan diam-diam disimpan ke memori yang hilang saat proses
+// berhenti. Konfigurasi yang diisi SETENGAH (endpoint ada, kredensial tidak)
+// justru menghentikan start: lebih baik gagal terang-terangan daripada
+// kehilangan berkas pengguna.
+func buildStorage(cfg config.Config, logger *slog.Logger) (storage.Store, error) {
+	if cfg.S3Endpoint == "" || cfg.S3Bucket == "" {
+		logger.Warn("object storage belum dikonfigurasi (S3_ENDPOINT/S3_BUCKET kosong); unggah bukti akan ditolak")
+		return storage.Disabled{}, nil
+	}
+	s3store, err := storage.NewS3(storage.S3Config{
+		Endpoint:     cfg.S3Endpoint,
+		Region:       cfg.S3Region,
+		Bucket:       cfg.S3Bucket,
+		AccessKey:    cfg.S3AccessKey,
+		SecretKey:    cfg.S3SecretKey,
+		UsePathStyle: cfg.S3UsePathStyle,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("konfigurasi object storage S3: %w", err)
+	}
+	logger.Info("object storage S3 aktif", "endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket)
+	return s3store, nil
+}
+
 // buildMailer menyusun pengirim email dari konfigurasi.
 //
 // SMTP tidak dikonfigurasi berarti pengirim Log (hanya mencatat) — dipakai di
@@ -185,11 +214,9 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	authRepo := authpg.New(pool)
 	authSvc := auth.NewService(authRepo, authRepo, authRepo, clock.System(), cfg.SessionIdle, cfg.SessionAbsolute)
 
-	store := storage.Store(storage.Disabled{})
-	if cfg.S3Endpoint != "" && cfg.S3Bucket != "" {
-		// Implementasi S3 asli menyusul bersama domain dokumen; sampai itu,
-		// storage dilaporkan "tidak dikonfigurasi" di /readyz.
-		logger.Warn("S3_ENDPOINT diisi tetapi implementasi S3 belum tersedia pada tahap ini")
+	store, err := buildStorage(cfg, logger)
+	if err != nil {
+		return err
 	}
 
 	renderer := pdf.Renderer(pdf.Disabled{})
@@ -243,6 +270,14 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// daftar dan detail (F1-11 + F1-12).
 	orderSvc := order.NewService(orderpg.New(pool), catalogSvc, settingsSvc)
 
+	// Bukti transfer pesanan (F1-13). Satu repository melayani tiga peran:
+	// metadata bukti, konteks pesanan untuk otorisasi, dan timeline pesanan.
+	// Batas unggah (max_file/max_mb) dibaca dari setelan yang sama dengan
+	// pengaturan sistem, jadi angka di UI dan server tidak pernah berbeda.
+	paymentRepo := paymentpg.New(pool)
+	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc,
+		payment.WithTimeline(paymentRepo))
+
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Config:              cfg,
 		Version:             version,
@@ -251,6 +286,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Settings:            settingsSvc,
 		Catalog:             catalogSvc,
 		Orders:              orderSvc,
+		Payments:            paymentSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,
@@ -262,6 +298,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		LoginLimiter:        loginLimiter,
 		ForgotLimiter:       forgotLimiter,
 		RegistrationLimiter: registrationLimiter,
+		ProofLimiter:        httpx.NewRateLimiter(30, 15*time.Minute),
 	})
 
 	srv := &http.Server{

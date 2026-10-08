@@ -97,6 +97,16 @@ export class ApiClient {
     return this.request<T>("POST", path, body, options);
   }
 
+  /**
+   * postForm mengirim multipart/form-data (unggahan berkas).
+   *
+   * Content-Type TIDAK disetel manual: browser menambahkan boundary-nya
+   * sendiri. Header CSRF tetap dikirim seperti request non-GET lain.
+   */
+  postForm<T>(path: string, form: FormData, options: RequestOptions = {}): Promise<T> {
+    return this.request<T>("POST", path, form, options);
+  }
+
   /** put mengganti isi sumber daya. */
   put<T>(path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
     return this.request<T>("PUT", path, body, options);
@@ -122,8 +132,14 @@ export class ApiClient {
     };
 
     if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(body);
+      if (typeof FormData !== "undefined" && body instanceof FormData) {
+        // Multipart: browser menyetel Content-Type + boundary sendiri;
+        // menyetelnya manual justru membuat boundary hilang.
+        init.body = body;
+      } else {
+        headers["Content-Type"] = "application/json";
+        init.body = JSON.stringify(body);
+      }
     }
 
     if (method !== "GET" && method !== "HEAD" && !options.skipCsrf) {

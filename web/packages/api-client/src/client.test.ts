@@ -105,3 +105,25 @@ describe("ApiClient", () => {
     expect(err.status).toBe(502);
   });
 });
+
+describe("ApiClient.postForm (F1-13)", () => {
+  it("mengirim multipart tanpa menyetel Content-Type manual dan tetap membawa CSRF", async () => {
+    const fetchImpl = mockFetch(async () => respon(JSON.stringify({ data: [] }), 201));
+    const client = new ApiClient({
+      fetchImpl,
+      cookieReader: (nama) => (nama === CSRF_COOKIE ? "token-csrf" : null),
+    });
+
+    const form = new FormData();
+    form.append("file", new File(["isi"], "bukti.jpg", { type: "image/jpeg" }));
+    await client.postForm("/orders/o1/proofs", form);
+
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
+    const headers = init?.headers as Record<string, string>;
+    // Boundary multipart hanya benar bila Content-Type TIDAK disetel sendiri.
+    expect(headers["Content-Type"]).toBeUndefined();
+    expect(headers[CSRF_HEADER]).toBe("token-csrf");
+    expect(init.body).toBe(form);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("/api/v1/orders/o1/proofs");
+  });
+});
