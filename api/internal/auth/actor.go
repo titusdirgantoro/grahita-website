@@ -4,7 +4,14 @@
 // hostname portal tidak pernah menjadi dasar keputusan (Architecture.md §6).
 package auth
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrBranchForbidden dikembalikan service bila aktor mencoba menyentuh data
+// cabang yang bukan miliknya (isolasi data cabang, Architecture.md §6).
+var ErrBranchForbidden = errors.New("tidak berhak mengakses data cabang lain")
 
 // Kind membedakan asal akun.
 type Kind string
@@ -124,6 +131,28 @@ func (a Actor) CanAny(caps ...Capability) bool {
 		}
 	}
 	return false
+}
+
+// OwnsBranch melaporkan apakah aktor adalah akun cabang pemilik branchID.
+//
+// Kepemilikan SELALU diambil dari sesi (Actor.BranchID), tidak pernah dari
+// parameter yang dikirim klien — inilah validasi ownership branch_id yang
+// diwajibkan Architecture.md §6.
+func (a Actor) OwnsBranch(branchID string) bool {
+	return a.IsBranch() && a.BranchID != "" && branchID != "" && a.BranchID == branchID
+}
+
+// RequireBranch memastikan aktor berhak bertindak atas branchID: akun cabang
+// hanya untuk cabangnya sendiri, sedangkan staf Pusat yang punya kapabilitas
+// master cabang boleh atas nama cabang mana pun.
+func (a Actor) RequireBranch(branchID string) error {
+	if a.OwnsBranch(branchID) {
+		return nil
+	}
+	if a.Can(CapAdminBranches) {
+		return nil
+	}
+	return ErrBranchForbidden
 }
 
 type actorCtxKey struct{}

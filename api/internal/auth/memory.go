@@ -2,17 +2,20 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
 
-// Memory adalah implementasi UserStore + SessionStore untuk pengujian dan
-// mode demo. Bukan untuk produksi: state hilang saat proses berhenti.
+// Memory adalah implementasi UserStore + SessionStore + ResetStore untuk
+// pengujian dan mode demo. Bukan untuk produksi: state hilang saat proses
+// berhenti.
 type Memory struct {
 	mu       sync.RWMutex
 	admins   map[string]Credentials // key: id
 	branches map[string]Credentials // key: id
 	sessions map[string]*memSession // key: hash heksadesimal
+	resets   map[string]*memReset   // key: hash heksadesimal
 }
 
 type memSession struct {
@@ -21,12 +24,18 @@ type memSession struct {
 	revoked bool
 }
 
+type memReset struct {
+	token ResetToken
+	used  bool
+}
+
 // NewMemory membuat penyimpanan in-memory kosong.
 func NewMemory() *Memory {
 	return &Memory{
 		admins:   map[string]Credentials{},
 		branches: map[string]Credentials{},
 		sessions: map[string]*memSession{},
+		resets:   map[string]*memReset{},
 	}
 }
 
@@ -100,6 +109,71 @@ func (m *Memory) BranchByID(_ context.Context, id string) (Credentials, error) {
 // TouchLogin tidak melakukan apa pun di memori.
 func (m *Memory) TouchLogin(context.Context, Kind, string) error { return nil }
 
+// UpdatePassword mengganti hash kata sandi satu akun.
+func (m *Memory) UpdatePassword(_ context.Context, kind Kind, id, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if kind == KindAdmin {
+		c, ok := m.admins[id]
+		if !ok {
+			return ErrNoUser
+		}
+		c.PasswordHash = passwordHash
+		m.admins[id] = c
+		return nil
+	}
+	c, ok := m.branches[id]
+	if !ok {
+		return ErrNoUser
+	}
+	c.PasswordHash = passwordHash
+	m.branches[id] = c
+	return nil
+}
+
+// CreateResetToken menyimpan token atur ulang dan membatalkan token aktif
+// sebelumnya milik pengguna yang sama (hanya satu tautan berlaku).
+func (m *Memory) CreateResetToken(_ context.Context, t ResetToken, tokenHash []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.resets {
+		if r.token.UserID == t.UserID && !r.used {
+			r.used = true
+		}
+	}
+	if t.ID == "" {
+		t.ID = fmt.Sprintf("reset-%x", tokenHash[:8])
+	}
+	m.resets[string(tokenHash)] = &memReset{token: t}
+	return nil
+}
+
+// ConsumeResetToken memakai token sekali pakai secara atomik.
+func (m *Memory) ConsumeResetToken(_ context.Context, tokenHash []byte, now time.Time) (ResetToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.resets[string(tokenHash)]
+	if !ok || r.used || !now.Before(r.token.ExpiresAt) {
+		return ResetToken{}, ErrResetInvalid
+	}
+	r.used = true
+	return r.token, nil
+}
+
+// ResetTokenCount mengembalikan jumlah token atur ulang yang masih berlaku
+// (hanya untuk pengujian).
+func (m *Memory) ResetTokenCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, r := range m.resets {
+		if !r.used {
+			n++
+		}
+	}
+	return n
+}
+
 // Create menyimpan sesi baru.
 func (m *Memory) Create(_ context.Context, s Session, tokenHash []byte, _ RequestMeta) (Session, error) {
 	m.mu.Lock()
@@ -156,6 +230,18 @@ func (m *Memory) RevokeForUser(_ context.Context, userID string) error {
 	defer m.mu.Unlock()
 	for _, ms := range m.sessions {
 		if ms.session.ActorID == userID {
+			ms.revoked = true
+		}
+	}
+	return nil
+}
+
+// RevokeOthers mencabut seluruh sesi satu pengguna kecuali keepID.
+func (m *Memory) RevokeOthers(_ context.Context, userID, keepID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ms := range m.sessions {
+		if ms.session.ActorID == userID && ms.session.ID != keepID {
 			ms.revoked = true
 		}
 	}

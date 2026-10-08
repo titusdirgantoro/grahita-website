@@ -113,7 +113,7 @@ func newTestServer(t *testing.T, health fakeHealth) (*httptest.Server, *auth.Mem
 		Nama: "Grahita Bandung", Email: "bandung@example.test", PasswordHash: hash, Active: true,
 	})
 
-	svc := auth.NewService(store, store, clock.System(), testConfig().SessionIdle, testConfig().SessionAbsolute)
+	svc := auth.NewService(store, store, store, clock.System(), testConfig().SessionIdle, testConfig().SessionAbsolute)
 
 	router := NewRouter(Deps{
 		Config:   testConfig(),

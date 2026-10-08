@@ -27,7 +27,9 @@ var PasswordPolicy = struct {
 }
 
 // ErrPasswordTooWeak dikembalikan bila kata sandi tidak memenuhi kebijakan.
-var ErrPasswordTooWeak = errors.New("kata sandi minimal 8 karakter")
+// Semua kegagalan kekuatan kata sandi membungkus sentinel ini supaya lapisan
+// transport bisa memetakannya ke 400 tanpa menebak jenis errornya.
+var ErrPasswordTooWeak = errors.New("kata sandi tidak memenuhi syarat")
 
 // HashPassword menghasilkan hash Argon2id yang aman disimpan di kolom
 // password_hash.
@@ -58,7 +60,7 @@ func VerifyPassword(hash, plain string) bool {
 // CheckPasswordStrength memvalidasi panjang dan variasi karakter dasar.
 func CheckPasswordStrength(plain string) error {
 	if utf8.RuneCountInString(plain) < PasswordPolicy.MinLength {
-		return ErrPasswordTooWeak
+		return fmt.Errorf("%w: minimal %d karakter", ErrPasswordTooWeak, PasswordPolicy.MinLength)
 	}
 	var hasLetter, hasDigit bool
 	for _, r := range plain {
@@ -70,10 +72,10 @@ func CheckPasswordStrength(plain string) error {
 		}
 	}
 	if !hasLetter || !hasDigit {
-		return errors.New("kata sandi harus memuat huruf dan angka")
+		return fmt.Errorf("%w: harus memuat huruf dan angka", ErrPasswordTooWeak)
 	}
 	if strings.TrimSpace(plain) != plain {
-		return errors.New("kata sandi tidak boleh diawali atau diakhiri spasi")
+		return fmt.Errorf("%w: tidak boleh diawali atau diakhiri spasi", ErrPasswordTooWeak)
 	}
 	return nil
 }

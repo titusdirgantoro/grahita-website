@@ -61,6 +61,24 @@ func (l *RateLimiter) Allow(key string) bool {
 	return true
 }
 
+// Exceeded melaporkan apakah key sudah mencapai batas TANPA menambah
+// hitungan. Dipakai login: yang dihitung hanya percobaan GAGAL (PRD
+// CP-AUT-05), sehingga pemeriksaan sebelum percobaan tidak boleh menambah
+// hitungan.
+func (l *RateLimiter) Exceeded(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[key]
+	if !ok {
+		return false
+	}
+	if l.now().After(b.reset) {
+		delete(l.buckets, key)
+		return false
+	}
+	return b.count >= l.limit
+}
+
 // Reset menghapus penghitung untuk key (dipanggil setelah login berhasil).
 func (l *RateLimiter) Reset(key string) {
 	l.mu.Lock()

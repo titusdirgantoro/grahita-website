@@ -197,6 +197,45 @@ migrasi naik/turun pada database bersih, keunikan email (citext) & satu akun per
 cabang, keunikan/format serial, seed pengaturan, penomoran bersamaan (24 submit
 paralel tanpa nomor kembar/bolong) dan penomoran setelah rollback.
 
+## Autentikasi, sesi & otorisasi (F1-04)
+
+Endpoint (semua di bawah `/api/v1`):
+
+| Method | Path | Catatan |
+|---|---|---|
+| POST | `/auth/login` | satu endpoint untuk kedua portal; identitas dari akun, bukan host |
+| POST | `/auth/logout` | idempoten, wajib CSRF |
+| GET | `/auth/me` | profil + role + `branch_id` dari sesi |
+| POST | `/auth/password/forgot` | respons selalu sama (non-enumeratif), dibatasi per IP |
+| POST | `/auth/password/reset` | token sekali pakai; mencabut **semua** sesi |
+| POST | `/auth/password/change` | verifikasi kata sandi lama; mencabut sesi **lain** saja |
+
+- **Cookie sesi host-only**: tanpa atribut `Domain`, `HttpOnly`, `SameSite=Lax`,
+  `Secure` di luar lokal. Token hanya disimpan sebagai SHA-256 di tabel
+  `sessions`; token atur ulang pun hanya SHA-256 di `password_reset_tokens`.
+- **Rate limit login** menghitung percobaan gagal: 5 per 15 menit, terpisah per
+  akun dan per IP (PRD CP-AUT-05). Lupa/atur ulang kata sandi dibatasi per IP.
+- **Boleh login** ditentukan SQL (`boleh_login`): akun aktif DAN cabangnya aktif,
+  atau admin yang `is_active` + sudah punya `password_hash` + `activated_at`.
+  Cabang nonaktif kehilangan sesinya pada permintaan berikutnya.
+- **CSRF** dikecualikan hanya untuk `login`, `password/forgot`, dan
+  `password/reset`; sisanya wajib `X-CSRF-Token` (double-submit cookie
+  `grahita_csrf`).
+- **Otorisasi di service**: `Actor.RequireBranch`/`OwnsBranch` membaca
+  `branch_id` dari sesi, dan matriks kapabilitas (`Auth.Can`) menegakkan
+  Manager vs Superadmin (bank/reporting/pengaturan/user admin hanya Superadmin)
+  — bukan sekadar menyembunyikan menu.
+- Tautan email reset: `${portal}/lupa?token=...`; rutenya dapat diganti lewat
+  `PASSWORD_RESET_PATH`.
+
+Uji: `internal/auth/reset_test.go` (unit, jam tetap),
+`internal/httpapi/router_auth_test.go` (API lewat HTTP penuh, termasuk isolasi
+cookie antar-subdomain dengan cookie jar),
+`internal/httpapi/openapi_contract_test.go` (router ⇄ kontrak OpenAPI), dan
+`internal/httpapi/integration_pg_test.go` (PostgreSQL nyata; butuh
+`TEST_DATABASE_URL`, memakai skema database tersendiri lalu menghapusnya).
+Detail keputusan dan bukti: `docs/design/f1-04/HASIL.md`.
+
 ## Sistem desain & shell (F1-03)
 
 `web/packages/ui` adalah satu paket sistem desain yang dipakai kedua SPA:

@@ -45,8 +45,13 @@ type Deps struct {
 	Gotenberg pdf.Renderer
 	Mailer    mailer.Mailer
 
-	// LoginLimiter membatasi percobaan login per akun+IP (PRD CP-AUT-05).
+	// LoginLimiter membatasi percobaan login GAGAL per akun + per IP
+	// (PRD CP-AUT-05: 5 percobaan gagal / 15 menit).
 	LoginLimiter *httpx.RateLimiter
+
+	// ForgotLimiter membatasi permintaan tautan atur ulang per IP, baik untuk
+	// forgot maupun reset (Architecture.md §6: lupa password dibatasi).
+	ForgotLimiter *httpx.RateLimiter
 }
 
 // API memegang dependensi untuk handler.

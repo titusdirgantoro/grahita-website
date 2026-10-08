@@ -97,11 +97,14 @@ jobs:
           TEST_DATABASE_URL: postgres://${{ env.PG_USER }}:${{ env.PG_PASSWORD }}@localhost:5432/grahita?sslmode=disable
         run: go run ./cmd/server --mode=migrate
 
-      - name: Uji migrasi naik/turun dan job worker
+      - name: Uji migrasi naik/turun, job worker, dan auth end-to-end
         env:
           DATABASE_URL: postgres://${{ env.PG_USER }}:${{ env.PG_PASSWORD }}@localhost:5432/grahita?sslmode=disable
           TEST_DATABASE_URL: postgres://${{ env.PG_USER }}:${{ env.PG_PASSWORD }}@localhost:5432/grahita?sslmode=disable
-        run: go test -count=1 ./internal/platform/database/... ./internal/worker/...
+        # -p 1: paket dijalankan berurutan karena keduanya memakai instance
+        # PostgreSQL yang sama pada job ini (uji auth memakai skema sendiri,
+        # tetapi ekstensi dibuat pada database yang sama).
+        run: go test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
 
   frontend:
     name: Frontend (typecheck, test, build)

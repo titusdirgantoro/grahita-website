@@ -13,7 +13,8 @@ import (
 
 const getAdminUserByEmail = `-- name: GetAdminUserByEmail :one
 
-SELECT id, nama, email::text AS email, password_hash, role::text AS role, is_active
+SELECT id, nama, email::text AS email, password_hash, role::text AS role, is_active,
+       COALESCE(is_active AND password_hash IS NOT NULL AND activated_at IS NOT NULL, false)::boolean AS boleh_login
   FROM admin_users
  WHERE email = $1
 `
@@ -25,9 +26,15 @@ type GetAdminUserByEmailRow struct {
 	PasswordHash pgtype.Text `json:"password_hash"`
 	Role         string      `json:"role"`
 	IsActive     bool        `json:"is_active"`
+	BolehLogin   bool        `json:"boleh_login"`
 }
 
 // Akun cabang & admin (PRD §2). Password selalu Argon2id.
+//
+// `boleh_login` adalah satu-satunya sumber kebenaran untuk "akun ini boleh
+// masuk": akun aktif DAN (untuk cabang) cabangnya masih aktif, DAN (untuk
+// admin) sudah diaktivasi (password_hash + activated_at terisi). Menyimpan
+// aturannya di query membuat handler/service tidak pernah menebak-nebak.
 func (q *Queries) GetAdminUserByEmail(ctx context.Context, email string) (GetAdminUserByEmailRow, error) {
 	row := q.db.QueryRow(ctx, getAdminUserByEmail, email)
 	var i GetAdminUserByEmailRow
@@ -38,12 +45,14 @@ func (q *Queries) GetAdminUserByEmail(ctx context.Context, email string) (GetAdm
 		&i.PasswordHash,
 		&i.Role,
 		&i.IsActive,
+		&i.BolehLogin,
 	)
 	return i, err
 }
 
 const getAdminUserByID = `-- name: GetAdminUserByID :one
-SELECT id, nama, email::text AS email, password_hash, role::text AS role, is_active
+SELECT id, nama, email::text AS email, password_hash, role::text AS role, is_active,
+       COALESCE(is_active AND password_hash IS NOT NULL AND activated_at IS NOT NULL, false)::boolean AS boleh_login
   FROM admin_users
  WHERE id = $1
 `
@@ -55,6 +64,7 @@ type GetAdminUserByIDRow struct {
 	PasswordHash pgtype.Text `json:"password_hash"`
 	Role         string      `json:"role"`
 	IsActive     bool        `json:"is_active"`
+	BolehLogin   bool        `json:"boleh_login"`
 }
 
 func (q *Queries) GetAdminUserByID(ctx context.Context, id string) (GetAdminUserByIDRow, error) {
@@ -67,13 +77,15 @@ func (q *Queries) GetAdminUserByID(ctx context.Context, id string) (GetAdminUser
 		&i.PasswordHash,
 		&i.Role,
 		&i.IsActive,
+		&i.BolehLogin,
 	)
 	return i, err
 }
 
 const getBranchUserByEmail = `-- name: GetBranchUserByEmail :one
 SELECT bu.id, bu.email::text AS email, bu.password_hash, bu.is_active, bu.branch_id,
-       b.nama AS branch_nama
+       b.nama AS branch_nama,
+       COALESCE(bu.is_active AND b.is_active, false)::boolean AS boleh_login
   FROM branch_users bu
   JOIN branches b ON b.id = bu.branch_id
  WHERE bu.email = $1
@@ -86,6 +98,7 @@ type GetBranchUserByEmailRow struct {
 	IsActive     bool   `json:"is_active"`
 	BranchID     string `json:"branch_id"`
 	BranchNama   string `json:"branch_nama"`
+	BolehLogin   bool   `json:"boleh_login"`
 }
 
 func (q *Queries) GetBranchUserByEmail(ctx context.Context, email string) (GetBranchUserByEmailRow, error) {
@@ -98,13 +111,15 @@ func (q *Queries) GetBranchUserByEmail(ctx context.Context, email string) (GetBr
 		&i.IsActive,
 		&i.BranchID,
 		&i.BranchNama,
+		&i.BolehLogin,
 	)
 	return i, err
 }
 
 const getBranchUserByID = `-- name: GetBranchUserByID :one
 SELECT bu.id, bu.email::text AS email, bu.password_hash, bu.is_active, bu.branch_id,
-       b.nama AS branch_nama
+       b.nama AS branch_nama,
+       COALESCE(bu.is_active AND b.is_active, false)::boolean AS boleh_login
   FROM branch_users bu
   JOIN branches b ON b.id = bu.branch_id
  WHERE bu.id = $1
@@ -117,6 +132,7 @@ type GetBranchUserByIDRow struct {
 	IsActive     bool   `json:"is_active"`
 	BranchID     string `json:"branch_id"`
 	BranchNama   string `json:"branch_nama"`
+	BolehLogin   bool   `json:"boleh_login"`
 }
 
 func (q *Queries) GetBranchUserByID(ctx context.Context, id string) (GetBranchUserByIDRow, error) {
@@ -129,6 +145,7 @@ func (q *Queries) GetBranchUserByID(ctx context.Context, id string) (GetBranchUs
 		&i.IsActive,
 		&i.BranchID,
 		&i.BranchNama,
+		&i.BolehLogin,
 	)
 	return i, err
 }
@@ -148,5 +165,33 @@ UPDATE branch_users SET last_login_at = now() WHERE id = $1
 
 func (q *Queries) TouchBranchLogin(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, touchBranchLogin, id)
+	return err
+}
+
+const updateAdminPassword = `-- name: UpdateAdminPassword :exec
+UPDATE admin_users SET password_hash = $2, updated_at = now() WHERE id = $1
+`
+
+type UpdateAdminPasswordParams struct {
+	ID           string      `json:"id"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+}
+
+func (q *Queries) UpdateAdminPassword(ctx context.Context, arg UpdateAdminPasswordParams) error {
+	_, err := q.db.Exec(ctx, updateAdminPassword, arg.ID, arg.PasswordHash)
+	return err
+}
+
+const updateBranchPassword = `-- name: UpdateBranchPassword :exec
+UPDATE branch_users SET password_hash = $2, updated_at = now() WHERE id = $1
+`
+
+type UpdateBranchPasswordParams struct {
+	ID           string `json:"id"`
+	PasswordHash string `json:"password_hash"`
+}
+
+func (q *Queries) UpdateBranchPassword(ctx context.Context, arg UpdateBranchPasswordParams) error {
+	_, err := q.db.Exec(ctx, updateBranchPassword, arg.ID, arg.PasswordHash)
 	return err
 }

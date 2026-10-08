@@ -26,3 +26,9 @@ UPDATE sessions SET revoked_at = now() WHERE id = $1;
 
 -- name: RevokeSessionsForUser :exec
 UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL;
+
+-- name: RevokeOtherSessions :exec
+-- Mencabut seluruh sesi satu pengguna KECUALI sesi yang sedang dipakai
+-- (ganti kata sandi: sesi lain logout, sesi aktif tetap hidup).
+UPDATE sessions SET revoked_at = now()
+ WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL;

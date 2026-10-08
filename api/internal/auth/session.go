@@ -54,6 +54,10 @@ type SessionStore interface {
 	Touch(ctx context.Context, id string, at time.Time) error
 	Revoke(ctx context.Context, id string) error
 	RevokeForUser(ctx context.Context, userID string) error
+	// RevokeOthers mencabut seluruh sesi pengguna KECUALI keepID — dipakai
+	// saat ganti kata sandi supaya sesi yang sedang dipakai tetap hidup
+	// (PRD CP-AUT-07).
+	RevokeOthers(ctx context.Context, userID, keepID string) error
 }
 
 // RequestMeta adalah konteks request yang dicatat untuk audit sesi.

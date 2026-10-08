@@ -108,7 +108,11 @@ paths:
       operationId: login
       summary: Masuk ke portal (identitas ditentukan konteks akun, bukan host)
       security: []
-      description: Endpoint ini dikecualikan dari pemeriksaan CSRF.
+      description: |
+        Endpoint ini dikecualikan dari pemeriksaan CSRF. Percobaan GAGAL
+        dibatasi 5 kali per 15 menit, dihitung terpisah per akun dan per IP
+        (PRD CP-AUT-05); melampaui batas menghasilkan `429 RATE_LIMITED`
+        sebelum kata sandi diperiksa.
       requestBody:
         required: true
         content:
@@ -167,6 +171,117 @@ paths:
                 $ref: "#/components/schemas/UserEnvelope"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+
+  /api/v1/auth/password/forgot:
+    post:
+      tags: [auth]
+      operationId: forgotPassword
+      summary: Kirim tautan atur ulang kata sandi (respons selalu sama)
+      security: []
+      description: |
+        Endpoint publik, dikecualikan dari pemeriksaan CSRF. Respons SELALU
+        `200` dengan pesan yang sama — email terdaftar maupun tidak — supaya
+        keberadaan akun tidak bisa ditebak (PRD CP-AUT-03). Tautan berlaku
+        `reset_menit` (default 60 menit) dan hanya bisa dipakai sekali; meminta
+        tautan baru membatalkan tautan lama yang belum dipakai.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+      responses:
+        "200":
+          description: Permintaan diterima (pesan identik untuk semua email)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [pesan]
+                    properties:
+                      pesan: { type: string }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/auth/password/reset:
+    post:
+      tags: [auth]
+      operationId: resetPassword
+      summary: Set kata sandi baru dengan token sekali pakai
+      security: []
+      description: |
+        Endpoint publik, dikecualikan dari pemeriksaan CSRF. Token berlaku
+        `reset_menit` dan hanya bisa dipakai sekali; setelah berhasil SELURUH
+        sesi pengguna dicabut (PRD CP-AUT-04, CP-AUT-07). Kata sandi divalidasi
+        sebelum token dipakai, sehingga percobaan dengan kata sandi lemah tidak
+        membakar tautan.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              additionalProperties: false
+              properties:
+                token: { type: string, maxLength: 512 }
+                password: { type: string, minLength: 8, maxLength: 200 }
+      responses:
+        "204":
+          description: Kata sandi tersimpan; seluruh sesi pengguna dicabut
+        "400":
+          description: Token tidak valid/kedaluwarsa/sudah dipakai, atau kata sandi lemah
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              example:
+                error:
+                  code: RESET_INVALID
+                  message: Tautan atur ulang tidak valid, sudah dipakai, atau kedaluwarsa. Minta tautan baru.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/auth/password/change:
+    post:
+      tags: [auth]
+      operationId: changePassword
+      summary: Ganti kata sandi saat login (verifikasi kata sandi lama)
+      description: |
+        Wajib login dan wajib CSRF. Sesi yang sedang dipakai tetap hidup,
+        sedangkan sesi LAIN milik pengguna yang sama dicabut (PRD CP-AUT-06,
+        CP-AUT-07).
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password_lama, password_baru]
+              additionalProperties: false
+              properties:
+                password_lama: { type: string, minLength: 8, maxLength: 200 }
+                password_baru: { type: string, minLength: 8, maxLength: 200 }
+      responses:
+        "204":
+          description: Kata sandi diganti; sesi lain dicabut
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/v1/settings:
     get:
@@ -465,6 +580,7 @@ components:
                   CONFLICT,
                   RATE_LIMITED,
                   CSRF_INVALID,
+                  RESET_INVALID,
                   TIMEOUT,
                   METHOD_NOT_ALLOWED,
                   BRANCH_MISSING,

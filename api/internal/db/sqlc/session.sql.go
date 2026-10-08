@@ -87,6 +87,23 @@ func (q *Queries) GetSessionByToken(ctx context.Context, tokenHash []byte) (GetS
 	return i, err
 }
 
+const revokeOtherSessions = `-- name: RevokeOtherSessions :exec
+UPDATE sessions SET revoked_at = now()
+ WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL
+`
+
+type RevokeOtherSessionsParams struct {
+	UserID string `json:"user_id"`
+	ID     string `json:"id"`
+}
+
+// Mencabut seluruh sesi satu pengguna KECUALI sesi yang sedang dipakai
+// (ganti kata sandi: sesi lain logout, sesi aktif tetap hidup).
+func (q *Queries) RevokeOtherSessions(ctx context.Context, arg RevokeOtherSessionsParams) error {
+	_, err := q.db.Exec(ctx, revokeOtherSessions, arg.UserID, arg.ID)
+	return err
+}
+
 const revokeSession = `-- name: RevokeSession :exec
 UPDATE sessions SET revoked_at = now() WHERE id = $1
 `

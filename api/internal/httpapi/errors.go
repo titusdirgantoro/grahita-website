@@ -37,6 +37,17 @@ func mapDomainErr(err error) error {
 		return apierr.Forbidden("Akun Anda sedang tidak aktif. Hubungi admin Pusat.")
 	case errors.Is(err, auth.ErrSessionInvalid):
 		return apierr.Unauthenticated("Sesi Anda sudah berakhir. Silakan masuk kembali.")
+	case errors.Is(err, auth.ErrResetInvalid):
+		return apierr.New(http.StatusBadRequest, "RESET_INVALID",
+			"Tautan atur ulang tidak valid, sudah dipakai, atau kedaluwarsa. Minta tautan baru.")
+	case errors.Is(err, auth.ErrWrongPassword):
+		return apierr.Validation("Kata sandi lama tidak cocok.",
+			map[string]string{"password_lama": "kata sandi lama salah"})
+	case errors.Is(err, auth.ErrPasswordTooWeak):
+		return apierr.Validation("Kata sandi belum memenuhi syarat.",
+			map[string]string{"password": err.Error()})
+	case errors.Is(err, auth.ErrBranchForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke data cabang ini.")
 	case errors.Is(err, settings.ErrNotFound), errors.Is(err, catalog.ErrNotFound):
 		return apierr.NotFound("Data yang diminta tidak ditemukan.")
 	case errors.Is(err, settings.ErrForbidden), errors.Is(err, catalog.ErrForbidden):

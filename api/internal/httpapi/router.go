@@ -45,11 +45,16 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/meta", a.adapt(a.meta))
 		r.Post("/auth/login", a.adapt(a.login))
 		r.Post("/auth/logout", a.adapt(a.logout))
+		// Lupa/atur ulang kata sandi tersedia tanpa sesi: pengguna yang tidak
+		// bisa masuk justru yang memakainya (PRD §3.2).
+		r.Post("/auth/password/forgot", a.adapt(a.forgotPassword))
+		r.Post("/auth/password/reset", a.adapt(a.resetPassword))
 
 		r.Group(func(r chi.Router) {
 			r.Use(a.requireAuth)
 
 			r.Get("/auth/me", a.adapt(a.me))
+			r.Post("/auth/password/change", a.adapt(a.changePassword))
 			r.Get("/settings", a.adapt(a.settings))
 			r.Get("/catalog", a.adapt(a.catalog))
 			r.Get("/me/branch", a.adapt(a.myBranch))
@@ -83,9 +88,13 @@ func NewRouter(d Deps) http.Handler {
 	return r
 }
 
-// csrfExempt adalah endpoint yang memang belum punya sesi/CSRF cookie.
+// csrfExempt adalah endpoint yang memang belum punya sesi/CSRF cookie:
+// login serta lupa/atur ulang kata sandi dipanggil dari halaman publik, dan
+// permintaannya tidak mengubah data apa pun atas nama sesi yang ada.
 func csrfExempt() map[string]bool {
 	return map[string]bool{
-		"/api/v1/auth/login": true,
+		"/api/v1/auth/login":           true,
+		"/api/v1/auth/password/forgot": true,
+		"/api/v1/auth/password/reset":  true,
 	}
 }

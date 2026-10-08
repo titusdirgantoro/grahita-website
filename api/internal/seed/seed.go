@@ -112,16 +112,19 @@ func seedUsers(ctx context.Context, tx pgx.Tx) error {
 		return fmt.Errorf("hash SEED_PASSWORD: %w", err)
 	}
 
+	// Admin contoh langsung dianggap AKTIF: mereka sudah punya kata sandi,
+	// jadi activated_at terisi. Admin undangan (F1-05) justru kebalikannya —
+	// password_hash dan activated_at NULL sampai benar-benar diaktivasi.
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO admin_users (nama, email, password_hash, role, is_active)
-		VALUES ($1,$2,$3,'superadmin',true)
+		INSERT INTO admin_users (nama, email, password_hash, role, is_active, invited_at, activated_at)
+		VALUES ($1,$2,$3,'superadmin',true,now(),now())
 		ON CONFLICT (email) DO NOTHING`,
 		"Rina Kartika", "rina@grahitaindonesia.com", hash); err != nil {
 		return fmt.Errorf("seed admin superadmin: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO admin_users (nama, email, password_hash, role, is_active)
-		VALUES ($1,$2,$3,'manager',true)
+		INSERT INTO admin_users (nama, email, password_hash, role, is_active, invited_at, activated_at)
+		VALUES ($1,$2,$3,'manager',true,now(),now())
 		ON CONFLICT (email) DO NOTHING`,
 		"Budi Santoso", "budi@grahitaindonesia.com", hash); err != nil {
 		return fmt.Errorf("seed admin manager: %w", err)

@@ -137,7 +137,7 @@ func (h health) MigrationVersion(ctx context.Context) (int64, error) {
 
 func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger *slog.Logger) error {
 	authRepo := authpg.New(pool)
-	authSvc := auth.NewService(authRepo, authRepo, clock.System(), cfg.SessionIdle, cfg.SessionAbsolute)
+	authSvc := auth.NewService(authRepo, authRepo, authRepo, clock.System(), cfg.SessionIdle, cfg.SessionAbsolute)
 
 	store := storage.Store(storage.Disabled{})
 	if cfg.S3Endpoint != "" && cfg.S3Bucket != "" {
@@ -155,25 +155,29 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	if cfg.SMTPHost != "" {
 		mail = mailer.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.MailFrom)
 	}
+	// Tautan atur ulang menunjuk portal asal akun: cabang ke portal cabang,
+	// admin ke portal admin (keduanya same-origin dengan API-nya).
+	authSvc.SetResetMailer(auth.NewEmailResetMailer(mail, cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath))
 
 	// Pembatas percobaan login selalu aktif dan tidak digantungkan pada
 	// CSRF_ENABLED: keduanya tidak berhubungan (PRD CP-AUT-05).
-	// 10 percobaan per 15 menit per (IP+akun); PRD minta 5, nilai lebih
-	// longgar dipakai agar tidak menyulitkan pengujian manual sekaligus
-	// tetap menahan brute force.
-	loginLimiter := httpx.NewRateLimiter(10, 15*time.Minute)
+	// 5 percobaan GAGAL per 15 menit, dihitung terpisah per akun dan per IP.
+	loginLimiter := httpx.NewRateLimiter(5, 15*time.Minute)
+	// Permintaan tautan atur ulang dibatasi per IP (Architecture.md §6).
+	forgotLimiter := httpx.NewRateLimiter(5, 15*time.Minute)
 
 	handler := httpapi.NewRouter(httpapi.Deps{
-		Config:       cfg,
-		Version:      version,
-		Health:       health{pool: pool, dsn: cfg.DatabaseURL},
-		Auth:         authSvc,
-		Settings:     settings.NewService(settingspg.New(pool)),
-		Catalog:      catalog.NewService(catalogpg.New(pool)),
-		Storage:      store,
-		Gotenberg:    renderer,
-		Mailer:       mail,
-		LoginLimiter: loginLimiter,
+		Config:        cfg,
+		Version:       version,
+		Health:        health{pool: pool, dsn: cfg.DatabaseURL},
+		Auth:          authSvc,
+		Settings:      settings.NewService(settingspg.New(pool)),
+		Catalog:       catalog.NewService(catalogpg.New(pool)),
+		Storage:       store,
+		Gotenberg:     renderer,
+		Mailer:        mail,
+		LoginLimiter:  loginLimiter,
+		ForgotLimiter: forgotLimiter,
 	})
 
 	srv := &http.Server{

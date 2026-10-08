@@ -83,7 +83,7 @@ func TestLoginDanSesi(t *testing.T) {
 	})
 
 	clk := clock.Fixed(time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC))
-	svc := NewService(store, store, clk, 8*time.Hour, 30*24*time.Hour)
+	svc := NewService(store, store, store, clk, 8*time.Hour, 30*24*time.Hour)
 
 	issued, err := svc.Login(context.Background(), "BANDUNG@example.test", "rahasia123", RequestMeta{IP: "127.0.0.1"})
 	if err != nil {
@@ -126,7 +126,7 @@ func TestKredensialSalahTidakMembocorkanAkun(t *testing.T) {
 		UserID: "a-1", Kind: KindAdmin, Role: RoleManager,
 		Nama: "Budi", Email: "budi@example.test", PasswordHash: hash, Active: true,
 	})
-	svc := NewService(store, store, clock.System(), time.Hour, time.Hour)
+	svc := NewService(store, store, store, clock.System(), time.Hour, time.Hour)
 
 	if _, err := svc.Login(context.Background(), "budi@example.test", "salah1234", RequestMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("password salah harus ErrInvalidCredentials, dapat %v", err)
@@ -143,7 +143,7 @@ func TestAkunNonaktifDitolak(t *testing.T) {
 		UserID: "a-1", Kind: KindAdmin, Role: RoleManager,
 		Nama: "Budi", Email: "budi@example.test", PasswordHash: hash, Active: false,
 	})
-	svc := NewService(store, store, clock.System(), time.Hour, time.Hour)
+	svc := NewService(store, store, store, clock.System(), time.Hour, time.Hour)
 
 	if _, err := svc.Login(context.Background(), "budi@example.test", "rahasia123", RequestMeta{}); !errors.Is(err, ErrInactiveAccount) {
 		t.Errorf("akun nonaktif harus ErrInactiveAccount, dapat %v", err)
@@ -172,7 +172,7 @@ func TestSesiDicabutSetelahGantiSandi(t *testing.T) {
 		UserID: "u-1", Kind: KindBranch, Role: RoleBranch, BranchID: "br-1",
 		Nama: "Cabang", Email: "cabang@example.test", PasswordHash: hash, Active: true,
 	})
-	svc := NewService(store, store, clock.System(), time.Hour, time.Hour)
+	svc := NewService(store, store, store, clock.System(), time.Hour, time.Hour)
 
 	issued, err := svc.Login(context.Background(), "cabang@example.test", "rahasia123", RequestMeta{})
 	if err != nil {

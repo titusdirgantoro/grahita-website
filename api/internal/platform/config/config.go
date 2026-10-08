@@ -42,6 +42,10 @@ type Config struct {
 	SessionIdle     time.Duration
 	SessionAbsolute time.Duration
 
+	// PasswordResetPath adalah rute halaman atur ulang kata sandi pada portal
+	// (tautan email `${portal}/<path>?token=...`).
+	PasswordResetPath string
+
 	// CSRF double-submit untuk semua request non-GET.
 	CSRFEnabled bool
 
@@ -105,29 +109,30 @@ func (c Config) AdminBaseURL() string {
 // Load membaca dan memvalidasi konfigurasi.
 func Load() (Config, error) {
 	c := Config{
-		AppEnv:          env("APP_ENV", "local"),
-		HTTPAddr:        env("HTTP_ADDR", ":8080"),
-		LogLevel:        env("LOG_LEVEL", "info"),
-		DatabaseURL:     env("DATABASE_URL", ""),
-		CustomerHost:    env("CUSTOMER_HOST", DefaultCustomerHost),
-		AdminHost:       env("ADMIN_HOST", DefaultAdminHost),
-		PublicScheme:    env("PUBLIC_SCHEME", "https"),
-		CookieName:      env("SESSION_COOKIE_NAME", "grahita_session"),
-		CSRFEnabled:     envBool("CSRF_ENABLED", true),
-		S3Endpoint:      env("S3_ENDPOINT", ""),
-		S3Region:        env("S3_REGION", "us-east-1"),
-		S3Bucket:        env("S3_BUCKET", ""),
-		S3AccessKey:     env("S3_ACCESS_KEY", ""),
-		S3SecretKey:     env("S3_SECRET_KEY", ""),
-		S3UsePathStyle:  envBool("S3_USE_PATH_STYLE", true),
-		SMTPHost:        env("SMTP_HOST", ""),
-		SMTPPort:        envInt("SMTP_PORT", 1025),
-		SMTPUser:        env("SMTP_USER", ""),
-		SMTPPass:        env("SMTP_PASS", ""),
-		MailFrom:        env("MAIL_FROM", "no-reply@grahita.id"),
-		GotenbergURL:    env("GOTENBERG_URL", ""),
-		WorkerShutdown:  20 * time.Second,
-		JobPollInterval: 15 * time.Second,
+		AppEnv:            env("APP_ENV", "local"),
+		HTTPAddr:          env("HTTP_ADDR", ":8080"),
+		LogLevel:          env("LOG_LEVEL", "info"),
+		DatabaseURL:       env("DATABASE_URL", ""),
+		CustomerHost:      env("CUSTOMER_HOST", DefaultCustomerHost),
+		AdminHost:         env("ADMIN_HOST", DefaultAdminHost),
+		PublicScheme:      env("PUBLIC_SCHEME", "https"),
+		CookieName:        env("SESSION_COOKIE_NAME", "grahita_session"),
+		CSRFEnabled:       envBool("CSRF_ENABLED", true),
+		PasswordResetPath: env("PASSWORD_RESET_PATH", "/lupa"),
+		S3Endpoint:        env("S3_ENDPOINT", ""),
+		S3Region:          env("S3_REGION", "us-east-1"),
+		S3Bucket:          env("S3_BUCKET", ""),
+		S3AccessKey:       env("S3_ACCESS_KEY", ""),
+		S3SecretKey:       env("S3_SECRET_KEY", ""),
+		S3UsePathStyle:    envBool("S3_USE_PATH_STYLE", true),
+		SMTPHost:          env("SMTP_HOST", ""),
+		SMTPPort:          envInt("SMTP_PORT", 1025),
+		SMTPUser:          env("SMTP_USER", ""),
+		SMTPPass:          env("SMTP_PASS", ""),
+		MailFrom:          env("MAIL_FROM", "no-reply@grahita.id"),
+		GotenbergURL:      env("GOTENBERG_URL", ""),
+		WorkerShutdown:    20 * time.Second,
+		JobPollInterval:   15 * time.Second,
 	}
 
 	// Cookie Secure hanya dimatikan di lingkungan lokal supaya bisa diakses

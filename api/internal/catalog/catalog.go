@@ -112,16 +112,12 @@ func (s *Service) Branches(ctx context.Context, actor auth.Actor) ([]Branch, err
 	return rows, nil
 }
 
-// Branch mengembalikan satu cabang. Akun cabang hanya boleh membaca cabangnya
-// sendiri (isolasi data antar cabang, Architecture.md §6).
+// Branch mengembalikan satu cabang. Kepemilikan cabang diperiksa di sini
+// lewat Actor (bukan dari parameter klien): akun cabang hanya boleh membaca
+// cabangnya sendiri (isolasi data cabang, Architecture.md §6).
 func (s *Service) Branch(ctx context.Context, actor auth.Actor, id string) (Branch, error) {
-	switch {
-	case actor.Can(auth.CapAdminBranches):
-		// seluruh cabang boleh dibaca
-	case actor.IsBranch() && actor.BranchID == id:
-		// hanya cabang sendiri
-	default:
-		return Branch{}, ErrForbidden
+	if err := actor.RequireBranch(id); err != nil {
+		return Branch{}, err
 	}
 	row, err := s.repo.GetBranch(ctx, id)
 	if err != nil {

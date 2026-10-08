@@ -40,7 +40,7 @@ func (r *Repo) AdminByEmail(ctx context.Context, email string) (auth.Credentials
 		Nama:         row.Nama,
 		Email:        row.Email,
 		PasswordHash: pgtypes.TextOr(row.PasswordHash),
-		Active:       row.IsActive,
+		Active:       row.BolehLogin,
 	}, nil
 }
 
@@ -60,7 +60,7 @@ func (r *Repo) AdminByID(ctx context.Context, id string) (auth.Credentials, erro
 		Nama:         row.Nama,
 		Email:        row.Email,
 		PasswordHash: pgtypes.TextOr(row.PasswordHash),
-		Active:       row.IsActive,
+		Active:       row.BolehLogin,
 	}, nil
 }
 
@@ -81,7 +81,7 @@ func (r *Repo) BranchByEmail(ctx context.Context, email string) (auth.Credential
 		Nama:         row.BranchNama,
 		Email:        row.Email,
 		PasswordHash: row.PasswordHash,
-		Active:       row.IsActive,
+		Active:       row.BolehLogin,
 	}, nil
 }
 
@@ -102,7 +102,7 @@ func (r *Repo) BranchByID(ctx context.Context, id string) (auth.Credentials, err
 		Nama:         row.BranchNama,
 		Email:        row.Email,
 		PasswordHash: row.PasswordHash,
-		Active:       row.IsActive,
+		Active:       row.BolehLogin,
 	}, nil
 }
 
@@ -166,4 +166,61 @@ func (r *Repo) Revoke(ctx context.Context, id string) error {
 // RevokeForUser mencabut seluruh sesi satu pengguna.
 func (r *Repo) RevokeForUser(ctx context.Context, userID string) error {
 	return r.q.RevokeSessionsForUser(ctx, userID)
+}
+
+// RevokeOthers mencabut seluruh sesi satu pengguna kecuali sesi yang dipakai.
+func (r *Repo) RevokeOthers(ctx context.Context, userID, keepID string) error {
+	return r.q.RevokeOtherSessions(ctx, sqlc.RevokeOtherSessionsParams{UserID: userID, ID: keepID})
+}
+
+// UpdatePassword menyimpan hash Argon2id baru untuk satu akun.
+func (r *Repo) UpdatePassword(ctx context.Context, kind auth.Kind, id, passwordHash string) error {
+	if kind == auth.KindAdmin {
+		if err := r.q.UpdateAdminPassword(ctx, sqlc.UpdateAdminPasswordParams{ID: id, PasswordHash: pgtypes.Text(passwordHash)}); err != nil {
+			return fmt.Errorf("query UpdateAdminPassword: %w", err)
+		}
+		return nil
+	}
+	if err := r.q.UpdateBranchPassword(ctx, sqlc.UpdateBranchPasswordParams{ID: id, PasswordHash: passwordHash}); err != nil {
+		return fmt.Errorf("query UpdateBranchPassword: %w", err)
+	}
+	return nil
+}
+
+// CreateResetToken membatalkan token atur ulang lama milik pengguna lalu
+// menyimpan yang baru — hanya satu tautan berlaku pada satu waktu.
+func (r *Repo) CreateResetToken(ctx context.Context, t auth.ResetToken, tokenHash []byte) error {
+	if err := r.q.DeleteActivePasswordResetTokens(ctx, t.UserID); err != nil {
+		return fmt.Errorf("query DeleteActivePasswordResetTokens: %w", err)
+	}
+	err := r.q.CreatePasswordResetToken(ctx, sqlc.CreatePasswordResetTokenParams{
+		ActorKind: sqlc.ActorKind(t.Kind),
+		UserID:    t.UserID,
+		TokenHash: tokenHash,
+		ExpiresAt: t.ExpiresAt,
+	})
+	if err != nil {
+		return fmt.Errorf("query CreatePasswordResetToken: %w", err)
+	}
+	return nil
+}
+
+// ConsumeResetToken memakai token sekali pakai secara atomik.
+func (r *Repo) ConsumeResetToken(ctx context.Context, tokenHash []byte, now time.Time) (auth.ResetToken, error) {
+	row, err := r.q.ConsumePasswordResetToken(ctx, sqlc.ConsumePasswordResetTokenParams{
+		TokenHash: tokenHash,
+		ExpiresAt: now,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.ResetToken{}, auth.ErrResetInvalid
+	}
+	if err != nil {
+		return auth.ResetToken{}, fmt.Errorf("query ConsumePasswordResetToken: %w", err)
+	}
+	return auth.ResetToken{
+		ID:        row.ID,
+		Kind:      auth.Kind(row.ActorKind),
+		UserID:    row.UserID,
+		ExpiresAt: row.ExpiresAt,
+	}, nil
 }
