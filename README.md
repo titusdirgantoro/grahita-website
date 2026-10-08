@@ -154,6 +154,40 @@ make test-integrasi
 CI selalu memakai image `postgres:18-alpine`, jadi shim ini hanya untuk mesin
 pengembang dan tidak pernah dipakai di produksi.
 
+## Basis data
+
+Migrasi goose di `api/db/migrations` di-embed ke binary dan dijalankan dengan
+`make migrate` (atau `go run ./cmd/server --mode=migrate`):
+
+| Versi | Isi |
+|---|---|
+| `0001_init.sql` | skema inti: 22 tabel + 12 enum (Database.md §3–§4) |
+| `0002_functions.sql` | `next_numbers()`, trigger `updated_at`, trigger total pesanan, seed pengaturan PRD §4.9 |
+| `0003_order_integrity.sql` | pengaman integritas: campur sertifikat/reguler, kewajiban packaging & serial saat submit, minimal satu superadmin aktif |
+| `0004_numbering.sql` | tanggal bisnis WIB (`wib_today()`), periode `invoice_periode()`/`serial_periode()`, format nomor |
+
+Aturan penting:
+
+- **Penomoran tanpa bolong & tanpa bentrok.** `next_numbers(scope, periode, jumlah)`
+  menaikkan baris `numbering_counters` dengan `UPDATE … RETURNING` di dalam
+  transaksi submit. Karena memakai tabel (bukan `SEQUENCE`), rollback tidak
+  membocorkan nomor dan reset periode (bulan untuk invoice, hari untuk serial)
+  berjalan alami.
+- **Draft tidak pernah dihalangi.** Invariant (minimal satu baris produk,
+  kewajiban baris packaging pada pesanan sertifikat, serial wajib ada, total
+  konsisten) hanya diperiksa saat status berpindah `draft → submitted`.
+- **Revisi admin tetap sah.** Penguncian pesanan `Submitted`/`Done` untuk cabang
+  ditegakkan di layer service (aktor), bukan trigger, sehingga revisi invoice
+  admin (AP-REV-01) tidak terhalang.
+- **Retensi bukti transfer: tanpa batas** untuk saat ini (keputusan user,
+  override Database.md §9) — tidak ada job pembersih dan backup tidak menghapus.
+- Query penomoran tersedia lewat sqlc di `api/db/queries/numbering.sql`.
+
+Uji integrasi skema (`go test ./internal/platform/database/...`) mencakup
+migrasi naik/turun pada database bersih, keunikan email (citext) & satu akun per
+cabang, keunikan/format serial, seed pengaturan, penomoran bersamaan (24 submit
+paralel tanpa nomor kembar/bolong) dan penomoran setelah rollback.
+
 ## Produksi
 
 ```bash
