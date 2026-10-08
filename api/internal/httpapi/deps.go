@@ -18,6 +18,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/document"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/payment"
@@ -66,6 +67,10 @@ type Deps struct {
 	// Payments melayani bukti transfer: unggah multi-berkas, daftar, dan
 	// tautan unduh berumur pendek (F1-13).
 	Payments *payment.Service
+
+	// Documents melayani dokumen pesanan: render Invoice PDF + Surat Jalan
+	// XLSX/PDF, daftar, dan tautan unduh berumur pendek (F1-17).
+	Documents *document.Service
 
 	// Registration melayani pendaftaran akun cabang dua langkah lewat token
 	// registrasi sekali pakai (F1-07).

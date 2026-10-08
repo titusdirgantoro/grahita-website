@@ -184,6 +184,17 @@
   list-style: none;
 }
 
+/* Satu baris dokumen: label + versi di kiri, tombol unduh di kanan. */
+.barisDokumen {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.barisDokumen > :last-child {
+  margin-left: auto;
+}
+
 .daftarBukti {
   display: grid;
   gap: 12px;

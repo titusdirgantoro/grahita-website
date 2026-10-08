@@ -29,6 +29,8 @@ import (
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
+	"github.com/grahita/portal/api/internal/document"
+	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/httpapi"
 	"github.com/grahita/portal/api/internal/notification"
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
@@ -285,6 +287,13 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	paymentRepo := paymentpg.New(pool)
 	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc)
 
+	// Dokumen pesanan (F1-17): render Invoice PDF + Surat Jalan XLSX/PDF ke
+	// object storage, catat di tabel `documents`, dan sediakan tautan unduh
+	// berumur pendek. Service yang sama dipakai transisi Done (F1-18) dan
+	// revisi invoice (F2-25).
+	documentRepo := documentpg.New(pool)
+	documentSvc := document.NewService(documentRepo, store, renderer)
+
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Config:              cfg,
 		Version:             version,
@@ -295,6 +304,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Orders:              orderSvc,
 		AdminOrders:         adminOrderSvc,
 		Payments:            paymentSvc,
+		Documents:           documentSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,

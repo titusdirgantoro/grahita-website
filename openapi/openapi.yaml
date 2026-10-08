@@ -2194,6 +2194,158 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 
+  /api/v1/orders/{id}/documents:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [customer, admin]
+      operationId: listOrderDocuments
+      summary: Dokumen satu pesanan (Invoice & Surat Jalan)
+      description: |
+        Daftar dokumen pesanan beserta versinya (F1-17, PRD §6.1). Dokumen
+        lahir saat status pesanan Done, jadi daftar kosong selama pesanan masih
+        draft/submitted.
+
+        Portal cabang hanya menerima INVOICE pesanan cabang SESI-nya: surat
+        jalan adalah dokumen Pusat (dikirim ke admin ber-flag surat jalan),
+        sehingga tidak pernah muncul di sini. Staf Pusat dengan kapabilitas
+        `admin.orders` menerima seluruh dokumen pesanan cabang mana pun.
+        Pesanan cabang lain dijawab `404` tanpa membocorkan keberadaannya.
+
+        Kunci object storage TIDAK pernah dikirim; unduhan memakai presigned URL
+        dari `GET /api/v1/documents/{id}/download`.
+      responses:
+        "200":
+          description: Daftar dokumen pesanan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrderDocument" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/documents/{id}/download:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: id dokumen (UUID).
+        schema: { type: string, format: uuid }
+    get:
+      tags: [customer, admin]
+      operationId: downloadDocument
+      summary: Tautan unduh berumur pendek satu dokumen
+      description: |
+        Presigned URL berumur pendek (default 300 detik) yang memaksa browser
+        MENGUNDUH dengan nama berkas yang benar — `Invoice-<nomor>.pdf`,
+        `Surat-Jalan-<nomor>.pdf`, atau `Surat-Jalan-<nomor>.xlsx`.
+
+        Akun cabang hanya boleh mengunduh INVOICE pesanan cabang SESI-nya;
+        dokumen cabang lain maupun surat jalan dijawab `404` (sama seperti
+        dokumen yang tidak ada, supaya jenis dokumen Pusat tidak terbaca).
+        Staf Pusat dengan `admin.orders` boleh mengunduh seluruh dokumen, dan
+        cetak dilakukan dari PDF yang diunduh.
+      responses:
+        "200":
+          description: Tautan unduh
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DocumentDownload" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/admin/orders/{id}/documents:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [admin]
+      operationId: listAdminOrderDocuments
+      summary: Seluruh dokumen satu pesanan (Manager & Superadmin)
+      description: |
+        Seluruh dokumen pesanan cabang mana pun — invoice dan surat jalan,
+        semua versi — untuk portal admin (F1-17, PRD §6.1).
+      responses:
+        "200":
+          description: Daftar dokumen pesanan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrderDocument" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    post:
+      tags: [admin]
+      operationId: generateAdminOrderDocuments
+      summary: Membuat/menyegarkan dokumen pesanan Done (Manager & Superadmin)
+      description: |
+        Memastikan ketiga dokumen versi berjalan — Invoice PDF, Surat Jalan
+        XLSX, dan Surat Jalan PDF — tersedia untuk pesanan yang sudah **Done**
+        (SystemDesign.md §4.4, §8). Dipakai portal admin untuk membuat dokumen
+        pertama kali atau menyegarkan setelah render gagal (mis. mesin PDF
+        sempat tidak siap); transisi Done sendiri memanggil layanan yang sama.
+
+        Sifatnya IDEMPOTEN: memanggil ulang tidak menghasilkan dokumen ganda,
+        tidak menimpa berkas versi yang sudah ada, dan berkas versi lama tetap
+        utuh setelah revisi invoice (versi +1).
+
+        Pesanan yang belum Done dijawab `409 ORDER_NOT_DONE`; `503
+        DOCUMENT_RENDER_UNAVAILABLE` bila mesin PDF (Gotenberg) belum siap, dan
+        `503 UNAVAILABLE` bila object storage belum siap.
+      responses:
+        "200":
+          description: Dokumen yang tersedia setelah penyegaran
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrderDocument" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -2574,6 +2726,25 @@ components:
         ukuran_byte: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
 
+    DocumentDownload:
+      type: object
+      required: [url, expires_in, nama_file, mime_type]
+      description: |
+        Tautan unduh satu dokumen pesanan (presigned URL berumur pendek) beserta
+        nama berkas dan MIME type-nya. Kunci object storage tidak pernah
+        disertakan — hanya URL bertanda tangan yang kedaluwarsa.
+      properties:
+        url: { type: string, format: uri }
+        expires_in:
+          type: integer
+          description: Masa berlaku tautan dalam detik (default 300).
+        nama_file: { type: string, example: Invoice-2026-10-0001.pdf }
+        mime_type:
+          type: string
+          enum:
+            - application/pdf
+            - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
     VerificationLog:
       type: object
       required: [id, metode, total_pesanan, total_terbaca, selisih, hasil, created_at]
@@ -2683,6 +2854,9 @@ components:
                   KODE_TAKEN,
                   PRODUCT_IN_USE,
                   ORDER_LOCKED,
+                  ORDER_NOT_DONE,
+                  DOCUMENT_NOT_READY,
+                  DOCUMENT_RENDER_UNAVAILABLE,
                   PROOF_LIMIT,
                   PROOF_DUPLICATE,
                   PAYLOAD_TOO_LARGE,

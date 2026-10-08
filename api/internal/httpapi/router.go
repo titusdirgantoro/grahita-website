@@ -85,6 +85,12 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/orders/{id}/proofs", a.adapt(a.orderProofs))
 			r.Post("/orders/{id}/proofs", a.adapt(a.orderProofUpload))
 			r.Get("/orders/{id}/proofs/{proofId}/download", a.adapt(a.orderProofDownload))
+			// Dokumen pesanan (F1-17): daftar dokumen satu pesanan milik
+			// cabang sesi (yang tampil hanya Invoice-nya) dan tautan unduh
+			// berumur pendek per dokumen — kunci storage tidak pernah
+			// dikirim ke klien (SystemDesign.md §8).
+			r.Get("/orders/{id}/documents", a.adapt(a.orderDocuments))
+			r.Get("/documents/{id}/download", a.adapt(a.documentDownload))
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
 			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
@@ -108,6 +114,11 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/orders/{id}/proofs", a.adapt(a.adminOrderProofs))
 					r.Post("/orders/{id}/proofs", a.adapt(a.adminOrderProofUpload))
 					r.Get("/orders/{id}/proofs/{proofId}/download", a.adapt(a.adminOrderProofDownload))
+					// Dokumen pesanan (F1-17): daftar lengkap dokumen satu
+					// pesanan dan pembuatan/penyegaran dokumen versi berjalan.
+					// Idempoten — aman dipanggil berulang.
+					r.Get("/orders/{id}/documents", a.adapt(a.orderDocuments))
+					r.Post("/orders/{id}/documents", a.adapt(a.adminOrderDocuments))
 				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminBranches))

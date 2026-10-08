@@ -582,6 +582,7 @@ export function PesananDetailAdminPage() {
   const [galatCatatan, setGalatCatatan] = useState<string | null>(null);
   const [zoom, setZoom] = useState<{ url: string; nama: string } | null>(null);
   const [sibukEmail, setSibukEmail] = useState<string | null>(null);
+  const [sibukDokumen, setSibukDokumen] = useState(false);
   const { tampilkan } = useToast();
 
   // Catatan awal dari server hanya dipakai sampai pengguna mulai mengetik,
@@ -635,6 +636,43 @@ export function PesananDetailAdminPage() {
       throw err;
     }
   }, [id]);
+
+  /**
+   * unduhDokumen mengambil tautan presigned berumur pendek untuk satu dokumen
+   * (invoice/surat jalan) lalu membukanya di tab baru. Kunci object storage
+   * tidak pernah sampai ke browser (F1-17, SystemDesign.md §8); mencetak
+   * dilakukan dari PDF yang terbuka.
+   */
+  const unduhDokumen = useCallback(
+    async (d: DokumenPesanan) => {
+      try {
+        const dl = await api.get<{ url: string; nama_file: string }>(`/documents/${d.id}/download`);
+        window.open(dl.url, "_blank", "noopener");
+        tampilkan(`Unduhan ${dl.nama_file} disiapkan.`);
+      } catch (err) {
+        tampilkan(pesanGalat(err));
+      }
+    },
+    [tampilkan],
+  );
+
+  /**
+   * buatDokumen memicu render dokumen versi berjalan. Endpointnya idempoten:
+   * dokumen yang sudah ada tidak dibuat ulang dan berkas versi lama tidak
+   * tersentuh.
+   */
+  const buatDokumen = useCallback(async () => {
+    setSibukDokumen(true);
+    try {
+      await api.post(`/admin/orders/${id}/documents`, {});
+      muatUlang();
+      tampilkan("Dokumen dibuat.");
+    } catch (err) {
+      tampilkan(pesanGalat(err));
+    } finally {
+      setSibukDokumen(false);
+    }
+  }, [id, muatUlang, tampilkan]);
 
   const timeline = useMemo(() => data?.timeline ?? [], [data?.timeline]);
 
@@ -785,15 +823,32 @@ export function PesananDetailAdminPage() {
           </Card>
 
           <Card>
-            <CardHead title="Dokumen" />
+            <CardHead
+              title="Dokumen"
+              tools={
+                data.status === "done" ? (
+                  <Button
+                    variant="secondary"
+                    icon="arrows-clockwise"
+                    onClick={buatDokumen}
+                    disabled={sibukDokumen}
+                  >
+                    {sibukDokumen ? "Memproses…" : "Buat dokumen"}
+                  </Button>
+                ) : undefined
+              }
+            />
             {data.dokumen.length === 0 ? (
               <p className="muted small">Belum ada dokumen. Invoice &amp; surat jalan lahir setelah verifikasi.</p>
             ) : (
               <ul className={styles.daftarPolos}>
                 {data.dokumen.map((d) => (
-                  <li key={d.id}>
+                  <li key={d.id} className={styles.barisDokumen}>
                     <span>{LABEL_DOKUMEN[d.jenis] ?? d.jenis}</span>
                     <span className="muted small">{`v${d.versi} · ${formatWaktu(d.created_at)}`}</span>
+                    <Button variant="secondary" icon="download-simple" onClick={() => unduhDokumen(d)}>
+                      Unduh
+                    </Button>
                   </li>
                 ))}
               </ul>

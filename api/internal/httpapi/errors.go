@@ -8,6 +8,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/document"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/payment"
@@ -194,6 +195,24 @@ func mapDomainErr(err error) error {
 			"Lampiran dokumen tidak dapat dibaca. Hubungi admin Pusat.")
 	case errors.Is(err, notification.ErrInvalidData):
 		return apierr.Validation("Data email tidak valid.", map[string]string{"email": err.Error()})
+	// Dokumen pesanan (F1-17). Dokumen hanya lahir untuk pesanan Done, dan
+	// ketiadaan dokumen cabang lain dijawab sama seperti pesanan yang tidak ada.
+	case errors.Is(err, document.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke dokumen pesanan ini.")
+	case errors.Is(err, document.ErrNotFound):
+		return apierr.NotFound("Pesanan atau dokumen yang diminta tidak ditemukan.")
+	case errors.Is(err, document.ErrNotDone):
+		return apierr.Conflict("ORDER_NOT_DONE",
+			"Dokumen hanya dibuat untuk pesanan yang sudah selesai (Done). Selesaikan verifikasi pembayaran terlebih dahulu.")
+	case errors.Is(err, document.ErrRenderUnavailable):
+		return apierr.New(http.StatusServiceUnavailable, "DOCUMENT_RENDER_UNAVAILABLE",
+			"Mesin pembuat PDF belum siap sehingga invoice/surat jalan belum bisa dibuat. Coba lagi beberapa saat lagi.")
+	case errors.Is(err, document.ErrStorageUnavailable):
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
+			"Penyimpanan dokumen belum siap sehingga dokumen tidak dapat disimpan.")
+	case errors.Is(err, document.ErrInvalidData):
+		return apierr.Validation("Data pesanan belum cukup untuk membuat dokumen.",
+			map[string]string{"dokumen": err.Error()})
 	// Pendaftaran akun cabang lewat token (F1-07). Pesan sengaja spesifik per
 	// keadaan supaya pengguna tahu harus berbuat apa (PRD CP-REG-07).
 	case errors.Is(err, registration.ErrTokenInvalid):

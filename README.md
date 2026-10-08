@@ -333,6 +333,53 @@ memperbarui status (`queued` → `sending` → `sent`/`failed`).
   tautan reset/undangan dari outbox, penerima email dokumen, kirim ulang +
   audit, email gagal di riwayat).
 
+## Dokumen pesanan: Invoice PDF & Surat Jalan XLSX/PDF (F1-17)
+
+Saat pesanan selesai (Done), sistem membuat **tiga dokumen** dan menyimpannya di
+object storage dengan kunci `documents/{order_id}/{jenis}-{versi}.{ext}` serta
+satu baris `documents` per `(order_id, jenis, versi)`:
+
+| Jenis | Cara | Isi |
+|---|---|---|
+| `invoice_pdf` | template HTML A4 → Gotenberg | identitas PT, nomor + versi revisi, tanggal, data cabang, order line + serial, biaya packaging, total, rekening AKTIF, penanda `LUNAS` / `CASH & CARRY — jatuh tempo …` |
+| `surat_jalan_xlsx` | `excelize` | header tetap `No \| Nama Barang \| Satuan \| Qty \| Serial Number`, **satu baris per order line**, A4 tegak, header diulang saat cetak |
+| `surat_jalan_pdf` | template HTML (data sama) → Gotenberg | kolom & baris sama dengan XLSX-nya |
+
+- **Hanya untuk pesanan Done** (PRD §6.1); status lain dijawab
+  `409 ORDER_NOT_DONE`.
+- **Idempoten**: kunci memuat versi dan `documents` unik per
+  `(order_id, jenis, versi)`, sehingga render ulang tidak menggandakan dokumen
+  dan **tidak menimpa berkas versi yang sudah ada**. Revisi invoice (versi +1,
+  F2-25) menghasilkan berkas baru; berkas lama tetap utuh (PRD §9 no.8).
+- **Satu permintaan = satu unit kerja**: seluruh isi dirender lebih dulu, lalu
+  ditulis ke storage, lalu seluruh barisnya disimpan dalam satu transaksi —
+  gagal di tengah jalan tidak meninggalkan berkas yatim/dokumen separuh jadi.
+- **Akses selalu lewat presigned URL berumur pendek** (300 detik); kunci storage
+  tidak pernah dikirim ke klien. Akun cabang hanya boleh melihat/mengunduh
+  **invoice** pesanan cabang sesinya; surat jalan adalah dokumen Pusat (dikirim
+  ke admin ber-flag `surat_jalan`), jadi dijawab `404` untuk cabang.
+- **Endpoint**:
+
+| Method | Path | Peran | Catatan |
+|---|---|---|---|
+| GET | `/orders/{id}/documents` | cabang & staf Pusat | cabang hanya melihat invoice-nya |
+| GET | `/documents/{id}/download` | cabang & staf Pusat | tautan unduh berumur pendek |
+| GET | `/admin/orders/{id}/documents` | Manager & Superadmin | seluruh dokumen semua versi |
+| POST | `/admin/orders/{id}/documents` | Manager & Superadmin | buat/segarkan dokumen versi berjalan (idempoten) |
+
+- **Konfigurasi**: `GOTENBERG_URL` (tanpa itu render PDF dijawab
+  `503 DOCUMENT_RENDER_UNAVAILABLE`); storage memakai `S3_*` yang sama dengan
+  bukti transfer.
+- **Paket**: `internal/document` (service + generator + repository in-memory),
+  `internal/document/postgres`, query `db/queries/document.sql`.
+- **Uji**: `internal/document` (unit: idempotensi, versi, otorisasi, isi HTML &
+  XLSX, kegagalan tanpa sisa), `internal/httpapi` (integrasi PG + uji PDF nyata
+  lewat Chromium lokal sebagai tiruan protokol Gotenberg — dilewati bila
+  `google-chrome` tidak ada), dan `web/apps/admin` (tombol Unduh/Buat dokumen).
+- **Catatan bisnis terbuka**: PRD §8 no.7 (format Surat Jalan resmi) dan no.9
+  (tanda tangan/stempel digital) belum diputuskan → dokumen memakai template
+  awal tanpa tanda tangan/stempel.
+
 ## Produksi
 
 ```bash

@@ -34,6 +34,8 @@ import (
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
+	"github.com/grahita/portal/api/internal/document"
+	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/notification"
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
 	"github.com/grahita/portal/api/internal/order"
@@ -122,6 +124,14 @@ type pgFixture struct {
 	// memakai object storage in-memory yang sama.
 	payments     *payment.Service
 	paymentsRepo *paymentpg.Repo
+
+	// Dokumen pesanan (F1-17): repository + service nyata di atas PostgreSQL
+	// dengan object storage in-memory yang sama dan renderer uji (tanpa mesin
+	// PDF). Pengujian yang butuh PDF nyata membangun router sendiri dari
+	// `deps` dengan renderer Chromium (integration_documents_pdf_test.go).
+	documents *document.Service
+	docRepo   *documentpg.Repo
+	deps      Deps
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -310,6 +320,11 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.paymentsRepo = payRepo
 
 	orderRepo := orderpg.New(pool)
+	docRepo := documentpg.New(pool)
+	docSvc := document.NewService(docRepo, objek, rendererUji{})
+	f.docRepo = docRepo
+	f.documents = docSvc
+
 	deps := Deps{
 		Config:              testConfig(),
 		Version:             "test-pg",
@@ -320,6 +335,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Orders:              order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
 		AdminOrders:         order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,
+		Documents:           docSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,
@@ -331,6 +347,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		RegistrationLimiter: httpx.NewRateLimiter(50, 15*time.Minute),
 		ProofLimiter:        httpx.NewRateLimiter(500, 15*time.Minute),
 	}
+	f.deps = deps
 	f.srv = httptest.NewServer(NewRouter(deps))
 	t.Cleanup(f.srv.Close)
 	return f

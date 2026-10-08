@@ -311,4 +311,39 @@ describe("Riwayat pemesanan admin (F1-15)", () => {
       `/api/v1/admin/orders/${DETAIL_ID}/emails/invoice_cabang/resend`,
     );
   });
+
+  it("unduh dokumen memakai tautan presigned domain dokumen (F1-17)", async () => {
+    const buka = vi.fn();
+    vi.stubGlobal("open", buka);
+    const { panggilan } = stubPesanan();
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Invoice");
+
+    fireEvent.click(screen.getByRole("button", { name: "Unduh" }));
+
+    await waitFor(() => {
+      expect(panggilan.some((u) => u.includes("/documents/d1/download"))).toBe(true);
+    });
+    expect(buka).toHaveBeenCalled();
+    // Kunci storage tidak pernah dipakai UI: tautan datang dari endpoint download.
+    expect(panggilan.some((u) => u.includes("storage_key"))).toBe(false);
+  });
+
+  it("tombol buat dokumen hanya untuk pesanan Done dan idempoten lewat endpoint admin", async () => {
+    const { posts, panggilan } = stubPesanan({ detail: { ...DETAIL_UJI, status: "done" } });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+
+    const tombol = await screen.findByRole("button", { name: "Buat dokumen" });
+    fireEvent.click(tombol);
+
+    await waitFor(() => {
+      expect(posts.some((p) => p.url.endsWith(`/admin/orders/${DETAIL_ID}/documents`))).toBe(true);
+    });
+    const kirim = posts.find((p) => p.url.endsWith(`/admin/orders/${DETAIL_ID}/documents`));
+    expect(kirim?.url).toBe(`/api/v1/admin/orders/${DETAIL_ID}/documents`);
+    // Daftar dokumen dimuat ulang setelah render.
+    await waitFor(() => {
+      expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(1);
+    });
+  });
 });
