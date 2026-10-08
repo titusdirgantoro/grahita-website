@@ -1,0 +1,6 @@
+.env
+api/go.sum
+api/tmp/
+web/*/dist/
+node_modules/
+*.log

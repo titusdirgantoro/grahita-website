@@ -1,0 +1,31 @@
+# Produksi: TLS otomatis dari Let's Encrypt.
+# Jalankan dengan docker-compose.prod.yml.
+
+grahitaindonesia.com, www.grahitaindonesia.com {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	# Admin Portal disajikan pada path /admin
+	handle_path /admin* {
+		root * /srv/admin
+		try_files {path} /index.html
+		file_server
+	}
+
+	handle {
+		root * /srv/customer
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,66 @@
+# Overlay produksi.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Perbedaan dari development:
+#   - Caddy memakai domain asli + TLS otomatis (port 80/443)
+#   - Mailpit tidak dipakai; SMTP mengarah ke Gmail
+#   - Postgres & MinIO tidak mengekspos port ke publik
+#   - API tidak mengekspos port langsung (hanya lewat Caddy)
+
+services:
+  postgres:
+    ports: !override []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?wajib diisi di .env produksi}
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "effective_cache_size=3GB"
+      - "-c"
+      - "work_mem=16MB"
+
+  minio:
+    ports: !override []
+
+  mailpit:
+    profiles: ["dev-only"]   # tidak ikut jalan di produksi
+
+  api:
+    ports: !override []
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: info
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: "587"
+      SMTP_USER: ${SMTP_USER:?wajib diisi}
+      SMTP_PASS: ${SMTP_PASS:?wajib diisi}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@grahitaindonesia.com}
+      CORS_ORIGINS: https://grahitaindonesia.com
+
+  worker:
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: info
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: "587"
+      SMTP_USER: ${SMTP_USER:?wajib diisi}
+      SMTP_PASS: ${SMTP_PASS:?wajib diisi}
+
+  caddy:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - ./web/customer:/srv/customer:ro
+      - ./web/admin:/srv/admin:ro
+      - caddydata:/data
+      - caddyconfig:/config
+
+volumes:
+  caddydata:
+  caddyconfig:

@@ -1,0 +1,34 @@
+{
+	admin off
+	auto_https off
+}
+
+# ---- Customer Portal : http://localhost:8080 ----
+:80 {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		root * /srv/customer
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# ---- Admin Portal : http://localhost:8081 ----
+:81 {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		root * /srv/admin
+		try_files {path} /index.html
+		file_server
+	}
+}
