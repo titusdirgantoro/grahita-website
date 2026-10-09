@@ -67,7 +67,6 @@ curlx() {
 cookie() { awk -v n="$2" '$6==n {v=$7} END {print v}' "$1"; }
 
 kode() { printf '%s' "$1" | tail -1; }
-isi()  { printf '%s' "$1" | sed '$d'; }
 # sukses2xx mengembalikan 0 bila kode status diawali "2".
 sukses2xx() { case "$1" in 2??) return 0 ;; *) return 1 ;; esac; }
 

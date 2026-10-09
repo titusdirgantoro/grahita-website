@@ -1,29 +1,28 @@
 == 1. bangun binary ==
--rwxrwxr-x 1 hermes hermes 43610400 Oct  9 08:50 /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/staging-lokal/server
+-rwxrwxr-x 1 hermes hermes 43611136 Oct  9 09:08 /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/staging-lokal/server
 == 2. siapkan database grahita_f122 ==
-NOTICE:  database "grahita_f122" does not exist, skipping
 == 3. migrasi ==
-{"time":"2026-10-09T08:50:21.093322459Z","level":"INFO","msg":"menjalankan server","mode":"migrate","env":"staging","version":"dev"}
-{"time":"2026-10-09T08:50:21.65653241Z","level":"INFO","msg":"goose","msg":"OK   0001_init.sql (534.32ms)"}
-{"time":"2026-10-09T08:50:21.669037985Z","level":"INFO","msg":"goose","msg":"OK   0002_functions.sql (11.26ms)"}
-{"time":"2026-10-09T08:50:21.685744412Z","level":"INFO","msg":"goose","msg":"OK   0003_order_integrity.sql (16.25ms)"}
-{"time":"2026-10-09T08:50:21.694524562Z","level":"INFO","msg":"goose","msg":"OK   0004_numbering.sql (8.33ms)"}
-{"time":"2026-10-09T08:50:21.722726072Z","level":"INFO","msg":"goose","msg":"OK   0005_report_jobs.sql (27.99ms)"}
-{"time":"2026-10-09T08:50:21.722864409Z","level":"INFO","msg":"goose","msg":"goose: successfully migrated database to version: 5"}
-{"time":"2026-10-09T08:50:21.723050998Z","level":"INFO","msg":"migrasi selesai"}
-{"time":"2026-10-09T08:50:21.912295125Z","level":"INFO","msg":"migrasi river selesai","migrasi_diterapkan":8,"versi_terakhir":8}
-{"time":"2026-10-09T08:50:21.912581048Z","level":"INFO","msg":"berhenti dengan rapi","mode":"migrate"}
+{"time":"2026-10-09T09:08:43.836457879Z","level":"INFO","msg":"menjalankan server","mode":"migrate","env":"staging","version":"dev"}
+{"time":"2026-10-09T09:08:44.444049506Z","level":"INFO","msg":"goose","msg":"OK   0001_init.sql (555.59ms)"}
+{"time":"2026-10-09T09:08:44.460889632Z","level":"INFO","msg":"goose","msg":"OK   0002_functions.sql (16.4ms)"}
+{"time":"2026-10-09T09:08:44.474616333Z","level":"INFO","msg":"goose","msg":"OK   0003_order_integrity.sql (13.42ms)"}
+{"time":"2026-10-09T09:08:44.479702451Z","level":"INFO","msg":"goose","msg":"OK   0004_numbering.sql (4.8ms)"}
+{"time":"2026-10-09T09:08:44.497592482Z","level":"INFO","msg":"goose","msg":"OK   0005_report_jobs.sql (17.65ms)"}
+{"time":"2026-10-09T09:08:44.497657763Z","level":"INFO","msg":"goose","msg":"goose: successfully migrated database to version: 5"}
+{"time":"2026-10-09T09:08:44.497837858Z","level":"INFO","msg":"migrasi selesai"}
+{"time":"2026-10-09T09:08:44.740479288Z","level":"INFO","msg":"migrasi river selesai","migrasi_diterapkan":8,"versi_terakhir":8}
+{"time":"2026-10-09T09:08:44.740674962Z","level":"INFO","msg":"berhenti dengan rapi","mode":"migrate"}
 == 4. seed ==
-{"time":"2026-10-09T08:50:22.329683987Z","level":"INFO","msg":"menjalankan server","mode":"seed","env":"staging","version":"dev"}
-{"time":"2026-10-09T08:50:22.703059911Z","level":"INFO","msg":"akun contoh dibuat","jumlah_admin":2,"sumber_password":"SEED_PASSWORD"}
-{"time":"2026-10-09T08:50:22.704821415Z","level":"INFO","msg":"seed selesai"}
-{"time":"2026-10-09T08:50:22.705129219Z","level":"INFO","msg":"berhenti dengan rapi","mode":"seed"}
+{"time":"2026-10-09T09:08:45.200767983Z","level":"INFO","msg":"menjalankan server","mode":"seed","env":"staging","version":"dev"}
+{"time":"2026-10-09T09:08:45.731435616Z","level":"INFO","msg":"akun contoh dibuat","jumlah_admin":2,"sumber_password":"SEED_PASSWORD"}
+{"time":"2026-10-09T09:08:45.733804284Z","level":"INFO","msg":"seed selesai"}
+{"time":"2026-10-09T09:08:45.736623923Z","level":"INFO","msg":"berhenti dengan rapi","mode":"seed"}
 == 5. jalankan API (latar belakang) ==
-pid=1729583
+pid=1772406
 API siap setelah 2 percobaan
 == 6. periksa kesiapan ==
 {"checks":{"database":"ok","gotenberg":"tidak dikonfigurasi","migrations":"ok (versi 5)","smtp":"ok","storage":"tidak dikonfigurasi"},"status":"ready","version":"dev"}
 
 == 7. contoh metrik ==
 grahita_build_info{env="staging",version="dev"} 1
-grahita_disk_used_ratio{mount="/"} 0.7325534765119007
+grahita_disk_used_ratio{mount="/"} 0.7345056144721706

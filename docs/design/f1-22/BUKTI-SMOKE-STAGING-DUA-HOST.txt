@@ -24,11 +24,11 @@ Uji asap staging Grahita
   [32mLULUS[0m cookie sesi host-only (tanpa Domain)
 
 3. Katalog cabang (harga dari server)
-  [32mLULUS[0m katalog 200; produk uji 01a11fdb-360b-95c7-6a98-788468937f82
+  [32mLULUS[0m katalog 200; produk uji 01a11fec-0a28-cfe7-be08-b9c337b0d874
 
 4. Buat draft lalu submit (C&C tanpa bukti)
-  [32mLULUS[0m draft dibuat 01a11fde-6268-27a7-ecc8-73755f6289fb (total 700000, status 201)
-  [32mLULUS[0m submit 200; status submitted, nomor 2026-10-02
+  [32mLULUS[0m draft dibuat 01a11fec-235c-1e87-bb08-4b6069ebab7c (total 700000, status 201)
+  [32mLULUS[0m submit 200; status submitted, nomor 2026-10-01
 
 5. Isolasi sesi antar host (cookie host-only)
   [32mLULUS[0m sesi cabang TIDAK berlaku di host admin (401)
