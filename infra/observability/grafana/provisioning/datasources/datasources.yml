@@ -1,0 +1,22 @@
+# Sumber data Grafana (Architecture.md §8).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 30s
+      httpMethod: POST
+    editable: false
+    # Tanpa kredensial: Prometheus internal Compose.
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000
+    editable: false

@@ -1,0 +1,50 @@
+# Prometheus untuk stack Grahita (Architecture.md §8).
+#
+# Dijalankan lewat overlay docker-compose.observability.yml. Target dipanen di
+# jaringan internal Compose: /metrics API tidak dipublikasikan ke host dan
+# Caddy tidak mem-proxy-nya, jadi hanya Prometheus yang bisa menjangkaunya.
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  # Label yang menempel pada semua deret waktu & alarm. Prometheus hanya
+  # mendukung bentuk ${VAR} (tanpa nilai bawaan); APP_ENV selalu diisi
+  # environment service di docker-compose.observability.yml.
+  external_labels:
+    sistem: grahita
+    lingkungan: "${APP_ENV}"
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # API: metrik HTTP, antrean email, pesanan, dan status cadangan.
+  - job_name: grahita-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8080"]
+        labels:
+          komponen: api
+
+  # Worker: metrik pekerjaan River (durasi, hasil) dari listener khusus
+  # WORKER_METRICS_ADDR. Tanpa target ini kegagalan job tidak terlihat.
+  - job_name: grahita-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["worker:9091"]
+        labels:
+          komponen: worker
+
+  # Disk/CPU/memori host: pelengkap alert disk > 80%.
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

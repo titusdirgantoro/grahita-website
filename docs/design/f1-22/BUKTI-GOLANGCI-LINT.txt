@@ -1,0 +1,45 @@
+internal/httpapi/integration_dashboard_pg_test.go:59:23: Error return value of `resp.Body.Close` is not checked (errcheck)
+	defer resp.Body.Close()
+	                     ^
+internal/httpapi/integration_proofs_pg_test.go:303:18: Error return value of `baca.Close` is not checked (errcheck)
+	defer baca.Close()
+	                ^
+internal/httpapi/integration_revise_pg_test.go:165:16: Error return value of `rc.Close` is not checked (errcheck)
+	defer rc.Close()
+	              ^
+internal/payment/payment_test.go:168:16: Error return value of `rc.Close` is not checked (errcheck)
+	defer rc.Close()
+	              ^
+internal/platform/storage/s3_test.go:171:16: Error return value of `rc.Close` is not checked (errcheck)
+	defer rc.Close()
+	              ^
+internal/httpapi/router_proofs_test.go:234:8: ineffectual assignment to body (ineffassign)
+	resp, body = doJSON(t, http.MethodGet, s.srv.URL+"/api/v1/orders/"+proofOrderA+"/proofs", "", cookiesB, "")
+	      ^
+internal/httpapi/router_proofs_test.go:238:8: ineffectual assignment to body (ineffassign)
+	resp, body = doJSON(t, http.MethodGet,
+	      ^
+internal/httpapi/router_proofs_test.go:404:8: ineffectual assignment to body (ineffassign)
+	resp, body = doJSON(t, http.MethodGet, s.srv.URL+"/api/v1/admin/orders/"+proofOrderB+"/proofs", "", cookies, "")
+	      ^
+internal/document/render.go:152:21: S1016: should convert r (type Rekening) to rekeningView instead of using struct literal (staticcheck)
+		out = append(out, rekeningView{Bank: r.Bank, Nomor: r.Nomor, AtasNama: r.AtasNama})
+		                  ^
+internal/httpapi/integration_documents_pdf_test.go:61:4: SA4004: the surrounding loop is unconditionally terminated (staticcheck)
+			break
+			^
+internal/httpapi/router_proofs_test.go:146:2: S1011: should replace loop with cookies = append(cookies, resp.Cookies()...) (staticcheck)
+	for _, c := range resp.Cookies() {
+	^
+internal/order/order.go:91:21: ST1005: error strings should not be capitalized (staticcheck)
+	ErrCNCNotAllowed = errors.New("Cash & Carry tidak diizinkan untuk cabang ini")
+	                   ^
+internal/notification/notification_test.go:332:22: func (*fakeMailer).terakhir is unused (unused)
+func (m *fakeMailer) terakhir(t *testing.T) mailer.Message {
+                     ^
+13 issues:
+* errcheck: 5
+* ineffassign: 3
+* staticcheck: 4
+* unused: 1
+EXIT=1

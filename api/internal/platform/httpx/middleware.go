@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/grahita/portal/api/internal/platform/apierr"
+	"github.com/grahita/portal/api/internal/platform/observability"
 )
 
 type ctxKey string
@@ -99,7 +100,8 @@ func Logger(next http.Handler) http.Handler {
 }
 
 // Recoverer mengubah panic menjadi 500 dengan bentuk error yang seragam dan
-// menjaga proses tetap hidup.
+// menjaga proses tetap hidup. Panic juga dikirim ke Sentry bila dikonfigurasi
+// (Architecture.md §8); tanpa SENTRY_DSN pelaporan itu no-op.
 func Recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -110,6 +112,11 @@ func Recoverer(next http.Handler) http.Handler {
 					"stack", string(debug.Stack()),
 					"request_id", RequestIDFrom(r.Context()),
 				)
+				observability.TangkapPanic(r.Context(), rec, map[string]string{
+					"route":      r.URL.Path,
+					"method":     r.Method,
+					"request_id": RequestIDFrom(r.Context()),
+				})
 				Fail(w, r, apierr.New(http.StatusInternalServerError, apierr.CodeInternal, "Terjadi kesalahan pada server."))
 			}
 		}()

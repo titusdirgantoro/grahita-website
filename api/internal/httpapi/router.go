@@ -17,8 +17,18 @@ func NewRouter(d Deps) http.Handler {
 	a := New(d)
 
 	r := chi.NewRouter()
+	// Metrik dipasang PALING LUAR (setelah RequestID) supaya defer-nya berjalan
+	// paling akhir: status akhir — termasuk 500 hasil Recoverer saat panic —
+	// yang tercatat, bukan 200 sementara. Menaruhnya setelah Recoverer membuat
+	// panic tercatat sebagai 200 dan mengecilkan rasio error pada alarm
+	// (Architecture.md §8).
+	if d.Metrics != nil {
+		r.Use(d.Metrics.Middleware)
+	}
 	r.Use(httpx.RequestID)
 	r.Use(httpx.Logger)
+	// Panic diubah menjadi 500 oleh Recoverer; metrik di atas mencatat hasil
+	// akhirnya.
 	r.Use(httpx.Recoverer)
 	r.Use(httpx.SecurityHeaders)
 	// Metadata request (IP klien) dititipkan lebih dulu supaya entri audit
@@ -41,6 +51,13 @@ func NewRouter(d Deps) http.Handler {
 	// Endpoint kesehatan: tersedia tanpa autentikasi dan tanpa CSRF.
 	r.Get("/healthz", a.adapt(a.healthz))
 	r.Get("/readyz", a.adapt(a.readyz))
+	// Metrik Prometheus (Architecture.md §8). Tanpa autentikasi seperti
+	// /healthz, tetapi TIDAK dijangkau publik: Caddy hanya mem-proxy /api/*
+	// dan port API tidak dipublikasikan di produksi (docker-compose.prod.yml),
+	// jadi hanya Prometheus di jaringan internal yang bisa memanjatnya.
+	if d.Metrics != nil {
+		r.Get("/metrics", d.Metrics.Handler().ServeHTTP)
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(a.authenticate)

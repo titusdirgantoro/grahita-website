@@ -1,0 +1,136 @@
+{
+  "uid": "grahita-operasional",
+  "title": "Grahita — Pekerjaan, Email, Cadangan & Disk",
+  "tags": ["grahita", "operasional"],
+  "timezone": "Asia/Jakarta",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "editable": false,
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Umur email tertua menunggu",
+      "description": "Ambang alarm: di atas 30 menit (Architecture.md §8).",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "grahita_outbox_oldest_pending_seconds", "legendFormat": "tertua" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 900 }, { "color": "red", "value": 1800 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Job gagal permanen (discarded)",
+      "description": "Di atas 0 selama 10 menit = alarm kritis (risiko F1-18).",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "grahita_jobs_current{state=\"discarded\"}", "legendFormat": "discarded" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Cadangan terakhir sukses",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "grahita_backup_last_run_success", "legendFormat": "{{jenis}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "GAGAL", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "SUKSES", "color": "green" } } }
+          ]
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Disk terpakai",
+      "description": "Ambang alarm: di atas 80% (Architecture.md §8).",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "grahita_disk_used_ratio", "legendFormat": "{{mount}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.8 }, { "color": "red", "value": 0.92 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Pekerjaan River per state",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "grahita_jobs_current", "legendFormat": "{{state}}" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Hasil pekerjaan 10 menit (sukses vs gagal)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind, outcome) (increase(grahita_jobs_completed_total[10m]))", "legendFormat": "{{kind}}/{{outcome}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Durasi job p95",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, kind) (rate(grahita_job_duration_seconds_bucket[15m])))", "legendFormat": "{{kind}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Antrean email per status",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "grahita_outbox_messages", "legendFormat": "{{status}}" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Pesanan per status",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "grahita_orders_current", "legendFormat": "{{status}}" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 10,
+      "type": "logs",
+      "title": "Log worker (Loki)",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "expr": "{compose_service=\"worker\"}" }],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}

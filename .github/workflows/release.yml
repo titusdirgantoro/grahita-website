@@ -1,0 +1,168 @@
+# Alur rilis: staging OTOMATIS setelah CI hijau, produksi HANYA setelah
+# persetujuan manual (Architecture.md §9, PRD §10).
+#
+# Persetujuan manual ditegakkan oleh GitHub Environment "production" dengan
+# protection rule "Required reviewers": job `produksi` menunggu reviewer
+# menyetujui sebelum langkahnya berjalan. Tidak ada tombol di dalam workflow
+# yang bisa melewatinya.
+#
+# Rahasia (SSH key, kredensial GHCR, kata sandi akun uji) SELALU dari GitHub
+# Secrets — tidak pernah masuk repo (Architecture.md §6; scripts/check-secrets.sh).
+
+name: Rilis
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_produksi:
+        description: "Setujui juga deploy produksi pada jalannya alur ini"
+        type: boolean
+        default: false
+
+env:
+  GO_VERSION: "1.27"
+  NODE_VERSION: "22"
+  REGISTRY: ghcr.io
+
+jobs:
+  gerbang:
+    name: Gerbang pra-rilis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tidak ada rahasia di repo
+        run: ./scripts/check-secrets.sh
+
+      # Migrasi harus kompatibel mundur supaya rollback tetap mungkin
+      # (Architecture.md §9).
+      - name: Migrasi kompatibel mundur
+        run: ./scripts/check-migration-kompatibel.sh
+
+  terbitkan:
+    name: Build & terbitkan image (GHCR)
+    needs: gerbang
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        name: Tag = commit SHA (imutable)
+        run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push image api (dipakai api DAN worker)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/api:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/api:staging
+
+      - name: Build & push image web (dua SPA + Caddy)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/web:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/web:staging
+
+  staging:
+    name: Deploy staging (otomatis)
+    needs: terbitkan
+    runs-on: ubuntu-latest
+    # Environment "staging" TANPA reviewer: rilis ke staging memang otomatis.
+    environment:
+      name: staging
+      url: https://${{ vars.STAGING_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy staging
+        env:
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          SSH_PORT: ${{ secrets.STAGING_SSH_PORT }}
+          REMOTE_DIR: ${{ vars.STAGING_REMOTE_DIR }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ needs.terbitkan.outputs.tag }}
+          LINGKUNGAN: staging
+        run: ./infra/deploy/deploy.sh
+
+      - name: Uji asap staging (login → submit → verify → download)
+        env:
+          CUSTOMER_BASE: https://${{ vars.STAGING_HOST }}
+          ADMIN_BASE: https://${{ vars.STAGING_ADMIN_HOST }}
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+          SMOKE_ADMIN_EMAIL: ${{ secrets.SMOKE_ADMIN_EMAIL }}
+          SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+          SMOKE_BASIC_AUTH: ${{ secrets.STAGING_BASIC_AUTH }}
+        run: |
+          if [ -z "${SMOKE_EMAIL:-}" ] || [ -z "${SMOKE_ADMIN_EMAIL:-}" ]; then
+            echo "Akun uji belum tersedia di Secrets (SMOKE_EMAIL/SMOKE_ADMIN_EMAIL)."
+            echo "Uji asap TIDAK dijalankan — staging belum boleh disebut terverifikasi."
+            exit 1
+          fi
+          ./scripts/smoke-staging.sh
+
+  produksi:
+    name: Deploy produksi (persetujuan manual)
+    needs: [terbitkan, staging]
+    runs-on: ubuntu-latest
+    # Job ini menunggu reviewer menyetujui Environment "production" pada UI
+    # GitHub Actions. Inilah gerbang "produksi hanya sesudah approval".
+    environment:
+      name: production
+      url: https://${{ vars.CUSTOMER_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy produksi
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          REMOTE_DIR: ${{ vars.PROD_REMOTE_DIR }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ needs.terbitkan.outputs.tag }}
+          LINGKUNGAN: production
+        run: ./infra/deploy/deploy.sh
+
+      - name: Uji asap produksi (baca-saja)
+        env:
+          CUSTOMER_BASE: https://${{ vars.CUSTOMER_HOST }}
+          ADMIN_BASE: https://${{ vars.ADMIN_HOST }}
+        run: |
+          set -eu
+          # /healthz & /readyz sengaja TIDAK diproxy Caddy (hanya /api/*),
+          # jadi pemeriksaan publik memakai meta same-origin.
+          for basis in "$CUSTOMER_BASE" "$ADMIN_BASE"; do
+            kode=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$basis/api/v1/meta")
+            echo "$basis/api/v1/meta -> $kode"
+            [ "$kode" = "200" ] || { echo "meta gagal pada $basis"; exit 1; }
+          done

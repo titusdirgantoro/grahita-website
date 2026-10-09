@@ -9,11 +9,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/grahita/portal/api/internal/backup"
 	"github.com/grahita/portal/api/internal/fulfillment"
@@ -247,6 +249,60 @@ type Client struct {
 	river *river.Client[pgx.Tx]
 }
 
+// PencatatJob menerima hasil satu pekerjaan River yang selesai dikerjakan.
+//
+// Interface ini sengaja kecil dan hidup di paket worker (bukan di paket
+// observability) supaya paket worker tidak bergantung pada Prometheus:
+// composition root menyerahkan implementasinya (observability.Metrics).
+type PencatatJob interface {
+	CatatJob(kind string, durasi time.Duration, err error)
+}
+
+// Opsi menyesuaikan pembuatan worker tanpa mengubah pemanggil yang sudah ada.
+type Opsi func(*konfigurasiWorker)
+
+type konfigurasiWorker struct {
+	pencatat PencatatJob
+}
+
+// DenganPencatatJob memasang pencatat metrik pekerjaan (Architecture.md §8).
+func DenganPencatatJob(p PencatatJob) Opsi {
+	return func(k *konfigurasiWorker) { k.pencatat = p }
+}
+
+// HookMetrikJob mengembalikan hook River yang mencatat durasi dan hasil setiap
+// pekerjaan ke pencatat. Mengembalikan nil bila pencatat nil.
+//
+// HookWorkBegin/WorkEnd tidak berbagi context (didokumentasikan River), jadi
+// waktu mulai disimpan pada peta berkunci keyed oleh id job.
+func HookMetrikJob(pencatat PencatatJob) []rivertype.Hook {
+	if pencatat == nil {
+		return nil
+	}
+	var mu sync.Mutex
+	mulai := map[int64]time.Time{}
+	return []rivertype.Hook{
+		river.HookWorkBeginFunc(func(_ context.Context, job *rivertype.JobRow) error {
+			mu.Lock()
+			mulai[job.ID] = time.Now()
+			mu.Unlock()
+			return nil
+		}),
+		river.HookWorkEndFunc(func(_ context.Context, job *rivertype.JobRow, err error) error {
+			mu.Lock()
+			t, ada := mulai[job.ID]
+			delete(mulai, job.ID)
+			mu.Unlock()
+			var durasi time.Duration
+			if ada {
+				durasi = time.Since(t)
+			}
+			pencatat.CatatJob(job.Kind, durasi, err)
+			return err
+		}),
+	}
+}
+
 // New membuat River client dengan queue sesuai konfigurasi.
 //
 // notif boleh nil (mis. pengujian unit worker tanpa database domain); bila
@@ -257,7 +313,12 @@ type Client struct {
 // laporan boleh nil: tanpa service laporan, job ekspor XLSX tidak didaftarkan
 // (permintaan ekspor sudah ditolak lebih dulu di API — tidak ada pekerjaan
 // menggantung).
-func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service, selesai ServerSelesai, laporan Laporan) (*Client, error) {
+func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service, selesai ServerSelesai, laporan Laporan, opts ...Opsi) (*Client, error) {
+	var konf konfigurasiWorker
+	for _, o := range opts {
+		o(&konf)
+	}
+
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &PingWorker{})
 	if notif != nil {
@@ -323,6 +384,7 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 		FetchCooldown:     cooldown,
 		FetchPollInterval: cfg.JobPollInterval,
 		SoftStopTimeout:   cfg.WorkerShutdown,
+		Hooks:             HookMetrikJob(konf.pencatat),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("buat river client: %w", err)

@@ -60,6 +60,12 @@ jobs:
             echo "Hasil sqlc generate berbeda dengan yang ada di repo."; exit 1
           fi
 
+      # Gerbang migrasi kompatibel mundur (Architecture.md §9): perubahan
+      # destruktif pada skema yang sudah dipakai membatalkan rollback.
+      - name: Migrasi kompatibel mundur
+        working-directory: .
+        run: ./scripts/check-migration-kompatibel.sh
+
   migrasi:
     name: Migrasi bersih + worker (PostgreSQL 18)
     runs-on: ubuntu-latest
@@ -160,9 +166,41 @@ jobs:
       - name: Pindai pola rahasia
         run: ./scripts/check-secrets.sh
 
-      - name: govulncheck (informasional)
-        continue-on-error: true
+      - name: govulncheck (gagal bila ada kerentanan yang bisa dijangkau)
         working-directory: api
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
+
+  # Pemindaian keamanan image: build image api (dipakai api DAN worker) lalu
+  # pindai paket OS + pustaka Go (Architecture.md §9: "scan (govulncheck,
+  # trivy, npm audit)"). Kerentanan HIGH/CRITICAL yang sudah ada perbaikannya
+  # menggagalkan build.
+  keamanan-gambar:
+    name: Build image + Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image api
+        run: docker build -t grahita-api:ci ./api
+
+      - name: Trivy (OS + pustaka, HIGH/CRITICAL yang dapat diperbaiki)
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          image-ref: grahita-api:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+
+      - name: Trivy (konfigurasi Dockerfile)
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          scan-type: config
+          scan-ref: api/Dockerfile
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          # Misconfig tanpa perbaikan (mis. `:latest`) tidak menggagalkan.
+          ignore-unfixed: true

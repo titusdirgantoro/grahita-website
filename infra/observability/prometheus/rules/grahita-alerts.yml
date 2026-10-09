@@ -1,0 +1,189 @@
+# Aturan alarm Grahita (Architecture.md §8).
+#
+# Satu berkas = satu kelompok aturan. Nama metrik di sini HARUS cocok dengan
+# yang diekspor internal/platform/observability (namespace "grahita") dan
+# dengan query di cmd/server/stats.go.
+#
+# Verifikasi: promtool check rules infra/observability/prometheus/rules/*.yml
+
+groups:
+  - name: grahita-api
+    rules:
+      # API error rate > 2% selama 5 menit (Architecture.md §8).
+      - alert: GrahitaAPILajuErrorTINGGI
+        expr: |
+          (
+            sum(rate(grahita_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(grahita_http_requests_total[5m])), 0.001)
+          ) > 0.02
+        for: 5m
+        labels:
+          tingkat: kritis
+          tim: backend
+        annotations:
+          ringkasan: "Laju error API di atas 2% selama 5 menit"
+          keterangan: >-
+            Rasio respons 5xx {{ $value | humanizePercentage }} dari seluruh
+            permintaan. Periksa log Loki (job grahita-api) dan Sentry untuk
+            stack trace; cek /readyz apakah database/storage bermasalah.
+
+      # API mati atau tidak bisa dipanen (proses/container berhenti).
+      - alert: GrahitaAPITidakTerjangkau
+        expr: up{job="grahita-api"} == 0
+        for: 2m
+        labels:
+          tingkat: kritis
+          tim: backend
+        annotations:
+          ringkasan: "Prometheus tidak bisa memanen API"
+          keterangan: >-
+            Periksa `docker compose ps api` dan log container. Endpoint
+            /healthz hanya menjawab bila proses hidup; /readyz menambahkan
+            status database & migrasi.
+
+      # Worker mati: pesanan Done tidak akan mendapat dokumen/email (F1-18).
+      - alert: GrahitaWorkerTidakTerjangkau
+        expr: up{job="grahita-worker"} == 0
+        for: 5m
+        labels:
+          tingkat: kritis
+          tim: backend
+        annotations:
+          ringkasan: "Prometheus tidak bisa memanen worker"
+          keterangan: >-
+            Worker memproses render dokumen, pengiriman email, ekspor laporan,
+            dan cadangan. Tanpa worker antrean akan menumpuk.
+
+  - name: grahita-pekerjaan
+    rules:
+      # Job gagal > 3 kali dalam 10 menit (Architecture.md §8:
+      # "job gagal > 3 berturut-turut").
+      - alert: GrahitaJobSeringGagal
+        expr: increase(grahita_jobs_completed_total{outcome="gagal"}[10m]) > 3
+        labels:
+          tingkat: peringatan
+          tim: backend
+        annotations:
+          ringkasan: "Pekerjaan latar belakang sering gagal ({{ $labels.kind }})"
+          keterangan: >-
+            {{ $value }} kegagalan {{ $labels.kind }} dalam 10 menit. Periksa
+            log worker; kegagalan render biasanya berarti Gotenberg/S3 belum
+            siap, kegagalan email biasanya SMTP.
+
+      # Job gagal PERMANEN (River `discarded`) — risiko F1-18: pesanan bisa
+      # tetap Done tanpa dokumen/email. Butuh rekonsiliasi manual.
+      - alert: GrahitaJobGagalPermanen
+        expr: grahita_jobs_current{state="discarded"} > 0
+        for: 10m
+        labels:
+          tingkat: kritis
+          tim: backend
+        annotations:
+          ringkasan: "Ada pekerjaan yang menyerah permanen (discarded)"
+          keterangan: >-
+            {{ $value }} job berakhir `discarded`. Jalankan prosedur
+            rekonsiliasi (infra/observability/README.md §Rekonsiliasi) supaya
+            pesanan tidak tertinggal tanpa dokumen/email.
+
+      # Antrean menumpuk: pekerjaan menunggu/tertunda dalam jumlah besar.
+      - alert: GrahitaAntreanJobMenumpuk
+        expr: grahita_jobs_current{state="available"} > 50
+        for: 15m
+        labels:
+          tingkat: peringatan
+          tim: backend
+        annotations:
+          ringkasan: "Antrean pekerjaan menumpuk ({{ $value }} menunggu)"
+          keterangan: >-
+            Worker mungkin lambat atau berhenti mengambil job. Periksa
+            WORKER_CONCURRENCY dan durasi job di dasbor Grahita — Pekerjaan.
+
+  - name: grahita-email
+    rules:
+      # Email outbox tertahan > 30 menit (Architecture.md §8).
+      - alert: GrahitaEmailTertahan
+        expr: grahita_outbox_oldest_pending_seconds > 1800
+        for: 5m
+        labels:
+          tingkat: kritis
+          tim: backend
+        annotations:
+          ringkasan: "Email tertua tertahan lebih dari 30 menit"
+          keterangan: >-
+            Umur email tertua yang belum terkirim {{ $value | humanizeDuration }}.
+            Periksa kredensial SMTP, konektivitas jaringan, dan log worker.
+
+      # Email gagal permanen (melewati batas percobaan) menunggu kirim ulang.
+      - alert: GrahitaEmailGagalPermanen
+        expr: grahita_outbox_messages{status="failed"} > 0
+        for: 30m
+        labels:
+          tingkat: peringatan
+          tim: backend
+        annotations:
+          ringkasan: "Ada email gagal permanen menunggu kirim ulang"
+          keterangan: >-
+            {{ $value }} email berstatus failed. Muncul juga sebagai chip
+            "perlu tindakan" di dasbor admin; admin dapat mengirim ulang dari
+            riwayat email.
+
+  - name: grahita-cadangan
+    rules:
+      # Cadangan terakhir GAGAL (F1-21, Architecture.md §7).
+      - alert: GrahitaCadanganGagal
+        expr: grahita_backup_last_run_success == 0
+        for: 5m
+        labels:
+          tingkat: kritis
+          tim: backend
+        annotations:
+          ringkasan: "Cadangan {{ $labels.jenis }} terakhir gagal"
+          keterangan: >-
+            Periksa `backup_runs.pesan` di halaman Pengaturan, kunci age,
+            kredensial rclone/Drive, dan ruang disk tujuan.
+
+      # Tidak ada cadangan SUKSES lebih dari 26 jam (jadwal harian 02:00 WIB
+      # memberi kelonggaran 2 jam). `absent(...)` menangkap kasus cadangan
+      # belum pernah berjalan sama sekali.
+      - alert: GrahitaCadanganBasi
+        expr: |
+          time() - grahita_backup_last_run_timestamp_seconds{jenis="postgres"} > 93600
+          or
+          absent(grahita_backup_last_run_timestamp_seconds{jenis="postgres"})
+        for: 30m
+        labels:
+          tingkat: kritis
+          tim: backend
+        annotations:
+          ringkasan: "Tidak ada cadangan harian yang terlihat lebih dari 26 jam"
+          keterangan: >-
+            Backup yang tidak pernah dijalankan/diuji tidak dihitung sebagai
+            backup. Periksa jadwal worker dan tabel backup_runs.
+
+  - name: grahita-disk
+    rules:
+      # Disk > 80% (Architecture.md §8).
+      - alert: GrahitaDiskHampirPenuh
+        expr: grahita_disk_used_ratio > 0.8
+        for: 10m
+        labels:
+          tingkat: peringatan
+          tim: infrastruktur
+        annotations:
+          ringkasan: "Disk {{ $labels.mount }} terpakai di atas 80%"
+          keterangan: >-
+            Pemakaian {{ $value | humanizePercentage }}. Bersihkan cadangan
+            lama, log container, atau perbesar volume sebelum penuh.
+
+      - alert: GrahitaDiskKritis
+        expr: grahita_disk_used_ratio > 0.92
+        for: 5m
+        labels:
+          tingkat: kritis
+          tim: infrastruktur
+        annotations:
+          ringkasan: "Disk {{ $labels.mount }} di atas 92% — risiko gagal tulis"
+          keterangan: >-
+            PostgreSQL/MinIO/Loki dapat gagal menulis. Tindakan segera:
+            kosongkan cadangan lama dan log.

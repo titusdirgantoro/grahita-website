@@ -1,0 +1,168 @@
+{
+  "uid": "grahita-api",
+  "title": "Grahita — API & HTTP",
+  "tags": ["grahita", "api"],
+  "timezone": "Asia/Jakarta",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "editable": false,
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "route",
+        "label": "Rute",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(grahita_http_requests_total, route)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "API terjangkau",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"grahita-api\"}",
+          "legendFormat": "api"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "MATI", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "HIDUP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Worker terjangkau",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"grahita-worker\"}",
+          "legendFormat": "worker"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "MATI", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "HIDUP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Rasio error 5 menit",
+      "description": "Ambang alarm: di atas 2% selama 5 menit (Architecture.md §8).",
+      "gridPos": { "h": 5, "w": 6, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(grahita_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(grahita_http_requests_total[5m])), 0.001)",
+          "legendFormat": "rasio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.01 }, { "color": "red", "value": 0.02 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Permintaan sedang diproses",
+      "gridPos": { "h": 5, "w": 6, "x": 14, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "grahita_http_in_flight_requests",
+          "legendFormat": "in-flight"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Permintaan per status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(grahita_http_requests_total{route=~\"$route\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 12, "stacking": { "mode": "normal" } } }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Latensi p95 per rute",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(grahita_http_request_duration_seconds_bucket{route=~\"$route\"}[5m])))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Proses API (goroutine & memori)",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "go_goroutines{job=\"grahita-api\"}", "legendFormat": "goroutine" },
+        { "refId": "B", "expr": "process_resident_memory_bytes{job=\"grahita-api\"}", "legendFormat": "RSS byte" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "logs",
+      "title": "Log API terbaru (Loki)",
+      "description": "Saring kata kunci; setiap baris memuat request_id untuk korelasi.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "refId": "A", "expr": "{compose_service=\"api\"}" }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}

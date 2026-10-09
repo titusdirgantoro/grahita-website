@@ -1,0 +1,65 @@
+# Alertmanager untuk Grahita (Architecture.md §8) — TEMPLATE.
+#
+# Berkas ini adalah TEMPLATE, bukan konfigurasi siap pakai: Alertmanager tidak
+# mendukung substitusi environment di konfigurasinya (berbeda dari Prometheus),
+# jadi `mulai.sh` merender PLACEHOLDER kredensial di bawah ini memakai sed
+# SEBELUM biner dijalankan (lihat docker-compose.observability.yml). Catatan
+# komentar ini sengaja tidak memuat placeholder apa pun supaya pemeriksaan
+# "semua placeholder sudah tersubstitusi" pada mulai.sh tidak salah alarm.
+#
+# Semua kredensial berasal dari environment; tidak ada alamat/kata sandi yang
+# di-hardcode di repo (Architecture.md §6, scripts/check-secrets.sh).
+#
+# Variabel WAJIB (container menolak start bila kosong): ALERT_SMTP_SMARTHOST,
+# ALERT_SMTP_FROM, ALERT_SMTP_USER, ALERT_SMTP_PASS, ALERT_EMAIL_TO.
+
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "${ALERT_SMTP_SMARTHOST}"
+  smtp_from: "${ALERT_SMTP_FROM}"
+  smtp_auth_username: "${ALERT_SMTP_USER}"
+  smtp_auth_password: "${ALERT_SMTP_PASS}"
+  smtp_require_tls: true
+
+route:
+  # Penerima bawaan: pengelola infrastruktur (diisi operator lewat environment).
+  receiver: pengelola
+  group_by: ["alertname", "komponen", "jenis"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Alarm kritis langsung dikirim tanpa menunggu kelompok lain.
+    - matchers:
+        - tingkat = "kritis"
+      receiver: pengelola
+      group_wait: 10s
+      repeat_interval: 1h
+
+receivers:
+  # Alamat tujuan dari environment: jangan tulis alamat pribadi di repo
+  # (temuan QA F1-16 soal .env.example).
+  - name: pengelola
+    email_configs:
+      - to: "${ALERT_EMAIL_TO}"
+        send_resolved: true
+        headers:
+          Subject: >-
+            [Grahita {{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+            ({{ .Alerts | len }} alarm)
+
+inhibit_rules:
+  # Bila API/worker tidak terjangkau, alarm turunannya (email tertahan, job
+  # menumpuk, error rate) hanya menambah bising — tahan sementara.
+  - source_matchers:
+      - alertname =~ "GrahitaAPITidakTerjangkau|GrahitaWorkerTidakTerjangkau"
+    target_matchers:
+      - alertname =~ "GrahitaEmailTertahan|GrahitaAntreanJobMenumpuk|GrahitaJobSeringGagal"
+    equal: ["sistem"]
+
+  # Disk hampir penuh memicu banyak alarm turunan; cukup tampilkan penyebabnya.
+  - source_matchers:
+      - alertname = "GrahitaDiskKritis"
+    target_matchers:
+      - alertname = "GrahitaDiskHampirPenuh"
+    equal: ["mount"]

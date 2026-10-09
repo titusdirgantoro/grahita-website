@@ -7,22 +7,53 @@
 # Rute admin berada di ROOT host admin (bukan /admin seperti dokumen lama).
 # Endpoint API tetap /api/v1/admin dan selalu dilayani API same-origin di host
 # masing-masing, sehingga browser tidak pernah melakukan request lintas-origin.
-
+#
+# Verifikasi: docker run --rm -v "$PWD/infra/caddy:/etc/caddy:ro" \
+#   -e CUSTOMER_HOST=... -e ADMIN_HOST=... caddy:2 caddy validate --config /etc/caddy/Caddyfile.prod
 {
-	email admin@grahitaindonesia.com
+	# Ganti sesuai kebijakan: alamat kontak ACME (Let's Encrypt), bukan rahasia.
+	email {$ACME_EMAIL:admin@grahitaindonesia.com}
 }
 
-{$CUSTOMER_HOST:grahita-branch.tiusclaw.com} {
-	encode gzip
-
+# Snippet header keamanan (Architecture.md §6). Dipakai kedua host supaya
+# header aset statis tidak pernah berbeda dari header respons API.
+(keamanan) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		X-Frame-Options "DENY"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+		# CSP ketat: SPA memakai aset self-host (tidak ada CDN pihak ketiga),
+		# API same-origin, font/ikon dari bundle. style-src 'unsafe-inline'
+		# masih dibutuhkan token CSS yang disuntik Vite.
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 		-Server
 	}
+}
 
+# Jalur internal yang TIDAK boleh dijangkau publik. Prometheus memanen /metrics
+# di jaringan Compose, jadi tidak ada alasan permintaan itu datang dari
+# internet; jawab 404 supaya keberadaannya tidak terungkap.
+#
+# Memakai `handle` (bukan `respond`) karena urutan direktif Caddy menaruh
+# `handle` SEBELUM `respond`, sehingga `respond` akan dievaluasi setelah
+# penangan SPA catch-all dan /metrics justru dilayani index.html (terbukti pada
+# verifikasi replika: /metrics menjawab 200 sebelum perbaikan ini).
+(blokir_internal) {
+	@internal path /metrics /metrics/* /debug/* /internal/* /admin/*.map
+	handle @internal {
+		respond 404
+	}
+}
+
+{$CUSTOMER_HOST:grahita-branch.tiusclaw.com} {
+	encode gzip zstd
+	import keamanan
+	import blokir_internal
+
+	# API same-origin: /api/v1 selalu dilayani host yang sama dengan SPA,
+	# sehingga cookie sesi host-only tetap dikirim dan tidak ada CORS.
 	handle /api/* {
 		reverse_proxy api:8080
 	}
@@ -35,15 +66,9 @@
 }
 
 {$ADMIN_HOST:grahita-admin.tiusclaw.com} {
-	encode gzip
-
-	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		X-Content-Type-Options "nosniff"
-		Referrer-Policy "strict-origin-when-cross-origin"
-		X-Frame-Options "DENY"
-		-Server
-	}
+	encode gzip zstd
+	import keamanan
+	import blokir_internal
 
 	handle /api/* {
 		reverse_proxy api:8080

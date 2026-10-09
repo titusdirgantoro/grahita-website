@@ -27,6 +27,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/platform/mailer"
+	"github.com/grahita/portal/api/internal/platform/observability"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/registration"
@@ -123,6 +124,11 @@ type Deps struct {
 	// ProofLimiter membatasi laju unggahan bukti transfer per akun
 	// (Architecture.md §6: unggahan dibatasi).
 	ProofLimiter *httpx.RateLimiter
+
+	// Metrics menyediakan endpoint /metrics beserta penghitung permintaan
+	// (Architecture.md §8). Boleh nil: tanpa itu tidak ada metrik sama sekali
+	// (dipakai pengujian router yang tidak membutuhkan Prometheus).
+	Metrics *observability.Metrics
 }
 
 // API memegang dependensi untuk handler.

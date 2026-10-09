@@ -1,0 +1,54 @@
+===== 1. caddy validate Caddyfile.prod =====
+Valid configuration
+  -> LULUS
+
+===== 2. caddy validate Caddyfile.staging =====
+Valid configuration
+  -> LULUS
+
+===== 3. promtool check config (prometheus.yml) =====
+Checking /home/hermes/projects/grahita-website/infra/observability/prometheus/prometheus.yml
+ SUCCESS: /home/hermes/projects/grahita-website/infra/observability/prometheus/prometheus.yml is valid prometheus config file syntax
+
+  -> LULUS
+
+===== 4. promtool check rules (grahita-alerts.yml) =====
+Checking /home/hermes/projects/grahita-website/infra/observability/prometheus/rules/grahita-alerts.yml
+  SUCCESS: 12 rules found
+
+  -> LULUS
+
+===== 5. promtool check rules --lint=all =====
+Checking /home/hermes/projects/grahita-website/infra/observability/prometheus/rules/grahita-alerts.yml
+  SUCCESS: 12 rules found
+
+  -> LULUS
+
+===== 6. amtool check-config (Alertmanager, dirender lewat mulai.sh) =====
+render selesai: /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.DVpXw8S30Q/alertmanager.yml
+  -> LULUS
+Checking '/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.DVpXw8S30Q/alertmanager.yml'  SUCCESS
+Found:
+ - global config
+ - route
+ - 2 inhibit rules
+ - 1 receivers
+ - 0 templates
+
+  -> LULUS
+
+===== 6b. mulai.sh MENOLAK render tanpa kredensial (fail closed) =====
+Alertmanager tidak dapat dirender: variabel wajib belum diisi: ALERT_SMTP_PASS
+Isi lewat environment (mekanisme rahasia operator); jangan tulis di repo.
+  -> LULUS: exit != 0
+
+===== 7. Grafana: JSON dasbor valid =====
+  OK   grahita-api.json
+  OK   grahita-operasional.json
+
+===== 8. docker compose config (tanpa daemon) =====
+  -> LULUS
+  -> LULUS
+  -> LULUS
+
+SEMUA VERIFIKASI KONFIGURASI LULUS

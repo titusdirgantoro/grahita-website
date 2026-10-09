@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/grahita/portal/api/internal/platform/observability"
 )
 
 // Domain keputusan user (tidak boleh diubah tanpa persetujuan):
@@ -118,6 +120,22 @@ type Config struct {
 	WorkerQueues    map[string]int
 	WorkerShutdown  time.Duration
 	JobPollInterval time.Duration
+
+	// Observability (Architecture.md §8). METRICS_ENABLED menyalakan endpoint
+	// /metrics beserta penghitung permintaan; endpoint itu hanya dijangkau
+	// Prometheus di jaringan internal (Caddy tidak mem-proxy /metrics dan
+	// port API tidak dipublikasikan di produksi). SENTRY_DSN kosong berarti
+	// pelaporan error dimatikan (no-op).
+	MetricsEnabled    bool
+	MetricsInterval   time.Duration
+	DiskMounts        []string
+	SentryDSN         string
+	SentryEnvironment string
+	SentrySampleRate  float64
+	// WorkerMetricsAddr adalah alamat listener /metrics proses worker. Worker
+	// tidak melayani HTTP lain, jadi metrik pekerjaan (River) hanya bisa
+	// dipanen dari sini (Architecture.md §8).
+	WorkerMetricsAddr string
 }
 
 // IsProduction menandai lingkungan produksi.
@@ -194,6 +212,12 @@ func Load() (Config, error) {
 		BackupRestoreDSN:     env("BACKUP_RESTORE_DSN", ""),
 		WorkerShutdown:       20 * time.Second,
 		JobPollInterval:      15 * time.Second,
+		MetricsEnabled:       envBool("METRICS_ENABLED", true),
+		DiskMounts:           observability.MountsDariEnv(env("DISK_MOUNTS", "/")),
+		SentryDSN:            env("SENTRY_DSN", ""),
+		SentryEnvironment:    env("SENTRY_ENVIRONMENT", ""),
+		SentrySampleRate:     envFloat("SENTRY_TRACES_SAMPLE_RATE", 0),
+		WorkerMetricsAddr:    env("WORKER_METRICS_ADDR", ":9091"),
 	}
 
 	// Cara menjangkau tujuan cadangan ditentukan otomatis bila tidak disebut
@@ -236,6 +260,14 @@ func Load() (Config, error) {
 	}
 	if c.BackupSweepGrace, err = envDuration("BACKUP_SWEEP_GRACE", 24*time.Hour); err != nil {
 		return c, err
+	}
+	if c.MetricsInterval, err = envDuration("METRICS_INTERVAL", 30*time.Second); err != nil {
+		return c, err
+	}
+
+	// Lingkungan Sentry mengikuti APP_ENV bila tidak disebut eksplisit.
+	if c.SentryEnvironment = strings.TrimSpace(c.SentryEnvironment); c.SentryEnvironment == "" {
+		c.SentryEnvironment = c.AppEnv
 	}
 
 	c.WorkerQueues = map[string]int{"default": envInt("WORKER_CONCURRENCY", 4)}
@@ -336,6 +368,17 @@ func envInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return fallback
+}
+
+// envFloat membaca angka pecahan; nilai tidak sah diabaikan (kembali ke
+// bawaan) supaya konfigurasi pengamatan tidak menjatuhkan start server.
+func envFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return fallback

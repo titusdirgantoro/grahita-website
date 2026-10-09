@@ -1,0 +1,126 @@
+# Overlay observability: Prometheus, Alertmanager, Loki, Promtail, Grafana.
+#
+#	export APP_ENV=production ALERT_EMAIL_TO=... ALERT_SMTP_USER=... ALERT_SMTP_PASS=...
+#	docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+#
+# Tidak ada satu pun port yang dipublikasikan ke host: seluruh UI/skrap hanya
+# dijangkau lewat jaringan internal Compose atau terowongan SSH. Ini menghindari
+# Prometheus/Grafana terbuka di internet tanpa autentikasi.
+#
+# Semua kata sandi berasal dari environment (Architecture.md §6); tidak ada
+# rahasia di repo.
+
+services:
+  api:
+    environment:
+      # Metrik HTTP + antrean/pesanan/cadangan; endpoint /metrics hidup di
+      # dalam jaringan Compose dan TIDAK diproxy Caddy.
+      METRICS_ENABLED: "true"
+      METRICS_INTERVAL: ${METRICS_INTERVAL:-30s}
+      DISK_MOUNTS: ${DISK_MOUNTS:-/}
+      # Sentry opsional: kosong = no-op.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
+
+  worker:
+    environment:
+      METRICS_ENABLED: "true"
+      METRICS_INTERVAL: ${METRICS_INTERVAL:-30s}
+      WORKER_METRICS_ADDR: ":9091"
+      DISK_MOUNTS: ${DISK_MOUNTS:-/}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
+
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    restart: unless-stopped
+    depends_on:
+      - api
+      - worker
+    volumes:
+      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheusdata:/prometheus
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENSI:-30d}"
+      - "--web.enable-lifecycle"
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    volumes:
+      # Template + perender; Alertmanager tidak mendukung substitusi environment
+      # di konfigurasinya, jadi mulai.sh merender template lebih dulu.
+      - ./infra/observability/alertmanager/alertmanager.tmpl.yml:/etc/alertmanager/alertmanager.tmpl.yml:ro
+      - ./infra/observability/alertmanager/mulai.sh:/etc/alertmanager/mulai.sh:ro
+      - alertmanagerdata:/alertmanager
+    environment:
+      # Kredensial/kontak operator. WAJIB diisi: mulai.sh menolak start bila ada
+      # yang kosong, supaya alarm tidak pernah "berjalan" tanpa tujuan.
+      ALERT_SMTP_SMARTHOST: ${ALERT_SMTP_SMARTHOST:-}
+      ALERT_SMTP_FROM: ${ALERT_SMTP_FROM:-}
+      ALERT_SMTP_USER: ${ALERT_SMTP_USER:-}
+      ALERT_SMTP_PASS: ${ALERT_SMTP_PASS:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+    command: ["/bin/sh", "/etc/alertmanager/mulai.sh"]
+
+  loki:
+    image: grafana/loki:3.5.0
+    restart: unless-stopped
+    volumes:
+      - ./infra/observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - lokidata:/loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+
+  promtail:
+    image: grafana/promtail:3.5.0
+    restart: unless-stopped
+    depends_on:
+      - loki
+    volumes:
+      - ./infra/observability/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # Hanya baca log container; tidak menulis apa pun ke Docker.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?wajib diisi - kata sandi Grafana tidak boleh bawaan}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+
+  # Metrik host (disk/memori/CPU) — pelengkap alert disk.
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+
+volumes:
+  prometheusdata:
+  alertmanagerdata:
+  lokidata:
+  grafanadata:

@@ -1,0 +1,77 @@
+# Overlay STAGING (Architecture.md §5.3): salinan produksi, data anonim,
+# dilindungi basic-auth, tidak diindeks mesin pencari.
+#
+#	docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
+#
+# Perbedaan dari produksi:
+#   - Host staging (bukan host produksi) + Caddyfile.staging (X-Robots-Tag,
+#     HSTS pendek, basic-auth wajib).
+#   - APP_ENV=staging, SESSION_SECURE=true: cookie hanya lewat HTTPS.
+#   - SMTP diarahkan ke penangkap email internal (Mailpit profil tools) atau
+#     SMTP uji operator supaya email uji tidak keluar ke pelanggan nyata.
+
+services:
+  postgres:
+    ports: !override []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?wajib diisi di environment staging}
+
+  minio:
+    ports: !override []
+
+  mailpit:
+    # Penangkap email staging: taruh di profil supaya hanya jalan bila diminta
+    # (`--profile tools`), email uji tidak pernah keluar ke alamat nyata.
+    profiles: ["tools"]
+
+  api:
+    image: ${IMAGE_PREFIX:-ghcr.io/grahita/portal}/api:${IMAGE_TAG:-latest}
+    ports: !override []
+    environment:
+      APP_ENV: staging
+      LOG_LEVEL: info
+      CUSTOMER_HOST: ${STAGING_HOST:-staging.grahita-branch.tiusclaw.com}
+      ADMIN_HOST: ${STAGING_ADMIN_HOST:-staging.grahita-admin.tiusclaw.com}
+      PUBLIC_SCHEME: https
+      SESSION_SECURE: "true"
+      CORS_ORIGINS: ""
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@example.test}
+      METRICS_ENABLED: "true"
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: staging
+
+  worker:
+    image: ${IMAGE_PREFIX:-ghcr.io/grahita/portal}/api:${IMAGE_TAG:-latest}
+    environment:
+      APP_ENV: staging
+      LOG_LEVEL: info
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@example.test}
+      METRICS_ENABLED: "true"
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: staging
+
+  web:
+    image: ${IMAGE_PREFIX:-ghcr.io/grahita/portal}/web:${IMAGE_TAG:-latest}
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-admin@grahitaindonesia.com}
+      STAGING_HOST: ${STAGING_HOST:-staging.grahita-branch.tiusclaw.com}
+      STAGING_ADMIN_HOST: ${STAGING_ADMIN_HOST:-staging.grahita-admin.tiusclaw.com}
+      STAGING_BASIC_AUTH_USER: ${STAGING_BASIC_AUTH_USER:?wajib diisi}
+      # Hash bcrypt dari `caddy hash-password`; TIDAK pernah masuk repo.
+      STAGING_BASIC_AUTH_HASH: ${STAGING_BASIC_AUTH_HASH:?wajib diisi}
+    volumes:
+      - ./infra/caddy/Caddyfile.staging:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+
+volumes:
+  caddydata:
+  caddyconfig:

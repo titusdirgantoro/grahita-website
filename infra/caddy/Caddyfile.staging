@@ -1,0 +1,75 @@
+# Konfigurasi Caddy untuk STAGING (Architecture.md §5.3).
+#
+# Staging adalah salinan produksi dengan data anonim dan dilindungi basic-auth
+# supaya tidak diindeks/dilihat publik. Tidak ada kata sandi di repo: hash
+# bcrypt disubstitusi dari environment (bikin dengan `caddy hash-password`).
+#
+#   export STAGING_HOST=staging.grahita-branch.tiusclaw.com
+#   export STAGING_ADMIN_HOST=staging.grahita-admin.tiusclaw.com
+#   export STAGING_BASIC_AUTH_USER=grahita
+#   export STAGING_BASIC_AUTH_HASH='$2a$14$...'
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
+#
+# Verifikasi: caddy validate --config /etc/caddy/Caddyfile.staging
+{
+	email {$ACME_EMAIL:admin@grahitaindonesia.com}
+	# Untuk uji lokal tanpa DNS publik, aktifkan CA internal:
+	#   local_certs
+}
+
+(keamanan_staging) {
+	header {
+		Strict-Transport-Security "max-age=3600"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		# Jangan pernah diindeks mesin pencari.
+		X-Robots-Tag "noindex, nofollow, noarchive"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		-Server
+	}
+}
+
+(gerbang_staging) {
+	# Basic-auth wajib: tanpa hash yang sah, seluruh situs menolak akses.
+	basic_auth {
+		{$STAGING_BASIC_AUTH_USER:grahita} {$STAGING_BASIC_AUTH_HASH}
+	}
+	# Memakai `handle` supaya blokir ini dievaluasi SEBELUM penangan SPA
+	# catch-all (urutan direktif Caddy menaruh `handle` sebelum `respond`).
+	@internal path /metrics /metrics/* /debug/* /internal/*
+	handle @internal {
+		respond 404
+	}
+}
+
+{$STAGING_HOST:staging.grahita-branch.tiusclaw.com} {
+	encode gzip zstd
+	import keamanan_staging
+	import gerbang_staging
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle {
+		root * /srv/customer
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+{$STAGING_ADMIN_HOST:staging.grahita-admin.tiusclaw.com} {
+	encode gzip zstd
+	import keamanan_staging
+	import gerbang_staging
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle {
+		root * /srv/admin
+		try_files {path} /index.html
+		file_server
+	}
+}

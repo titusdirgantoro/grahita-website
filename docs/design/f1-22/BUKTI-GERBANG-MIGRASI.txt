@@ -1,0 +1,12 @@
+--- menjalankan gerbang atas migrasi destruktif ---
+PELANGGARAN 9999_kontrol_negatif.sql:2: pernyataan DROP di bagian Up: ALTER TABLE orders DROP COLUMN catatan;
+
+Migrasi tidak kompatibel mundur. Ikuti pola expand → migrate → contract:
+  1) tambah kolom/tabel baru (nullable), 2) isi data & pindahkan pembaca,
+  3) hapus yang lama pada rilis BERIKUTNYA lewat migrasi maju tersendiri.
+HASIL: LULUS — gerbang menolak migrasi destruktif (exit != 0)
+--- memastikan berkas uji terhapus ---
+ls: cannot access '/home/hermes/projects/grahita-website/api/db/migrations/9999_kontrol_negatif.sql': No such file or directory
+berkas uji sudah tidak ada
+--- gerbang atas repo bersih ---
+Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.

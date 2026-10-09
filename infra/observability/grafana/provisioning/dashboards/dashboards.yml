@@ -1,0 +1,16 @@
+# Penyedia dasbor Grafana: berkas JSON di /var/lib/grafana/dashboards
+# dipasang otomatis (Architecture.md §8). Dasbor tidak boleh diubah dari UI —
+# sumber kebenarannya adalah repo (infra/observability/grafana/dashboards).
+apiVersion: 1
+
+providers:
+  - name: grahita
+    orgId: 1
+    folder: Grahita
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 60
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

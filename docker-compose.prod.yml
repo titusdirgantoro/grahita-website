@@ -30,6 +30,9 @@ services:
     profiles: ["dev-only"]   # tidak ikut jalan di produksi
 
   api:
+    # Image dari registry (di-tag commit SHA oleh .github/workflows/release.yml);
+    # `build:` di docker-compose.yml tetap ada untuk pengembangan lokal.
+    image: ${IMAGE_PREFIX:-ghcr.io/grahita/portal}/api:${IMAGE_TAG:-latest}
     ports: !override []
     environment:
       APP_ENV: production
@@ -46,6 +49,7 @@ services:
       MAIL_FROM: ${MAIL_FROM:-no-reply@grahita.id}
 
   worker:
+    image: ${IMAGE_PREFIX:-ghcr.io/grahita/portal}/api:${IMAGE_TAG:-latest}
     environment:
       APP_ENV: production
       LOG_LEVEL: info
@@ -55,6 +59,7 @@ services:
       SMTP_PASS: ${SMTP_PASS:?wajib diisi}
 
   web:
+    image: ${IMAGE_PREFIX:-ghcr.io/grahita/portal}/web:${IMAGE_TAG:-latest}
     ports: !override
       - "80:80"
       - "443:443"

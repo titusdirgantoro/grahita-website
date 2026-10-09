@@ -93,8 +93,29 @@ openapi: ## Lint skema OpenAPI
 secrets: ## Memindai pola rahasia di repo
 	./scripts/check-secrets.sh
 
-ci-lokal: fmt vet test web-typecheck web-test web-build openapi secrets ## Menjalankan gerbang CI secara lokal
+migrasi-cek: ## Gerbang migrasi kompatibel mundur (Architecture.md §9)
+	./scripts/check-migration-kompatibel.sh
+
+smoke-staging: ## Uji asap alur kritis pada staging/produksi (butuh env kredensial)
+	./scripts/smoke-staging.sh
+
+## ---------- operasional (F1-22) ----------
+
+observability-up: ## Menjalankan Prometheus/Alertmanager/Loki/Promtail/Grafana
+	CUSTOMER_HOST=$${CUSTOMER_HOST:-grahita-branch.tiusclaw.com} ADMIN_HOST=$${ADMIN_HOST:-grahita-admin.tiusclaw.com} \
+	POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:?} SMTP_USER=$${SMTP_USER:?} SMTP_PASS=$${SMTP_PASS:?} \
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.observability.yml up -d
+
+observability-caddy-cek: ## Validasi Caddyfile produksi/staging (butuh biner caddy)
+	caddy validate --config infra/caddy/Caddyfile.prod --adapter caddyfile
+
+observability-prom-cek: ## Validasi konfigurasi & aturan Prometheus (butuh promtool)
+	promtool check config infra/observability/prometheus/prometheus.yml
+	promtool check rules infra/observability/prometheus/rules/grahita-alerts.yml
+
+ci-lokal: fmt vet test web-typecheck web-test web-build openapi secrets migrasi-cek ## Menjalankan gerbang CI secara lokal
 
 .PHONY: help up down reset logs ps migrate seed psql smoke fmt vet test test-integrasi \
         build sqlc shim-pg web-install web-dev-customer web-dev-admin web-typecheck \
-        web-test web-build openapi secrets ci-lokal
+        web-test web-build openapi secrets migrasi-cek smoke-staging observability-up \
+        observability-caddy-cek observability-prom-cek ci-lokal

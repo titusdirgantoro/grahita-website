@@ -439,3 +439,38 @@ Sebelum itu: arahkan DNS `grahita-branch.tiusclaw.com` dan
 `grahita-admin.tiusclaw.com` ke server, isi rahasia lewat environment
 (`POSTGRES_PASSWORD`, `SMTP_USER`, `SMTP_PASS`), dan siapkan backup harian
 sesuai `Architecture.md` §7. Caddy mengurus sertifikat TLS otomatis.
+
+## Operasional: observability, rilis & staging (F1-22)
+
+Rincian tiap bagian ada di dokumennya masing-masing; ringkasannya:
+
+| Kebutuhan | Berkas |
+|---|---|
+| Metrik, alarm, dasbor, log, runbook | `infra/observability/README.md` |
+| Overlay Prometheus/Alertmanager/Loki/Promtail/Grafana | `docker-compose.observability.yml` |
+| Aturan alarm (12 aturan) | `infra/observability/prometheus/rules/grahita-alerts.yml` |
+| Deploy SSH + rahasia yang dibutuhkan | `infra/deploy/README.md`, `infra/deploy/deploy.sh` |
+| CI (lint/test/migrasi/build/scan rahasia+image) | `.github/workflows/ci.yml` |
+| Rilis: staging otomatis → produksi disetujui manual | `.github/workflows/release.yml` |
+| Uji asap alur kritis dua host | `scripts/smoke-staging.sh` |
+| Gerbang migrasi kompatibel mundur | `scripts/check-migration-kompatibel.sh` |
+
+Endpoint metrik (`api:8080/metrics` dan `worker:9091/metrics`) **tidak
+dipublikasikan**: Caddy hanya mem-proxy `/api/*` dan overlay produksi tidak
+memetakan port API ke host. Caddy juga memblokir `/metrics` di tepi (404)
+sebagai pertahanan berlapis.
+
+```bash
+make observability-up        # Prometheus + Alertmanager + Loki + Grafana
+make observability-prom-cek  # promtool check config/rules
+make migrasi-cek             # gerbang migrasi kompatibel mundur
+make smoke-staging           # uji asap dua host (butuh env kredensial)
+```
+
+Verifikasi replika staging tanpa DNS/VPS nyata: jalankan `caddy validate` pada
+`infra/caddy/Caddyfile.staging`, adapt konfigurasi itu dengan
+`caddy adapt`, lalu ganti hanya nilai bergantung-lingkungan (alamat listen,
+upstream, akar SPA, TLS internal) dan jalankan `scripts/smoke-staging.sh`
+dengan `SMOKE_CURL_OPTS="--resolve ... --cacert ..."`. Cara ini yang dipakai
+untuk membuktikan kedua host menyajikan UI/API pada mesin tanpa DNS; lihat
+`docs/design/f1-22/HASIL.md`.

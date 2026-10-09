@@ -1,0 +1,42 @@
+# Promtail: mengumpulkan log container ke Loki (Architecture.md §8).
+#
+# Memakai Docker service discovery supaya hanya berjalan di Compose/VPS yang
+# sama. Label compose_project/compose_service memudahkan penyaringan di
+# Grafana (mis. {compose_service="api"}).
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: compose_service
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: compose_project
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: stream
+    pipeline_stages:
+      # Log aplikasi adalah JSON dari slog; angkat beberapa field menjadi label
+      # agar bisa difilter cepat tanpa membongkar isi pesan.
+      - json:
+          expressions:
+            level: level
+            msg: msg
+            request_id: request_id
+      - labels:
+          level: level

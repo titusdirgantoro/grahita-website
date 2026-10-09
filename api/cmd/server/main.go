@@ -54,6 +54,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/platform/mailer"
+	"github.com/grahita/portal/api/internal/platform/observability"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/registration"
@@ -108,6 +109,23 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevelSlog()}))
 	slog.SetDefault(logger)
 	logger.Info("menjalankan server", "mode", *mode, "env", cfg.AppEnv, "version", version)
+
+	// Pelaporan error ke Sentry (Architecture.md §8). Opsional: tanpa
+	// SENTRY_DSN seluruh pelaporan menjadi no-op, jadi pengembangan lokal dan
+	// pengujian tidak mengirim apa pun.
+	tutupSentry := func() {}
+	if terpasang, err := observability.InitSentry(observability.SentryOptions{
+		DSN:              cfg.SentryDSN,
+		Environment:      cfg.SentryEnvironment,
+		Release:          version,
+		TracesSampleRate: cfg.SentrySampleRate,
+		Logger:           logger,
+	}); err != nil {
+		logger.Warn("Sentry tidak terpasang", "err", err)
+	} else {
+		tutupSentry = terpasang
+	}
+	defer tutupSentry()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -184,6 +202,21 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 	}
 	defer pool.Close()
 
+	// Metrik Prometheus (Architecture.md §8). Dinyalakan secara bawaan dan
+	// dapat dimatikan dengan METRICS_ENABLED=false. Sumber angka database
+	// diserahkan sebagai interface supaya paket platform tetap bebas pgx.
+	var metrik *observability.Metrics
+	if cfg.MetricsEnabled {
+		metrik = observability.New(observability.Options{
+			Version: version,
+			Env:     cfg.AppEnv,
+			Sumber:  sumberStatistik{pool: pool},
+			Mounts:  cfg.DiskMounts,
+			Logger:  logger,
+		})
+		go metrik.JalankanPemantauan(ctx, cfg.MetricsInterval)
+	}
+
 	if mode == "worker" {
 		// Object storage juga dipasang di worker: pengiriman lampiran dokumen
 		// (F1-16), render Invoice/Surat Jalan setelah pesanan selesai (F1-18),
@@ -220,9 +253,18 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 			logger.Info("jadwal cadangan aktif", "tujuan", bk.Target().Nama(), "jadwal", bk.Jadwal())
 		}
 
-		client, err := worker.New(pool, cfg, notif, bk, selesai, reportSvc)
+		client, err := worker.New(pool, cfg, notif, bk, selesai, reportSvc, worker.DenganPencatatJob(metrik))
 		if err != nil {
 			return err
+		}
+		// Worker tidak melayani HTTP selain /metrics: Prometheus menjangkaunya
+		// di WORKER_METRICS_ADDR (tidak dipublikasikan ke host).
+		if metrik != nil {
+			hentikan, err := jalankanMetrikWorker(ctx, cfg, logger, metrik)
+			if err != nil {
+				return err
+			}
+			defer hentikan()
 		}
 		if err := client.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			return err
@@ -230,7 +272,7 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 		return nil
 	}
 
-	return runAPI(ctx, pool, cfg, logger)
+	return runAPI(ctx, pool, cfg, logger, metrik)
 }
 
 // buildStorage menyusun object storage S3-compatible dari konfigurasi.
@@ -306,7 +348,7 @@ func (h health) MigrationVersion(ctx context.Context) (int64, error) {
 }
 
 // runAPI menyusun seluruh dependensi dan menjalankan HTTP API.
-func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger *slog.Logger) error {
+func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger *slog.Logger, metrik *observability.Metrics) error {
 	authRepo := authpg.New(pool)
 	authSvc := auth.NewService(authRepo, authRepo, authRepo, clock.System(), cfg.SessionIdle, cfg.SessionAbsolute)
 
@@ -457,6 +499,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		ForgotLimiter:       forgotLimiter,
 		RegistrationLimiter: registrationLimiter,
 		ProofLimiter:        httpx.NewRateLimiter(30, 15*time.Minute),
+		Metrics:             metrik,
 	})
 
 	srv := &http.Server{
