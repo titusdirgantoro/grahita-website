@@ -344,7 +344,10 @@ func newPGFixture(t *testing.T) *pgFixture {
 		t.Fatalf("siapkan penjadwal pekerjaan: %v", err)
 	}
 	payRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
-	paySvc := payment.NewService(payRepo, payRepo, objek, settingsSvc)
+	// Sumber setelan AI dipasang (F2-26): unggahan bukti pada pesanan yang
+	// sudah dikirim menitipkan pekerjaan pembacaan bukti pada transaksi yang
+	// sama, sama seperti produksi (cmd/server).
+	paySvc := payment.NewService(payRepo, payRepo, objek, settingsSvc, payment.WithAISettings(settingsSvc))
 	f.payments = paySvc
 	f.paymentsRepo = payRepo
 	f.jobs = jobQueue
@@ -360,13 +363,14 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.revise = order.NewRevisionService(orderRepo, settingsSvc)
 
 	deps := Deps{
-		Config:      testConfig(),
-		Version:     "test-pg",
-		Health:      fakeHealth{migrasi: 9},
-		Auth:        svc,
-		Settings:    settingsSvc,
-		Catalog:     catalogSvc,
-		Orders:      order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
+		Config:   testConfig(),
+		Version:  "test-pg",
+		Health:   fakeHealth{migrasi: 9},
+		Auth:     svc,
+		Settings: settingsSvc,
+		Catalog:  catalogSvc,
+		Orders: order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc),
+			order.WithClock(clock.System()), order.WithAISettings(settingsSvc)),
 		AdminOrders: order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
 		Revise:      f.revise,
 		Dashboard: dashboard.NewService(dashboardpg.New(pool),

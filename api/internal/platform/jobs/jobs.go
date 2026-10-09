@@ -80,6 +80,27 @@ type ReportXLSXArgs struct {
 // Kind mengidentifikasi jenis job ekspor laporan di tabel River.
 func (ReportXLSXArgs) Kind() string { return KindReportXLSX }
 
+// KindOCRBukti adalah Kind pekerjaan "baca bukti transfer dengan AI/OCR lalu
+// putuskan verifikasi otomatis" (kartu F2-26; SystemDesign.md §4.3, PRD §5).
+const KindOCRBukti = "ocr_bukti"
+
+// OCRBuktiArgs meminta pembacaan AI/OCR seluruh bukti satu pesanan.
+//
+// Muatannya SENGAJA hanya id pesanan: seluruh keadaan (bukti mana yang sudah
+// dibaca — kolom `payment_proofs.ocr_at`, setelan `ai` yang berlaku, status
+// pesanan, dan log verifikasi terakhir) dibaca ulang saat pekerjaan dijalankan.
+// Job yang terlewat/tergandakan karena itu tidak pernah menggandakan keputusan
+// maupun log: bukti yang sudah dibaca tidak dipanggil lagi ke provider, dan
+// keputusan untuk satu himpunan bukti yang sama tidak ditulis dua kali
+// (River at-least-once; lihat catatan idempotensi di internal/payment/ocr.go).
+type OCRBuktiArgs struct {
+	// OrderID adalah id pesanan yang buktinya harus dibaca.
+	OrderID string `json:"order_id"`
+}
+
+// Kind mengidentifikasi jenis job pembacaan bukti di tabel River.
+func (OCRBuktiArgs) Kind() string { return KindOCRBukti }
+
 // KindReminderCNC adalah Kind pekerjaan "periksa dan antre pengingat pembayaran
 // Cash & Carry" yang dijalankan terjadwal 07:00 WIB (F2-23, SystemDesign.md
 // §4.6, PRD CP-CNC-05).

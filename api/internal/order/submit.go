@@ -56,6 +56,18 @@ type BranchFlags interface {
 // Option mengubah perilaku Service pesanan.
 type Option func(*Service)
 
+// AISettingsSource membaca setelan AI yang sedang berlaku (PRD §4.9). Dipakai
+// submit untuk memutuskan apakah pesanan yang baru dikirim harus menitipkan
+// pekerjaan pembacaan bukti (kartu F2-26, SystemDesign.md §4.2).
+// Implementasinya adalah settings.Service.
+type AISettingsSource interface {
+	AISettings(ctx context.Context) (settings.AISettings, error)
+}
+
+// WithAISettings memasang sumber setelan AI. Tanpa ini, AI dianggap mati:
+// submit tidak pernah menitipkan pekerjaan pembacaan bukti.
+func WithAISettings(a AISettingsSource) Option { return func(s *Service) { s.ai = a } }
+
 // WithBranchFlags memasang sumber flag cabang (C&C). Tanpa ini, permintaan
 // C&C SELALU ditolak (fail closed): flag yang tidak bisa diverifikasi tidak
 // boleh dianggap benar.
@@ -89,6 +101,10 @@ type SubmitRequest struct {
 	BiayaPackaging int64
 	// DigitInvoice adalah setelan `digit_invoice` saat submit (BR-03).
 	DigitInvoice int
+	// EnqueueOCR meminta repository menitipkan pekerjaan pembacaan bukti
+	// AI/OCR pada transaksi submit yang sama (kartu F2-26, SystemDesign.md
+	// §4.2). Diisi service HANYA ketika `ai.aktif = true`.
+	EnqueueOCR bool
 }
 
 // SubmitLine adalah satu baris draft beserta keadaan master dan harga cabang
@@ -283,6 +299,17 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 		Tanggal:        tanggal,
 		BiayaPackaging: biaya,
 		DigitInvoice:   int(digit),
+	}
+
+	// Setelan AI dibaca pada saat submit: pesanan yang dikirim dengan AI
+	// menyala mendapat pekerjaan pembacaan bukti pada transaksi yang sama
+	// (F2-26, SystemDesign.md §4.2). Tanpa sumber setelan, AI dianggap mati.
+	if s.ai != nil {
+		ai, err := s.ai.AISettings(ctx)
+		if err != nil {
+			return Order{}, fmt.Errorf("baca setelan %s: %w", settings.AI, err)
+		}
+		req.EnqueueOCR = ai.Aktif
 	}
 	if in.IsCNC {
 		cncHari, err := s.cfg.Int(ctx, settings.CNCHari)

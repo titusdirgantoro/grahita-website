@@ -21,6 +21,7 @@ import (
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/database"
+	"github.com/grahita/portal/api/internal/platform/jobs"
 	"github.com/grahita/portal/api/internal/platform/pgtypes"
 )
 
@@ -407,6 +408,21 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 		ActorID:   pgtypes.UUID(req.ActorID),
 	}); err != nil {
 		return order.Order{}, fmt.Errorf("query InsertOrderEvent: %w", err)
+	}
+
+	// Pekerjaan pembacaan bukti AI/OCR (kartu F2-26) DITITIPKAN pada transaksi
+	// submit yang sama (SystemDesign.md §4.2: "job: verifikasi AI (bila
+	// aktif)"). Karena River menyimpan job di PostgreSQL yang sama, tidak
+	// mungkin terjadi "pesanan terkirim tapi pembacaan buktinya hilang" atau
+	// sebaliknya. Tanpa penjadwal, submit DITOLAK alih-alih mengirim pesanan
+	// yang tidak akan pernah dibaca AI — gagal terang-terangan.
+	if req.EnqueueOCR {
+		if r.jobs == nil {
+			return order.Order{}, fmt.Errorf("%w: penjadwal pekerjaan pembacaan bukti belum terpasang", order.ErrQueueUnavailable)
+		}
+		if _, err := r.jobs.InsertTx(ctx, tx, jobs.OCRBuktiArgs{OrderID: req.ID}, nil); err != nil {
+			return order.Order{}, fmt.Errorf("titipkan pekerjaan pembacaan bukti: %w", err)
+		}
 	}
 
 	saved, err := loadOrder(ctx, q, req.ID, req.BranchID)

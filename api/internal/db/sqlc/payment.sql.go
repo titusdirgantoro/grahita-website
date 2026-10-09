@@ -272,6 +272,65 @@ func (q *Queries) ListPaymentProofs(ctx context.Context, orderID string) ([]List
 	return items, nil
 }
 
+const listProofsForOCR = `-- name: ListProofsForOCR :many
+SELECT id, order_id, storage_key, mime_type, nama_file,
+       ocr_nominal, ocr_tanggal, ocr_bank, ocr_rek_akhir,
+       COALESCE(ocr_confidence, 0)::float8 AS ocr_confidence,
+       ocr_at
+  FROM payment_proofs
+ WHERE order_id = $1::uuid
+ ORDER BY created_at, id
+`
+
+type ListProofsForOCRRow struct {
+	ID            string      `json:"id"`
+	OrderID       string      `json:"order_id"`
+	StorageKey    string      `json:"storage_key"`
+	MimeType      string      `json:"mime_type"`
+	NamaFile      string      `json:"nama_file"`
+	OcrNominal    pgtype.Int8 `json:"ocr_nominal"`
+	OcrTanggal    *time.Time  `json:"ocr_tanggal"`
+	OcrBank       pgtype.Text `json:"ocr_bank"`
+	OcrRekAkhir   pgtype.Text `json:"ocr_rek_akhir"`
+	OcrConfidence float64     `json:"ocr_confidence"`
+	OcrAt         *time.Time  `json:"ocr_at"`
+}
+
+// Seluruh bukti satu pesanan beserta hasil baca yang SUDAH ADA, terlama dulu.
+// `ocr_at` NULL menandai bukti yang belum pernah dibaca sehingga pengulangan
+// pekerjaan tidak memanggil provider lagi untuk bukti yang sudah dibaca.
+func (q *Queries) ListProofsForOCR(ctx context.Context, orderID string) ([]ListProofsForOCRRow, error) {
+	rows, err := q.db.Query(ctx, listProofsForOCR, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProofsForOCRRow{}
+	for rows.Next() {
+		var i ListProofsForOCRRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderID,
+			&i.StorageKey,
+			&i.MimeType,
+			&i.NamaFile,
+			&i.OcrNominal,
+			&i.OcrTanggal,
+			&i.OcrBank,
+			&i.OcrRekAkhir,
+			&i.OcrConfidence,
+			&i.OcrAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockOrderForProof = `-- name: LockOrderForProof :one
 SELECT o.id FROM orders o WHERE o.id = $1::uuid FOR UPDATE
 `
@@ -284,6 +343,77 @@ func (q *Queries) LockOrderForProof(ctx context.Context, id string) (string, err
 	var id_2 string
 	err := row.Scan(&id_2)
 	return id_2, err
+}
+
+const orderForOCR = `-- name: OrderForOCR :one
+
+SELECT o.id,
+       o.status::text                              AS status,
+       o.total,
+       o.tanggal,
+       o.verif_status::text                        AS verif_status,
+       COALESCE(o.alasan_review::text, '')::text   AS alasan_review
+  FROM orders o
+ WHERE o.id = $1::uuid
+`
+
+type OrderForOCRRow struct {
+	ID           string     `json:"id"`
+	Status       string     `json:"status"`
+	Total        int64      `json:"total"`
+	Tanggal      *time.Time `json:"tanggal"`
+	VerifStatus  string     `json:"verif_status"`
+	AlasanReview string     `json:"alasan_review"`
+}
+
+// ---------------------------------------------------------------- F2-26 ----
+// Pembacaan bukti AI/OCR (kartu F2-26, PRD §5, Database.md §4.5/§7.4).
+//
+// Satu jalannya pekerjaan: baca bukti yang BELUM pernah dibaca (`ocr_at`
+// NULL) lewat provider, simpan hasil per bukti + entri audit raw-nya, jumlahkan
+// nominal seluruh bukti, lalu serahkan keputusan ke `payment.MarkVerified`
+// (metode `ai`). Query di bawah menyediakan seluruh bahan itu.
+// Konteks pesanan yang dibutuhkan penilaian otomatis: status (hanya
+// `submitted` yang dinilai), total pesanan, tanggal bisnis (toleransi mundur),
+// dan sub-status verifikasi yang sedang berlaku.
+func (q *Queries) OrderForOCR(ctx context.Context, id string) (OrderForOCRRow, error) {
+	row := q.db.QueryRow(ctx, orderForOCR, id)
+	var i OrderForOCRRow
+	err := row.Scan(
+		&i.ID,
+		&i.Status,
+		&i.Total,
+		&i.Tanggal,
+		&i.VerifStatus,
+		&i.AlasanReview,
+	)
+	return i, err
+}
+
+const orderSudahDinilaiAI = `-- name: OrderSudahDinilaiAI :one
+SELECT EXISTS (
+    SELECT 1
+      FROM verification_logs v
+     WHERE v.order_id = $1::uuid
+       AND v.metode = 'ai'
+       AND v.created_at >= COALESCE(
+             (SELECT max(p.ocr_at) FROM payment_proofs p
+               WHERE p.order_id = $1::uuid),
+             to_timestamp(0))
+)::bool AS sudah
+`
+
+// Penjaga IDEMPOTENSI (kartu F2-26): sudahkah ada keputusan AI yang dibuat
+// SESUDAH bukti terakhir dibaca? Bila ya, keputusan untuk himpunan bukti yang
+// sama tidak ditulis dua kali — pengulangan job River (at-least-once) tidak
+// menambah baris verification_logs, timeline, atau audit. Bukti BARU (yang
+// ocr_at-nya lebih muda) otomatis membuat jawabannya false sehingga penilaian
+// ulang tetap terjadi.
+func (q *Queries) OrderSudahDinilaiAI(ctx context.Context, orderID string) (bool, error) {
+	row := q.db.QueryRow(ctx, orderSudahDinilaiAI, orderID)
+	var sudah bool
+	err := row.Scan(&sudah)
+	return sudah, err
 }
 
 const sha256PaymentProofs = `-- name: Sha256PaymentProofs :many
@@ -313,4 +443,45 @@ func (q *Queries) Sha256PaymentProofs(ctx context.Context, orderID string) ([][]
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateProofOCR = `-- name: UpdateProofOCR :exec
+UPDATE payment_proofs
+   SET ocr_nominal    = $1,
+       ocr_tanggal    = $2::date,
+       ocr_bank       = $3,
+       ocr_rek_akhir  = $4,
+       ocr_confidence = $5,
+       ocr_raw        = $6,
+       ocr_at         = now()
+ WHERE id = $7::uuid
+   AND order_id = $8::uuid
+`
+
+type UpdateProofOCRParams struct {
+	OcrNominal    pgtype.Int8    `json:"ocr_nominal"`
+	OcrTanggal    *time.Time     `json:"ocr_tanggal"`
+	OcrBank       pgtype.Text    `json:"ocr_bank"`
+	OcrRekAkhir   pgtype.Text    `json:"ocr_rek_akhir"`
+	OcrConfidence pgtype.Numeric `json:"ocr_confidence"`
+	OcrRaw        []byte         `json:"ocr_raw"`
+	ID            string         `json:"id"`
+	OrderID       string         `json:"order_id"`
+}
+
+// Menyimpan hasil baca satu bukti (Database.md §4.5). `ocr_at` diisi DI SINI
+// sehingga bukti yang sudah dibaca tidak pernah dipanggil ulang ke provider.
+// Nilai yang tidak terbaca dikirim NULL — pembaca tidak mengarang angka.
+func (q *Queries) UpdateProofOCR(ctx context.Context, arg UpdateProofOCRParams) error {
+	_, err := q.db.Exec(ctx, updateProofOCR,
+		arg.OcrNominal,
+		arg.OcrTanggal,
+		arg.OcrBank,
+		arg.OcrRekAkhir,
+		arg.OcrConfidence,
+		arg.OcrRaw,
+		arg.ID,
+		arg.OrderID,
+	)
+	return err
 }

@@ -140,7 +140,33 @@ type Config struct {
 	// tidak melayani HTTP lain, jadi metrik pekerjaan (River) hanya bisa
 	// dipanen dari sini (Architecture.md §8).
 	WorkerMetricsAddr string
+
+	// Pembacaan bukti transfer AI/OCR (F2-26; Architecture.md §1/§11).
+	//
+	// OCRProvider memilih implementasi `payment.PaymentReader`: "claude"
+	// (bawaan) memakai Claude vision, "mock" memakai pembaca deterministik
+	// untuk pengembangan lokal/pengujian (Architecture.md §1: "OCR mode mock").
+	OCRProvider string
+	// AnthropicAPIKey adalah kunci Claude API. Kosong berarti provider claude
+	// BELUM bisa dipakai: pekerjaan pembacaan bukti gagal dan diulang (River),
+	// bukan menyetujui pembayaran atas dasar tebakan. Kunci TIDAK pernah
+	// dicatat ke log maupun entri audit.
+	AnthropicAPIKey string
+	// AnthropicBaseURL/AnthropicModel mengatur endpoint + model vision;
+	// kosong berarti bawaan pembaca (api.anthropic.com, model bawaan).
+	AnthropicBaseURL string
+	AnthropicModel   string
+	// OCRTimeout membatasi satu panggilan provider.
+	OCRTimeout time.Duration
 }
+
+// Nilai OCR_PROVIDER yang dikenal.
+const (
+	// OCRProviderClaude memakai Claude vision (bawaan).
+	OCRProviderClaude = "claude"
+	// OCRProviderMock memakai pembaca deterministik (lokal/pengujian).
+	OCRProviderMock = "mock"
+)
 
 // IsProduction menandai lingkungan produksi.
 func (c Config) IsProduction() bool { return c.AppEnv == "production" }
@@ -223,6 +249,19 @@ func Load() (Config, error) {
 		SentrySampleRate:     envFloat("SENTRY_TRACES_SAMPLE_RATE", 0),
 		WorkerMetricsAddr:    env("WORKER_METRICS_ADDR", ":9091"),
 		ReminderJamWIB:       envInt("REMINDER_JAM_WIB", 7),
+		OCRProvider:          strings.ToLower(strings.TrimSpace(env("OCR_PROVIDER", OCRProviderClaude))),
+		AnthropicAPIKey:      strings.TrimSpace(env("ANTHROPIC_API_KEY", "")),
+		AnthropicBaseURL:     strings.TrimSpace(env("ANTHROPIC_BASE_URL", "")),
+		AnthropicModel:       strings.TrimSpace(env("ANTHROPIC_MODEL", "")),
+	}
+
+	// Pilihan pembaca bukti divalidasi di sini: nilai yang tidak dikenal
+	// menghentikan start alih-alih diam-diam memakai provider lain (F2-26).
+	switch c.OCRProvider {
+	case OCRProviderClaude, OCRProviderMock:
+	default:
+		return c, fmt.Errorf("OCR_PROVIDER tidak dikenal: %q (pilih %s atau %s)",
+			c.OCRProvider, OCRProviderClaude, OCRProviderMock)
 	}
 
 	// Cara menjangkau tujuan cadangan ditentukan otomatis bila tidak disebut
@@ -261,6 +300,9 @@ func Load() (Config, error) {
 		return c, err
 	}
 	if c.BackupInterval, err = envDuration("BACKUP_INTERVAL", 15*time.Minute); err != nil {
+		return c, err
+	}
+	if c.OCRTimeout, err = envDuration("OCR_TIMEOUT", 60*time.Second); err != nil {
 		return c, err
 	}
 	if c.BackupSweepGrace, err = envDuration("BACKUP_SWEEP_GRACE", 24*time.Hour); err != nil {

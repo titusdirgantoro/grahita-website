@@ -72,6 +72,26 @@ const (
 // MaxCatatanVerifikasi membatasi panjang catatan verifikasi (kolom text).
 const MaxCatatanVerifikasi = 2000
 
+// Identitas AKTOR SISTEM untuk keputusan verifikasi otomatis (kartu F2-26).
+//
+// Nilainya sengaja konstan dan bukan akun nyata: verifikasi AI tidak punya
+// sesi, tidak bisa login, dan TIDAK boleh muncul sebagai pemeriksa manusia —
+// `verification_logs.admin_id` karena itu tetap NULL untuk metode `ai`
+// (Database.md §4.5). Pola yang sama dipakai pekerjaan latar lain
+// (backup/notifikasi: id 00000000-0000-0000-0000-000000000000).
+const (
+	// AktorSistemAI adalah id mesin untuk keputusan verifikasi otomatis.
+	AktorSistemAI = "00000000-0000-0000-0000-000000000000"
+	// NamaAktorSistemAI adalah penanda mesin pada audit/timeline.
+	NamaAktorSistemAI = "verifikasi-ai"
+)
+
+// SystemActor mengembalikan aktor mesin untuk keputusan verifikasi otomatis.
+// Aktor ini HANYA diterima untuk metode `ai` (lihat penjaga di MarkVerified).
+func SystemActor() auth.Actor {
+	return auth.Actor{UserID: AktorSistemAI, Kind: auth.KindSystem, Nama: NamaAktorSistemAI}
+}
+
 // Sentinel error domain verifikasi. Pemetaan ke bentuk HTTP ada di transport.
 var (
 	// ErrInvalidData adalah kesalahan bentuk data verifikasi (dipakai sebagai
@@ -208,7 +228,18 @@ func NewVerificationService(repo Verifier) *VerificationService {
 // Ini satu-satunya pintu transisi Done, dipakai verifikasi manual sekarang dan
 // AI/OCR maupun Virtual Account nanti.
 func (s *VerificationService) MarkVerified(ctx context.Context, actor auth.Actor, orderID string, in VerifyInput) (VerifyOutcome, error) {
-	if err := adminVerifikator(actor); err != nil {
+	// Metode ditentukan lebih dulu: ia menentukan siapa yang boleh memanggil
+	// (aktor sistem hanya untuk `ai`, lihat verifikatorSah).
+	metode := strings.TrimSpace(in.Metode)
+	if metode == "" {
+		// Bawaan: verifikasi manual. Handler admin selalu mengirim yang
+		// eksplisit supaya jejaknya jelas.
+		metode = MetodeManual
+	}
+	if !MetodeValid(metode) {
+		return VerifyOutcome{}, fmt.Errorf("%w: %q", ErrMetodeInvalid, in.Metode)
+	}
+	if err := verifikatorSah(actor, metode); err != nil {
 		return VerifyOutcome{}, err
 	}
 	id := strings.TrimSpace(orderID)
@@ -272,11 +303,23 @@ func (s *VerificationService) siapkan(ctx context.Context, actor auth.Actor, ord
 	return req, nil
 }
 
-// adminVerifikator menegakkan PRD §2.1: hanya staf Pusat ber-kapabilitas
+// verifikatorSah menegakkan PRD §2.1: hanya staf Pusat ber-kapabilitas
 // `admin.verify` (Manager maupun Superadmin) yang boleh memverifikasi
 // pembayaran. Akun cabang ditolak — cabang tidak pernah memutuskan pembayaran
 // pesanannya sendiri.
-func adminVerifikator(actor auth.Actor) error {
+//
+// Satu pengecualian yang disengaja (kartu F2-26): aktor SISTEM
+// (`auth.KindSystem`) — mesin pembaca bukti AI — boleh memverifikasi HANYA
+// dengan metode `ai`. Aktor sistem tidak pernah diterima untuk metode
+// `manual`/`virtual_account`, sehingga tidak ada jalan bagi pekerjaan latar
+// menulis verifikasi yang mengaku dibuat manusia.
+func verifikatorSah(actor auth.Actor, metode string) error {
+	if actor.Kind == auth.KindSystem {
+		if metode == MetodeAI {
+			return nil
+		}
+		return fmt.Errorf("%w: aktor sistem hanya boleh memakai metode %q", ErrForbidden, MetodeAI)
+	}
 	if !actor.IsAdmin() || !actor.Can(auth.CapAdminVerify) {
 		return ErrForbidden
 	}
@@ -357,6 +400,20 @@ func TeksEventSetuju(nama string) string {
 // perlu review, lengkap dengan alasannya.
 func TeksEventPerluReview(nama, alasan string) string {
 	return "Pembayaran ditandai perlu review (" + LabelAlasan(alasan) + ") oleh " + namaPelaku(nama) + " (admin Pusat)"
+}
+
+// TeksEventSetujuSistem menyusun kalimat timeline saat pembayaran disetujui
+// OTOMATIS oleh sistem (verifikasi AI/OCR, kartu F2-26). Dipisahkan dari
+// kalimat verifikasi manusia supaya timeline tidak pernah mengaku dikerjakan
+// admin padahal tidak ada admin yang memutuskan (PRD §5).
+func TeksEventSetujuSistem() string {
+	return "Pembayaran diverifikasi otomatis oleh sistem (AI) dan pesanan selesai"
+}
+
+// TeksEventPerluReviewSistem menyusun kalimat timeline saat sistem menandai
+// pesanan perlu review; keputusan akhir tetap milik manusia (PRD §5).
+func TeksEventPerluReviewSistem(alasan string) string {
+	return "Pembayaran ditandai perlu review (" + LabelAlasan(alasan) + ") oleh sistem (AI)"
 }
 
 // namaPelaku memakai nama admin apa adanya; akun tanpa nama memakai sebutan

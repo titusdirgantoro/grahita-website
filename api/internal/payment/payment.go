@@ -205,6 +205,15 @@ type CommitRequest struct {
 	// Events berisi satu peristiwa per bukti yang dicatat; kosong berarti
 	// unggahan tidak menghasilkan timeline (mis. pesanan masih draft).
 	Events []Event
+	// EnqueueOCR meminta repository MENITIPKAN pekerjaan pembacaan bukti
+	// AI/OCR pada transaksi yang sama (kartu F2-26, SystemDesign.md §4.2/§5.1):
+	// bukti yang tersimpan tidak pernah kehilangan pembacaannya, dan job yang
+	// batal ikut rollback bersama barisnya.
+	//
+	// Diisi service HANYA bila pesanan sudah berstatus `submitted` dan
+	// `ai.aktif = true`; pesanan draft belum punya total final sehingga
+	// pembacaan otomatis belum bermakna (SystemDesign.md §4.3).
+	EnqueueOCR bool
 }
 
 // OrderSource membaca konteks pesanan (pemilik + status). Ia sengaja berupa
@@ -237,6 +246,9 @@ type Service struct {
 	store  storage.Store
 	cfg    Config
 	ttl    time.Duration
+	// ai membaca setelan `ai` (PRD §4.9). Boleh nil: tanpa sumber setelan,
+	// unggahan bukti tidak pernah menitipkan pekerjaan OCR (AI dianggap mati).
+	ai AISettingsSource
 }
 
 // Option mengubah perilaku service.
@@ -244,6 +256,11 @@ type Option func(*Service)
 
 // WithPresignTTL mengubah umur tautan unduh (detik).
 func WithPresignTTL(d time.Duration) Option { return func(s *Service) { s.ttl = d } }
+
+// WithAISettings memasang sumber setelan `ai` sehingga unggahan bukti pada
+// pesanan yang sudah dikirim dapat menitipkan pekerjaan pembacaan AI/OCR pada
+// transaksi yang sama (kartu F2-26, `ai.aktif`).
+func WithAISettings(ai AISettingsSource) Option { return func(s *Service) { s.ai = ai } }
 
 // NewService membuat service bukti transfer. store dan cfg tidak boleh nil:
 // berkas wajib punya tujuan penyimpanan, dan batas unggah wajib dari server.
@@ -278,6 +295,15 @@ func (s *Service) Upload(ctx context.Context, actor auth.Actor, orderID string, 
 	}
 
 	maxFile, maxBytes, err := s.limits(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pekerjaan pembacaan AI/OCR (F2-26) hanya dititipkan untuk bukti pada
+	// pesanan yang SUDAH dikirim dan ketika AI menyala (SystemDesign.md §4.3:
+	// "ai.aktif = false → antre verifikasi manual"). Pesanan draft belum punya
+	// total final, jadi pembacaan otomatis belum bermakna.
+	enqueue, err := s.perluBacaBukti(ctx, ref.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -326,12 +352,14 @@ func (s *Service) Upload(ctx context.Context, actor auth.Actor, orderID string, 
 	}
 
 	// Langkah 4 — satu transaksi: metadata + timeline, batas jumlah diperiksa
-	// ulang sambil baris pesanan dikunci.
+	// ulang sambil baris pesanan dikunci. Pekerjaan pembacaan AI/OCR (F2-26)
+	// ikut dititipkan di sini bila AI menyala dan pesanan sudah dikirim.
 	out, err := s.repo.CommitProofs(ctx, CommitRequest{
-		OrderID: ref.ID,
-		MaxFile: maxFile,
-		Proofs:  metadatas(ref, actor, disiapkan, kunci),
-		Events:  eventsUnggah(ref, actor, len(disiapkan)),
+		OrderID:    ref.ID,
+		MaxFile:    maxFile,
+		Proofs:     metadatas(ref, actor, disiapkan, kunci),
+		Events:     eventsUnggah(ref, actor, len(disiapkan)),
+		EnqueueOCR: enqueue,
 	})
 	if err != nil {
 		// Transaksi batal: seluruh objek yang sudah ditulis dibuang lagi
@@ -522,6 +550,23 @@ func (s *Service) limits(ctx context.Context) (maxFile int64, maxBytes int64, er
 		maxMB = 1
 	}
 	return maxFile, maxMB * 1024 * 1024, nil
+}
+
+// perluBacaBukti melaporkan apakah unggahan bukti pada pesanan berstatus
+// tersebut harus menitipkan pekerjaan pembacaan AI/OCR. Membaca setelan `ai`
+// SERVER (bukan dari klien) dan menolak berjalan tanpa sumber setelan.
+//
+// Kesalahan membaca setelan TIDAK ditelan: gagal terang-terangan lebih baik
+// daripada diam-diam melewati pembacaan bukti yang sudah dicentang admin.
+func (s *Service) perluBacaBukti(ctx context.Context, status string) (bool, error) {
+	if s.ai == nil || status != StatusSubmitted {
+		return false, nil
+	}
+	ai, err := s.ai.AISettings(ctx)
+	if err != nil {
+		return false, fmt.Errorf("baca setelan %s: %w", "ai", err)
+	}
+	return ai.Aktif, nil
 }
 
 // MaxRequestBytes adalah batas ukuran badan permintaan multipart yang dipakai

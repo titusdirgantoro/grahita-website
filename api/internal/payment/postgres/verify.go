@@ -29,10 +29,12 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
 	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
+	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/jobs"
@@ -130,7 +132,7 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 		TotalTerbaca: pgtypes.Int8Ptr(req.TotalTerbaca),
 		Hasil:        sqlc.VerifStatus(req.Hasil),
 		Alasan:       sqlc.NullReviewReason{ReviewReason: sqlc.ReviewReason(req.Alasan), Valid: req.Alasan != ""},
-		AdminID:      pgtypes.UUID(req.Actor.UserID),
+		AdminID:      adminIDVerifikasi(req),
 		Catatan:      pgtypes.Text(req.Catatan),
 	})
 	if err != nil {
@@ -142,7 +144,7 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 		OrderID:   req.OrderID,
 		Icon:      pgtypes.Text(ikonVerifikasi(req.Hasil)),
 		Teks:      teksVerifikasi(req),
-		ActorKind: sqlc.ActorKindAdmin,
+		ActorKind: actorKindVerifikasi(req),
 		ActorID:   pgtypes.UUID(req.Actor.UserID),
 	}); err != nil {
 		return payment.VerifyOutcome{}, fmt.Errorf("query InsertVerifyOrderEvent: %w", err)
@@ -214,10 +216,37 @@ func ikonVerifikasi(hasil string) string {
 
 // teksVerifikasi menyusun kalimat timeline verifikasi.
 func teksVerifikasi(req payment.MarkVerifiedRequest) string {
+	if req.Actor.Kind == auth.KindSystem {
+		if req.Hasil == payment.VerifCocok {
+			return payment.TeksEventSetujuSistem()
+		}
+		return payment.TeksEventPerluReviewSistem(req.Alasan)
+	}
 	if req.Hasil == payment.VerifCocok {
 		return payment.TeksEventSetuju(req.Actor.Nama)
 	}
 	return payment.TeksEventPerluReview(req.Actor.Nama, req.Alasan)
+}
+
+// actorKindVerifikasi menentukan jenis aktor pada timeline: `system` untuk
+// keputusan otomatis (AI/OCR, kartu F2-26), `admin` untuk keputusan manusia
+// (PRD §5 — timeline tidak boleh mengaku dikerjakan admin padahal bukan).
+func actorKindVerifikasi(req payment.MarkVerifiedRequest) sqlc.ActorKind {
+	if req.Actor.Kind == auth.KindSystem {
+		return sqlc.ActorKindSystem
+	}
+	return sqlc.ActorKindAdmin
+}
+
+// adminIDVerifikasi mengisi pemeriksa pada `verification_logs`. Verifikasi
+// otomatis (metode `ai`) menyimpan NULL — database & dokumen menyatakan
+// admin_id NULL berarti AI (Database.md §4.5); id mesin tidak pernah ditulis
+// sebagai pemeriksa manusia.
+func adminIDVerifikasi(req payment.MarkVerifiedRequest) pgtype.UUID {
+	if req.Metode == payment.MetodeAI || req.Actor.Kind == auth.KindSystem {
+		return pgtype.UUID{}
+	}
+	return pgtypes.UUID(req.Actor.UserID)
 }
 
 // statusSesudah mengembalikan status pesanan sesudah keputusan: Done hanya

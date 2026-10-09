@@ -241,6 +241,9 @@ type Service struct {
 	cfg   Config
 	flags BranchFlags
 	clk   clock.Clock
+	// ai membaca setelan AI (PRD §4.9). Boleh nil: tanpa sumber setelan,
+	// submit tidak pernah menitipkan pekerjaan pembacaan bukti (F2-26).
+	ai AISettingsSource
 }
 
 // NewService membuat service pesanan. cfg menyajikan setelan operasional

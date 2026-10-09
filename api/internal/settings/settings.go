@@ -198,6 +198,105 @@ func (s *Service) Bool(ctx context.Context, key string) (bool, error) {
 	return b, nil
 }
 
+// AISettings adalah sudut pandang TERURAI dari kunci setelan `ai`
+// (PRD §4.9). Dipakai domain verifikasi otomatis (kartu F2-26) supaya aturan
+// ambang/toleransi selalu dibaca dari setelan server — bukan dari klien dan
+// bukan dari konstanta yang tersebar di beberapa berkas.
+type AISettings struct {
+	// Aktif menandakan verifikasi bukti transfer otomatis dinyalakan.
+	Aktif bool
+	// MinKeyakinan adalah ambang keyakinan OCR untuk menyetujui otomatis
+	// (0..1).
+	MinKeyakinan float64
+	// TolKurang/TolLebih adalah toleransi selisih nominal (Rupiah).
+	TolKurang int64
+	TolLebih  int64
+	// DigitRek adalah jumlah digit akhir rekening yang dicocokkan.
+	DigitRek int64
+	// Mundur adalah toleransi tanggal transfer mundur (hari).
+	Mundur int64
+}
+
+// AISettings mengembalikan setelan `ai` yang sedang berlaku (nilai tersimpan
+// bila ada, selain itu nilai bawaan PRD §4.9) dalam bentuk terurai.
+//
+// Nilai yang tidak lengkap (mis. objek lama tanpa satu field) memakai bawaan
+// field itu, sehingga penambahan field di masa depan tidak pernah membuat
+// pembacaan gagal. Nilai yang secara tipe salah dijawab ErrInvalidValue —
+// lebih baik menolak daripada menyetujui otomatis dengan ambang yang keliru.
+func (s *Service) AISettings(ctx context.Context) (AISettings, error) {
+	raw, err := s.effective(ctx, AI)
+	if err != nil {
+		return AISettings{}, fmt.Errorf("%w: baca setelan %s: %v", ErrInvalidValue, AI, err)
+	}
+	out := AISettings{Aktif: false, MinKeyakinan: 0.9, TolKurang: 0, TolLebih: 0, DigitRek: 4, Mundur: 1}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return AISettings{}, fmt.Errorf("%w: setelan %s bukan objek", ErrInvalidValue, AI)
+	}
+	if v, ok := fields["aktif"]; ok {
+		var b bool
+		if err := json.Unmarshal(v, &b); err != nil {
+			return AISettings{}, fmt.Errorf("%w: ai.aktif harus true atau false", ErrInvalidValue)
+		}
+		out.Aktif = b
+	}
+	if out.MinKeyakinan, err = aiFloat(fields, "min_keyakinan", out.MinKeyakinan); err != nil {
+		return AISettings{}, err
+	}
+	if out.TolKurang, err = aiInt(fields, "tol_kurang", out.TolKurang); err != nil {
+		return AISettings{}, err
+	}
+	if out.TolLebih, err = aiInt(fields, "tol_lebih", out.TolLebih); err != nil {
+		return AISettings{}, err
+	}
+	if out.DigitRek, err = aiInt(fields, "digit_rek", out.DigitRek); err != nil {
+		return AISettings{}, err
+	}
+	if out.Mundur, err = aiInt(fields, "mundur", out.Mundur); err != nil {
+		return AISettings{}, err
+	}
+	return out, nil
+}
+
+// aiFloat membaca satu field numerik pecahan objek `ai`.
+func aiFloat(fields map[string]json.RawMessage, key string, def float64) (float64, error) {
+	raw, ok := fields[key]
+	if !ok {
+		return def, nil
+	}
+	n, err := number(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w: ai.%s harus berupa angka", ErrInvalidValue, key)
+	}
+	f, err := n.Float64()
+	if err != nil {
+		return 0, fmt.Errorf("%w: ai.%s harus berupa angka", ErrInvalidValue, key)
+	}
+	return f, nil
+}
+
+// aiInt membaca satu field numerik bulat objek `ai`.
+func aiInt(fields map[string]json.RawMessage, key string, def int64) (int64, error) {
+	raw, ok := fields[key]
+	if !ok {
+		return def, nil
+	}
+	n, err := number(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w: ai.%s harus berupa angka", ErrInvalidValue, key)
+	}
+	s := n.String()
+	if strings.ContainsAny(s, ".eE") {
+		return 0, fmt.Errorf("%w: ai.%s harus bilangan bulat", ErrInvalidValue, key)
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: ai.%s harus berupa angka", ErrInvalidValue, key)
+	}
+	return v, nil
+}
+
 // Update menyimpan satu atau beberapa pengaturan sekaligus (Superadmin).
 //
 // Seluruh nilai divalidasi LEBIH DAHULU: bila ada satu yang tidak valid, tidak

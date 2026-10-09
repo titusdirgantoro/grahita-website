@@ -6,6 +6,8 @@
 package pgtypes
 
 import (
+	"strconv"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -74,4 +76,17 @@ func Int8Ptr(p *int64) pgtype.Int8 {
 		return pgtype.Int8{}
 	}
 	return pgtype.Int8{Int64: *p, Valid: true}
+}
+
+// Numeric mengubah float64 menjadi pgtype.Numeric (bukan NULL). Dipakai kolom
+// pecahan seperti `payment_proofs.ocr_confidence` numeric(4,3) (F2-26):
+// pemanggil sudah menjepit nilainya ke rentang kolom. Nilainya diurai dari
+// bentuk desimal (3 angka di belakang koma) supaya tidak bergantung pada
+// dukungan konversi float64 di driver.
+func Numeric(f float64) pgtype.Numeric {
+	var n pgtype.Numeric
+	if err := n.Scan(strconv.FormatFloat(f, 'f', 3, 64)); err != nil {
+		return pgtype.Numeric{}
+	}
+	return n
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/database"
+	"github.com/grahita/portal/api/internal/platform/jobs"
 	"github.com/grahita/portal/api/internal/platform/pgtypes"
 )
 
@@ -129,6 +130,20 @@ func (r *Repo) CommitProofs(ctx context.Context, req payment.CommitRequest) ([]p
 			ActorID:   pgtypes.UUID(e.ActorID),
 		}); err != nil {
 			return nil, fmt.Errorf("query InsertProofOrderEvent: %w", err)
+		}
+	}
+
+	// Pekerjaan pembacaan AI/OCR (kartu F2-26) DITITIPKAN pada transaksi yang
+	// sama: bukti yang tersimpan tidak pernah kehilangan pembacaannya, dan job
+	// yang batal ikut rollback bersama barisnya (SystemDesign.md §4.2/§5.1).
+	// Tanpa penjadwal, unggahan DITOLAK alih-alih menyimpan bukti yang tidak
+	// akan pernah dibaca AI — gagal terang-terangan, bukan setengah jalan.
+	if req.EnqueueOCR {
+		if r.jobs == nil {
+			return nil, fmt.Errorf("%w: penjadwal pekerjaan pembacaan bukti belum terpasang", payment.ErrQueueUnavailable)
+		}
+		if _, err := r.jobs.InsertTx(ctx, tx, jobs.OCRBuktiArgs{OrderID: req.OrderID}, nil); err != nil {
+			return nil, fmt.Errorf("titipkan pekerjaan pembacaan bukti: %w", err)
 		}
 	}
 

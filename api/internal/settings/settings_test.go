@@ -407,3 +407,58 @@ func TestIntNilaiBerlakuDanBawaan(t *testing.T) {
 		t.Errorf("kunci objek harus ditolak sebagai bilangan bulat, dapat %v", err)
 	}
 }
+
+// TestAISettingsTerurai menegakkan kontrak setelan `ai` untuk verifikasi
+// otomatis (kartu F2-26): nilai tersimpan dipakai apa adanya, kekosongan
+// memakai bawaan PRD §4.9, dan nilai yang salah tipe ditolak — lebih baik
+// berhenti daripada menyetujui pembayaran dengan ambang yang keliru.
+func TestAISettingsTerurai(t *testing.T) {
+	ctx := context.Background()
+
+	// Nilai tersimpan lengkap.
+	svc := NewService(newFakeRepo(map[string]string{
+		AI: `{"aktif":true,"min_keyakinan":0.85,"tol_kurang":1000,"tol_lebih":500,"digit_rek":6,"mundur":2}`,
+	}))
+	got, err := svc.AISettings(ctx)
+	if err != nil {
+		t.Fatalf("setelan ai tersimpan harus terbaca: %v", err)
+	}
+	mau := AISettings{Aktif: true, MinKeyakinan: 0.85, TolKurang: 1000, TolLebih: 500, DigitRek: 6, Mundur: 2}
+	if got != mau {
+		t.Errorf("setelan ai harus %+v, dapat %+v", mau, got)
+	}
+
+	// Bawaan PRD §4.9.
+	bawaan, err := NewService(newFakeRepo(nil)).AISettings(ctx)
+	if err != nil {
+		t.Fatalf("bawaan harus terbaca: %v", err)
+	}
+	mauBawaan := AISettings{Aktif: false, MinKeyakinan: 0.9, TolKurang: 0, TolLebih: 0, DigitRek: 4, Mundur: 1}
+	if bawaan != mauBawaan {
+		t.Errorf("bawaan ai harus %+v, dapat %+v", mauBawaan, bawaan)
+	}
+
+	// Objek tidak lengkap memakai bawaan field yang hilang.
+	sebagian, err := NewService(newFakeRepo(map[string]string{AI: `{"aktif":true}`})).AISettings(ctx)
+	if err != nil {
+		t.Fatalf("objek tidak lengkap harus tetap terbaca: %v", err)
+	}
+	if !sebagian.Aktif || sebagian.MinKeyakinan != 0.9 || sebagian.DigitRek != 4 || sebagian.Mundur != 1 {
+		t.Errorf("field yang hilang harus memakai bawaan, dapat %+v", sebagian)
+	}
+
+	// Nilai salah tipe ditolak.
+	rusak := map[string]string{
+		"bukan objek":           `"ai"`,
+		"aktif bukan bool":      `{"aktif":"ya"}`,
+		"keyakinan bukan angka": `{"min_keyakinan":"tinggi"}`,
+		"digit_rek pecahan":     `{"digit_rek":4.5}`,
+	}
+	for nama, nilai := range rusak {
+		t.Run(nama, func(t *testing.T) {
+			if _, err := NewService(newFakeRepo(map[string]string{AI: nilai})).AISettings(ctx); !errors.Is(err, ErrInvalidValue) {
+				t.Errorf("setelan rusak harus ErrInvalidValue, dapat %v", err)
+			}
+		})
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/grahita/portal/api/internal/backup"
 	"github.com/grahita/portal/api/internal/fulfillment"
 	"github.com/grahita/portal/api/internal/notification"
+	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -289,6 +290,63 @@ func (w *ReminderCNCWorker) Work(ctx context.Context, job *river.Job[jobs.Remind
 	return err
 }
 
+// PembacaBuktiAI membaca seluruh bukti satu pesanan lalu memutuskan
+// verifikasinya secara otomatis (payment.OCRService, kartu F2-26).
+type PembacaBuktiAI interface {
+	Baca(ctx context.Context, orderID string) (payment.OCRHasil, error)
+}
+
+// OCRBuktiWorker menjalankan job "ocr_bukti": membaca bukti transfer lewat
+// provider di balik `payment.PaymentReader`, menyimpan hasilnya, dan
+// meneruskan keputusan ke `payment.MarkVerified` dengan metode `ai`
+// (SystemDesign.md §4.3, PRD §5).
+//
+// Sifatnya IDEMPOTEN: bukti yang sudah dibaca tidak dipanggil ulang ke
+// provider, dan keputusan untuk himpunan bukti yang sama tidak ditulis dua
+// kali. Karena itu job yang terlewat/tergandakan (River at-least-once) tidak
+// pernah menggandakan log verifikasi, dokumen, atau email.
+//
+// Kegagalan provider dikembalikan sebagai galat supaya River mengulanginya;
+// setelan `ai.aktif` diperiksa ULANG di sini (bukan hanya saat enqueue),
+// sehingga mematikan AI menghentikan pemanggilan provider walaupun job sudah
+// telanjur terjadwal.
+type OCRBuktiWorker struct {
+	river.WorkerDefaults[jobs.OCRBuktiArgs]
+	ocr PembacaBuktiAI
+}
+
+// NewOCRBuktiWorker membuat worker pembacaan bukti.
+func NewOCRBuktiWorker(ocr PembacaBuktiAI) *OCRBuktiWorker { return &OCRBuktiWorker{ocr: ocr} }
+
+// Kind adalah Kind job di tabel River.
+func (OCRBuktiWorker) Kind() string { return jobs.KindOCRBukti }
+
+// Work menjalankan satu siklus pembacaan bukti satu pesanan.
+func (w *OCRBuktiWorker) Work(ctx context.Context, job *river.Job[jobs.OCRBuktiArgs]) error {
+	if w.ocr == nil {
+		// Tanpa layanan, pekerjaan tidak bisa dikerjakan — jangan dilepas
+		// begitu saja (pesanan menunggu pembacaan yang tak pernah datang).
+		return fmt.Errorf("job %s: layanan pembacaan bukti belum terpasang", w.Kind())
+	}
+	hasil, err := w.ocr.Baca(ctx, job.Args.OrderID)
+	if err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "pembacaan bukti AI/OCR",
+		"order_id", hasil.OrderID, "dilewati", hasil.Dilewati, "sebab", hasil.Sebab,
+		"jumlah_bukti", hasil.JumlahBukti, "dibaca", hasil.Dibaca,
+		"hasil", hasilVerifikasi(hasil))
+	return nil
+}
+
+// hasilVerifikasi merangkum keputusan untuk log (kosong bila dilewati).
+func hasilVerifikasi(h payment.OCRHasil) string {
+	if h.Keputusan == nil {
+		return ""
+	}
+	return h.Keputusan.Hasil + ":" + h.Keputusan.Alasan
+}
+
 // JadwalHarianWIB memicu pekerjaan setiap hari pada jam:menit WIB — jadwal
 // pengingat C&C 07:00 Asia/Jakarta (SystemDesign.md §4.6).
 //
@@ -330,11 +388,20 @@ type Opsi func(*konfigurasiWorker)
 
 type konfigurasiWorker struct {
 	pencatat PencatatJob
+	// ocr membaca seluruh bukti satu pesanan dengan AI/OCR (F2-26). Boleh
+	// nil: tanpa layanan ini job "ocr_bukti" gagal terang-terangan.
+	ocr PembacaBuktiAI
 }
 
 // DenganPencatatJob memasang pencatat metrik pekerjaan (Architecture.md §8).
 func DenganPencatatJob(p PencatatJob) Opsi {
 	return func(k *konfigurasiWorker) { k.pencatat = p }
+}
+
+// DenganPembacaBukti memasang layanan pembacaan bukti AI/OCR (F2-26) sehingga
+// worker menjalankan job "ocr_bukti".
+func DenganPembacaBukti(ocr PembacaBuktiAI) Opsi {
+	return func(k *konfigurasiWorker) { k.ocr = ocr }
 }
 
 // HookMetrikJob mengembalikan hook River yang mencatat durasi dan hasil setiap
@@ -380,7 +447,8 @@ func HookMetrikJob(pencatat PencatatJob) []rivertype.Hook {
 // bila diisi, worker menjalankan job render dokumen + antre email (F1-18).
 // laporan boleh nil: tanpa service laporan, job ekspor XLSX tidak didaftarkan
 // (permintaan ekspor sudah ditolak lebih dulu di API — tidak ada pekerjaan
-// menggantung).
+// menggantung). Opsi DenganPembacaBukti memasang layanan pembacaan bukti
+// AI/OCR (F2-26); tanpa itu job "ocr_bukti" tidak didaftarkan sama sekali.
 func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service, selesai ServerSelesai, laporan Laporan, opts ...Opsi) (*Client, error) {
 	var konf konfigurasiWorker
 	for _, o := range opts {
@@ -402,6 +470,9 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 	}
 	if laporan != nil {
 		river.AddWorker(workers, NewReportXLSXWorker(laporan))
+	}
+	if konf.ocr != nil {
+		river.AddWorker(workers, NewOCRBuktiWorker(konf.ocr))
 	}
 
 	queues := map[string]river.QueueConfig{}

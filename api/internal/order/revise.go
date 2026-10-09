@@ -56,9 +56,10 @@ var (
 	// sedangkan setelan `manager_boleh_revisi` nonaktif (PRD §4.9).
 	ErrRevisiTidakDiizinkan = errors.New("revisi invoice tidak diizinkan untuk peran ini")
 	// ErrQueueUnavailable dikembalikan bila penjadwal pekerjaan (River) belum
-	// terpasang: revisi DITOLAK alih-alih menaikkan versi tanpa invoice versi
-	// baru dan email (fail closed).
-	ErrQueueUnavailable = errors.New("penjadwal pekerjaan revisi belum tersedia")
+	// terpasang: transaksi yang menuntut pekerjaan lanjutan — revisi invoice
+	// (F2-25) maupun submit pesanan saat AI menyala (F2-26) — DITOLAK alih-alih
+	// menyimpan keadaan yang kehilangan pekerjaannya (fail closed).
+	ErrQueueUnavailable = errors.New("penjadwal pekerjaan latar belum tersedia")
 	// ErrInvoiceVersiBelumAda dikembalikan bila invoice VERSI BERJALAN pesanan
 	// belum dirender saat revisi diminta (fail closed, temuan QA putaran 1).
 	//

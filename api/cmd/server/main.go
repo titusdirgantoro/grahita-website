@@ -244,6 +244,20 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 		// streaming lalu disimpan ke object storage yang sama.
 		reportSvc := report.NewService(reportpg.New(pool), store)
 
+		// Pembacaan bukti transfer AI/OCR (F2-26) dijalankan di worker: baca
+		// setiap bukti lewat provider di balik PaymentReader, simpan hasilnya,
+		// lalu putuskan verifikasi lewat jalur MarkVerified yang sama dengan
+		// verifikasi manual (metode `ai`). Penjadwal River ikut dipasang di
+		// sini karena persetujuan otomatis menitipkan pekerjaan dokumen+email.
+		jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+		if err != nil {
+			return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
+		}
+		paymentRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
+		ocrSvc := payment.NewOCRService(paymentRepo, buildReader(cfg, logger), store,
+			bank.NewService(bankpg.New(pool)), settings.NewService(settingspg.New(pool)),
+			payment.NewVerificationService(paymentRepo))
+
 		// Service cadangan hanya dijalankan bila tujuan dikonfigurasi; tanpa
 		// itu tidak ada job jadwal cadangan yang didaftarkan sama sekali
 		// (bukan job yang selalu gagal).
@@ -255,7 +269,8 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 			logger.Info("jadwal cadangan aktif", "tujuan", bk.Target().Nama(), "jadwal", bk.Jadwal())
 		}
 
-		client, err := worker.New(pool, cfg, notif, bk, selesai, reportSvc, worker.DenganPencatatJob(metrik))
+		client, err := worker.New(pool, cfg, notif, bk, selesai, reportSvc,
+			worker.DenganPencatatJob(metrik), worker.DenganPembacaBukti(ocrSvc))
 		if err != nil {
 			return err
 		}
@@ -275,6 +290,31 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 	}
 
 	return runAPI(ctx, pool, cfg, logger, metrik)
+}
+
+// buildReader menyusun pembaca bukti transfer (kartu F2-26; Architecture.md
+// §1/§11) dari konfigurasi:
+//
+//   - OCR_PROVIDER=mock → pembaca deterministik (lokal/pengujian, tanpa
+//     jaringan); bawaannya "tidak terbaca" sehingga mode lokal TIDAK pernah
+//     menyetujui pembayaran atas dasar angka karangan;
+//   - OCR_PROVIDER=claude (bawaan) → Claude vision. Tanpa ANTHROPIC_API_KEY,
+//     pekerjaan pembacaan bukti GAGAL dan diulang (bukan menyetujui asal-asalan
+//     atau menyimpan bacaan kosong); admin tetap bisa memverifikasi manual.
+func buildReader(cfg config.Config, logger *slog.Logger) payment.PaymentReader {
+	if cfg.OCRProvider == config.OCRProviderMock {
+		logger.Warn("pembaca bukti memakai mock deterministik (OCR_PROVIDER=mock) — hanya untuk pengembangan/pengujian")
+		return payment.NewMockReader(nil)
+	}
+	if cfg.AnthropicAPIKey == "" {
+		logger.Warn("ANTHROPIC_API_KEY kosong: pekerjaan pembacaan bukti akan gagal dan diulang sampai kuncinya diisi")
+	}
+	return payment.NewClaudeReader(payment.ClaudeConfig{
+		APIKey:  cfg.AnthropicAPIKey,
+		BaseURL: cfg.AnthropicBaseURL,
+		Model:   cfg.AnthropicModel,
+		Timeout: cfg.OCRTimeout,
+	})
 }
 
 // buildStorage menyusun object storage S3-compatible dari konfigurasi.
@@ -415,11 +455,24 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// Setelan sistem (F1-09) sekaligus sumber angka server untuk pesanan:
 	// biaya_packaging pesanan Sertifikat dan cnc_hari tenggat C&C (F1-12).
 	settingsSvc := settings.NewService(settingspg.New(pool))
+	// Penjadwal pekerjaan River (insert-only) dipakai beberapa repository untuk
+	// MENITIPKAN job DI DALAM transaksinya; worker-lah yang menjalankannya.
+	// Sejak F2-26 submit pesanan juga menitipkan pekerjaan pembacaan bukti,
+	// jadi penjadwal ini disiapkan sebelum repository pesanan dibuat.
+	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
+	}
+
 	// Pesanan cabang: draft, editor order line, aturan Sertifikat/packaging,
-	// daftar dan detail (F1-11 + F1-12).
-	orderRepo := orderpg.New(pool)
+	// daftar dan detail (F1-11 + F1-12). Sumber setelan AI dipasang supaya
+	// pesanan yang dikirim saat `ai.aktif` menyala menitipkan pekerjaan
+	// pembacaan bukti pada transaksi submit yang sama (F2-26,
+	// SystemDesign.md §4.2).
+	orderRepo := orderpg.New(pool, orderpg.WithJobQueue(jobQueue))
 	orderSvc := order.NewService(orderRepo, catalogSvc, settingsSvc,
-		order.WithBranchFlags(branchSvc), order.WithClock(clock.System()))
+		order.WithBranchFlags(branchSvc), order.WithClock(clock.System()),
+		order.WithAISettings(settingsSvc))
 
 	// Riwayat & detail pesanan seluruh cabang untuk admin Pusat (F1-15).
 	// Penanda "email gagal" diserahkan domain notification lewat interface,
@@ -442,14 +495,12 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	//
 	// Repository yang sama juga menyimpan transaksi VERIFIKASI pembayaran
 	// (F1-18): status, log, timeline, audit, dan penjadwalan pekerjaan dokumen
-	// dalam satu transaksi. Klien River di bawah hanya dipakai untuk
-	// MENITIPKAN job (insert-only); worker-lah yang menjalankannya.
-	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
-	if err != nil {
-		return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
-	}
+	// dalam satu transaksi. Setelan AI dipasang supaya unggahan bukti pada
+	// pesanan yang sudah dikirim menitipkan pekerjaan pembacaan AI/OCR
+	// (F2-26) pada transaksi yang sama.
 	paymentRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
-	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc)
+	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc,
+		payment.WithAISettings(settingsSvc))
 	verifySvc := payment.NewVerificationService(paymentRepo)
 
 	// Revisi invoice berversi (F2-25): repository pesanan dengan penjadwal
