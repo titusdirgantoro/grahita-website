@@ -152,11 +152,19 @@ function fetchPesanan(
     bukti?: unknown[];
     /** Flag cash_and_carry cabang sesi (F1-14: centang C&C di modal kirim). */
     cabangCNC?: boolean;
+    /**
+     * tundaDaftarMs menunda balasan GET /orders. Dipakai uji regresi anggaran
+     * tunggu (F1-11): rantai sesi → daftar menempuh dua putaran, jadi balasan
+     * yang lebih lambat dari tunggu bawaan Testing Library (1 dtk) tidak boleh
+     * lagi membuat tabel tertinggal di SkeletonList.
+     */
+    tundaDaftarMs?: number;
   } = {},
 ) {
   const panggilan: Panggilan[] = [];
   const daftar = opsi.daftar ?? [draft, terkirim];
   const bukti = opsi.bukti ?? [];
+  const tunda = (ms: number) => new Promise((selesai) => setTimeout(selesai, ms));
   // Setelah submit berhasil, detail pesanan memuat versi yang sudah dikirim —
   // memaksa UI memuat ulang dan menampilkan nomor/serial.
   let setelahKirim = false;
@@ -182,7 +190,10 @@ function fetchPesanan(
       if (input.includes("/orders?status=draft")) {
         return json({ data: daftar.filter((o) => (o as { status: string }).status === "draft") });
       }
-      if (input.endsWith("/orders") && (init?.method ?? "GET") === "GET") return json({ data: daftar });
+      if (input.endsWith("/orders") && (init?.method ?? "GET") === "GET") {
+        if (opsi.tundaDaftarMs) await tunda(opsi.tundaDaftarMs);
+        return json({ data: daftar });
+      }
       if (input.endsWith("/orders") && init?.method === "POST") {
         return json({ data: { ...draft, id: "o-baru" } }, 201);
       }
@@ -244,6 +255,29 @@ describe("Customer Portal — daftar pesanan (F1-11)", () => {
     });
     // Hanya draft yang tersisa di tabel.
     expect(screen.queryByRole("link", { name: "2026-10-01" })).toBeNull();
+  });
+
+  /**
+   * Regresi F1-11 untuk kepak suite penuh: memuat daftar menempuh dua putaran
+   * (sesi lewat /auth/me, lalu daftar lewat /orders). Pada host yang sibuk —
+   * suite penuh menjalankan delapan berkas uji paralel — tunggu bawaan Testing
+   * Library (1 dtk) habis lebih dulu, sehingga tabel tertinggal di SkeletonList
+   * (`aria-busy="true"`, "Memuat data…") dan tautan "Draft" tidak pernah
+   * ditemukan. Uji ini memaksa balasan /orders datang setelah 1,2 dtk: merah
+   * bila anggaran tunggu dikembalikan ke bawaan, hijau bila anggaran suite
+   * (test/setup.ts) berlaku.
+   */
+  it("keluar dari SkeletonList saat balasan daftar lebih lambat dari tunggu bawaan", async () => {
+    const panggilan = fetchPesanan({ tundaDaftarMs: 1200 });
+
+    render(<RouterProvider router={buatRouter("/pesanan")} />);
+
+    const tautanDraft = await screen.findByRole("link", { name: "Draft" });
+    expect(tautanDraft.getAttribute("href")).toBe("/pesanan/o1");
+    expect(screen.getByRole("link", { name: "2026-10-01" })).toBeDefined();
+    // Tabel tidak boleh menyisakan penanda memuat setelah data tiba.
+    expect(screen.queryByText("Memuat data…")).toBeNull();
+    expect(panggilan.some((p) => p.url.endsWith("/orders"))).toBe(true);
   });
 });
 

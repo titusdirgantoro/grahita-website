@@ -37,5 +37,10 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // Kueri async memakai anggaran tunggu 5 dtk (src/test/setup.ts) karena
+    // halaman memuat data dua putaran berantai; batas per-tes dinaikkan dari
+    // bawaan 5 dtk supaya pada host sibuk anggaran itu sempat terpakai dan
+    // kegagalan tetap muncul sebagai pesan kueri, bukan "Test timed out".
+    testTimeout: 20000,
   },
 });
