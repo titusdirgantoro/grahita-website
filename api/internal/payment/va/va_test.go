@@ -59,9 +59,55 @@ func TestVerifikasiTandaTanganMenolakYangTidakCocok(t *testing.T) {
 			t.Fatalf("%s: ingin ErrTandaTanganTidakSah, dapat %v", nama, err)
 		}
 	}
-	// Rahasia berbeda → ditolak (klaim: tidak ada jalur "kunci kosong=lolos").
+	// Rahasia berbeda dari yang menandatangani → ditolak.
 	if err := VerifikasiTandaTangan(nil, k, sah); !errors.Is(err, ErrTandaTanganTidakSah) {
 		t.Fatalf("rahasia nil: ingin ErrTandaTanganTidakSah, dapat %v", err)
+	}
+}
+
+// TestVerifikasiTandaTanganMenolakRahasiaKosong menjaga invarian GAGAL TERTUTUP
+// yang diklaim KONTRAK-VA.md §4.3 butir 1: HMAC-SHA256 dengan kunci kosong
+// tetap terhitung dan deterministik, jadi tanpa penjaga ini callback dari pihak
+// yang menduga "rahasia belum disetel" akan LOLOS. Uji ini membuktikan tanda
+// tangan yang dihitung dengan kunci kosong DITOLAK saat rahasia kosong/nil —
+// bukan hanya ditolak saat ditandatangani dengan kunci lain (itu klaim
+// berbeda).
+func TestVerifikasiTandaTanganMenolakRahasiaKosong(t *testing.T) {
+	k := Kanonik("POST", "/api/v1/va/callback", "2026-10-09T03:30:00Z", []byte(`{"nominal":999999}`))
+	palsu := TandaTangan(nil, k)
+	if palsu != TandaTangan([]byte{}, k) {
+		t.Fatalf("premis uji salah: HMAC kunci nil != kunci kosong (%q vs %q)", palsu, TandaTangan([]byte{}, k))
+	}
+	// Tanda tangan kunci-kosong atas kanonik yang sama pun harus ditolak.
+	if err := VerifikasiTandaTangan(nil, k, palsu); !errors.Is(err, ErrTandaTanganTidakSah) {
+		t.Fatalf("rahasia nil + tanda tangan kunci kosong: ingin ErrTandaTanganTidakSah, dapat %v", err)
+	}
+	if err := VerifikasiTandaTangan([]byte{}, k, palsu); !errors.Is(err, ErrTandaTanganTidakSah) {
+		t.Fatalf("rahasia kosong + tanda tangan kunci kosong: ingin ErrTandaTanganTidakSah, dapat %v", err)
+	}
+	// Rahasia kosong juga ditolak walau tanda tangannya sah menurut kunci lain
+	// yang benar: tidak ada jalur "rahasia kosong = lolos".
+	if err := VerifikasiTandaTangan(nil, k, TandaTangan(rahasiaUjiUnit(), k)); !errors.Is(err, ErrTandaTanganTidakSah) {
+		t.Fatalf("rahasia nil + tanda tangan kunci sah: ingin ErrTandaTanganTidakSah, dapat %v", err)
+	}
+	if err := VerifikasiTandaTangan([]byte{}, k, TandaTangan(rahasiaUjiUnit(), k)); !errors.Is(err, ErrTandaTanganTidakSah) {
+		t.Fatalf("rahasia kosong + tanda tangan kunci sah: ingin ErrTandaTanganTidakSah, dapat %v", err)
+	}
+	// Jalur kanonik (yang dipakai MockProvider.TerimaCallback) juga gagal
+	// tertutup, bahkan sebelum header/stempel waktu disentuh.
+	in := PermintaanCallback{
+		Method: "POST", Path: "/api/v1/va/callback",
+		Header:       http.Header{},
+		Body:         []byte(`{"nominal":999999}`),
+		DiterimaPada: time.Date(2026, 10, 9, 3, 30, 0, 0, time.UTC),
+	}
+	in.Header.Set("X-VA-Signature", TandaTangan(nil, Kanonik(in.Method, in.Path, "2026-10-09T03:30:00Z", in.Body)))
+	in.Header.Set("X-VA-Signature-Timestamp", "2026-10-09T03:30:00Z")
+	if err := VerifikasiKanonik(nil, in, "X-VA-Signature"); !errors.Is(err, ErrTandaTanganTidakSah) {
+		t.Fatalf("VerifikasiKanonik rahasia nil: ingin ErrTandaTanganTidakSah, dapat %v", err)
+	}
+	if err := VerifikasiKanonik([]byte{}, in, "X-VA-Signature"); !errors.Is(err, ErrTandaTanganTidakSah) {
+		t.Fatalf("VerifikasiKanonik rahasia kosong: ingin ErrTandaTanganTidakSah, dapat %v", err)
 	}
 }
 

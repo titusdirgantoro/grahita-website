@@ -45,7 +45,17 @@ func TandaTangan(rahasia []byte, kanonik string) string {
 // tanda tangan yang dihitung ulang, MEMAKAI PERBANDINGAN WAKTU-KONSTAN
 // (`crypto/subtle`). Panjang berbeda atau nilai berbeda sama-sama menghasilkan
 // `ErrTandaTanganTidakSah`; tidak ada informasi yang bocor lewat pesan galat.
+//
+// GAGAL TERTUTUP: rahasia kosong (`nil`/`[]byte{}`) SELALU ditolak. HMAC-SHA256
+// dengan kunci kosong tetap terhitung dan deterministik, jadi tanpa penjaga ini
+// sistem yang belum mendapat rahasia dari bank akan MENERIMA callback yang
+// dapat dipalsukan oleh siapa pun yang menebak keadaan itu. Ini sejalan dengan
+// jalur RSA (`VerifikasiRSASHA256` menolak kunci publik `nil`) dan dengan
+// sentinel gagal-tertutup lain di paket ini.
 func VerifikasiTandaTangan(rahasia []byte, kanonik, terkirim string) error {
+	if len(rahasia) == 0 {
+		return ErrTandaTanganTidakSah
+	}
 	diharapkan := TandaTangan(rahasia, kanonik)
 	kirim := strings.ToLower(strings.TrimSpace(terkirim))
 	if subtle.ConstantTimeCompare([]byte(diharapkan), []byte(kirim)) != 1 {
@@ -55,8 +65,13 @@ func VerifikasiTandaTangan(rahasia []byte, kanonik, terkirim string) error {
 }
 
 // VerifikasiKanonik adalah jalan pintas: menyusun kanonik dari
-// `PermintaanCallback` lalu memverifikasi tanda tangan pada `header`.
+// `PermintaanCallback` lalu memverifikasi tanda tangan pada `header`. Rahasia
+// kosong ditolak lebih dahulu (gagal tertutup) — provider yang belum
+// dikonfigurasi tidak boleh menyentuh header/isi payload sama sekali.
 func VerifikasiKanonik(rahasia []byte, in PermintaanCallback, header string) error {
+	if len(rahasia) == 0 {
+		return ErrTandaTanganTidakSah
+	}
 	if header == "" {
 		return errors.New("nama header tanda tangan tidak ditentukan")
 	}
