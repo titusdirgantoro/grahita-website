@@ -197,8 +197,8 @@ RSA diuji dengan kunci yang dibangkitkan di uji; angka biaya/tanda tangan di
 KONTRAK-VA.md §11 dikutip dari sumber publik dengan peringatan verifikasi ulang
 (K-01/K-02/K-08).
 
-**Verifikasi ulang pada arsip bersih commit ini** (`git archive a66f8a6`, tanpa
-perubahan yang belum ter-commit di pohon kerja, mis. F2-26):
+**Verifikasi ulang pada arsip bersih commit terakhir** (`git archive
+fc05285`, tanpa perubahan yang belum ter-commit di pohon kerja, mis. F2-26):
 
 ```
 $ cd <arsip>/api
@@ -206,11 +206,17 @@ $ gofmt -l .                     # kosong
 $ go vet ./...                   # VET_OK
 $ go build ./...                 # BUILD_OK
 $ go test -race -count=1 ./internal/payment/va/...
-ok  github.com/grahita/portal/api/internal/payment/va        1.424s
-ok  github.com/grahita/portal/api/internal/payment/va/vatest 1.041s
+ok  github.com/grahita/portal/api/internal/payment/va        1.348s
+ok  github.com/grahita/portal/api/internal/payment/va/vatest 1.038s
+$ go test -v ./internal/payment/va/... | grep -cE '^    --- PASS|^--- PASS'
+27
 $ grep -rn "payment/va" --include="*.go" . | grep -v "^./internal/payment/va/"
 (tidak ada impor di luar paket)
 ```
+
+Commit kode kartu ini: `fc05285` (`a66f8a6` → `deeb9ef` → `fc05285`).
+Perubahan setelahnya **hanya** halaman dokumentasi ini (tidak ada berkas kode
+yang berubah), sehingga verifikasi arsip di atas tetap berlaku untuk HEAD.
 
 ## Batas bukti & risiko tersisa (non-pemblokir)
 
