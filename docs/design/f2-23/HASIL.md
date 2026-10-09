@@ -168,3 +168,96 @@ baris `cnc_reminders` (h-2) + satu email `reminder_cnc` — membuktikan penjagaa
   status `sent` sudah diuji di paket notification.
 - Tahap yang terlewat bila worker mati satu hari penuh tidak dikejar (keputusan
   §2 di atas) — disengaja, tidak dianggap cacat.
+
+## Tindak lanjut non-pemblokir QA F2-23 (kartu t_9b6a1dbf)
+
+Dua catatan non-pemblokir QA dikerjakan di sini. Perilaku pengingat **tidak
+berubah**: himpunan tahap yang lahir identik (dibuktikan uji), yang berubah
+hanya dokumentasi semantik kolom dan jumlah baris yang dibaca kueri kandidat.
+
+### 1. Semantik `cnc_reminders.sent_at`
+
+`sent_at` mengambil `DEFAULT now()` saat baris pengingat LAHIR (waktu tahap
+DIANTRE oleh `AntreReminderCNC`), BUKAN waktu email benar-benar terkirim. Nama
+kolom mengikuti `Database.md` §4.7 dan tidak diubah; yang ditambahkan hanya
+penjelas agar kolom itu tidak dibaca sebagai laporan pengiriman:
+
+| Berkas | Yang ditambahkan |
+|---|---|
+| `api/db/migrations/0007_cnc_reminders_sent_at.sql` (baru) | `COMMENT ON COLUMN cnc_reminders.sent_at`; bagian `Down` mengosongkan komentar |
+| `api/db/migrations/0001_init.sql` | komentar sebaris pada kolom `sent_at` (komentar saja, tanpa perubahan skema) |
+| `docs/Database.md` §4.7 | komentar yang sama pada blok SQL `cnc_reminders` |
+| `api/internal/db/sqlc/models.go` | hasil `sqlc generate`: komentar mengalir ke bidang `CncReminder.SentAt` |
+
+Kebenaran "email sudah terkirim" tetap di `email_outbox.sent_at`, yang hanya
+terisi setelah SMTP menerima pesan
+(`TestPGReminderCNCGagalKirimDapatRetryTidakDianggapTerkirim`). Migrasi 0007
+tidak mengubah tipe/nullability/data, jadi aman dijalankan pada basis data yang
+sudah berisi dan lolos `scripts/check-migration-kompatibel.sh`.
+
+### 2. Jendela tanggal kandidat `KandidatCNC`
+
+Kueri kandidat dulu membaca SELURUH pesanan C&C `status <> 'done'` yang
+berjatuh tempo, lalu menyaring tahap per baris di Go. Sekarang ia dibatasi
+jendela tanggal jatuh tempo `[hari-3, hari+2]`
+(`notification.JendelaKandidatCNC`):
+
+- Jendela itu diturunkan dari jadwal tahap (h-2 → jatuh tempo hari+2; h-0 →
+  hari; h+1 → hari-1; h+3 → hari-3), jadi ia **superset** dari tanggal
+  ber-tahap. `TahapReminder` tetap satu-satunya penentu tahap; jendela hanya
+  membatasi baris yang dibaca sehingga himpunan tahap yang lahir tidak berubah.
+- `ReminderStore.KandidatCNC` kini menerima `hari` (tanggal bisnis WIB) supaya
+  jendela mengikuti jam aplikasi (`clock.TodayWIB`), bukan jam dinding basis
+  data; `JalankanReminderCNC` menghitung `hari` sebelum memanggil.
+- Batas jendela dikirim sebagai teks `$1::text::date` (pola yang sama dengan
+  kueri audit) supaya tidak bergantung zona waktu sesi basis data.
+- Efek pada `HasilReminder`: `Diperiksa`/`Dilewati` turun ke jumlah kandidat di
+  dalam jendela (maknanya tidak berubah); `Diantre`/`Gagal` tidak berubah.
+
+Uji yang mengunci sifat ini:
+
+- `TestJendelaKandidatCNCMenutupSemuaTahap` (unit) — menyapu ±400 hari: SETIAP
+  jatuh tempo yang menghasilkan tahap menurut `TahapReminder` berada di dalam
+  jendela; sekaligus membuktikan jendela memang lebih luas (hari-2 dan hari+1
+  tidak ber-tahap).
+- `TestJendelaKandidatCNCMemakaiTanggalWIB` (unit) — batas jendela dihitung pada
+  tanggal bisnis WIB.
+- `TestJalankanReminderCNCDiteruskanHariBisnisWIB` (unit) — service meneruskan
+  hari bisnis WIB dan kandidat di luar jendela tidak dibaca.
+- `TestPGReminderCNCJendelaTidakMengubahTahap` (integrasi PostgreSQL) — 21 hari
+  uji × 16 pesanan (jatuh tempo −60..+60 hari): tiap hari, kandidat berjendela
+  dibandingkan dengan acuan kueri LAMA (tanpa jendela); kandidat berjendela
+  wajib subset acuan, semua pesanan acuan yang ber-tahap hari itu wajib ada di
+  jendela, dan tahap yang benar-benar lahir sama persis dengan acuan — sekaligus
+  terbukti jendela benar-benar memangkas.
+- `TestPGReminderCNCJendelaMemakaiBatasWIB` (integrasi PostgreSQL) — batas
+  inklusif: pada hari bisnis 2026-10-07 hanya jatuh tempo 10-04..10-09 yang
+  dibaca.
+
+Bukti pemangkasan pada volume (20.060 pesanan C&C belum Done; 60 di antaranya di
+jendela), diukur di basis data uji dengan `EXPLAIN (ANALYZE, BUFFERS)`:
+
+| Kueri | Baris hasil | Pemindaian | Buffer | Waktu |
+|---|---|---|---|---|
+| Berjendela (`2026-10-04`..`2026-10-09`) | 60 | `Index Scan` pada indeks parsial `orders_cnc_jatuh_tempo` (kondisi indeks langsung memuat rentang) | `shared hit=16` | 0,66 ms |
+| Lama tanpa jendela | 20.060 | `Seq Scan on orders` + sort | `shared hit=352` | 32,9 ms |
+
+### Gerbang ulang (tindak lanjut, kode akhir)
+
+| Perintah | Hasil |
+|---|---|
+| `gofmt -l .` (api) | kosong |
+| `go vet ./...` | exit 0 |
+| `go build ./...` | exit 0 |
+| `sqlc-v1.31.1 generate` | 0 diff (idempoten; `models.go` sudah memuat komentar kolom) |
+| `scripts/check-migration-kompatibel.sh` | exit 0 (0007 hanya `COMMENT ON COLUMN`) |
+| `./scripts/check-secrets.sh` | exit 0 |
+| `go test -race -p 1 -count=1 ./internal/notification/... ./internal/worker/...` | ok (notification 20,8 s; worker 4,7 s), EXIT=0 |
+| `go test -p 1 -count=1 ./...` (basis data segar + shim) | 29 paket ok, 0 FAIL, EXIT=0 (httpapi 307,4 s; notification 13,1 s; worker 2,1 s) |
+
+Catatan: `-p 1` wajib saat menjalankan beberapa paket pada SATU basis data —
+`CREATE EXTENSION IF NOT EXISTS citext` pada dua paket paralel bisa balapan
+(galat unik `pg_extension_name_index`) atau meninggalkan ekstensi di skema uji
+yang membuat paket berikutnya tidak menemukan tipe `citext`. Bukan cacat kode;
+muncul hanya karena eksekusi paralel lintas paket pada basis data bersama.
+

@@ -367,6 +367,9 @@ CREATE INDEX email_outbox_failed  ON email_outbox (created_at DESC) WHERE status
 CREATE TABLE cnc_reminders (
     order_id   uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     tahap      text NOT NULL,                         -- 'h-2','h-0','h+1','h+3'
+    -- sent_at = waktu baris pengingat DIANTRE (DEFAULT now()), BUKAN waktu email
+    -- terkirim: kebenaran "terkirim" ada di email_outbox.sent_at (migrasi
+    -- 0007_cnc_reminders_sent_at.sql).
     sent_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (order_id, tahap)
 );

@@ -19,6 +19,10 @@ type fakeReminderStore struct {
 	dibuat   map[string]bool
 	emails   []Envelope
 	tahapan  []string
+	// hariTerakhir merekam hari bisnis yang diterima KandidatCNC supaya uji
+	// dapat memastikan service meneruskan tanggal bisnis WIB, bukan instant
+	// mentah dari clock.
+	hariTerakhir time.Time
 	// gagal, bila diisi, membuat setiap penulisan gagal (meniru transaksi
 	// database yang rollback).
 	gagal error
@@ -28,8 +32,21 @@ func newFakeReminderStore(kandidat ...KandidatCNC) *fakeReminderStore {
 	return &fakeReminderStore{kandidat: kandidat, dibuat: map[string]bool{}}
 }
 
-func (f *fakeReminderStore) KandidatCNC(context.Context) ([]KandidatCNC, error) {
-	return f.kandidat, nil
+// KandidatCNC meniru postgres.Repo.KandidatCNC: menyaring kandidat ke jendela
+// tanggal JendelaKandidatCNC(hari) sehingga tier unit hanya melihat kandidat
+// yang akan dibaca kueri sungguhan (yang penyaringan SQL-nya diuji di tier
+// integrasi).
+func (f *fakeReminderStore) KandidatCNC(_ context.Context, hari time.Time) ([]KandidatCNC, error) {
+	f.hariTerakhir = hari
+	mulai, akhir := JendelaKandidatCNC(hari)
+	out := []KandidatCNC{}
+	for _, k := range f.kandidat {
+		jt := tanggalWIB(k.JatuhTempo)
+		if !jt.Before(mulai) && !jt.After(akhir) {
+			out = append(out, k)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeReminderStore) AntreReminderCNC(_ context.Context, orderID, tahap string, e Envelope) (bool, error) {
@@ -134,6 +151,103 @@ func TestJalankanReminderCNCMemakaiTanggalWIB(t *testing.T) {
 	}
 	if len(rs.tahapan) != 1 || rs.tahapan[0] != TahapReminderH0 {
 		t.Fatalf("tahap harus %s, dapat %v", TahapReminderH0, rs.tahapan)
+	}
+}
+
+// TestJalankanReminderCNCDiteruskanHariBisnisWIB memastikan service menyerahkan
+// HARI BISNIS WIB (bukan instant mentah clock) ke penyimpanan, dan bahwa
+// kandidat di luar jendela tidak pernah dibaca — jadi hasil pemindaian hanya
+// bergantung pada tanggal WIB, bukan tanggal/UTC server.
+func TestJalankanReminderCNCDiteruskanHariBisnisWIB(t *testing.T) {
+	rs := newFakeReminderStore(
+		kandidatCNC("o-luar-lalu", "2026-10-0001", "2026-10-03"),  // hari-4: di luar jendela
+		kandidatCNC("o-dalam", "2026-10-0002", "2026-10-09"),      // h-2
+		kandidatCNC("o-luar-depan", "2026-10-0003", "2026-10-10"), // hari+3: di luar jendela
+	)
+	// 2026-10-06T17:30Z == 2026-10-07 00:30 WIB (jam UTC masih hari sebelumnya).
+	clk := clock.Fixed(time.Date(2026, 10, 6, 17, 30, 0, 0, time.UTC))
+	svc := svcReminder(t, clk, rs)
+
+	hasil, err := svc.JalankanReminderCNC(context.Background())
+	if err != nil {
+		t.Fatalf("JalankanReminderCNC: %v", err)
+	}
+	if mau := time.Date(2026, 10, 7, 0, 0, 0, 0, clock.Jakarta()); !rs.hariTerakhir.Equal(mau) {
+		t.Errorf("hari bisnis yang diteruskan harus %s (WIB), dapat %s", mau, rs.hariTerakhir)
+	}
+	if hasil.Diperiksa != 1 || hasil.Diantre != 1 || hasil.Dilewati != 0 {
+		t.Errorf("hanya kandidat di dalam jendela yang boleh dibaca/diproses, hasil %+v", hasil)
+	}
+	if len(rs.tahapan) != 1 || rs.tahapan[0] != TahapReminderH2 {
+		t.Errorf("tahap harus hanya %s, dapat %v", TahapReminderH2, rs.tahapan)
+	}
+}
+
+// ---------- JendelaKandidatCNC ----------
+
+// TestJendelaKandidatCNCMenutupSemuaTahap mengunci hubungan antara jadwal
+// tahap dan jendela kandidat: SETIAP jatuh tempo yang menghasilkan tahap pada
+// hari `hari` (menurut TahapReminder, satu-satunya penentu tahap) selalu berada
+// di dalam JendelaKandidatCNC(hari). Karena itu menambahkan klausa jendela pada
+// kueri kandidat tidak mungkin menjatuhkan pengingat — ia hanya membatasi baris
+// yang dibaca. Sekaligus ditegaskan jendela memang lebih LUAS: tepi dalamnya
+// (hari-2 dan hari+1) tidak ber-tahap.
+func TestJendelaKandidatCNCMenutupSemuaTahap(t *testing.T) {
+	hari := time.Date(2026, 10, 7, 7, 0, 0, 0, clock.Jakarta())
+	mulai, akhir := JendelaKandidatCNC(hari)
+	if mau := time.Date(2026, 10, 4, 0, 0, 0, 0, clock.Jakarta()); !mulai.Equal(mau) {
+		t.Errorf("batas mundur harus %s (hari-3), dapat %s", mau, mulai)
+	}
+	if mau := time.Date(2026, 10, 9, 0, 0, 0, 0, clock.Jakarta()); !akhir.Equal(mau) {
+		t.Errorf("batas maju harus %s (hari+2), dapat %s", mau, akhir)
+	}
+	if mulai.Location() != clock.Jakarta() || akhir.Location() != clock.Jakarta() {
+		t.Fatalf("batas jendela harus bertanggal WIB, dapat %s .. %s", mulai.Location(), akhir.Location())
+	}
+
+	// Tidak boleh ada tahap yang jatuh di luar jendela — dijangkau jauh ke
+	// belakang (tumpukan C&C lewat jatuh tempo bertahun-tahun) dan ke depan.
+	jt := time.Date(2026, 10, 9, 0, 0, 0, 0, clock.Jakarta())
+	for geser := -400; geser <= 400; geser++ {
+		kandidatJt := jt.AddDate(0, 0, geser)
+		if _, ok := TahapReminder(hari, kandidatJt); !ok {
+			continue
+		}
+		if kandidatJt.Before(mulai) || kandidatJt.After(akhir) {
+			t.Fatalf("jatuh tempo %s punya tahap pada %s tetapi di luar jendela %s..%s",
+				kandidatJt.Format("2006-01-02"), hari.Format("2006-01-02"),
+				mulai.Format("2006-01-02"), akhir.Format("2006-01-02"))
+		}
+	}
+
+	for _, tanggal := range []string{"2026-10-05", "2026-10-08"} { // hari-2, hari+1
+		d, err := time.ParseInLocation("2006-01-02", tanggal, clock.Jakarta())
+		if err != nil {
+			t.Fatalf("parse %s: %v", tanggal, err)
+		}
+		if _, ok := TahapReminder(hari, d); ok {
+			t.Errorf("%s seharusnya tanpa tahap (jendela memang lebih luas dari tanggal ber-tahap)", tanggal)
+		}
+	}
+}
+
+// TestJendelaKandidatCNCMemakaiTanggalWIB membuktikan batas jendela dihitung
+// pada tanggal bisnis WIB: instant yang jam UTC-nya masih hari sebelumnya tetapi
+// sudah lewat tengah malam WIB memakai hari WIB berikutnya.
+func TestJendelaKandidatCNCMemakaiTanggalWIB(t *testing.T) {
+	// 2026-10-06T17:30Z == 2026-10-07 00:30 WIB.
+	pagi := time.Date(2026, 10, 6, 17, 30, 0, 0, time.UTC)
+	mulai, akhir := JendelaKandidatCNC(pagi)
+	mauMulai := time.Date(2026, 10, 4, 0, 0, 0, 0, clock.Jakarta())
+	mauAkhir := time.Date(2026, 10, 9, 0, 0, 0, 0, clock.Jakarta())
+	if !mulai.Equal(mauMulai) || !akhir.Equal(mauAkhir) {
+		t.Errorf("jendela 00:30 WIB harus %s..%s, dapat %s..%s", mauMulai, mauAkhir, mulai, akhir)
+	}
+
+	// Jendela sama baik dipanggil dengan instant waktu maupun hari WIB-nya.
+	m, a := JendelaKandidatCNC(clock.TodayWIB(clock.Fixed(pagi)))
+	if !m.Equal(mulai) || !a.Equal(akhir) {
+		t.Errorf("jendela dari hari WIB (%s..%s) harus sama dengan dari instant (%s..%s)", m, a, mulai, akhir)
 	}
 }
 

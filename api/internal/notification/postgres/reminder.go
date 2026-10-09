@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -18,21 +19,36 @@ import (
 
 var _ notification.ReminderStore = (*Repo)(nil)
 
-// KandidatCNC mengembalikan pesanan C&C yang belum Done dan punya jatuh tempo,
-// beserta data cabang yang dibutuhkan email pengingat.
+// KandidatCNC mengembalikan pesanan C&C yang belum Done, punya jatuh tempo,
+// dan berjatuh tempo DI DALAM jendela kandidat hari bisnis `hari`
+// (notification.JendelaKandidatCNC), beserta data cabang yang dibutuhkan email
+// pengingat.
+//
+// Jendela tanggal (`jatuh_tempo` di sekitar hari) sengaja dipasang supaya
+// pemindaian harian tidak membaca SELURUH tumpukan C&C yang lewat jatuh tempo:
+// kandidat tumbuh linear terhadap tumpukan itu, sedangkan hanya empat tanggal
+// (h-2/h-0/h+1/h+3) yang pernah punya tahap. Jendela ini superset dari
+// tanggal-tanggal ber-tahap (lihat JendelaKandidatCNC), jadi ia TIDAK pernah
+// menjatuhkan kandidat yang akan menghasilkan tahap — penyaringan tahap yang
+// sebenarnya tetap dilakukan TahapReminder per baris di service.
 //
 // Filter `status <> 'done'` adalah yang membuat pesanan yang lunas sebelum
 // tahap berikutnya berhenti diingatkan (PRD CP-CNC-05/CP-CNC-07). Pesanan
-// non-C&C dan C&C tanpa jatuh tempo tidak pernah masuk. Urutan
-// jatuh_tempo,id menjaga hasil deterministik.
-func (r *Repo) KandidatCNC(ctx context.Context) ([]notification.KandidatCNC, error) {
+// non-C&C, C&C tanpa jatuh tempo, dan C&C di luar jendela tidak pernah masuk.
+// Urutan jatuh_tempo,id menjaga hasil deterministik. Batas jendela dikirim
+// sebagai teks lalu di-cast `::text::date` (pola yang sama dengan kueri audit)
+// supaya tidak bergantung zona waktu sesi database.
+func (r *Repo) KandidatCNC(ctx context.Context, hari time.Time) ([]notification.KandidatCNC, error) {
+	mulai, akhir := notification.JendelaKandidatCNC(hari)
 	rows, err := r.pool.Query(ctx, `
 		SELECT o.id, COALESCE(o.nomor, ''), b.nama, b.nama_kepala, b.email,
 		       COALESCE(o.total, 0), o.jatuh_tempo
 		FROM orders o
 		JOIN branches b ON b.id = o.branch_id
 		WHERE o.is_cnc AND o.status <> 'done' AND o.jatuh_tempo IS NOT NULL
-		ORDER BY o.jatuh_tempo, o.id`)
+		  AND o.jatuh_tempo BETWEEN $1::text::date AND $2::text::date
+		ORDER BY o.jatuh_tempo, o.id`,
+		mulai.Format("2006-01-02"), akhir.Format("2006-01-02"))
 	if err != nil {
 		return nil, fmt.Errorf("baca kandidat pengingat C&C: %w", err)
 	}

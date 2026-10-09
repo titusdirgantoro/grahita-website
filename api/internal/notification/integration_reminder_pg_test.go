@@ -14,6 +14,7 @@ package notification_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -222,7 +223,7 @@ func TestPGReminderCNCDoneDanNonCncDikecualikan(t *testing.T) {
 	svc := notification.New(repo, &hitungMailer{},
 		notification.WithClock(clk), notification.WithReminderStore(repo))
 
-	kandidat, err := repo.KandidatCNC(ctx)
+	kandidat, err := repo.KandidatCNC(ctx, clock.TodayWIB(clk))
 	if err != nil {
 		t.Fatalf("KandidatCNC: %v", err)
 	}
@@ -376,5 +377,240 @@ func TestPGReminderCNCGagalKirimDapatRetryTidakDianggapTerkirim(t *testing.T) {
 	}
 	if n := hitungBaris(t, pool); n != 1 {
 		t.Fatalf("retry tidak boleh menggandakan baris, dapat %d", n)
+	}
+}
+
+// ---------- Tindak lanjut non-pemblokir: jendela kandidat KandidatCNC ----------
+
+// kandidatTanpaJendela meniru kueri KandidatCNC SEBELUM klausa jendela tanggal
+// (seluruh pesanan C&C belum Done yang berjatuh tempo) sebagai acuan pembanding
+// bagi kueri berjendela. Mengembalikan nomor -> jatuh tempo (YYYY-MM-DD).
+func kandidatTanpaJendela(t *testing.T, pool *database.Pool) map[string]string {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `
+		SELECT o.nomor, to_char(o.jatuh_tempo, 'YYYY-MM-DD')
+		FROM orders o
+		JOIN branches b ON b.id = o.branch_id
+		WHERE o.is_cnc AND o.status <> 'done' AND o.jatuh_tempo IS NOT NULL`)
+	if err != nil {
+		t.Fatalf("acuan tanpa jendela: %v", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var nomor, jt string
+		if err := rows.Scan(&nomor, &jt); err != nil {
+			t.Fatalf("scan acuan tanpa jendela: %v", err)
+		}
+		out[nomor] = jt
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("baca acuan tanpa jendela: %v", err)
+	}
+	return out
+}
+
+// tahapBerTahap mengembalikan nomor -> tahap yang pada hari `hari` menghasilkan
+// pengingat, dihitung dari acuan penuh memakai notification.TahapReminder
+// (penentu tahap yang sama dengan produksi).
+func tahapBerTahap(t *testing.T, acuan map[string]string, hari time.Time) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for nomor, jtStr := range acuan {
+		jt, err := time.ParseInLocation("2006-01-02", jtStr, clock.Jakarta())
+		if err != nil {
+			t.Fatalf("parse jatuh tempo %q: %v", jtStr, err)
+		}
+		if tahap, ok := notification.TahapReminder(hari, jt); ok {
+			out[nomor] = tahap
+		}
+	}
+	return out
+}
+
+// himpunanTahap membaca seluruh pasangan "nomor|tahap" yang sudah tercatat.
+func himpunanTahap(t *testing.T, pool *database.Pool) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, s := range tahapTersimpan(t, pool) {
+		out[s] = true
+	}
+	return out
+}
+
+// TestPGReminderCNCJendelaTidakMengubahTahap membuktikan klausa jendela tanggal
+// pada Repo.KandidatCNC (tindak lanjut non-pemblokir t_9b6a1dbf) TIDAK mengubah
+// himpunan tahap yang lahir, sekaligus benar-benar memangkas baris yang dibaca.
+//
+// Untuk tiap hari dalam rentang uji:
+//   - kandidat kueri BERJENDELA dibandingkan dengan acuan kueri LAMA (tanpa
+//     jendela): berjendela harus subset acuan, dan SETIAP pesanan acuan yang
+//     ber-tahap hari itu wajib ada di dalamnya (jendela tidak boleh
+//     menjatuhkan pengingat);
+//   - pemindaian service harus mengantre TEPAT tahap-tahap itu, tidak kurang
+//     (dan tidak ada baris di luar jendela yang lahir).
+//
+// Tumpukan C&C lewat jatuh tempo (−60/−40 hari) dan jauh ke depan (+40/+60)
+// disemai supaya terbukti baris yang jauh dari hari ini berhenti dibaca tanpa
+// menghilangkan satu pun pengingat.
+func TestPGReminderCNCJendelaTidakMengubahTahap(t *testing.T) {
+	pool, _ := skemaUji(t)
+	ctx := context.Background()
+	repo := notificationpg.New(pool)
+	branchID, _ := seedCabangCNC(t, pool)
+
+	// Pesanan berjatuh tempo relatif 2026-10-09 (nomor unik).
+	geseran := []int{-60, -40, -10, -9, -5, -3, -2, -1, 0, 1, 2, 3, 4, 5, 40, 60}
+	for i, geser := range geseran {
+		nomor := fmt.Sprintf("2026-10-%04d", i+1)
+		jt := timeMustWIB(t, "2026-10-09", 7).AddDate(0, 0, geser).Format("2006-01-02")
+		seedPesananCNC(t, pool, branchID, nomor, "submitted", jt)
+	}
+	// Dikecualikan oleh predikat lain (bukan hanya jendela): Done, draft tanpa
+	// nomor/jatuh tempo, dan non-C&C berjatuh tempo.
+	seedPesananCNC(t, pool, branchID, "2026-10-9001", "done", "2026-10-09")
+	if _, err := pool.Exec(ctx, `INSERT INTO orders (branch_id, versi, status, is_cnc, total)
+		VALUES ($1,0,'draft',true,350000)`, branchID); err != nil {
+		t.Fatalf("seed draft C&C tanpa jatuh tempo: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO orders (branch_id, nomor, versi, status, tanggal, is_cnc, total, submitted_at)
+		VALUES ($1,'2026-10-9003',0,'submitted','2026-10-01',false,100000,now())`, branchID); err != nil {
+		t.Fatalf("seed pesanan non-C&C: %v", err)
+	}
+
+	clk := hariCNC(t, "2026-10-04")
+	svc := notification.New(repo, &hitungMailer{},
+		notification.WithClock(clk), notification.WithReminderStore(repo))
+
+	acuan := kandidatTanpaJendela(t, pool)
+	if len(acuan) != len(geseran) {
+		t.Fatalf("acuan harus %d pesanan C&C belum Done, dapat %d", len(geseran), len(acuan))
+	}
+
+	tercatat := himpunanTahap(t, pool)
+	adaPemangkasan := false
+	totalDiperiksa := 0
+	// Rentang hari menutup SEMUA tahap pesanan berjatuh tempo −10..+5.
+	for geser := -12; geser <= 8; geser++ {
+		hari := timeMustWIB(t, "2026-10-09", 7).AddDate(0, 0, geser)
+		clk.Set(hari)
+		hariBisnis := clock.TodayWIB(clk)
+		tanggal := hariBisnis.Format("2006-01-02")
+
+		berjendela, err := repo.KandidatCNC(ctx, hariBisnis)
+		if err != nil {
+			t.Fatalf("KandidatCNC %s: %v", tanggal, err)
+		}
+		if len(berjendela) > len(acuan) {
+			t.Fatalf("%s: kueri berjendela mengembalikan %d baris, lebih banyak dari acuan %d",
+				tanggal, len(berjendela), len(acuan))
+		}
+		if len(berjendela) < len(acuan) {
+			adaPemangkasan = true
+		}
+		nomorDiJendela := map[string]bool{}
+		for _, k := range berjendela {
+			if _, ada := acuan[k.Nomor]; !ada {
+				t.Fatalf("%s: kandidat %s tidak ada di acuan tanpa jendela", tanggal, k.Nomor)
+			}
+			nomorDiJendela[k.Nomor] = true
+		}
+
+		wajib := tahapBerTahap(t, acuan, hariBisnis)
+		for nomor := range wajib {
+			if !nomorDiJendela[nomor] {
+				t.Fatalf("%s: pesanan %s ber-tahap hari itu tetapi TIDAK ada di jendela kandidat",
+					tanggal, nomor)
+			}
+		}
+
+		hasil, err := svc.JalankanReminderCNC(ctx)
+		if err != nil {
+			t.Fatalf("JalankanReminderCNC %s: %v", tanggal, err)
+		}
+		totalDiperiksa += hasil.Diperiksa
+		if hasil.Diperiksa != len(berjendela) {
+			t.Errorf("%s: Diperiksa harus %d (persis kandidat berjendela), dapat %d",
+				tanggal, len(berjendela), hasil.Diperiksa)
+		}
+		if hasil.Diantre != len(wajib) {
+			t.Errorf("%s: harus mengantre %d tahap, dapat %d", tanggal, len(wajib), hasil.Diantre)
+		}
+
+		sesudah := himpunanTahap(t, pool)
+		baru := map[string]bool{}
+		for kunci := range sesudah {
+			if !tercatat[kunci] {
+				baru[kunci] = true
+			}
+		}
+		if len(baru) != len(wajib) {
+			t.Errorf("%s: tahap baru %v, mau tepat %v (wajib)", tanggal, baru, wajib)
+		}
+		for nomor, tahap := range wajib {
+			if kunci := nomor + "|" + tahap; !baru[kunci] {
+				t.Errorf("%s: tahap %s untuk %s tidak lahir", tanggal, tahap, nomor)
+			}
+		}
+		for kunci := range baru {
+			cocok := false
+			for nomor, tahap := range wajib {
+				if kunci == nomor+"|"+tahap {
+					cocok = true
+					break
+				}
+			}
+			if !cocok {
+				t.Errorf("%s: tahap %s lahir padahal tidak diharapkan", tanggal, kunci)
+			}
+		}
+		tercatat = sesudah
+	}
+
+	if !adaPemangkasan {
+		t.Error("klausa jendela tidak pernah memangkas satu baris pun — bukti pemangkasan tidak sah")
+	}
+	if totalDiperiksa <= len(acuan) {
+		t.Errorf("total Diperiksa %d tidak menunjukkan pemangkasan nyata (acuan %d/hari)", totalDiperiksa, len(acuan))
+	}
+	// Acuan penuh: 4 tahap untuk tiap pesanan berjatuh tempo −10..+5 (12 pesanan).
+	if mau := 12 * 4; len(tercatat) != mau {
+		t.Errorf("total tahap tercatat harus %d, dapat %d (%v)", mau, len(tercatat), tercatat)
+	}
+}
+
+// TestPGReminderCNCJendelaMemakaiBatasWIB memastikan batas jendela yang
+// dikirim kueri benar-benar bertanggal WIB: pada hari bisnis 2026-10-07
+// (jatuh tempo 2026-10-09 = h-2) kandidat yang masih masuk jendela (10-04..10-09)
+// dibaca, sedangkan yang satu hari di luarnya (10-03 dan 10-10) tidak.
+func TestPGReminderCNCJendelaMemakaiBatasWIB(t *testing.T) {
+	pool, _ := skemaUji(t)
+	ctx := context.Background()
+	repo := notificationpg.New(pool)
+	branchID, _ := seedCabangCNC(t, pool)
+
+	seedPesananCNC(t, pool, branchID, "2026-10-0001", "submitted", "2026-10-03") // hari-4: di luar
+	seedPesananCNC(t, pool, branchID, "2026-10-0002", "submitted", "2026-10-04") // hari-3: batas dalam
+	seedPesananCNC(t, pool, branchID, "2026-10-0003", "submitted", "2026-10-09") // hari+2: batas luar (h-2)
+	seedPesananCNC(t, pool, branchID, "2026-10-0004", "submitted", "2026-10-10") // hari+3: di luar
+
+	// 2026-10-06T17:30Z == 2026-10-07 00:30 WIB.
+	hariBisnis := clock.TodayWIB(clock.Fixed(time.Date(2026, 10, 6, 17, 30, 0, 0, time.UTC)))
+	kandidat, err := repo.KandidatCNC(ctx, hariBisnis)
+	if err != nil {
+		t.Fatalf("KandidatCNC: %v", err)
+	}
+	dapat := map[string]bool{}
+	for _, k := range kandidat {
+		dapat[k.Nomor] = true
+	}
+	if !dapat["2026-10-0002"] || !dapat["2026-10-0003"] {
+		t.Errorf("batas jendela harus INKLUSIF (10-04 dan 10-09 dibaca), dapat %v", dapat)
+	}
+	if dapat["2026-10-0001"] || dapat["2026-10-0004"] {
+		t.Errorf("jatuh tempo di luar jendela (10-03/10-10) tidak boleh dibaca, dapat %v", dapat)
+	}
+	if len(kandidat) != 2 {
+		t.Errorf("harus tepat 2 kandidat di jendela, dapat %d", len(kandidat))
 	}
 }

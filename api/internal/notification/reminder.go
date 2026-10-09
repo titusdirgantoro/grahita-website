@@ -82,9 +82,12 @@ type KandidatCNC struct {
 // Interface ini dipisah dari Store supaya paket lain tidak ikut menanggung
 // kewajiban pengingat; implementasinya adalah notification/postgres.Repo.
 type ReminderStore interface {
-	// KandidatCNC mengembalikan pesanan C&C yang belum Done dan punya jatuh
-	// tempo.
-	KandidatCNC(ctx context.Context) ([]KandidatCNC, error)
+	// KandidatCNC mengembalikan pesanan C&C yang belum Done, punya jatuh
+	// tempo, DAN berjatuh tempo di dalam jendela kandidat hari bisnis `hari`
+	// (JendelaKandidatCNC). Jendela itu superset dari tanggal ber-tahap,
+	// sehingga pemanggil tetap menyaring tahap per baris dengan
+	// TahapReminder; gunanya hanya membatasi volume baris yang dibaca.
+	KandidatCNC(ctx context.Context, hari time.Time) ([]KandidatCNC, error)
 	// AntreReminderCNC menyimpan baris cnc_reminders (order_id, tahap) DAN
 	// baris email_outbox DAN entri audit dalam SATU transaksi. Bool kedua
 	// bernilai true bila baris reminder baru dibuat; false berarti tahap itu
@@ -145,6 +148,45 @@ func TahapReminder(hari, jatuhTempo time.Time) (string, bool) {
 	}
 }
 
+// Selisih hari (tanggal bisnis hari minus jatuh tempo) yang punya tahap
+// pengingat: -2, 0, +1, +3 (lihat TahapReminder). Karena itu pesanan yang BISA
+// menghasilkan tahap pada hari bisnis `hari` hanya berjatuh tempo di rentang
+// [hari-3, hari+2]:
+//
+//	selisih +3 (TahapReminderP3) -> jatuh tempo = hari-3
+//	selisih +1 (TahapReminderP1) -> jatuh tempo = hari-1
+//	selisih  0 (TahapReminderH0) -> jatuh tempo = hari
+//	selisih -2 (TahapReminderH2) -> jatuh tempo = hari+2
+//
+// Kedua konstanta di bawah adalah batas jendela kandidat yang dipakai kueri
+// `postgres.Repo.KandidatCNC`; ia SENGAJA diturunkan dari jadwal tahap di atas,
+// bukan dipilih bebas.
+const (
+	// jendelaKandidatMundurHari adalah batas MUNDUR jendela kandidat relatif
+	// hari bisnis WIB (hari-3), berasal dari tahap terjauh ke DEPAN (h+3).
+	jendelaKandidatMundurHari = 3
+	// jendelaKandidatMajuHari adalah batas MAJU jendela kandidat relatif hari
+	// bisnis WIB (hari+2), berasal dari tahap terjauh ke BELAKANG (h-2).
+	jendelaKandidatMajuHari = 2
+)
+
+// JendelaKandidatCNC mengembalikan rentang tanggal jatuh tempo yang mungkin
+// menghasilkan pengingat pada hari bisnis `hari` (kedua batas INKLUSIF,
+// dinormalkan ke tengah malam WIB).
+//
+// Jendela ini LEBIH LUAS dari tanggal ber-tahap: ia ikut memuat hari-2 dan
+// hari+1 yang tidak punya tahap. Maksudnya semata supaya kueri kandidat
+// (`postgres.Repo.KandidatCNC`) tidak perlu membaca SELURUH tumpukan C&C yang
+// lewat jatuh tempo saat volume naik, sedangkan TahapReminder tetap
+// satu-satunya penentu tahap — himpunan tahap yang lahir tidak berubah
+// (dikunci uji unit TestJendelaKandidatCNCMenutupSemuaTahap dan uji integrasi
+// TestPGReminderCNCJendelaTidakMengubahTahap).
+func JendelaKandidatCNC(hari time.Time) (mulai, akhir time.Time) {
+	h := tanggalWIB(hari)
+	return h.AddDate(0, 0, -jendelaKandidatMundurHari),
+		h.AddDate(0, 0, jendelaKandidatMajuHari)
+}
+
 // labelTahap adalah teks tahap yang tercetak di badan email.
 func labelTahap(tahap string) string { return strings.ToUpper(tahap) }
 
@@ -173,7 +215,8 @@ func envelopeReminder(k KandidatCNC, tahap string) (Envelope, error) {
 
 // JalankanReminderCNC menjalankan satu pemindaian pengingat C&C.
 //
-// Ia membaca kandidat, lalu untuk setiap kandidat yang tahapnya jatuh HARI INI
+// Ia membaca kandidat pada jendela tanggal jatuh tempo hari itu (lihat
+// JendelaKandidatCNC), lalu untuk setiap kandidat yang tahapnya jatuh HARI INI
 // (WIB) mengantre email pengingat ke cabang lewat email_outbox. Penulisan
 // baris cnc_reminders + email_outbox + audit dilakukan atomik oleh repository,
 // jadi pemindaian ulang pada hari yang sama tidak menggandakan email.
@@ -187,12 +230,13 @@ func (s *Service) JalankanReminderCNC(ctx context.Context) (HasilReminder, error
 	if s.reminder == nil {
 		return hasil, fmt.Errorf("%w: penyimpanan pengingat C&C belum terpasang", ErrInvalidData)
 	}
-	kandidat, err := s.reminder.KandidatCNC(ctx)
+
+	hari := clock.TodayWIB(s.clk)
+	kandidat, err := s.reminder.KandidatCNC(ctx, hari)
 	if err != nil {
 		return hasil, fmt.Errorf("baca kandidat pengingat C&C: %w", err)
 	}
 
-	hari := clock.TodayWIB(s.clk)
 	for _, k := range kandidat {
 		hasil.Diperiksa++
 		tahap, ok := TahapReminder(hari, k.JatuhTempo)

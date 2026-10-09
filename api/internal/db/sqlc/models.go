@@ -662,9 +662,10 @@ type BranchUser struct {
 }
 
 type CncReminder struct {
-	OrderID string    `json:"order_id"`
-	Tahap   string    `json:"tahap"`
-	SentAt  time.Time `json:"sent_at"`
+	OrderID string `json:"order_id"`
+	Tahap   string `json:"tahap"`
+	// Waktu baris pengingat DIANTRE (DEFAULT now() saat insert), bukan waktu email terkirim; kebenaran pengiriman ada di email_outbox.sent_at.
+	SentAt time.Time `json:"sent_at"`
 }
 
 type Document struct {
