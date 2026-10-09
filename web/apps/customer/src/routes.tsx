@@ -14,13 +14,10 @@ import { CustomerShell, SkeletonList, type ShellLinkProps } from "@grahita/ui";
 import { SessionProvider, useSesi } from "./session";
 import { NAV_CUSTOMER } from "./nav";
 import { HalamanDaftar, HalamanLupa, HalamanMasuk } from "./pages/auth";
-import {
-  BerandaPage,
-  InvoicePage,
-  KatalogPage,
-  ProfilPage,
-  TutorialPage,
-} from "./pages/shell-pages";
+import { KatalogPage, ProfilPage } from "./pages/shell-pages";
+import { BerandaPage } from "./pages/beranda";
+import { InvoicePage } from "./pages/invoice";
+import { TutorialPage } from "./pages/tutorial";
 import {
   PesananDetailPage,
   PesananEditorPage,
@@ -156,7 +153,24 @@ const pesananDetailRoute = createRoute({
     return <PesananDetailPage id={id} />;
   },
 });
-const invoiceRoute = createRoute({ getParentRoute: () => shellRoute, path: "/invoice", component: InvoicePage });
+/**
+ * Rute riwayat invoice (F1-19): filter periode disimpan di URL search param
+ * (`/invoice?dari=2026-10-01&sampai=2026-10-31`) supaya dapat di-bookmark dan
+ * di-share (SystemDesign.md §7.2). Tanggal divalidasi bentuknya di service;
+ * router hanya memastikan nilainya string.
+ */
+const invoiceRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/invoice",
+  validateSearch: (search: Record<string, unknown>): { dari?: string; sampai?: string } => ({
+    dari: typeof search.dari === "string" && search.dari !== "" ? search.dari : undefined,
+    sampai: typeof search.sampai === "string" && search.sampai !== "" ? search.sampai : undefined,
+  }),
+  component: function InvoiceRoute() {
+    const { dari, sampai } = invoiceRoute.useSearch();
+    return <InvoicePage dari={dari} sampai={sampai} />;
+  },
+});
 const tutorialRoute = createRoute({ getParentRoute: () => shellRoute, path: "/tutorial", component: TutorialPage });
 const profilRoute = createRoute({ getParentRoute: () => shellRoute, path: "/profil", component: ProfilPage });
 

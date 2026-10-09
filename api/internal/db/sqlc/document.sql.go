@@ -283,3 +283,94 @@ func (q *Queries) ListDocumentsByOrder(ctx context.Context, orderID string) ([]L
 	}
 	return items, nil
 }
+
+const listInvoicesForBranch = `-- name: ListInvoicesForBranch :many
+SELECT o.id::text                     AS order_id,
+       COALESCE(o.nomor, '')::text    AS nomor,
+       o.tanggal,
+       o.status::text                 AS status,
+       o.versi,
+       o.is_cnc,
+       o.jatuh_tempo,
+       o.total,
+       COALESCE((SELECT sum(l.qty) FROM order_lines l
+                  WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
+       COALESCE(d.id::text, '')::text AS dokumen_id,
+       COALESCE(d.versi, -1)          AS versi_dokumen,
+       COALESCE(d.ukuran_byte, 0)::bigint AS ukuran_byte,
+       d.created_at                   AS dokumen_created_at
+  FROM orders o
+  LEFT JOIN documents d
+         ON d.order_id = o.id
+        AND d.jenis = 'invoice_pdf'
+ WHERE o.branch_id = $1::uuid
+   AND o.nomor IS NOT NULL
+   AND ($2::date IS NULL OR o.tanggal >= $2::date)
+   AND ($3::date IS NULL OR o.tanggal <= $3::date)
+ ORDER BY o.tanggal DESC, o.nomor DESC, d.versi DESC
+`
+
+type ListInvoicesForBranchParams struct {
+	BranchID string     `json:"branch_id"`
+	Dari     *time.Time `json:"dari"`
+	Sampai   *time.Time `json:"sampai"`
+}
+
+type ListInvoicesForBranchRow struct {
+	OrderID          string     `json:"order_id"`
+	Nomor            string     `json:"nomor"`
+	Tanggal          *time.Time `json:"tanggal"`
+	Status           string     `json:"status"`
+	Versi            int32      `json:"versi"`
+	IsCnc            bool       `json:"is_cnc"`
+	JatuhTempo       *time.Time `json:"jatuh_tempo"`
+	Total            int64      `json:"total"`
+	JumlahItem       int64      `json:"jumlah_item"`
+	DokumenID        string     `json:"dokumen_id"`
+	VersiDokumen     int32      `json:"versi_dokumen"`
+	UkuranByte       int64      `json:"ukuran_byte"`
+	DokumenCreatedAt *time.Time `json:"dokumen_created_at"`
+}
+
+// Riwayat invoice satu cabang (kartu F1-19, PRD §3.8): satu baris per DOKUMEN
+// invoice (jenis invoice_pdf) milik pesanan cabang tersebut, sehingga versi
+// LAMA tetap tampil setelah revisi (versi +1 menghasilkan dokumen baru tanpa
+// menimpa yang lama, F1-17/F2-25). Pesanan ber-nomor yang dokumennya belum
+// dirender juga ikut satu baris dengan dokumen kosong (versi_dokumen -1) —
+// itulah bentuk "invoice belum Done / belum siap" yang tidak bisa diunduh.
+//
+// Filter periode memakai `orders.tanggal` (tanggal bisnis WIB, BR-04) dan
+// inklusif di kedua ujungnya. branch_id selalu dari SESI.
+func (q *Queries) ListInvoicesForBranch(ctx context.Context, arg ListInvoicesForBranchParams) ([]ListInvoicesForBranchRow, error) {
+	rows, err := q.db.Query(ctx, listInvoicesForBranch, arg.BranchID, arg.Dari, arg.Sampai)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListInvoicesForBranchRow{}
+	for rows.Next() {
+		var i ListInvoicesForBranchRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.Nomor,
+			&i.Tanggal,
+			&i.Status,
+			&i.Versi,
+			&i.IsCnc,
+			&i.JatuhTempo,
+			&i.Total,
+			&i.JumlahItem,
+			&i.DokumenID,
+			&i.VersiDokumen,
+			&i.UkuranByte,
+			&i.DokumenCreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

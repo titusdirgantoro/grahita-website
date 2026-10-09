@@ -2449,6 +2449,66 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 
+  /api/v1/invoices:
+    get:
+      tags: [customer]
+      operationId: listInvoices
+      summary: Riwayat invoice cabang yang sedang masuk
+      description: |
+        Riwayat invoice cabang (F1-19, PRD §3.8): daftar invoice milik cabang
+        SESI beserta nomor, tanggal, versi, total, dan ketersediaan PDF-nya.
+        Tidak ada parameter cabang — `branch_id` selalu dari sesi, sehingga
+        riwayat lintas cabang tidak pernah bisa diminta dan tidak pernah
+        tampil.
+
+        Satu baris = satu DOKUMEN invoice (versi). Karena revisi invoice
+        menghasilkan dokumen versi baru tanpa menimpa berkas lama (F1-17,
+        F2-25), versi lama tetap terlihat di daftar ini dan tetap dapat
+        diunduh; `terbaru` menandai dokumen yang versinya sama dengan versi
+        pesanan sekarang.
+
+        Pesanan ber-nomor yang dokumennya belum ada — masih `submitted`, atau
+        transisi Done-nya belum merender dokumen — tetap muncul satu baris
+        dengan `versi_dokumen` null dan `dapat_diunduh` false. Jadi invoice
+        yang belum Done TIDAK bisa diunduh: `GET /api/v1/documents/{id}/download`
+        dijawab 404 karena dokumennya memang belum ada.
+
+        Filter periode `dari`/`sampai` memakai tanggal bisnis pesanan (WIB,
+        BR-04) dan inklusif di kedua ujungnya; keduanya opsional. Format yang
+        tidak dikenal atau rentang terbalik dijawab `400 VALIDATION_FAILED`,
+        bukan daftar kosong.
+      parameters:
+        - name: dari
+          in: query
+          required: false
+          description: Batas awal periode (YYYY-MM-DD), inklusif.
+          schema: { type: string, format: date }
+        - name: sampai
+          in: query
+          required: false
+          description: Batas akhir periode (YYYY-MM-DD), inklusif.
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Riwayat invoice cabang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/InvoiceRow" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
   /api/v1/admin/orders/{id}/documents:
     parameters:
       - $ref: "#/components/parameters/OrderIdPath"
@@ -3128,6 +3188,58 @@ components:
           enum:
             - application/pdf
             - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+    InvoiceRow:
+      type: object
+      required:
+        [order_id, nomor, status, versi, is_cnc, total, jumlah_item, versi_dokumen,
+         ukuran_byte, terbaru, dapat_diunduh]
+      description: |
+        Satu baris riwayat invoice cabang (F1-19, PRD §3.8). Satu baris = satu
+        dokumen invoice versi tertentu; versi lama tetap tampil setelah revisi.
+        Pesanan ber-nomor yang dokumennya belum ada muncul dengan
+        `versi_dokumen` null dan `dapat_diunduh` false — bentuk invoice yang
+        belum Done sehingga belum bisa diunduh. Kunci object storage tidak
+        pernah disertakan.
+      properties:
+        order_id: { type: string, format: uuid }
+        nomor: { type: string, example: 2026-10-0001 }
+        tanggal:
+          type: string
+          format: date
+          description: Tanggal bisnis WIB pesanan (BR-04).
+        status: { type: string, enum: [submitted, done] }
+        versi:
+          type: integer
+          minimum: 0
+          description: Versi pesanan (0 = asli, >0 = sudah direvisi).
+        is_cnc: { type: boolean }
+        jatuh_tempo:
+          type: string
+          format: date
+          description: Tenggat Cash & Carry; hanya untuk pesanan C&C.
+        total: { type: integer, format: int64 }
+        jumlah_item:
+          type: integer
+          format: int64
+          description: Σ qty baris produk (baris biaya packaging tidak dihitung).
+        dokumen_id:
+          type: string
+          format: uuid
+          description: Id dokumen invoice versi baris ini; kosong bila belum ada.
+        versi_dokumen:
+          type: [integer, "null"]
+          description: Versi dokumen invoice baris ini; null bila belum ada.
+        ukuran_byte: { type: integer, format: int64 }
+        terbaru:
+          type: boolean
+          description: True bila dokumen baris ini versinya sama dengan versi pesanan.
+        dapat_diunduh:
+          type: boolean
+          description: |
+            True hanya bila dokumen invoice-nya ada DAN pesanannya sudah Done.
+            Unduhan memakai `GET /api/v1/documents/{id}/download` dengan
+            `dokumen_id` ini.
 
     VerificationLog:
       type: object

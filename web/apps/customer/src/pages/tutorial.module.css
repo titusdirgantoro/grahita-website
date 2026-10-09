@@ -1,0 +1,60 @@
+.topikList {
+  display: grid;
+  gap: 12px;
+  max-width: 760px;
+}
+
+.topik {
+  padding: 16px;
+}
+
+.kepala {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.ilustrasi {
+  flex: 0 0 auto;
+  width: 160px;
+  max-width: 42%;
+  height: auto;
+}
+
+.teks {
+  min-width: 0;
+}
+
+.judul {
+  margin: 0 0 4px;
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.ringkas {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+@media (max-width: 560px) {
+  .kepala {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .ilustrasi {
+    width: 100%;
+    max-width: 240px;
+  }
+
+  .judul {
+    font-size: 16px;
+    line-height: 22px;
+  }
+}

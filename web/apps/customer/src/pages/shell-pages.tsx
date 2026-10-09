@@ -1,9 +1,7 @@
-import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { api } from "@grahita/api-client";
 import {
-  Accordion,
   Badge,
   Button,
   Card,
@@ -14,18 +12,23 @@ import {
   Form,
   Input,
   Logo,
-  Modal,
   Notice,
   PageHead,
   Skeleton,
   SkeletonList,
-  Table,
-  useToast,
 } from "@grahita/ui";
 
 import { useSesi } from "../session";
 import { useApi } from "../useApi";
 import styles from "./customer-pages.module.css";
+
+/**
+ * Halaman shell yang ringkas: katalog (F1-08) dan profil cabang (F1-10).
+ *
+ * Beranda, Riwayat invoice, dan Tutorial punya sumber data/isi sendiri dan
+ * hidup di berkas terpisah sejak kartu F1-19: `beranda.tsx`, `invoice.tsx`,
+ * `tutorial.tsx`.
+ */
 
 const rupiah = new Intl.NumberFormat("id-ID", {
   style: "currency",
@@ -54,133 +57,6 @@ interface Cabang {
   is_special?: boolean;
   pajak_in?: boolean;
   is_active: boolean;
-}
-
-/** pBeranda — /: ringkasan + pesanan terakhir + contoh modal kirim. */
-export function BerandaPage() {
-  const [modal, setModal] = useState(false);
-  const { tampilkan } = useToast();
-
-  return (
-    <>
-      <PageHead
-        title="Beranda"
-        sub="Ringkasan pesanan cabang Anda"
-        actions={
-          <Button variant="primary" icon="plus">
-            Buat pesanan
-          </Button>
-        }
-      />
-
-      <div className={styles.kpis}>
-        <Card>
-          <div className={styles.kpi}>
-            <div>
-              <p className={styles.lbl}>Pesanan periode ini</p>
-              <p className={styles.val}>0</p>
-              <span className="caption">Belum ada pesanan bulan ini</span>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div className={styles.kpi}>
-            <div>
-              <p className={styles.lbl}>Menunggu verifikasi</p>
-              <p className={styles.val}>0</p>
-              <span className="caption">Bukti transfer diproses admin</span>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div className={styles.kpi}>
-            <div>
-              <p className={styles.lbl}>Draft belum dikirim</p>
-              <p className={styles.val}>0</p>
-              <span className="caption">Lanjutkan atau hapus draft</span>
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      <div className={styles.stack}>
-        <Card>
-          <CardHead title="Pesanan terakhir" />
-          <EmptyState
-            icon="receipt"
-            action={
-              <Button variant="secondary" icon="plus">
-                Buat pesanan pertama
-              </Button>
-            }
-          >
-            Belum ada pesanan. Pesanan yang Anda kirim akan tampil di sini beserta statusnya.
-          </EmptyState>
-        </Card>
-
-        <Card>
-          <CardHead title="Alur pesanan" />
-          <div className={styles.tools}>
-            <Badge tone="draft">Draft</Badge>
-            <Badge tone="warning">Menunggu verifikasi</Badge>
-            <Badge tone="success">Selesai</Badge>
-            <Badge tone="cnc">C&amp;C</Badge>
-            <Badge tone="rev">Revisi 1</Badge>
-          </div>
-          <p className="muted small" style={{ marginTop: 12 }}>
-            Contoh chip status dan tombol modal (dipakai saat submit bukti transfer).
-          </p>
-          <div className={styles.tools} style={{ marginTop: 12 }}>
-            <Button variant="secondary" icon="upload-simple" onClick={() => setModal(true)}>
-              Contoh modal kirim
-            </Button>
-            <Button
-              variant="ghost"
-              icon="check-circle"
-              onClick={() => tampilkan("Contoh notifikasi berhasil.")}
-            >
-              Contoh notifikasi
-            </Button>
-          </div>
-        </Card>
-
-        <Card>
-          <CardHead title="Sedang memuat (skeleton)" />
-          <SkeletonList rows={2} />
-        </Card>
-      </div>
-
-      <Modal
-        open={modal}
-        onClose={() => setModal(false)}
-        title="Kirim pesanan"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setModal(false)}>
-              Batal
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setModal(false);
-                tampilkan("Pesanan dikirim (contoh).");
-              }}
-            >
-              Kirim
-            </Button>
-          </>
-        }
-      >
-        <Notice tone="info">
-          Unggah minimal satu bukti transfer (JPG/PNG/PDF, maks 5 berkas × 5 MB).
-        </Notice>
-        <p className="muted small">
-          Modal ini adalah komponen bersama: fokus terperangkap, Escape menutup, dan fokus kembali
-          ke tombol pemicu.
-        </p>
-      </Modal>
-    </>
-  );
 }
 
 /** pKatalog — /katalog: grid produk aktif dengan harga khusus cabang. */
@@ -218,38 +94,6 @@ export function KatalogPage() {
             ))}
           </div>
         )}
-      </Card>
-    </>
-  );
-}
-
-/** pInvoice — /invoice: riwayat invoice + unduh PDF (kerangka kartu F1-03). */
-export function InvoicePage() {
-  return (
-    <>
-      <PageHead title="Riwayat invoice" sub="Invoice yang sudah selesai beserta versi revisinya" />
-      <Card>
-        <Table mobileCards caption="Riwayat invoice">
-          <thead>
-            <tr>
-              <th scope="col">Nomor</th>
-              <th scope="col">Tanggal</th>
-              <th scope="col" className="num">
-                Total
-              </th>
-              <th scope="col">Dokumen</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colSpan={4}>
-                <EmptyState icon="file-text">
-                  Belum ada invoice. Invoice tersedia setelah pembayaran diverifikasi admin.
-                </EmptyState>
-              </td>
-            </tr>
-          </tbody>
-        </Table>
       </Card>
     </>
   );
@@ -335,33 +179,6 @@ export function ProfilPage() {
             }}
           />
         </Card>
-      </div>
-    </>
-  );
-}
-
-/** pTutorial — /tutorial: panduan langkah (accordion native). */
-export function TutorialPage() {
-  return (
-    <>
-      <PageHead title="Tutorial" sub="Panduan singkat pemakaian portal cabang" />
-      <div className={styles.stack}>
-        <Accordion summary="Cara membuat dan mengirim pesanan" open>
-          <li>Buka menu Pesanan lalu tekan “Buat pesanan”.</li>
-          <li>Tambahkan baris produk dan atur jumlah.</li>
-          <li>Simpan sebagai Draft atau lanjutkan ke pengiriman.</li>
-          <li>Unggah bukti transfer lalu kirim pesanan.</li>
-        </Accordion>
-        <Accordion summary="Aturan produk Sertifikat">
-          <li>Harga satuan Sertifikat selalu Rp0.</li>
-          <li>Biaya packaging ditambahkan otomatis per pesanan.</li>
-          <li>Sertifikat tidak boleh dicampur produk reguler.</li>
-        </Accordion>
-        <Accordion summary="Aturan Cash &amp; Carry">
-          <li>Hanya tersedia untuk cabang dengan flag C&amp;C.</li>
-          <li>Bukti transfer boleh diunggah menyusul.</li>
-          <li>Jatuh tempo dihitung dari tanggal pesanan.</li>
-        </Accordion>
       </div>
     </>
   );

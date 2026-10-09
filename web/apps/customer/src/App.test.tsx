@@ -91,13 +91,15 @@ describe("Customer Portal — shell & navigasi", () => {
     expect(screen.getByText(/Biaya packaging Rp\s?3\.000 ditambahkan otomatis per pesanan\./)).toBeDefined();
   });
 
-  it("rute /tutorial merender shell dan isi accordion", async () => {
+  it("rute /tutorial merender shell dan empat topik panduan", async () => {
     fetchAndalan();
 
     render(<RouterProvider router={buatRouter("/tutorial")} />);
 
-    expect(await screen.findByText("Cara membuat dan mengirim pesanan")).toBeDefined();
-    expect(screen.getByText("Aturan produk Sertifikat")).toBeDefined();
+    // Judul topik muncul sebagai judul kartu (h2) dan ringkasan accordion.
+    await screen.findByRole("heading", { name: "Cara memesan" });
+    expect(screen.getAllByText("Aturan produk Sertifikat").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Pesanan Cash & Carry").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("complementary")).toBeDefined();
   });
 

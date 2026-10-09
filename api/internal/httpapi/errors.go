@@ -247,6 +247,14 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, document.ErrInvalidData):
 		return apierr.Validation("Data pesanan belum cukup untuk membuat dokumen.",
 			map[string]string{"dokumen": err.Error()})
+	// Riwayat invoice cabang (F1-19): filter periode yang tidak terbaca
+	// dijawab 400, bukan daftar kosong; akun tanpa cabang dijawab 409 sama
+	// seperti domain lain.
+	case errors.Is(err, document.ErrFilterInvalid):
+		return apierr.Validation("Filter periode tidak valid.",
+			map[string]string{"periode": err.Error()})
+	case errors.Is(err, document.ErrNoBranch):
+		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
 	// Pendaftaran akun cabang lewat token (F1-07). Pesan sengaja spesifik per
 	// keadaan supaya pengguna tahu harus berbuat apa (PRD CP-REG-07).
 	case errors.Is(err, registration.ErrTokenInvalid):

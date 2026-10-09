@@ -39,6 +39,10 @@
 //     mengunduh semua dokumen semua cabang (PRD §2.1, §6.1). Dokumen cabang
 //     lain dijawab 404 tanpa membocorkan keberadaannya, dan kunci storage
 //     tidak pernah dikirim ke klien.
+//   - Riwayat invoice cabang (kartu F1-19, PRD §3.8) dibaca lewat
+//     Service.Invoices: satu baris per dokumen invoice versi berapa pun
+//     (versi lama tetap terlihat setelah revisi) ditambah pesanan ber-nomor
+//     yang dokumennya belum ada, selalu dibatasi branch_id SESI.
 //
 // Catatan kartu: PRD §8 no.7 (template resmi Surat Jalan) dan no.9 (tanda
 // tangan/stempel digital) masih terbuka. Paket ini memakai template awal yang
@@ -70,6 +74,11 @@ const (
 
 // Status pesanan yang relevan (mirror enum order_status, Database.md §3).
 const StatusDone = "done"
+
+// JenisBarisProduk adalah jenis baris pesanan yang dihitung sebagai item
+// pesanan (mirror enum line_kind, Database.md §3): baris biaya packaging
+// pesanan Sertifikat TIDAK dihitung.
+const JenisBarisProduk = "product"
 
 // DirStorage adalah awalan kunci object storage seluruh dokumen
 // (SystemDesign.md §8).
@@ -108,7 +117,17 @@ var (
 	// ErrInvalidData dikembalikan bila data pesanan tidak cukup untuk
 	// merender dokumen yang dimintai.
 	ErrInvalidData = errors.New("data pesanan tidak cukup untuk dokumen")
+	// ErrNoBranch dikembalikan bila akun cabang tidak terhubung ke cabang,
+	// sehingga tidak ada riwayat invoice yang bisa ditampilkan.
+	ErrNoBranch = errors.New("akun tidak terhubung ke cabang")
+	// ErrFilterInvalid dikembalikan bila filter periode riwayat invoice tidak
+	// bisa dibaca (bukan tanggal YYYY-MM-DD atau rentang terbalik).
+	ErrFilterInvalid = errors.New("filter periode tidak valid")
 )
+
+// TanggalLayout adalah bentuk tanggal bisnis (WIB) yang dipakai filter dan
+// jawaban API riwayat invoice — sama dengan orders.tanggal (BR-04).
+const TanggalLayout = "2006-01-02"
 
 // Document adalah satu baris tabel `documents` yang aman dikirim ke klien.
 // Kunci storage tidak pernah ikut (json:"-"); unduhan memakai presigned URL.
@@ -135,6 +154,48 @@ type Download struct {
 	ExpiresIn int    `json:"expires_in"`
 	NamaFile  string `json:"nama_file"`
 	MimeType  string `json:"mime_type"`
+}
+
+// InvoiceFilter adalah filter periode riwayat invoice (PRD §3.8): tanggal
+// bisnis WIB dalam bentuk YYYY-MM-DD, inklusif di kedua ujungnya. Kosong
+// berarti tanpa batas.
+type InvoiceFilter struct {
+	Dari   string
+	Sampai string
+}
+
+// InvoiceRow adalah satu baris riwayat invoice cabang (kartu F1-19).
+//
+// Satu baris = satu DOKUMEN invoice (satu versi). Karena revisi invoice
+// menghasilkan dokumen versi baru tanpa menimpa yang lama (F1-17, F2-25),
+// versi lama tetap tampil di daftar ini; `Terbaru` menandai baris yang
+// versinya sama dengan versi pesanan saat ini.
+//
+// Pesanan ber-nomor yang dokumennya belum ada (mis. masih Submitted, atau
+// render dokumen belum selesai) tetap muncul dengan VersiDokumen nil dan
+// DapatDiunduh false — bentuk "invoice belum bisa diunduh" di UI.
+//
+// Kunci storage tidak pernah ikut: unduhan selalu lewat presigned URL.
+type InvoiceRow struct {
+	OrderID    string `json:"order_id"`
+	Nomor      string `json:"nomor"`
+	Tanggal    string `json:"tanggal,omitempty"`
+	Status     string `json:"status"`
+	Versi      int    `json:"versi"`
+	IsCNC      bool   `json:"is_cnc"`
+	JatuhTempo string `json:"jatuh_tempo,omitempty"`
+	Total      int64  `json:"total"`
+	JumlahItem int64  `json:"jumlah_item"`
+	// DokumenID adalah dokumen invoice versi baris ini; kosong bila belum ada.
+	DokumenID string `json:"dokumen_id,omitempty"`
+	// VersiDokumen adalah versi DOKUMEN baris ini; null bila belum ada.
+	VersiDokumen *int  `json:"versi_dokumen"`
+	UkuranByte   int64 `json:"ukuran_byte"`
+	// Terbaru menandai dokumen yang versinya sama dengan versi pesanan.
+	Terbaru bool `json:"terbaru"`
+	// DapatDiunduh true hanya bila dokumen invoice-nya benar-benar ada dan
+	// pesanannya sudah Done — invoice yang belum selesai tidak bisa diunduh.
+	DapatDiunduh bool `json:"dapat_diunduh"`
 }
 
 // Line adalah satu baris pesanan yang tampil di invoice/surat jalan.
@@ -215,6 +276,12 @@ type Repository interface {
 	// finalnya dikembalikan, sehingga render ulang tidak pernah menggandakan
 	// dokumen.
 	SaveAll(ctx context.Context, req SaveRequest) ([]Document, error)
+	// ListInvoices mengembalikan riwayat invoice SATU cabang: satu baris per
+	// dokumen invoice versi berapa pun, ditambah pesanan ber-nomor yang
+	// dokumennya belum ada. branchID berasal dari SESI dan wajib dipakai
+	// sebagai syarat query; dari/sampai (bila tidak nil) menyaring tanggal
+	// bisnis pesanan secara inklusif.
+	ListInvoices(ctx context.Context, branchID string, dari, sampai *time.Time) ([]InvoiceRow, error)
 }
 
 // Service adalah logika bisnis dokumen pesanan.
@@ -316,6 +383,72 @@ func (s *Service) List(ctx context.Context, actor auth.Actor, orderID string) ([
 		}
 	}
 	return out, nil
+}
+
+// Invoices mengembalikan riwayat invoice cabang SESI (kartu F1-19, PRD §3.8):
+// nomor, tanggal, versi, total, dan ketersediaan PDF per versi dokumen.
+//
+// Endpoint ini khusus portal cabang: staf Pusat memakai jalur admin. Akun
+// cabang tanpa cabang dijawab ErrNoBranch, dan tidak ada satu pun parameter
+// yang bisa menunjuk cabang lain — branch_id selalu dari SESI.
+func (s *Service) Invoices(ctx context.Context, actor auth.Actor, f InvoiceFilter) ([]InvoiceRow, error) {
+	if !actor.IsBranch() || !actor.Can(auth.CapInvoiceOwn) {
+		return nil, ErrForbidden
+	}
+	branchID := strings.TrimSpace(actor.BranchID)
+	if branchID == "" {
+		return nil, ErrNoBranch
+	}
+	dari, sampai, err := periodeInvoice(f)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.repo.ListInvoices(ctx, branchID, dari, sampai)
+	if err != nil {
+		return nil, fmt.Errorf("riwayat invoice: %w", err)
+	}
+	for i := range rows {
+		r := &rows[i]
+		// Baris tanpa dokumen tidak pernah bisa diunduh; dokumen hanya lahir
+		// untuk pesanan Done (PRD §6.1), jadi syarat status di sini bersifat
+		// sabuk pengaman terhadap data yang tidak konsisten.
+		r.DapatDiunduh = r.DokumenID != "" && r.Status == StatusDone
+		r.Terbaru = r.VersiDokumen != nil && *r.VersiDokumen == r.Versi
+	}
+	if rows == nil {
+		rows = []InvoiceRow{}
+	}
+	return rows, nil
+}
+
+// periodeInvoice membaca filter periode menjadi batas tanggal. Nilai kosong
+// berarti tanpa batas; rentang terbalik ditolak supaya UI tidak diam-diam
+// menampilkan daftar kosong karena kesalahan penulisan.
+func periodeInvoice(f InvoiceFilter) (dari, sampai *time.Time, err error) {
+	if dari, err = bacaTanggal("dari", f.Dari); err != nil {
+		return nil, nil, err
+	}
+	if sampai, err = bacaTanggal("sampai", f.Sampai); err != nil {
+		return nil, nil, err
+	}
+	if dari != nil && sampai != nil && dari.After(*sampai) {
+		return nil, nil, fmt.Errorf("%w: tanggal dari (%s) melewati sampai (%s)",
+			ErrFilterInvalid, dari.Format(TanggalLayout), sampai.Format(TanggalLayout))
+	}
+	return dari, sampai, nil
+}
+
+// bacaTanggal membaca satu batas periode (YYYY-MM-DD); kosong berarti nil.
+func bacaTanggal(nama, nilai string) (*time.Time, error) {
+	nilai = strings.TrimSpace(nilai)
+	if nilai == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(TanggalLayout, nilai)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s harus berformat YYYY-MM-DD", ErrFilterInvalid, nama)
+	}
+	return &t, nil
 }
 
 // DownloadURL membuat tautan unduh berumur pendek untuk SATU dokumen.

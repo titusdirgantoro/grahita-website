@@ -86,3 +86,37 @@ SELECT id,
  WHERE order_id = sqlc.arg(order_id)::uuid
    AND jenis = sqlc.arg(jenis)::doc_kind
    AND versi = sqlc.arg(versi);
+
+-- name: ListInvoicesForBranch :many
+-- Riwayat invoice satu cabang (kartu F1-19, PRD §3.8): satu baris per DOKUMEN
+-- invoice (jenis invoice_pdf) milik pesanan cabang tersebut, sehingga versi
+-- LAMA tetap tampil setelah revisi (versi +1 menghasilkan dokumen baru tanpa
+-- menimpa yang lama, F1-17/F2-25). Pesanan ber-nomor yang dokumennya belum
+-- dirender juga ikut satu baris dengan dokumen kosong (versi_dokumen -1) —
+-- itulah bentuk "invoice belum Done / belum siap" yang tidak bisa diunduh.
+--
+-- Filter periode memakai `orders.tanggal` (tanggal bisnis WIB, BR-04) dan
+-- inklusif di kedua ujungnya. branch_id selalu dari SESI.
+SELECT o.id::text                     AS order_id,
+       COALESCE(o.nomor, '')::text    AS nomor,
+       o.tanggal,
+       o.status::text                 AS status,
+       o.versi,
+       o.is_cnc,
+       o.jatuh_tempo,
+       o.total,
+       COALESCE((SELECT sum(l.qty) FROM order_lines l
+                  WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
+       COALESCE(d.id::text, '')::text AS dokumen_id,
+       COALESCE(d.versi, -1)          AS versi_dokumen,
+       COALESCE(d.ukuran_byte, 0)::bigint AS ukuran_byte,
+       d.created_at                   AS dokumen_created_at
+  FROM orders o
+  LEFT JOIN documents d
+         ON d.order_id = o.id
+        AND d.jenis = 'invoice_pdf'
+ WHERE o.branch_id = sqlc.arg(branch_id)::uuid
+   AND o.nomor IS NOT NULL
+   AND (sqlc.narg(dari)::date IS NULL OR o.tanggal >= sqlc.narg(dari)::date)
+   AND (sqlc.narg(sampai)::date IS NULL OR o.tanggal <= sqlc.narg(sampai)::date)
+ ORDER BY o.tanggal DESC, o.nomor DESC, d.versi DESC;

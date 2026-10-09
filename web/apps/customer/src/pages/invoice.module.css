@@ -1,0 +1,27 @@
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
+.filter {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.aksiFilter {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 767px) {
+  .filter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aksiFilter > * {
+    flex: 1 1 auto;
+  }
+}

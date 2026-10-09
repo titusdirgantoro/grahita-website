@@ -183,6 +183,56 @@ func (r *Repo) SaveAll(ctx context.Context, req document.SaveRequest) ([]documen
 	return out, nil
 }
 
+// ListInvoices membaca riwayat invoice satu cabang (kartu F1-19): satu baris
+// per dokumen invoice versi berapa pun + pesanan ber-nomor yang dokumennya
+// belum ada. branch_id selalu dari SESI; dari/sampai menyaring tanggal bisnis
+// pesanan secara inklusif.
+//
+// Membaca `orders` dari paket ini mengikuti pola yang sama dengan
+// OrderForDocument: querynya milik paket ini dan tidak menimbulkan
+// ketergantungan paket antar-domain (SystemDesign.md §2).
+func (r *Repo) ListInvoices(ctx context.Context, branchID string, dari, sampai *time.Time) ([]document.InvoiceRow, error) {
+	rows, err := r.q.ListInvoicesForBranch(ctx, sqlc.ListInvoicesForBranchParams{
+		BranchID: branchID,
+		Dari:     dari,
+		Sampai:   sampai,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query ListInvoicesForBranch: %w", err)
+	}
+	out := make([]document.InvoiceRow, 0, len(rows))
+	for _, row := range rows {
+		invoice := document.InvoiceRow{
+			OrderID:    row.OrderID,
+			Nomor:      row.Nomor,
+			Status:     row.Status,
+			Versi:      int(row.Versi),
+			IsCNC:      row.IsCnc,
+			Total:      row.Total,
+			JumlahItem: row.JumlahItem,
+			UkuranByte: row.UkuranByte,
+		}
+		invoice.Tanggal = tanggalInvoice(row.Tanggal)
+		invoice.JatuhTempo = tanggalInvoice(row.JatuhTempo)
+		if row.DokumenID != "" && row.VersiDokumen >= 0 {
+			invoice.DokumenID = row.DokumenID
+			versi := int(row.VersiDokumen)
+			invoice.VersiDokumen = &versi
+		}
+		out = append(out, invoice)
+	}
+	return out, nil
+}
+
+// tanggalInvoice mengubah kolom date menjadi bentuk YYYY-MM-DD; kosong bila
+// kolomnya NULL (draft tidak punya tanggal, BR-04).
+func tanggalInvoice(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format(document.TanggalLayout)
+}
+
 // toDocument menyusun nilai domain dari kolom baris `documents`.
 func toDocument(id, orderID, jenis string, versi int, storageKey string, ukuran int64, createdAt time.Time) document.Document {
 	return document.Document{

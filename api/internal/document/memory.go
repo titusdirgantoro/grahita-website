@@ -3,6 +3,8 @@ package document
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -136,6 +138,99 @@ func (m *Memory) TambahDokumen(d Document) Document {
 // pengujian menempuh jalur pemeriksaan format id yang sama dengan produksi.
 func idMemory(n int) string {
 	return fmt.Sprintf("11111111-2222-3333-4444-%012d", n)
+}
+
+// ListInvoices meniru query ListInvoicesForBranch: pesanan ber-nomor milik
+// satu cabang, satu baris per dokumen invoice (versi apa pun) dan satu baris
+// tanpa dokumen bila belum ada, terurut tanggal/nomor/versi menurun.
+func (m *Memory) ListInvoices(_ context.Context, branchID string, dari, sampai *time.Time) ([]InvoiceRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]InvoiceRow, 0)
+	for _, o := range m.orders {
+		if o.BranchID != branchID || strings.TrimSpace(o.Nomor) == "" {
+			continue
+		}
+		if !dalamPeriode(o.Tanggal, dari, sampai) {
+			continue
+		}
+		dasar := InvoiceRow{
+			OrderID:    o.ID,
+			Nomor:      o.Nomor,
+			Status:     o.Status,
+			Versi:      o.Versi,
+			IsCNC:      o.IsCNC,
+			Total:      o.Total,
+			JumlahItem: jumlahItemProduk(o.Lines),
+		}
+		if !o.Tanggal.IsZero() {
+			dasar.Tanggal = o.Tanggal.Format(TanggalLayout)
+		}
+		if o.JatuhTempo != nil && !o.JatuhTempo.IsZero() {
+			dasar.JatuhTempo = o.JatuhTempo.Format(TanggalLayout)
+		}
+		ada := false
+		for _, d := range m.docs {
+			if d.OrderID != o.ID || d.Jenis != JenisInvoicePDF {
+				continue
+			}
+			ada = true
+			versi := d.Versi
+			row := dasar
+			row.DokumenID = d.ID
+			row.VersiDokumen = &versi
+			row.UkuranByte = d.UkuranByte
+			out = append(out, row)
+		}
+		if !ada {
+			out = append(out, dasar)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Tanggal != out[j].Tanggal {
+			return out[i].Tanggal > out[j].Tanggal
+		}
+		if out[i].Nomor != out[j].Nomor {
+			return out[i].Nomor > out[j].Nomor
+		}
+		return versiDokumen(out[i]) > versiDokumen(out[j])
+	})
+	return out, nil
+}
+
+// dalamPeriode melaporkan apakah tanggal pesanan masuk rentang inklusif.
+func dalamPeriode(t time.Time, dari, sampai *time.Time) bool {
+	if t.IsZero() {
+		return dari == nil && sampai == nil
+	}
+	if dari != nil && t.Before(*dari) {
+		return false
+	}
+	if sampai != nil && t.After(*sampai) {
+		return false
+	}
+	return true
+}
+
+// versiDokumen mengembalikan versi dokumen baris (-1 bila belum ada dokumen).
+func versiDokumen(r InvoiceRow) int {
+	if r.VersiDokumen == nil {
+		return -1
+	}
+	return *r.VersiDokumen
+}
+
+// jumlahItemProduk menjumlahkan qty baris produk (baris packaging tidak
+// dihitung) — sama dengan kolom `jumlah_item` daftar pesanan cabang.
+func jumlahItemProduk(lines []Line) int64 {
+	var total int64
+	for _, l := range lines {
+		if l.Jenis == JenisBarisProduk {
+			total += int64(l.Qty)
+		}
+	}
+	return total
 }
 
 // JumlahDokumen mengembalikan banyaknya baris dokumen yang tersimpan.

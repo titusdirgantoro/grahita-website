@@ -91,6 +91,11 @@ func NewRouter(d Deps) http.Handler {
 			// dikirim ke klien (SystemDesign.md §8).
 			r.Get("/orders/{id}/documents", a.adapt(a.orderDocuments))
 			r.Get("/documents/{id}/download", a.adapt(a.documentDownload))
+			// Riwayat invoice cabang (F1-19, PRD §3.8): nomor, tanggal,
+			// versi (versi lama tetap tampil setelah revisi), dan
+			// ketersediaan PDF-nya — selalu dibatasi branch_id SESI dan
+			// dapat difilter periode.
+			r.Get("/invoices", a.adapt(a.invoices))
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
 			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
