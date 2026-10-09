@@ -41,7 +41,10 @@ F2-23; template dan jenis emailnya sudah siap dipakai kartu itu.
 ## Keputusan desain
 
 1. **Outbox sebagai satu-satunya jalan keluar email.** Tidak ada satu pun
-   handler HTTP atau service yang memanggil `mailer.Send`. Jaminan ini diuji:
+   jalur PRODUKSI (handler HTTP atau service) yang memanggil `mailer.Send`.
+   Satu-satunya sisa pemanggil langsung adalah `auth.EmailResetMailer`, yang
+   kini ditandai `Deprecated` dan hanya dipakai uji lama (komposisi root memakai
+   `notification.ResetMailer`). Jaminan ini diuji:
    setelah `POST /auth/password/forgot` dan `POST /admin/users/admin`, baris
    `email_outbox` sudah ada tetapi pengirim **belum** dipanggil sama sekali
    (uji `TestPGLupaKataSandiLewatOutboxTidakDikirimLangsung`,
@@ -133,6 +136,69 @@ F2-23; template dan jenis emailnya sudah siap dipakai kartu itu.
     transaksi"): kegagalan separuh jalan tidak boleh meninggalkan akun tanpa
     tautan aktif. Bukti: `TestPGTokenResetHanyaSatuYangAktif`.
 
+## Perbaikan QA putaran 1 (b00d2e6)
+
+QA putaran 1 (lensa artifact + eksekusi) meminta perubahan pada tiga hal plus
+satu temuan dari kartu F1-15. Semuanya dikerjakan di kartu ini.
+
+15. **Kirim ulang ATOMIK (PEMBLOKIR butir 1).** Sebelumnya `ResendOrder`
+    memeriksa `Latest`/`ActiveExists` DI LUAR transaksi insert (`postgres.go`
+    `Resend`), sehingga dua permintaan bersamaan sama-sama lolos dan lahirlah
+    dua email + dua audit (probe QA: reproduksi 3/3). Kini `Resend`
+    - membuka transaksi,
+    - mengambil `pg_advisory_xact_lock(hashtext(order_id), hashtext(jenis))`
+      (berlaku sampai commit, jadi permintaan lain menunggu),
+    - memeriksa ulang "masih ada queued/sending" DI DALAM transaksi itu,
+    - baru menyimpan baris + audit.
+    Yang kedua melihat baris baru dan dijawab `409 EMAIL_ALREADY_QUEUED`.
+    Pemeriksaan cepat di service tetap ada hanya sebagai jalan pintas (tidak
+    otoritatif). Bukti:
+    `TestPGResendBersamaanTidakMenggandakanEmail` — 5 permintaan bersamaan →
+    tepat 1 sukses, 4 `ErrAlreadyQueued`, 2 baris outbox (asli + 1 kirim ulang),
+    1 entri audit. Kontrol negatif: dengan kunci advisory dinonaktifkan, uji itu
+    GAGAL (`sukses=2`) — jadi penjaganya benar-benar bekerja.
+16. **Semantik at-least-once didokumentasikan dan diuji (PEMBLOKIR butir 2).**
+    Pengiriman TIDAK tepat-sekali: bila proses mati (atau `MarkSent` gagal)
+    SETELAH SMTP menerima, baris diklaim ulang setelah sewa 15 menit dan
+    mailer dipanggil dua kali. Ini inheren pada pola outbox dan disengaja;
+    tepat-sekali harus lewat idempotency key di sisi penerima (kartu terpisah
+    bila produk membutuhkannya). Dinyatakan di doc paket `notification`,
+    README, OpenAPI, dan diabadikan uji
+    `TestPGAtLeastOnceKirimDuaKaliSetelahSMTPMenerima` (akhir: `sent`,
+    `attempts=2`, mailer 2×). Klaim "baris `sent` tidak pernah dikirim ulang"
+    tetap berlaku; yang tidak diklaim adalah "tepat-sekali".
+17. **Pemindaian yang berhenti di tengah batch melepas baris yang belum
+    dicoba (butir 3).** `Claim` mengambil sampai `Batch=50` baris dan menaikkan
+    `attempts` semuanya, sementara satu kirim bisa memakai `SMTP_TIMEOUT=30s`
+    dan `JobTimeout` River 2 menit — job yang dibatalkan di tengah batch
+    dahulu meninggalkan baris `sending` dengan attempts TERPAKAI, sehingga
+    berulang kali email bisa mencapai `failed` tanpa pernah dicoba. Kini
+    `ProsesAntrean` memanggil `store.Release` untuk baris yang BELUM dicoba
+    (sejak baris yang sedang diproses) pada setiap jalan keluar dini — context
+    dibatalkan, `MarkSent`/`GiveUp`/`Reschedule` gagal — dan `Release`
+    mengembalikan `status='queued'` serta `attempts = GREATEST(attempts-1, 0)`.
+    Pelepasan memakai `context.WithoutCancel` (context-nya memang sudah mati)
+    dengan tenggat 5 detik. Baris yang sudah dicoba tetap `sending`/
+    dijadwalkan ulang. Sisa yang TIDAK tertutup: proses yang mati keras (SIGKILL)
+    tanpa jalan keluar dini — di situ sewa 15 menit tetap berlaku dan
+    `attempts` bisa terpakai; itu memang batas pola lease, dan jalan
+    pemulihannya adalah kirim ulang admin. Bukti:
+    `TestSisaKlaimDilepasSaatPemindaianDibatalkan` (unit) dan
+    `TestPGSisaKlaimDilepasSaatPemindaianDibatalkan` (integrasi PG).
+18. **Id pesanan bukan UUID dijawab 404, bukan 500 (temuan QA F1-15).**
+    `ListByOrder`, `ResendOrder`, dan `buildOrderEnvelope` menolak id yang tidak
+    cocok pola UUID dengan `ErrNotFound` (404) sebelum menyentuh SQL, sehingga
+    SQLSTATE 22P02 tidak pernah sampai ke klien. Pola diperiksa sama persis
+    dengan paket `order`. Bukti: uji unit
+    `TestIdPesananBukanUUIDDijawabNotFound` dan integrasi HTTP
+    `TestPGEmailDokumenIdBukanUUIDTidak500` (GET & POST resend → 404; UUID sah
+    tanpa pesanan → 200 riwayat kosong). OpenAPI endpoint riwayat kini
+    mencantumkan respons `404`.
+19. **Nilai data di-escape pada badan HTML email (catatan non-pemblokir QA).**
+    `template.go` menyisipkan `nama`/`cabang`/`nomor`/`tautan`/dst. ke HTML;
+    kini semuanya melewati `html.EscapeString` (`esc()`) dan komentar yang
+    keliru diperbaiki. Bukti: `TestTemplateHTMLMengEscapeNilaiData`.
+
 ## Penyimpangan / keputusan yang perlu dicatat
 
 - **Nama paket**: SystemDesign §2 menulis `notification/`; kartu ini memakai
@@ -191,23 +257,56 @@ Probe binary sungguhan (bukan test) pada DB bersih PG16 + shim
 
 Uji yang ditambahkan kartu ini:
 
-- `internal/notification`: 20 uji unit (jadwal retry, antrean, klaim sewa,
-  retry→failed, baris sending tersangkut, lampiran gagal dibaca, 6 template,
-  aturan kirim ulang, adaptor reset/undangan) + 7 uji integrasi PostgreSQL
-  (rollback, klaim paralel, pemulihan `sending`, jadwal retry tersimpan,
-  `sending` yang percobaannya habis → `failed`, resend+audit satu transaksi,
-  satu tautan aktif).
+- `internal/notification`: 23 uji unit (jadwal retry, antrean, klaim sewa,
+  retry→failed, baris sending tersangkut, sisa klaim dilepas saat pemindaian
+  dibatalkan, id pesanan bukan UUID → `ErrNotFound`, escaping HTML template,
+  lampiran gagal dibaca, 6 template, aturan kirim ulang, adaptor reset/undangan)
+  + 10 uji integrasi PostgreSQL (rollback, klaim paralel, pemulihan `sending`,
+  jadwal retry tersimpan, `sending` yang percobaannya habis → `failed`,
+  resend+audit satu transaksi, satu tautan aktif, kirim ulang bersamaan tidak
+  menggandakan email, at-least-once setelah SMTP menerima, sisa klaim dilepas
+  saat pemindaian dibatalkan).
 - `internal/platform/mailer`: 6 uji (bentuk MIME + lampiran, deadline peer
   diam, deadline mengikuti context, kirim lampiran lewat server SMTP palsu).
-- `internal/httpapi` (integrasi PG): 9 uji baru — lupa kata sandi lewat outbox
+- `internal/httpapi` (integrasi PG): 10 uji baru — lupa kata sandi lewat outbox
   + tautan sekali pakai, akun tak dikenal tidak mengantre, undangan admin
   diantre lalu dikirim worker, kirim ulang undangan idempoten, penerima email
   dokumen, RBAC + riwayat + audit kirim ulang, email gagal tampil di riwayat
   dan bisa dikirim ulang, dokumen belum siap / tanpa penerima, kirim ulang
-  undangan untuk akun nonaktif.
+  undangan untuk akun nonaktif, id pesanan bukan UUID tidak 500.
+
+## Bukti verifikasi putaran 2 (perbaikan QA putaran 1)
+
+Perintah dijalankan di repo target (cwd `api/`, Go `go1.27.1`, sqlc `v1.31.1`,
+PG16.15 + `scripts/pg-dev-shim.sql`):
+
+```
+gofmt -l .                                   # kosong
+go vet ./...                                 # exit 0
+go build ./... && go build ./cmd/server      # exit 0
+sqlc-v1.31.1 generate                        # tanpa diff (git status bersih)
+sh scripts/check-secrets.sh                  # tidak ada rahasia terdeteksi (exit 0)
+node @redocly/cli lint openapi/openapi.yaml  # "API description is valid" (10 peringatan lama)
+TEST_DATABASE_URL=…/grahita_test  (PG16)
+go test -race -p 1 -count=1 ./...            # 19 paket ok, 0 FAIL, exit 0
+                                             # (log cache/scratch/f116r2-full.log)
+```
+
+Kontrol negatif yang saya jalankan untuk membuktikan penjaga baru bekerja
+(bukan sekadar hijau): dengan `pg_advisory_xact_lock` di `Resend` dinonaktifkan
+sementara, `TestPGResendBersamaanTidakMenggandakanEmail` GAGAL
+(`sukses=2 ditolak=3`); setelah dipulihkan, uji hijau kembali.
 
 ## Risiko residu
 
+- **At-least-once**: email yang sama bisa terkirim dua kali pada celah
+  pasca-SMTP (proses mati setelah SMTP menerima, sebelum status `sent`
+  tersimpan). Pengguna menerima risiko duplikat LANGKA ini; ia BUKAN izin untuk
+  duplikasi klik/resend biasa (klik ganda kini atomik dan dijawab 409).
+- **Proses mati keras tanpa jalan keluar dini** (SIGKILL/mati listrik) tidak
+  dapat memanggil `Release`, jadi baris yang belum dicoba menunggu sewa 15 menit
+  dan `attempts`-nya sudah terpakai. Ini batas pola lease; pemulihannya lewat
+  kirim ulang admin bila email akhirnya `failed`.
 - PG18 asli (`postgres:18-alpine`) belum dieksekusi; uji integrasi berjalan di
   PG16 + shim `uuidv7()` — sama dengan kartu F1-02..F1-11.
 - `golangci-lint` tidak tersedia di sesi ini (gate lint tidak direproduksi).

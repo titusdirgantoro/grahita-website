@@ -72,10 +72,16 @@ func (s *Service) buildOrderEnvelope(ctx context.Context, in OrderEmailInput) (E
 	if !jenisDokumen[in.Jenis] {
 		return Envelope{}, OrderRef{}, fmt.Errorf("%w: %q bukan email dokumen", ErrKindInvalid, in.Jenis)
 	}
+	orderID := strings.TrimSpace(in.OrderID)
+	if !uuidRe.MatchString(orderID) {
+		// Id pesanan selalu UUID (uuidv7); bentuk lain dijawab 404, bukan 500
+		// dari SQLSTATE 22P02 saat query PostgreSQL (temuan QA F1-15).
+		return Envelope{}, OrderRef{}, fmt.Errorf("%w: id pesanan %q bukan UUID", ErrNotFound, in.OrderID)
+	}
 	if s.orders == nil {
 		return Envelope{}, OrderRef{}, fmt.Errorf("%w: pembaca pesanan belum terpasang", ErrInvalidData)
 	}
-	ref, err := s.orders.OrderByID(ctx, strings.TrimSpace(in.OrderID))
+	ref, err := s.orders.OrderByID(ctx, orderID)
 	if err != nil {
 		return Envelope{}, OrderRef{}, err
 	}
@@ -215,11 +221,15 @@ func (s *Service) EnqueueOrderEmail(ctx context.Context, in OrderEmailInput) (Em
 }
 
 // ListByOrder mengembalikan riwayat email satu pesanan (PRD EM-02).
+//
+// Id yang bukan UUID dijawab ErrNotFound (404), bukan 500 dari SQLSTATE 22P02
+// (temuan QA F1-15 pada GET /api/v1/admin/orders/{id}/emails).
 func (s *Service) ListByOrder(ctx context.Context, actor auth.Actor, orderID string) ([]Email, error) {
 	if !actor.Can(auth.CapAdminOrders) {
 		return nil, ErrForbidden
 	}
-	if strings.TrimSpace(orderID) == "" {
+	orderID = strings.TrimSpace(orderID)
+	if !uuidRe.MatchString(orderID) {
 		return nil, ErrNotFound
 	}
 	rows, err := s.store.ByOrder(ctx, orderID)
@@ -250,12 +260,20 @@ func (s *Service) ResendOrder(ctx context.Context, actor auth.Actor, orderID, je
 	if orderID == "" || !jenisDokumen[jenis] {
 		return Email{}, fmt.Errorf("%w: %q", ErrKindInvalid, jenis)
 	}
+	if !uuidRe.MatchString(orderID) {
+		// Bentuk id yang bukan UUID dijawab 404 supaya tidak menjadi 500
+		// (SQLSTATE 22P02) — sama seperti paket order (temuan QA F1-15).
+		return Email{}, ErrNotFound
+	}
 
 	// Harus ada email sebelumnya: kirim ulang adalah pemulihan, bukan cara
 	// membuat email baru.
 	if _, err := s.store.Latest(ctx, orderID, jenis); err != nil {
 		return Email{}, err
 	}
+	// Cek cepat (non-otoritatif) supaya permintaan yang jelas masih antre tidak
+	// perlu membangun lampiran. Yang mengikat adalah penjaga atomik di dalam
+	// store.Resend, yang memeriksa ulang di transaksi yang sama.
 	aktif, err := s.store.ActiveExists(ctx, orderID, jenis)
 	if err != nil {
 		return Email{}, err

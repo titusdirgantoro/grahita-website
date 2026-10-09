@@ -309,6 +309,15 @@ memperbarui status (`queued` → `sending` → `sent`/`failed`).
 - **Klaim aman paralel**: `FOR UPDATE SKIP LOCKED` + masa sewa 15 menit,
   sehingga baris tidak terkirim dua kali dan baris `sending` yang ditinggal
   proses mati pulih sendiri.
+- **Semantik pengiriman at-least-once**: bila proses mati (atau penandaan
+  `sent` gagal) SETELAH SMTP menerima pesan, baris diklaim ulang setelah sewa
+  habis sehingga email yang sama bisa terkirim **dua kali**. Ini inheren pada
+  pola outbox dan disengaja; kebutuhan tepat-sekali harus lewat idempotency key
+  di sisi penerima. Yang dijamin: baris `sent` tidak pernah dikirim ulang.
+- **Pemindaian berhenti di tengah batch**: bila context job dibatalkan (mis.
+  `JobTimeout` River 2 menit), baris yang **belum** sempat dicoba dilepas
+  kembali ke `queued` dengan `attempts` seperti sebelum klaim, sehingga jatah
+  retry tidak habis oleh email yang tidak pernah dikirim.
 - **Penerima**: email Pusat hanya ke admin **aktif & sudah diaktivasi** yang
   ber-flag `notif_invoice`/`notif_surat_jalan`; admin undangan/nonaktif tidak
   pernah menerima. Email cabang memakai `branches.email`.
@@ -319,19 +328,22 @@ memperbarui status (`queued` → `sending` → `sent`/`failed`).
 
 | Method | Path | Catatan |
 |---|---|---|
-| GET | `/admin/orders/{id}/emails` | riwayat + status + `last_error` (EM-02) |
-| POST | `/admin/orders/{id}/emails/{kind}/resend` | kirim ulang dokumen, ber-audit |
+| GET | `/admin/orders/{id}/emails` | riwayat + status + `last_error` (EM-02); id bukan UUID → `404` |
+| POST | `/admin/orders/{id}/emails/{kind}/resend` | kirim ulang dokumen, ber-audit; penjaga antrean **atomik** (klik ganda bersamaan pun maksimum satu email + satu audit, sisanya `409`) |
 | POST | `/admin/users/admin/{id}/resend` | pemulihan undangan admin (Superadmin) |
 
 - **Konfigurasi** (tanpa rahasia di repo): `SMTP_HOST/PORT/USER/PASS`,
-  `MAIL_FROM`, `SMTP_TIMEOUT` (batas waktu total satu kirim, default 30s),
-  `OUTBOX_INTERVAL`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_BATCH`. Lokal memakai
-  Mailpit (`http://localhost:8025`).
+  `MAIL_FROM` (alamat pengirim; untuk integrasi diisi alamat akun pengelola
+  lewat environment, tidak di-hardcode di repo), `SMTP_TIMEOUT` (batas waktu
+  total satu kirim, default 30s), `OUTBOX_INTERVAL`, `OUTBOX_MAX_ATTEMPTS`,
+  `OUTBOX_BATCH`. Lokal memakai Mailpit (`http://localhost:8025`).
 - **Uji**: `internal/notification` (unit + integrasi PostgreSQL: rollback tidak
-  mengirim, klaim paralel, retry tersimpan), `internal/platform/mailer`
+  mengirim, klaim paralel, retry tersimpan, kirim ulang bersamaan tidak
+  menggandakan email, at-least-once setelah SMTP menerima, sisa klaim dilepas
+  saat pemindaian dibatalkan, id bukan UUID → 404), `internal/platform/mailer`
   (MIME + lampiran, deadline peer diam), dan `internal/httpapi` (integrasi PG:
   tautan reset/undangan dari outbox, penerima email dokumen, kirim ulang +
-  audit, email gagal di riwayat).
+  audit, email gagal di riwayat, id bukan UUID tidak 500).
 
 ## Dokumen pesanan: Invoice PDF & Surat Jalan XLSX/PDF (F1-17)
 

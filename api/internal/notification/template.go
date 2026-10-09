@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"strconv"
 	"strings"
@@ -11,6 +12,9 @@ import (
 
 	"github.com/grahita/portal/api/internal/platform/mailer"
 )
+
+// esc meng-escape teks untuk disisipkan ke badan HTML email (&, <, >, ", ').
+func esc(s string) string { return html.EscapeString(s) }
 
 // TemplateName mengembalikan nama template sebuah email: payload["template"]
 // bila ada, kalau tidak jenis emailnya sendiri.
@@ -69,8 +73,9 @@ func (s *Service) Render(ctx context.Context, e Email) (mailer.Message, error) {
 // renderTemplate menghasilkan badan text + HTML untuk satu template.
 //
 // Template ditulis apa adanya (tanpa mesin template) supaya isi email dapat
-// diuji persis dan tidak bisa menyisipkan HTML dari data pengguna tanpa
-// escaping eksplisit.
+// diuji persis. Nilai yang berasal dari data (nama, cabang, nomor, tautan,
+// dst.) DI-ESCAPE saat masuk badan HTML lewat esc() sehingga data tidak bisa
+// menyisipkan markup; badan teks dibiarkan apa adanya.
 func renderTemplate(nama string, payload map[string]any) (string, string, error) {
 	switch nama {
 	case JenisResetPassword:
@@ -236,7 +241,7 @@ func tplResetPasswordHTML(p map[string]any) string {
 			"<p>Kami menerima permintaan atur ulang kata sandi untuk akun <strong>%s</strong>.</p>"+
 			"<p><a href=\"%s\">Buat kata sandi baru</a> — tautan berlaku %d menit.</p>"+
 			"<p>Bila Anda tidak meminta ini, abaikan email ini; kata sandi Anda tidak berubah.</p>",
-		sapaan(p), str(p, "email"), str(p, "tautan"), num(p, "berlaku_menit"))
+		esc(sapaan(p)), esc(str(p, "email")), esc(str(p, "tautan")), num(p, "berlaku_menit"))
 }
 
 // ---------- template: undangan_admin ----------
@@ -264,7 +269,7 @@ func tplUndanganAdminHTML(p map[string]any) string {
 			"<p>Anda diundang sebagai <strong>%s</strong> di Admin Portal Grahita Indonesia (%s).</p>"+
 			"<p><a href=\"%s\">Buat kata sandi Anda</a></p>"+
 			"<p>%s Tautan berlaku sampai %s.</p>",
-		sapaan(p), str(p, "role"), str(p, "email"), str(p, "tautan"), catatan, berkas(p, "berlaku_sampai"))
+		esc(sapaan(p)), esc(str(p, "role")), esc(str(p, "email")), esc(str(p, "tautan")), esc(catatan), esc(berkas(p, "berlaku_sampai")))
 }
 
 // ---------- template: invoice (cabang & admin) ----------
@@ -293,14 +298,14 @@ func tplInvoiceHTML(p map[string]any, keCabang bool) string {
 				"<p>Invoice pesanan <strong>%s</strong> dari cabang <strong>%s</strong> telah diterbitkan%s.</p>"+
 				"<p>Total pesanan: <strong>%s</strong>.</p>"+
 				"<p>Berkas invoice kami lampirkan pada email ini.</p>",
-			str(p, "nomor"), str(p, "cabang"), versiTeks(p), rupiah(num(p, "total")))
+			esc(str(p, "nomor")), esc(str(p, "cabang")), versiTeks(p), rupiah(num(p, "total")))
 	}
 	return fmt.Sprintf(
 		"<p>Halo %s,</p>"+
 			"<p>Invoice pesanan <strong>%s</strong> dari cabang <strong>%s</strong> telah diterbitkan%s.</p>"+
 			"<p>Total pesanan: <strong>%s</strong>.</p>"+
 			"<p>Berkas invoice kami lampirkan pada email ini.</p>",
-		sapaan(p), str(p, "nomor"), str(p, "cabang"), versiTeks(p), rupiah(num(p, "total")))
+		esc(sapaan(p)), esc(str(p, "nomor")), esc(str(p, "cabang")), versiTeks(p), rupiah(num(p, "total")))
 }
 
 func versiTeks(p map[string]any) string {
@@ -328,7 +333,7 @@ func tplSuratJalanHTML(p map[string]any) string {
 			"(tanggal pesanan %s).</p>"+
 			"<p>Total pesanan: <strong>%s</strong>.</p>"+
 			"<p>Berkas Surat Jalan (XLSX dan PDF) kami lampirkan pada email ini.</p>",
-		str(p, "nomor"), str(p, "cabang"), str(p, "tanggal"), rupiah(num(p, "total")))
+		esc(str(p, "nomor")), esc(str(p, "cabang")), esc(str(p, "tanggal")), rupiah(num(p, "total")))
 }
 
 // ---------- template: reminder_cnc ----------
@@ -348,5 +353,5 @@ func tplReminderHTML(p map[string]any) string {
 			"<p>Pengingat pembayaran (%s) untuk pesanan Cash &amp; Carry <strong>%s</strong>.</p>"+
 			"<p>Jatuh tempo: <strong>%s</strong>.<br>Total pesanan: <strong>%s</strong>.</p>"+
 			"<p>Mohon selesaikan pembayaran agar pesanan dapat diproses.</p>",
-		sapaan(p), str(p, "tahap"), str(p, "nomor"), str(p, "jatuh_tempo"), rupiah(num(p, "total")))
+		esc(sapaan(p)), esc(str(p, "tahap")), esc(str(p, "nomor")), esc(str(p, "jatuh_tempo")), rupiah(num(p, "total")))
 }

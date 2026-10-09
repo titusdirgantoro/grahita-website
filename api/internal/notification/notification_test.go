@@ -184,6 +184,26 @@ func (f *fakeStore) ActiveExists(_ context.Context, orderID, jenis string) (bool
 	return false, nil
 }
 
+// Release mengembalikan baris `sending` yang belum dicoba ke `queued` dan
+// mengembalikan `attempts` seperti sebelum klaim — cermin Release PostgreSQL.
+func (f *fakeStore) Release(_ context.Context, ids []string, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range ids {
+		row, ok := f.rows[id]
+		if !ok || row.Status != StatusSending {
+			continue
+		}
+		row.Status = StatusQueued
+		if row.Attempts > 0 {
+			row.Attempts--
+		}
+		row.NextTryAt = now
+		f.rows[id] = row
+	}
+	return nil
+}
+
 func (f *fakeStore) update(id string, fn func(*Email)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -254,6 +274,30 @@ type fakeObjects struct {
 	isi map[string][]byte
 	err error
 }
+
+// batalMailer membatalkan context pemindaian pada kirim ke-`pada` (meniru job
+// River yang kehabisan waktu di tengah batch) lalu mengembalikan kegagalan.
+type batalMailer struct {
+	mu    sync.Mutex
+	pada  int
+	kirim int
+	batal context.CancelFunc
+}
+
+func (m *batalMailer) Send(_ context.Context, _ mailer.Message) error {
+	m.mu.Lock()
+	m.kirim++
+	n := m.kirim
+	batal := m.batal
+	m.mu.Unlock()
+	if n >= m.pada {
+		batal()
+		return errors.New("pemindaian dibatalkan")
+	}
+	return nil
+}
+
+func (m *batalMailer) Health(context.Context) error { return nil }
 
 func (o *fakeObjects) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	if o.err != nil {
@@ -652,9 +696,14 @@ func TestRenderMelampirkanDokumenDenganNamaDanTipeTepat(t *testing.T) {
 
 // ---------- uji email dokumen + kirim ulang ----------
 
+// orderUUID adalah id pesanan berbentuk UUID yang dipakai uji unit: service
+// menolak id bukan UUID dengan 404 (temuan QA F1-15), jadi fixture pun harus
+// memakai bentuk yang sah.
+const orderUUID = "018f0000-0000-7000-8000-000000000001"
+
 func fixtureOrder() OrderRef {
 	return OrderRef{
-		ID: "order-1", Nomor: "2026-10-0001", Cabang: "Cabang A", NamaKepala: "Kepala A",
+		ID: orderUUID, Nomor: "2026-10-0001", Cabang: "Cabang A", NamaKepala: "Kepala A",
 		CabangEmail: "cabang-a@example.test", Versi: 0, Total: 350000,
 		Tanggal: time.Date(2026, 10, 8, 0, 0, 0, 0, clock.Jakarta()),
 	}
@@ -675,7 +724,7 @@ func TestEnqueueOrderEmailMenungguDokumenSelesai(t *testing.T) {
 	orders := &fakeOrders{ref: fixtureOrder()} // tanpa dokumen
 	s := newOrderService(t, store, &fakeMailer{}, orders, &fakeAdmins{invoice: []string{"sa@example.test"}})
 
-	_, err := s.EnqueueOrderEmail(context.Background(), OrderEmailInput{OrderID: "order-1", Jenis: JenisInvoiceAdmin})
+	_, err := s.EnqueueOrderEmail(context.Background(), OrderEmailInput{OrderID: orderUUID, Jenis: JenisInvoiceAdmin})
 	if !errors.Is(err, ErrDocumentNotReady) {
 		t.Fatalf("email dokumen sebelum render selesai harus ErrDocumentNotReady, dapat %v", err)
 	}
@@ -690,7 +739,7 @@ func TestEnqueueOrderEmailMenolakTanpaPenerimaYangBerhak(t *testing.T) {
 	// Admin undangan/nonaktif: repository pengguna mengembalikan daftar kosong.
 	s := newOrderService(t, store, &fakeMailer{}, orders, &fakeAdmins{})
 
-	_, err := s.EnqueueOrderEmail(context.Background(), OrderEmailInput{OrderID: "order-1", Jenis: JenisInvoiceAdmin})
+	_, err := s.EnqueueOrderEmail(context.Background(), OrderEmailInput{OrderID: orderUUID, Jenis: JenisInvoiceAdmin})
 	if !errors.Is(err, ErrNoRecipient) {
 		t.Fatalf("tanpa penerima berhak harus ErrNoRecipient, dapat %v", err)
 	}
@@ -704,7 +753,7 @@ func TestEnqueueOrderEmailInvoiceCabangKeEmailCabangSaja(t *testing.T) {
 	orders := &fakeOrders{ref: fixtureOrder(), docs: []Dokumen{{Jenis: "invoice_pdf", Versi: 0, StorageKey: "k/invoice.pdf"}}}
 	s := newOrderService(t, store, &fakeMailer{}, orders, &fakeAdmins{invoice: []string{"sa@example.test"}})
 
-	row, err := s.EnqueueOrderEmail(context.Background(), OrderEmailInput{OrderID: "order-1", Jenis: JenisInvoiceCabang})
+	row, err := s.EnqueueOrderEmail(context.Background(), OrderEmailInput{OrderID: orderUUID, Jenis: JenisInvoiceCabang})
 	if err != nil {
 		t.Fatalf("EnqueueOrderEmail: %v", err)
 	}
@@ -731,25 +780,25 @@ func TestResendOrderAturanOtorisasiDanIdempotensi(t *testing.T) {
 	cabang := auth.Actor{UserID: "usr-1", Kind: auth.KindBranch, Role: auth.RoleBranch, BranchID: "b-1"}
 
 	// 1. Akun cabang tidak boleh mengirim ulang email dokumen.
-	if _, err := s.ResendOrder(ctx, cabang, "order-1", JenisInvoiceAdmin); !errors.Is(err, ErrForbidden) {
+	if _, err := s.ResendOrder(ctx, cabang, orderUUID, JenisInvoiceAdmin); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("cabang harus ditolak, dapat %v", err)
 	}
 	// 2. Jenis non-dokumen ditolak.
-	if _, err := s.ResendOrder(ctx, manager, "order-1", JenisResetPassword); !errors.Is(err, ErrKindInvalid) {
+	if _, err := s.ResendOrder(ctx, manager, orderUUID, JenisResetPassword); !errors.Is(err, ErrKindInvalid) {
 		t.Fatalf("jenis non-dokumen harus ErrKindInvalid, dapat %v", err)
 	}
 	// 3. Belum pernah ada email -> tidak boleh memicu email baru.
-	if _, err := s.ResendOrder(ctx, manager, "order-1", JenisInvoiceAdmin); !errors.Is(err, ErrNotFound) {
+	if _, err := s.ResendOrder(ctx, manager, orderUUID, JenisInvoiceAdmin); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("email yang belum pernah ada harus ErrNotFound, dapat %v", err)
 	}
 
 	// 4. Setelah email pertama ada DAN sudah terkirim, kirim ulang berhasil dan
 	// tercatat di audit.
-	if _, err := s.EnqueueOrderEmail(ctx, OrderEmailInput{OrderID: "order-1", Jenis: JenisInvoiceAdmin}); err != nil {
+	if _, err := s.EnqueueOrderEmail(ctx, OrderEmailInput{OrderID: orderUUID, Jenis: JenisInvoiceAdmin}); err != nil {
 		t.Fatalf("enqueue pertama: %v", err)
 	}
 	// Masih antre: kirim ulang ditolak supaya tidak menggandakan email.
-	if _, err := s.ResendOrder(ctx, manager, "order-1", JenisInvoiceAdmin); !errors.Is(err, ErrAlreadyQueued) {
+	if _, err := s.ResendOrder(ctx, manager, orderUUID, JenisInvoiceAdmin); !errors.Is(err, ErrAlreadyQueued) {
 		t.Fatalf("saat email masih antre kirim ulang harus ErrAlreadyQueued, dapat %v", err)
 	}
 	// Pemindaian worker mengirim email pertama sehingga riwayat punya `sent`.
@@ -758,7 +807,7 @@ func TestResendOrderAturanOtorisasiDanIdempotensi(t *testing.T) {
 		t.Fatalf("ProsesAntrean email pertama: %v", err)
 	}
 
-	ulang, err := s.ResendOrder(ctx, manager, "order-1", JenisInvoiceAdmin)
+	ulang, err := s.ResendOrder(ctx, manager, orderUUID, JenisInvoiceAdmin)
 	if err != nil {
 		t.Fatalf("ResendOrder: %v", err)
 	}
@@ -777,7 +826,7 @@ func TestResendOrderAturanOtorisasiDanIdempotensi(t *testing.T) {
 	}
 
 	// 5. Klik ganda saat masih antre ditolak supaya email tidak berganda.
-	if _, err := s.ResendOrder(ctx, manager, "order-1", JenisInvoiceAdmin); !errors.Is(err, ErrAlreadyQueued) {
+	if _, err := s.ResendOrder(ctx, manager, orderUUID, JenisInvoiceAdmin); !errors.Is(err, ErrAlreadyQueued) {
 		t.Fatalf("kirim ulang ganda harus ErrAlreadyQueued, dapat %v", err)
 	}
 	if len(store.semua()) != 2 {
@@ -799,7 +848,7 @@ func TestResendOrderAturanOtorisasiDanIdempotensi(t *testing.T) {
 			t.Fatalf("semua baris harus sent, dapat %s", row.Status)
 		}
 	}
-	if _, err := s.ResendOrder(ctx, manager, "order-1", JenisInvoiceAdmin); err != nil {
+	if _, err := s.ResendOrder(ctx, manager, orderUUID, JenisInvoiceAdmin); err != nil {
 		t.Fatalf("kirim ulang setelah sent harus boleh: %v", err)
 	}
 }
@@ -813,7 +862,7 @@ func TestResendOrderMemakaiPenerimaYangBerhakSaatItu(t *testing.T) {
 	ctx := context.Background()
 	manager := auth.Actor{UserID: "adm-1", Kind: auth.KindAdmin, Role: auth.RoleManager}
 
-	if _, err := s.EnqueueOrderEmail(ctx, OrderEmailInput{OrderID: "order-1", Jenis: JenisInvoiceAdmin}); err != nil {
+	if _, err := s.EnqueueOrderEmail(ctx, OrderEmailInput{OrderID: orderUUID, Jenis: JenisInvoiceAdmin}); err != nil {
 		t.Fatalf("enqueue pertama: %v", err)
 	}
 	// Kirim email pertama supaya barisnya `sent` (bukan lagi dalam antrean).
@@ -824,7 +873,7 @@ func TestResendOrderMemakaiPenerimaYangBerhakSaatItu(t *testing.T) {
 	// Keadaan berubah: SA nonaktif, flag pindah ke manager lain.
 	admins.invoice = []string{"manager2@example.test"}
 
-	ulang, err := s.ResendOrder(ctx, manager, "order-1", JenisInvoiceAdmin)
+	ulang, err := s.ResendOrder(ctx, manager, orderUUID, JenisInvoiceAdmin)
 	if err != nil {
 		t.Fatalf("ResendOrder: %v", err)
 	}
@@ -839,11 +888,11 @@ func TestListByOrderButuhKapabilitasAdminOrders(t *testing.T) {
 	ctx := context.Background()
 
 	cabang := auth.Actor{UserID: "u", Kind: auth.KindBranch, Role: auth.RoleBranch}
-	if _, err := s.ListByOrder(ctx, cabang, "order-1"); !errors.Is(err, ErrForbidden) {
+	if _, err := s.ListByOrder(ctx, cabang, orderUUID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("cabang harus ditolak, dapat %v", err)
 	}
 	mgr := auth.Actor{UserID: "a", Kind: auth.KindAdmin, Role: auth.RoleManager}
-	list, err := s.ListByOrder(ctx, mgr, "order-1")
+	list, err := s.ListByOrder(ctx, mgr, orderUUID)
 	if err != nil {
 		t.Fatalf("manager harus boleh membaca riwayat: %v", err)
 	}
@@ -852,8 +901,96 @@ func TestListByOrderButuhKapabilitasAdminOrders(t *testing.T) {
 	}
 }
 
-// ---------- uji adapter ----------
+// TestSisaKlaimDilepasSaatPemindaianDibatalkan membuktikan butir 3 temuan QA
+// putaran 1: pemindaian yang berhenti di tengah batch (context dibatalkan,
+// mis. JobTimeout River) tidak boleh menghabiskan jatah retry email yang belum
+// pernah dicoba.
+func TestSisaKlaimDilepasSaatPemindaianDibatalkan(t *testing.T) {
+	store := newFakeStore()
+	clk := clock.Fixed(time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC))
+	ctx, batal := context.WithCancel(context.Background())
+	defer batal()
+	m := &batalMailer{pada: 2, batal: batal}
+	s := newTestService(t, store, m, clk)
 
+	ids := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		row := mustEnqueue(t, s, Envelope{
+			Jenis:   JenisResetPassword,
+			To:      []string{fmt.Sprintf("cabang%d@example.test", i)},
+			Payload: map[string]any{"tautan": "https://cabang.test/lupa?token=x"},
+		})
+		ids = append(ids, row.ID)
+	}
+
+	hasil, err := s.ProsesAntrean(ctx, 0)
+	if err == nil {
+		t.Fatal("pemindaian dengan context yang dibatalkan harus mengembalikan error")
+	}
+	if hasil.Terkirim != 1 {
+		t.Fatalf("harus tepat 1 email terkirim sebelum pembatalan, dapat %+v", hasil)
+	}
+	if got := store.row(t, ids[0]); got.Status != StatusSent {
+		t.Errorf("baris pertama harus sent, dapat %s", got.Status)
+	}
+	// Baris kedua sempat dicoba (mailer dipanggil) lalu dijadwalkan ulang:
+	// attempts-nya tetap terpakai.
+	if got := store.row(t, ids[1]); got.Status != StatusQueued || got.Attempts != 1 {
+		t.Errorf("baris kedua harus queued attempts=1, dapat %s attempts=%d", got.Status, got.Attempts)
+	}
+	// Baris ketiga TIDAK pernah dicoba: harus dilepas ke queued dengan attempts
+	// kembali seperti sebelum klaim (0), bukan terbuang.
+	if got := store.row(t, ids[2]); got.Status != StatusQueued || got.Attempts != 0 {
+		t.Errorf("baris ketiga harus dilepas ke queued attempts=0, dapat %s attempts=%d", got.Status, got.Attempts)
+	}
+}
+
+// TestIdPesananBukanUUIDDijawabNotFound menutup temuan QA F1-15: bentuk id yang
+// bukan UUID tidak boleh menjadi 500 (SQLSTATE 22P02), melainkan 404.
+func TestIdPesananBukanUUIDDijawabNotFound(t *testing.T) {
+	store := newFakeStore()
+	orders := &fakeOrders{ref: fixtureOrder(), docs: []Dokumen{{Jenis: "invoice_pdf", Versi: 0, StorageKey: "k/invoice.pdf"}}}
+	s := newOrderService(t, store, &fakeMailer{}, orders, &fakeAdmins{invoice: []string{"sa@example.test"}})
+	ctx := context.Background()
+	manager := auth.Actor{UserID: "adm-1", Kind: auth.KindAdmin, Role: auth.RoleManager}
+
+	if _, err := s.ListByOrder(ctx, manager, "bukan-uuid"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ListByOrder dengan id bukan UUID harus ErrNotFound, dapat %v", err)
+	}
+	if _, err := s.ResendOrder(ctx, manager, "bukan-uuid", JenisInvoiceAdmin); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ResendOrder dengan id bukan UUID harus ErrNotFound, dapat %v", err)
+	}
+	if _, err := s.EnqueueOrderEmail(ctx, OrderEmailInput{OrderID: "bukan-uuid", Jenis: JenisInvoiceAdmin}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("EnqueueOrderEmail dengan id bukan UUID harus ErrNotFound, dapat %v", err)
+	}
+	if len(store.semua()) != 0 {
+		t.Error("id tidak sah tidak boleh menyentuh antrean")
+	}
+}
+
+// TestTemplateHTMLMengEscapeNilaiData memastikan nilai dari data tidak bisa
+// menyisipkan markup ke badan HTML email.
+func TestTemplateHTMLMengEscapeNilaiData(t *testing.T) {
+	s := New(newFakeStore(), &fakeMailer{}, WithClock(clock.System()),
+		WithObjectStore(&fakeObjects{isi: map[string][]byte{"k/invoice.pdf": []byte("PDF")}}))
+	msg, err := s.Render(context.Background(), Email{
+		Jenis:   JenisInvoiceAdmin,
+		To:      []string{"admin@example.test"},
+		Subject: "Invoice",
+		Payload: map[string]any{"nomor": "2026-10-0001", "cabang": "<b>Cabang</b>", "total": int64(1000)},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(msg.HTML, "<b>Cabang</b>") {
+		t.Errorf("nilai data tidak boleh masuk mentah ke HTML:\n%s", msg.HTML)
+	}
+	if !strings.Contains(msg.HTML, "&lt;b&gt;Cabang&lt;/b&gt;") {
+		t.Errorf("nilai data harus di-escape di HTML:\n%s", msg.HTML)
+	}
+}
+
+// ---------- uji adapter ----------
 func TestResetMailerMengantreDanTidakMengirimLangsung(t *testing.T) {
 	store := newFakeStore()
 	m := &fakeMailer{}

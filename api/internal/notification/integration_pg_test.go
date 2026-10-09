@@ -11,6 +11,7 @@ package notification_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/mailer"
+	userspg "github.com/grahita/portal/api/internal/users/postgres"
 )
 
 // ---------- harness skema uji ----------
@@ -515,6 +517,253 @@ func TestPGTokenResetHanyaSatuYangAktif(t *testing.T) {
 	}
 	if string(hash) != "hash-kedua" {
 		t.Errorf("token aktif harus yang terbaru, dapat %q", hash)
+	}
+}
+
+// ---------- temuan QA putaran 1 ----------
+
+// mailerBatal membatalkan context pemindaian pada kirim ke-`pada` lalu gagal,
+// meniru job River yang kehabisan waktu di tengah batch.
+type mailerBatal struct {
+	mu    sync.Mutex
+	pada  int
+	kirim int
+	batal context.CancelFunc
+}
+
+func (m *mailerBatal) Send(_ context.Context, _ mailer.Message) error {
+	m.mu.Lock()
+	m.kirim++
+	n := m.kirim
+	batal := m.batal
+	m.mu.Unlock()
+	if n >= m.pada {
+		batal()
+		return errors.New("pemindaian dibatalkan")
+	}
+	return nil
+}
+
+func (m *mailerBatal) Health(context.Context) error { return nil }
+
+// seedPesananDokumen menyiapkan cabang + pesanan + dokumen invoice + satu admin
+// ber-flag penerima, supaya jalur dokumen (ResendOrder) dapat diuji utuh.
+func seedPesananDokumen(t *testing.T, pool *database.Pool, nomor string) string {
+	t.Helper()
+	ctx := context.Background()
+	var branchID string
+	if err := pool.QueryRow(ctx, `INSERT INTO branches (nama, nama_kepala, email)
+		VALUES ('Cabang Uji','Kepala Uji','cabang-uji@example.test') RETURNING id`).Scan(&branchID); err != nil {
+		t.Fatalf("seed cabang: %v", err)
+	}
+	var orderID string
+	if err := pool.QueryRow(ctx, `INSERT INTO orders (branch_id, nomor, versi, status, tanggal, total)
+		VALUES ($1, $2, 0, 'submitted', current_date, 350000) RETURNING id`, branchID, nomor).Scan(&orderID); err != nil {
+		t.Fatalf("seed pesanan: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO documents (order_id, jenis, versi, storage_key)
+		VALUES ($1::uuid, 'invoice_pdf', 0, $2)`, orderID, "orders/"+orderID+"/invoice.pdf"); err != nil {
+		t.Fatalf("seed dokumen: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO admin_users
+		(nama, email, password_hash, role, is_active, activated_at, invited_at, notif_invoice, notif_surat_jalan)
+		VALUES ('SA Uji','sa-uji@example.test','x','superadmin',true,now(),now(),true,true)`); err != nil {
+		t.Fatalf("seed admin penerima: %v", err)
+	}
+	return orderID
+}
+
+// TestPGResendBersamaanTidakMenggandakanEmail menutup PEMBLOKIR butir 1: dua
+// permintaan kirim ulang yang bersamaan harus menghasilkan paling banyak SATU
+// email baru dan SATU entri audit, sisanya 409 EMAIL_ALREADY_QUEUED.
+func TestPGResendBersamaanTidakMenggandakanEmail(t *testing.T) {
+	pool, _ := skemaUji(t)
+	ctx := context.Background()
+	repo := notificationpg.New(pool)
+	orderID := seedPesananDokumen(t, pool, "2026-10-9001")
+
+	svc := notification.New(repo, mailer.Log{},
+		notification.WithClock(clock.System()),
+		notification.WithOrderReader(repo),
+		notification.WithAdminRecipients(userspg.New(pool)),
+	)
+
+	// Email pertama harus ada lebih dulu (kirim ulang = pemulihan) dan tidak
+	// lagi dalam antrean supaya penjaga "masih antre" tidak langsung menolak.
+	if _, err := svc.EnqueueOrderEmail(ctx, notification.OrderEmailInput{
+		OrderID: orderID, Jenis: notification.JenisInvoiceAdmin}); err != nil {
+		t.Fatalf("enqueue email pertama: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE email_outbox SET status = 'sent', sent_at = now()`); err != nil {
+		t.Fatalf("tandai email pertama terkirim: %v", err)
+	}
+
+	aktor := auth.Actor{UserID: "11111111-1111-1111-1111-111111111111",
+		Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+
+	const jumlah = 5
+	var (
+		wg                    sync.WaitGroup
+		mu                    sync.Mutex
+		sukses, ditolak, lain int
+	)
+	mulai := make(chan struct{})
+	for i := 0; i < jumlah; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-mulai // lepaskan semua bersamaan
+			_, err := svc.ResendOrder(ctx, aktor, orderID, notification.JenisInvoiceAdmin)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				sukses++
+			case errors.Is(err, notification.ErrAlreadyQueued):
+				ditolak++
+			default:
+				lain++
+				t.Errorf("kirim ulang mengembalikan galat tak terduga: %v", err)
+			}
+		}()
+	}
+	close(mulai)
+	wg.Wait()
+
+	if sukses != 1 || ditolak != jumlah-1 || lain != 0 {
+		t.Fatalf("harus tepat 1 kirim ulang sukses dan %d ditolak, dapat sukses=%d ditolak=%d lain=%d",
+			jumlah-1, sukses, ditolak, lain)
+	}
+
+	var baris, audit int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox
+		WHERE order_id = $1::uuid AND jenis = 'invoice_admin'`, orderID).Scan(&baris); err != nil {
+		t.Fatalf("hitung baris outbox: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs
+		WHERE entity = 'email' AND action = 'resend'`).Scan(&audit); err != nil {
+		t.Fatalf("hitung audit: %v", err)
+	}
+	if baris != 2 {
+		t.Fatalf("harus tepat 2 baris (asli + 1 kirim ulang), dapat %d", baris)
+	}
+	if audit != 1 {
+		t.Fatalf("harus tepat 1 entri audit resend, dapat %d", audit)
+	}
+}
+
+// TestPGAtLeastOnceKirimDuaKaliSetelahSMTPMenerima mengabadikan semantik
+// at-least-once (PEMBLOKIR butir 2): bila proses mati SETELAH SMTP menerima
+// tetapi sebelum status `sent` tersimpan, baris diklaim ulang setelah sewa
+// habis dan mailer dipanggil dua kali. Ini disengaja, bukan bug tepat-sekali.
+func TestPGAtLeastOnceKirimDuaKaliSetelahSMTPMenerima(t *testing.T) {
+	pool, _ := skemaUji(t)
+	ctx := context.Background()
+	repo := notificationpg.New(pool)
+	m := &hitungMailer{}
+	svc := notification.New(repo, m, notification.WithClock(clock.System()))
+
+	now := time.Now().UTC().Add(time.Second)
+	row, err := repo.Enqueue(ctx, notification.Envelope{
+		Jenis:   notification.JenisResetPassword,
+		To:      []string{"a@example.test"},
+		Payload: map[string]any{"tautan": "https://cabang.test/lupa?token=x"},
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// 1. Klaim + kirim sukses, tetapi proses "mati" sebelum MarkSent.
+	batch, err := repo.Claim(ctx, notification.Claim{
+		Now: now, Limit: 1, Lease: notification.DefaultLease, MaxAttempts: notification.MaxAttempts})
+	if err != nil {
+		t.Fatalf("claim pertama: %v", err)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("harus mengklaim 1 baris, dapat %d", len(batch))
+	}
+	if err := svc.Kirim(ctx, batch[0]); err != nil {
+		t.Fatalf("kirim pertama: %v", err)
+	}
+	// Sengaja TIDAK MarkSent: meniru proses yang mati setelah SMTP menerima.
+
+	// 2. Setelah sewa habis baris diklaim ulang dan dikirim lagi.
+	batch2, err := repo.Claim(ctx, notification.Claim{
+		Now: now.Add(notification.DefaultLease + time.Minute), Limit: 1,
+		Lease: notification.DefaultLease, MaxAttempts: notification.MaxAttempts})
+	if err != nil {
+		t.Fatalf("claim kedua: %v", err)
+	}
+	if len(batch2) != 1 || batch2[0].ID != row.ID || batch2[0].Attempts != 2 {
+		t.Fatalf("baris harus diklaim ulang dengan attempts=2, dapat %+v", batch2)
+	}
+	if err := svc.Kirim(ctx, batch2[0]); err != nil {
+		t.Fatalf("kirim kedua: %v", err)
+	}
+	if err := repo.MarkSent(ctx, batch2[0].ID, now.Add(notification.DefaultLease+time.Minute)); err != nil {
+		t.Fatalf("MarkSent: %v", err)
+	}
+
+	if m.percobaan() != 2 {
+		t.Fatalf("mailer harus dipanggil 2 kali (at-least-once), dapat %d", m.percobaan())
+	}
+	var (
+		status   string
+		attempts int
+	)
+	if err := pool.QueryRow(ctx, `SELECT status::text, attempts FROM email_outbox WHERE id = $1::uuid`, row.ID).
+		Scan(&status, &attempts); err != nil {
+		t.Fatalf("baca baris akhir: %v", err)
+	}
+	if status != notification.StatusSent || attempts != 2 {
+		t.Fatalf("akhir harus sent attempts=2, dapat %s attempts=%d", status, attempts)
+	}
+}
+
+// TestPGSisaKlaimDilepasSaatPemindaianDibatalkan menutup butir 3 pada jalur
+// nyata: pemindaian yang context-nya dibatalkan di tengah batch melepas baris
+// yang belum dicoba kembali ke `queued` TANPA menghabiskan jatah retry.
+func TestPGSisaKlaimDilepasSaatPemindaianDibatalkan(t *testing.T) {
+	pool, _ := skemaUji(t)
+	repo := notificationpg.New(pool)
+
+	ctx, batal := context.WithCancel(context.Background())
+	defer batal()
+	m := &mailerBatal{pada: 2, batal: batal}
+	// Clock sedikit di depan now() database supaya baris baru langsung siap
+	// diklaim (next_try_at defaultnya now() database).
+	svc := notification.New(repo, m, notification.WithClock(clock.Fixed(time.Now().UTC().Add(time.Second))))
+
+	for i := 0; i < 3; i++ {
+		if _, err := repo.Enqueue(ctx, notification.Envelope{
+			Jenis:   notification.JenisResetPassword,
+			To:      []string{fmt.Sprintf("cabang%d@example.test", i)},
+			Payload: map[string]any{"tautan": "https://cabang.test/lupa?token=x"},
+		}); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+
+	if _, err := svc.ProsesAntrean(ctx, 0); err == nil {
+		t.Fatal("pemindaian dengan context yang dibatalkan harus mengembalikan error")
+	}
+
+	var terkirim, sedangDicoba, dilepas int
+	if err := pool.QueryRow(context.Background(), `SELECT
+		count(*) FILTER (WHERE status = 'sent'),
+		count(*) FILTER (WHERE status = 'sending' AND attempts = 1),
+		count(*) FILTER (WHERE status = 'queued' AND attempts = 0)
+		FROM email_outbox`).Scan(&terkirim, &sedangDicoba, &dilepas); err != nil {
+		t.Fatalf("rekap status: %v", err)
+	}
+	if terkirim != 1 {
+		t.Errorf("harus 1 email terkirim sebelum pembatalan, dapat %d", terkirim)
+	}
+	if sedangDicoba != 1 {
+		t.Errorf("harus 1 baris sempat dicoba (sending attempts=1), dapat %d", sedangDicoba)
+	}
+	if dilepas != 1 {
+		t.Errorf("harus 1 baris belum dicoba dilepas (queued attempts=0), dapat %d", dilepas)
 	}
 }
 

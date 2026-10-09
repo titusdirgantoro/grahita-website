@@ -10,6 +10,14 @@
 //     `FOR UPDATE SKIP LOCKED` + sewa (lease) sehingga dua worker tidak pernah
 //     mengirim baris yang sama, dan baris yang ditinggal proses mati pulih
 //     sendiri setelah sewa kedaluwarsa.
+//   - Pengiriman bersifat AT-LEAST-ONCE, bukan tepat-sekali: bila proses mati
+//     (atau penandaan `sent` gagal) SETELAH SMTP menerima pesan, baris diklaim
+//     ulang setelah sewa habis dan email bisa terkirim dua kali. Ini inheren
+//     pada pola outbox dan disengaja; deduplikasi tepat-sekali (bila kelak
+//     dibutuhkan) harus lewat idempotency key di sisi penerima. Yang dijamin
+//     di sini: baris `sent` tidak pernah dikirim ulang oleh worker, dan
+//     pemindaian yang berhenti di tengah batch melepas baris yang belum
+//     dicoba kembali ke `queued` tanpa menghabiskan jatah retry.
 //   - Retry berjenjang 1m, 5m, 30m, 2j, 6j sampai maksimum 5 percobaan
 //     (PRD EM-01). Setelah itu status `failed` dan muncul di riwayat pesanan
 //     dengan tombol kirim ulang (PRD EM-02/EM-03).
@@ -27,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -81,6 +90,12 @@ var jenisDokumen = map[string]bool{
 	JenisInvoiceAdmin:    true,
 	JenisSuratJalanAdmin: true,
 }
+
+// uuidRe menolak id pesanan yang jelas bukan UUID dengan jawaban 404, bukan
+// 500 dari SQLSTATE 22P02 (temuan QA F1-15 untuk GET /admin/orders/{id}/emails).
+// Id pesanan selalu diterbitkan sistem (uuidv7), jadi formatnya dapat diperiksa
+// tanpa menyentuh database. Pola ini sengaja sama dengan paket order.
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Lampiran menunjuk satu dokumen di object storage yang harus dilampirkan.
 type Lampiran struct {
@@ -148,6 +163,12 @@ type Store interface {
 	// ActiveExists melaporkan apakah masih ada email status queued/sending
 	// untuk satu pesanan + jenis (penjaga klik ganda kirim ulang).
 	ActiveExists(ctx context.Context, orderID, jenis string) (bool, error)
+	// Release mengembalikan baris `sending` yang BELUM sempat dicoba ke
+	// `queued` TANPA menambah percobaan (`attempts` dikurangi satu, kebalikan
+	// dari klaim). Dipakai ProsesAntrean ketika pemindaian berhenti di tengah
+	// batch (mis. context job dibatalkan) supaya jatah retry tidak habis oleh
+	// percobaan yang tidak pernah terjadi.
+	Release(ctx context.Context, ids []string, now time.Time) error
 	// PesananEmailGagal mengembalikan id pesanan (DISTINCT) yang punya minimal
 	// satu email berstatus `failed`. Dipakai riwayat pemesanan admin (F1-15)
 	// untuk penanda & filter "email gagal" tanpa domain lain membaca
@@ -352,6 +373,12 @@ func (s *Service) Enqueue(ctx context.Context, e Envelope) (Email, error) {
 //
 // Ia aman dijalankan bersamaan dari beberapa worker: klaim memakai
 // `FOR UPDATE SKIP LOCKED` sehingga satu baris hanya dipegang satu worker.
+//
+// Bila pemindaian berhenti di tengah batch (mis. context job dibatalkan River
+// pada JobTimeout), baris yang BELUM sempat dicoba dilepas kembali ke `queued`
+// dengan `attempts` seperti sebelum klaim. Tanpa itu, satu job yang dibatalkan
+// akan menghabiskan jatah retry email yang bahkan tidak pernah dikirim
+// (temuan QA putaran 1, butir 3).
 func (s *Service) ProsesAntrean(ctx context.Context, limit int) (Hasil, error) {
 	var hasil Hasil
 	if limit <= 0 || limit > s.cfg.Batch {
@@ -369,13 +396,19 @@ func (s *Service) ProsesAntrean(ctx context.Context, limit int) (Hasil, error) {
 	}
 	hasil.Diklaim = len(batch)
 
-	for _, e := range batch {
+	for i := range batch {
+		e := batch[i]
+		// Baris sesudah baris ini belum dicoba sama sekali; merekalah yang
+		// harus dilepas bila pemindaian berhenti sebelum sempat mengirimnya.
+		sisa := batch[i+1:]
 		if err := ctx.Err(); err != nil {
+			s.lepasSisa(ctx, append([]Email{e}, sisa...))
 			return hasil, err
 		}
 		err := s.Kirim(ctx, e)
 		if err == nil {
 			if err := s.store.MarkSent(ctx, e.ID, s.clk.Now()); err != nil {
+				s.lepasSisa(ctx, sisa)
 				return hasil, fmt.Errorf("tandai email %s terkirim: %w", e.ID, err)
 			}
 			hasil.Terkirim++
@@ -385,6 +418,7 @@ func (s *Service) ProsesAntrean(ctx context.Context, limit int) (Hasil, error) {
 			"percobaan", e.Attempts, "err", err)
 		if e.Attempts >= s.cfg.MaxAttempts {
 			if err := s.store.GiveUp(ctx, e.ID, err.Error()); err != nil {
+				s.lepasSisa(ctx, sisa)
 				return hasil, fmt.Errorf("tandai email %s gagal: %w", e.ID, err)
 			}
 			hasil.Menyerah++
@@ -392,11 +426,31 @@ func (s *Service) ProsesAntrean(ctx context.Context, limit int) (Hasil, error) {
 		}
 		delay := RetryDelay(e.Attempts)
 		if err := s.store.Reschedule(ctx, e.ID, s.clk.Now().Add(delay), err.Error()); err != nil {
+			s.lepasSisa(ctx, sisa)
 			return hasil, fmt.Errorf("jadwalkan ulang email %s: %w", e.ID, err)
 		}
 		hasil.Ditunda++
 	}
 	return hasil, nil
+}
+
+// lepasSisa mengembalikan baris yang belum sempat dicoba ke antrean. Context
+// pemanggil biasanya sudah dibatalkan (itu sebabnya pemindaian berhenti), jadi
+// pelepasan memakai context tanpa pembatalan dengan tenggat pendek supaya
+// baris tidak tertahan `sending` sampai sewa 15 menit habis.
+func (s *Service) lepasSisa(ctx context.Context, sisa []Email) {
+	if len(sisa) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(sisa))
+	for _, e := range sisa {
+		ids = append(ids, e.ID)
+	}
+	lepasCtx, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer batal()
+	if err := s.store.Release(lepasCtx, ids, s.clk.Now()); err != nil {
+		slog.WarnContext(ctx, "lepas sisa klaim email gagal", "jumlah", len(ids), "err", err)
+	}
 }
 
 // Kirim merender dan mengirim SATU email outbox. Ia tidak mengubah status;

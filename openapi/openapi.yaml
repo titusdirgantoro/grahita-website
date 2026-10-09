@@ -2072,6 +2072,16 @@ paths:
         `failed` (gagal setelah percobaannya habis: 1 percobaan + 5 retry
         berjenjang). Email gagal tampil di sini lengkap dengan `last_error` dan
         dapat dikirim ulang lewat endpoint resend (PRD EM-02/EM-03).
+
+        Pengiriman bersifat **at-least-once**: bila proses worker mati SETELAH
+        SMTP menerima pesan tetapi sebelum status `sent` tersimpan, baris
+        diklaim ulang setelah masa sewa 15 menit habis sehingga email yang sama
+        bisa terkirim dua kali. Baris `sent` sendiri tidak pernah dikirim ulang
+        oleh worker. Riwayat di sini memperlihatkan `attempts` > 1 pada baris
+        seperti itu.
+
+        `id` yang bukan UUID dijawab `404` (bukan error server) — sama seperti
+        endpoint pesanan admin lain.
       responses:
         "200":
           description: Riwayat email pesanan (terbaru lebih dulu)
@@ -2086,6 +2096,8 @@ paths:
                     items: { $ref: "#/components/schemas/EmailOutbox" }
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /api/v1/admin/orders/{id}/emails/{kind}/resend:
     parameters:
@@ -2120,7 +2132,12 @@ paths:
           `409 DOCUMENT_NOT_READY` (lampiran tidak pernah menunggu di dalam
           worker);
         - ditolak `409 EMAIL_ALREADY_QUEUED` bila masih ada email jenis yang
-          sama dalam antrean, sehingga klik ganda tidak menggandakan email;
+          sama dalam antrean, sehingga klik ganda tidak menggandakan email.
+          Penjaga ini ATOMIK: diperiksa di dalam transaksi yang sama dengan
+          penyimpanan baris baru dan diserialkan per (pesanan, jenis), jadi dua
+          permintaan yang benar-benar bersamaan pun menghasilkan maksimal satu
+          email baru dan satu entri audit; sisanya `409`;
+        - `id` yang bukan UUID dijawab `404`;
         - setiap kirim ulang dicatat di `audit_logs` (`entity` = `email`,
           `action` = `resend`).
       parameters:

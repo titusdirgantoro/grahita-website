@@ -681,4 +681,34 @@ func TestPGKirimUlangUndanganDitolakUntukAkunNonaktif(t *testing.T) {
 	}
 }
 
+// TestPGEmailDokumenIdBukanUUIDTidak500 menutup temuan QA F1-15: id pesanan
+// yang bukan UUID pada endpoint riwayat/kirim ulang email harus dijawab 404,
+// bukan 500 dari SQLSTATE 22P02.
+func TestPGEmailDokumenIdBukanUUIDTidak500(t *testing.T) {
+	f := newPGFixture(t)
+	cookiesSA, csrfSA := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/orders/bukan-uuid/emails", "", cookiesSA, "")
+	if status != http.StatusNotFound {
+		t.Fatalf("riwayat email dengan id bukan UUID harus 404, dapat %d (%v)", status, body)
+	}
+
+	// UUID sah tetapi pesanannya tidak ada: riwayat kosong, tetap 200.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/orders/018f0000-0000-7000-8000-0000000000ff/emails", "", cookiesSA, "")
+	if status != http.StatusOK {
+		t.Fatalf("riwayat email UUID sah harus 200, dapat %d (%v)", status, body)
+	}
+	if daftar := dataList(t, body); len(daftar) != 0 {
+		t.Errorf("riwayat pesanan tanpa email harus kosong, dapat %v", body)
+	}
+
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/orders/bukan-uuid/emails/invoice_admin/resend", "", cookiesSA, csrfSA)
+	if status != http.StatusNotFound {
+		t.Fatalf("kirim ulang email dengan id bukan UUID harus 404, dapat %d (%v)", status, body)
+	}
+}
+
 // dataList/dataMap sudah tersedia dari router_catalog_test.go.

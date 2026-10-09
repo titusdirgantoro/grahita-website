@@ -252,6 +252,13 @@ func (r *Repo) PesananEmailGagal(ctx context.Context) ([]string, error) {
 
 // Resend menyimpan salinan email baru DAN entri audit dalam SATU transaksi.
 //
+// Penjaga "masih ada email jenis yang sama dalam antrean" diperiksa DI DALAM
+// transaksi yang sama dan diserialkan per (order_id, jenis) lewat advisory lock
+// transaksional. Dua permintaan kirim ulang yang bersamaan karena itu tidak
+// bisa sama-sama lolos: yang kedua menunggu sampai yang pertama commit, lalu
+// melihat baris baru dan ditolak ErrAlreadyQueued. Tanpa ini, klik ganda
+// bersamaan menghasilkan dua email identik (temuan QA putaran 1, butir 1).
+//
 // EntityID entri audit diisi repository dengan id baris yang baru dibuat,
 // sehingga audit selalu menunjuk ke email hasil kirim ulang.
 func (r *Repo) Resend(ctx context.Context, e notification.Envelope, rec audit.Entry) (notification.Email, error) {
@@ -260,6 +267,26 @@ func (r *Repo) Resend(ctx context.Context, e notification.Envelope, rec audit.En
 		return notification.Email{}, fmt.Errorf("mulai transaksi kirim ulang email: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Kunci berlaku sampai transaksi selesai; hashtext memetakan pasangan
+	// (order_id, jenis) ke kunci int4 yang stabil.
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, e.OrderID, e.Jenis); err != nil {
+		return notification.Email{}, fmt.Errorf("kunci kirim ulang email: %w", err)
+	}
+
+	var aktif bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1 FROM email_outbox
+		    WHERE order_id = $1::uuid AND jenis = $2::email_kind
+		      AND status IN ('queued','sending'))`,
+		nullUUID(e.OrderID), e.Jenis).Scan(&aktif); err != nil {
+		return notification.Email{}, fmt.Errorf("periksa antrean email: %w", err)
+	}
+	if aktif {
+		return notification.Email{}, notification.ErrAlreadyQueued
+	}
 
 	email, err := r.insert(ctx, tx, e)
 	if err != nil {
@@ -273,6 +300,28 @@ func (r *Repo) Resend(ctx context.Context, e notification.Envelope, rec audit.En
 		return notification.Email{}, fmt.Errorf("simpan kirim ulang email: %w", err)
 	}
 	return email, nil
+}
+
+// Release mengembalikan baris `sending` yang BELUM sempat dicoba ke `queued`.
+//
+// `attempts` dikembalikan ke nilai sebelum klaim (GREATEST(attempts - 1, 0))
+// sehingga percobaan yang tidak pernah terjadi tidak menghabiskan jatah retry.
+// Baris yang sudah dicoba (mis. gagal lalu dijadwalkan ulang) tidak lagi
+// berstatus `sending` sehingga tidak tersentuh.
+func (r *Repo) Release(ctx context.Context, ids []string, now time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE email_outbox
+		SET status = 'queued',
+		    attempts = GREATEST(attempts - 1, 0),
+		    next_try_at = $2::timestamptz
+		WHERE status = 'sending' AND id::text = ANY($1::text[])`, ids, now)
+	if err != nil {
+		return fmt.Errorf("lepas klaim email: %w", err)
+	}
+	return nil
 }
 
 // OrderByID memuat data pesanan + email cabangnya.

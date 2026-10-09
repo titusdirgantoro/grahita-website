@@ -92,6 +92,12 @@ func NewResetURLBuilder(customerBase, adminBase, path string) ResetURLBuilder {
 // EmailResetMailer membangun tautan atur ulang lalu mengirimkannya lewat
 // mailer.Mailer. Portal tujuan dipilih dari jenis akun: cabang ke portal
 // cabang, admin ke portal admin — keduanya memakai rute DefaultResetPath.
+//
+// Deprecated: pengirim ini mengirim SMTP LANGSUNG, bukan lewat email_outbox,
+// sehingga bertentangan dengan pola transactional outbox (F1-16). Jalur
+// produksi memakai notification.ResetMailer (menulis email_outbox; worker yang
+// mengirim). Tipe ini hanya dipertahankan untuk pengujian lama dan tidak boleh
+// dipakai komposisi root mana pun.
 type EmailResetMailer struct {
 	mail  mailer.Mailer
 	build ResetURLBuilder
