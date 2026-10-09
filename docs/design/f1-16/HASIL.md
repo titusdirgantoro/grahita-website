@@ -153,10 +153,14 @@ satu temuan dari kartu F1-15. Semuanya dikerjakan di kartu ini.
     Yang kedua melihat baris baru dan dijawab `409 EMAIL_ALREADY_QUEUED`.
     Pemeriksaan cepat di service tetap ada hanya sebagai jalan pintas (tidak
     otoritatif). Bukti:
-    `TestPGResendBersamaanTidakMenggandakanEmail` — 5 permintaan bersamaan →
-    tepat 1 sukses, 4 `ErrAlreadyQueued`, 2 baris outbox (asli + 1 kirim ulang),
-    1 entri audit. Kontrol negatif: dengan kunci advisory dinonaktifkan, uji itu
-    GAGAL (`sukses=2`) — jadi penjaganya benar-benar bekerja.
+    `TestPGResendBersamaanTidakMenggandakanEmail` — 8 permintaan bersamaan per
+    ronde, 2 ronde → tiap ronde tepat 1 sukses dan 7 `ErrAlreadyQueued`, total
+    3 baris outbox (asli + 2 kirim ulang) dan 2 entri audit. Kontrol negatif
+    yang terukur: dengan kunci advisory dilepas, uji itu GAGAL 3/3 jalan
+    (`sukses=8 ditolak=0`) — jadi penjaganya benar-benar bekerja. Uji ini
+    diperkuat pada kartu tindak lanjut `t_9c58996f` (lihat bagian
+    "Penyempurnaan uji regresi" di bawah) karena versi 5 goroutine yang lama
+    ternyata FLAKY saat kunci dilepas (hanya 3 dari 5 jalan merah).
 16. **Semantik at-least-once didokumentasikan dan diuji (PEMBLOKIR butir 2).**
     Pengiriman TIDAK tepat-sekali: bila proses mati (atau `MarkSent` gagal)
     SETELAH SMTP menerima, baris diklaim ulang setelah sewa 15 menit dan
@@ -292,10 +296,70 @@ go test -race -p 1 -count=1 ./...            # 19 paket ok, 0 FAIL, exit 0
                                              # (log cache/scratch/f116r2-full.log)
 ```
 
-Kontrol negatif yang saya jalankan untuk membuktikan penjaga baru bekerja
-(bukan sekadar hijau): dengan `pg_advisory_xact_lock` di `Resend` dinonaktifkan
-sementara, `TestPGResendBersamaanTidakMenggandakanEmail` GAGAL
-(`sukses=2 ditolak=3`); setelah dipulihkan, uji hijau kembali.
+Kontrol negatif putaran 2 (dicatat apa adanya setelah temuan QA): dengan
+`pg_advisory_xact_lock` di `Resend` dinonaktifkan sementara, uji implementer
+saat itu (`TestPGResendBersamaanTidakMenggandakanEmail`, 5 goroutine) memang
+GAGAL (`sukses=2 ditolak=3`) — tetapi hanya 3 dari 5 jalan, jadi angka itu
+kebetulan, bukan jaminan. Kunci dipulihkan dan uji hijau kembali. Uji yang
+benar-benar dapat diandalkan sebagai penjaga regresi baru dibuat pada kartu
+tindak lanjut `t_9c58996f` (bagian berikutnya) dengan hasil kontrol negatif
+yang deterministik.
+
+## Penyempurnaan uji regresi (kartu tindak lanjut t_9c58996f)
+
+Temuan non-pemblokir QA putaran 2: uji balapan kirim ulang terlalu lemah
+sebagai penjaga regresi. Versi lama (5 goroutine, hanya penghalang start dari
+luar) bergantung pada penjadwalan Go — permintaan pertama bisa menyelesaikan
+seluruh transaksinya sebelum yang lain memeriksa antrean, sehingga uji tetap
+HIJAU meski kunci advisory sudah dilepas (terukur: 3 dari 5 jalan merah).
+Perilaku produksi TIDAK diubah (`Resend` tetap sama).
+
+Yang diperkuat pada `TestPGResendBersamaanTidakMenggandakanEmail`
+(`api/internal/notification/integration_pg_test.go`):
+
+- 8 permintaan bersamaan (dari 5) dan **2 ronde** berurutan pada pesanan yang
+  sama (baris ronde sebelumnya ditandai `sent` lebih dulu) sehingga hasilnya
+  bukan kebetulan satu kali jalan.
+- **Penghalang start dua lapis**: `close(mulai)` sebelum `ResendOrder`, plus
+  `penghalangResend` — pembungkus `notification.Store` yang menahan SETIAP
+  panggilan `store.Resend` sampai kedelapan goroutine tiba, lalu melepas
+  semuanya sekaligus. Kedelapan permintaan karena itu masuk ke transaksi
+  produksi (`postgres.Repo.Resend`) pada saat yang hampir sama; pembungkusnya
+  hanya menyinkronkan, tidak mengubah kode produksi.
+- **Kolam koneksi dipanaskan** (`panaskanKolam`: 8 koneksi dibuka lalu
+  dilepas) supaya pool `MinConns=1` tidak mendial koneksi baru di tengah
+  perlombaan dan menyerialkannya secara palsu.
+
+Hasil kontrol negatif yang benar-benar terukur (kunci
+`pg_advisory_xact_lock` dilepas pada salinan kerja `postgres.go`, lalu
+dipulihkan dan dibuktikan identik dengan HEAD lewat `git diff` kosong):
+
+```
+go test -race -count=1 -run TestPGResendBersamaanTidakMenggandakanEmail ./internal/notification/
+# kunci DILEPAS  -> 3/3 jalan GAGAL, semuanya persis:
+#   "ronde 1: harus tepat 1 kirim ulang sukses dan 7 ditolak, dapat sukses=8 ditolak=0 lain=0"
+# kunci DIPULIHKAN -> 3/3 jalan PASS (0.86s-1.00s)
+```
+
+Dengan kata lain uji sekarang MERAH secara deterministik saat penjaga atomik
+hilang (bukan 3/5 seperti sebelumnya) dan HIJAU saat penjaganya ada.
+
+Gerbang pada repo target saat tindak lanjut ini (PG16.15 +
+`scripts/pg-dev-shim.sql`, Go `go1.27.1`, cwd `api/`), semuanya hijau:
+`gofmt -l .` kosong; `go vet ./...` exit 0; `go build ./...` dan
+`go build ./cmd/server` exit 0; `sh scripts/check-secrets.sh` exit 0; dan
+`go test -race -p 1 -count=1 -timeout 30m ./...` → 26 paket `ok`, tanpa
+FAIL/SKIP/panic/data race (httpapi 667.9s, notification 17.3s), exit 0
+(log `cache/scratch/f116tl_suite.log`). Perubahan hanya di
+`integration_pg_test.go`, `.env.example`, dan halaman ini; `postgres.go`
+dipulihkan persis seperti semula (`git diff` kosong).
+
+Alamat email pribadi pengelola integrasi juga dihapus dari berkas yang
+dilacak: komentar `MAIL_FROM` di `.env.example` kini memakai placeholder
+generik `nama@contoh.id`; nilai bawaan tetap `no-reply@grahita.id` (README
+memang tidak pernah memuat alamat itu). Bukti: pencarian alamat email
+pengelola lama pada seluruh berkas terlacak tidak menemukan apa pun (0 hasil)
+dan `sh scripts/check-secrets.sh` lolos (exit 0).
 
 ## Risiko residu
 

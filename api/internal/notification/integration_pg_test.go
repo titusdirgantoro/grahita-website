@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -573,66 +574,170 @@ func seedPesananDokumen(t *testing.T, pool *database.Pool, nomor string) string 
 	return orderID
 }
 
-// TestPGResendBersamaanTidakMenggandakanEmail menutup PEMBLOKIR butir 1: dua
-// permintaan kirim ulang yang bersamaan harus menghasilkan paling banyak SATU
-// email baru dan SATU entri audit, sisanya 409 EMAIL_ALREADY_QUEUED.
+// ---------- temuan QA putaran 2 ----------
+
+// penghalangResend menahan SETIAP panggilan Resend sampai sejumlah goroutine
+// tiba, lalu melepas semuanya sekaligus (penghalang start di mulut store).
+//
+// Alasannya: uji balapan yang hanya melepas goroutine dari LUAR masih
+// bergantung pada penjadwalan Go. Permintaan pertama bisa menyelesaikan
+// seluruh transaksinya sebelum permintaan lain sempat memeriksa antrean,
+// sehingga uji tetap HIJAU meski penjaga atomik (`pg_advisory_xact_lock` di
+// postgres.Repo.Resend) sudah dilepas. QA putaran 2 mengukurnya pada uji lama
+// (5 goroutine): dengan kunci dilepas hanya 3 dari 5 jalan GAGAL. Dengan
+// penghalang ini seluruh permintaan benar-benar tumpang-tindih di mulut
+// `postgres.Repo.Resend`, jadi hilangnya penjaga atomik muncul deterministik
+// sebagai lebih dari satu kirim ulang sukses.
+//
+// Kode produksi tidak diubah: metode ini hanya menyinkronkan goroutine lalu
+// meneruskan ke repository sungguhan, tanpa mengubah perilakunya.
+type penghalangResend struct {
+	notification.Store
+	wajibTiba int32
+	tiba      int32
+	gerbang   chan struct{}
+	sekali    sync.Once
+	tenggat   time.Duration
+}
+
+func penghalangResendBaru(store notification.Store, wajib int) *penghalangResend {
+	return &penghalangResend{
+		Store:     store,
+		wajibTiba: int32(wajib),
+		gerbang:   make(chan struct{}),
+		tenggat:   30 * time.Second,
+	}
+}
+
+func (p *penghalangResend) Resend(ctx context.Context, e notification.Envelope, rec audit.Entry) (notification.Email, error) {
+	if atomic.AddInt32(&p.tiba, 1) >= p.wajibTiba {
+		p.sekali.Do(func() { close(p.gerbang) })
+	}
+	// Tenggat hanya jaring pengaman (mis. ada permintaan yang batal lebih
+	// dulu); pada jalur normal semua permintaan tiba sehingga gerbang langsung
+	// terbuka dan uji tidak pernah menunggu.
+	pemutus := time.NewTimer(p.tenggat)
+	defer pemutus.Stop()
+	select {
+	case <-p.gerbang:
+	case <-pemutus.C:
+	case <-ctx.Done():
+		return notification.Email{}, ctx.Err()
+	}
+	return p.Store.Resend(ctx, e, rec)
+}
+
+// panaskanKolam membuka `jumlah` koneksi pool sekaligus lalu melepasnya
+// kembali. Tanpa ini pool (MinConns=1) harus mendial 7 koneksi baru di tengah
+// perlombaan, sehingga permintaan bisa menyerial secara palsu dan ujinya
+// kembali flaky.
+func panaskanKolam(t *testing.T, ctx context.Context, pool *database.Pool, jumlah int) {
+	t.Helper()
+	var tiba, selesai sync.WaitGroup
+	tiba.Add(jumlah)
+	selesai.Add(jumlah)
+	lepas := make(chan struct{})
+	for i := 0; i < jumlah; i++ {
+		go func() {
+			defer selesai.Done()
+			conn, err := pool.Acquire(ctx)
+			if err != nil {
+				t.Errorf("panaskan kolam koneksi: %v", err)
+				tiba.Done()
+				return
+			}
+			defer conn.Release()
+			tiba.Done()
+			<-lepas
+		}()
+	}
+	tiba.Wait()
+	close(lepas)
+	selesai.Wait()
+}
+
+// TestPGResendBersamaanTidakMenggandakanEmail menutup PEMBLOKIR butir 1:
+// permintaan kirim ulang yang benar-benar bersamaan harus menghasilkan paling
+// banyak SATU email baru dan SATU entri audit, sisanya 409 EMAIL_ALREADY_QUEUED.
+//
+// Uji ini adalah penjaga regresi: ia harus MERAH tatkala `pg_advisory_xact_lock`
+// di `postgres.Repo.Resend` dilepas, dan HIJAU saat penjaganya ada. Supaya
+// andal, delapan goroutine ditahan DUA kali — sekali sebelum memanggil
+// ResendOrder (penghalang start) dan sekali di mulut `store.Resend` lewat
+// `penghalangResend` — ditambah kolam koneksi yang sudah dipanaskan. Dua ronde
+// dijalankan supaya hasilnya bukan kebetulan satu kali jalan.
 func TestPGResendBersamaanTidakMenggandakanEmail(t *testing.T) {
 	pool, _ := skemaUji(t)
 	ctx := context.Background()
 	repo := notificationpg.New(pool)
 	orderID := seedPesananDokumen(t, pool, "2026-10-9001")
 
-	svc := notification.New(repo, mailer.Log{},
-		notification.WithClock(clock.System()),
-		notification.WithOrderReader(repo),
-		notification.WithAdminRecipients(userspg.New(pool)),
-	)
+	const jumlah = 8 // minimal 8 (temuan QA putaran 2)
+	const ronde = 2
 
 	// Email pertama harus ada lebih dulu (kirim ulang = pemulihan) dan tidak
 	// lagi dalam antrean supaya penjaga "masih antre" tidak langsung menolak.
-	if _, err := svc.EnqueueOrderEmail(ctx, notification.OrderEmailInput{
+	if _, err := notification.New(repo, mailer.Log{},
+		notification.WithClock(clock.System()),
+		notification.WithOrderReader(repo),
+		notification.WithAdminRecipients(userspg.New(pool)),
+	).EnqueueOrderEmail(ctx, notification.OrderEmailInput{
 		OrderID: orderID, Jenis: notification.JenisInvoiceAdmin}); err != nil {
 		t.Fatalf("enqueue email pertama: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE email_outbox SET status = 'sent', sent_at = now()`); err != nil {
-		t.Fatalf("tandai email pertama terkirim: %v", err)
 	}
 
 	aktor := auth.Actor{UserID: "11111111-1111-1111-1111-111111111111",
 		Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
 
-	const jumlah = 5
-	var (
-		wg                    sync.WaitGroup
-		mu                    sync.Mutex
-		sukses, ditolak, lain int
-	)
-	mulai := make(chan struct{})
-	for i := 0; i < jumlah; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-mulai // lepaskan semua bersamaan
-			_, err := svc.ResendOrder(ctx, aktor, orderID, notification.JenisInvoiceAdmin)
-			mu.Lock()
-			defer mu.Unlock()
-			switch {
-			case err == nil:
-				sukses++
-			case errors.Is(err, notification.ErrAlreadyQueued):
-				ditolak++
-			default:
-				lain++
-				t.Errorf("kirim ulang mengembalikan galat tak terduga: %v", err)
-			}
-		}()
-	}
-	close(mulai)
-	wg.Wait()
+	for lan := 1; lan <= ronde; lan++ {
+		// Hasil ronde sebelumnya dianggap sudah terkirim supaya kirim ulang
+		// berikutnya sah (pemulihan email yang terkirim, bukan klik ganda).
+		if _, err := pool.Exec(ctx, `UPDATE email_outbox SET status = 'sent', sent_at = now()
+			WHERE order_id = $1::uuid AND status <> 'sent'`, orderID); err != nil {
+			t.Fatalf("ronde %d: tandai email sebelumnya terkirim: %v", lan, err)
+		}
 
-	if sukses != 1 || ditolak != jumlah-1 || lain != 0 {
-		t.Fatalf("harus tepat 1 kirim ulang sukses dan %d ditolak, dapat sukses=%d ditolak=%d lain=%d",
-			jumlah-1, sukses, ditolak, lain)
+		// Store dibungkus penghalang supaya kedelapan permintaan masuk ke
+		// transaksi produksi pada saat yang sama.
+		svc := notification.New(penghalangResendBaru(repo, jumlah), mailer.Log{},
+			notification.WithClock(clock.System()),
+			notification.WithOrderReader(repo),
+			notification.WithAdminRecipients(userspg.New(pool)),
+		)
+		panaskanKolam(t, ctx, pool, jumlah)
+
+		var (
+			wg                    sync.WaitGroup
+			mu                    sync.Mutex
+			sukses, ditolak, lain int
+		)
+		mulai := make(chan struct{})
+		for i := 0; i < jumlah; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-mulai // lepaskan semua bersamaan
+				_, err := svc.ResendOrder(ctx, aktor, orderID, notification.JenisInvoiceAdmin)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					sukses++
+				case errors.Is(err, notification.ErrAlreadyQueued):
+					ditolak++
+				default:
+					lain++
+					t.Errorf("ronde %d: kirim ulang mengembalikan galat tak terduga: %v", lan, err)
+				}
+			}()
+		}
+		close(mulai)
+		wg.Wait()
+
+		if sukses != 1 || ditolak != jumlah-1 || lain != 0 {
+			t.Fatalf("ronde %d: harus tepat 1 kirim ulang sukses dan %d ditolak, dapat sukses=%d ditolak=%d lain=%d",
+				lan, jumlah-1, sukses, ditolak, lain)
+		}
 	}
 
 	var baris, audit int
@@ -644,11 +749,11 @@ func TestPGResendBersamaanTidakMenggandakanEmail(t *testing.T) {
 		WHERE entity = 'email' AND action = 'resend'`).Scan(&audit); err != nil {
 		t.Fatalf("hitung audit: %v", err)
 	}
-	if baris != 2 {
-		t.Fatalf("harus tepat 2 baris (asli + 1 kirim ulang), dapat %d", baris)
+	if baris != 1+ronde {
+		t.Fatalf("harus tepat %d baris (asli + %d kirim ulang), dapat %d", 1+ronde, ronde, baris)
 	}
-	if audit != 1 {
-		t.Fatalf("harus tepat 1 entri audit resend, dapat %d", audit)
+	if audit != ronde {
+		t.Fatalf("harus tepat %d entri audit resend (satu per kirim ulang), dapat %d", ronde, audit)
 	}
 }
 
