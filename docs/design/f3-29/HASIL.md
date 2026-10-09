@@ -40,8 +40,8 @@ Perubahan berkas (semuanya **berkas baru**, tidak ada berkas lama yang diubah):
 | `api/internal/payment/va/va.go` | kontrak `Provider`, tipe `PermintaanVA`/`HasilVA`/`PermintaanCallback`/`PeristiwaBayar`, sentinel galat, `CocokNominal`, `Kunci()`, `PenyimpanIdempotensi` + `MemoriIdempotensi`, `Adapter.TanganiCallback` |
 | `api/internal/payment/va/signature.go` | jalur tanda tangan HMAC-SHA256: `Kanonik`, `TandaTangan`, `VerifikasiTandaTangan` (waktu-konstan), `VerifikasiKanonik`, `PeriksaUmur` (jendela replay) |
 | `api/internal/payment/va/signature_rsa.go` | jalur asimetris SNAP BI: `KanonikSNAP`, `KanonikSNAPToken`, `TandaTanganRSASHA256`, `VerifikasiRSASHA256`, `KunciPublikDariPEM`, `KunciPrivatDariPEM` |
-| `api/internal/payment/va/mock.go` | `MockProvider` deterministik + `BuatCallback`/`CallbackBadanMenandatangani` (perannya sebagai "bank" tiruan), `NominalDariString` |
-| `api/internal/payment/va/va_test.go` | 10 uji unit kontrak (kanonik, tanda tangan, jendela waktu, kunci idempotensi, pencocokan nominal, penjaga memori, kebocoran rahasia) |
+| `api/internal/payment/va/mock.go` | `MockProvider` deterministik + `BuatCallback`/`CallbackBadanMenandatangani` (perannya sebagai "bank" tiruan) |
+| `api/internal/payment/va/va_test.go` | 11 uji unit kontrak (kanonik, tanda tangan, jendela waktu, kunci idempotensi, pencocokan nominal, penjaga memori, kebocoran rahasia, gagal tertutup tanpa penjaga) |
 | `api/internal/payment/va/signature_rsa_test.go` | 3 uji unit jalur RSA/PEM (kunci dibangkitkan di uji, tanpa jaringan) |
 | `api/internal/payment/va/vatest/contract.go` | `Harness` + `Uji(t, pabrik)` — 12 sub-uji kontrak yang berlaku untuk provider mana pun |
 | `api/internal/payment/va/vatest/contract_test.go` | menjalankan seluruh kontrak terhadap `va.MockProvider` |
@@ -96,6 +96,12 @@ Perubahan berkas (semuanya **berkas baru**, tidak ada berkas lama yang diubah):
    dibuktikan dengan provider yang panik bila dipanggil (uji
    `adapter_toggle_mati_diabaikan`). Paket ini juga tidak diimpor ke mana pun
    (lihat bukti "tidak tersambung").
+9a. **Tanpa penjaga idempotensi = gagal tertutup.** `Adapter` dengan
+   `Penjaga=nil` menolak (`KodeDitolak` + `ErrPenjagaIdempotensiTidakAda`)
+   alih-alih "lanjut tanpa idempotensi"; callback duplikat yang dihitung dua
+   kali adalah kerugian uang, jadi keadaannya harus menolak. Diuji
+   `TestAdapterTanpaPenjagaGagalTertutup` (sekaligus membuktikan toggle mati
+   tetap mengalahkan penolakan itu).
 10. **Toleransi uang satu sumber.** `CocokNominal` memakai
     `tol_kurang`/`tol_lebih` yang sama dengan verifikasi AI (PRD §4.9)
     sehingga dua mode pembayaran tidak dapat menyimpang; toleransi negatif
@@ -141,9 +147,9 @@ ok    github.com/grahita/portal/api/internal/payment/va      1.837s
 ok    github.com/grahita/portal/api/internal/payment/va/vatest 1.099s
 ```
 
-Uji fokus (hitungan nyata): **14 uji PASS tingkat atas** (13 unit di paket `va`
+Uji fokus (hitungan nyata): **15 uji PASS tingkat atas** (14 unit di paket `va`
 + 1 suite kontrak di `vatest`) dengan **12 sub-uji** di dalam suite kontrak ⇒
-**26 baris PASS, 0 FAIL**.
+**27 baris PASS, 0 FAIL**.
 
 Sub-uji kontrak (`vatest.Uji`, berlaku untuk provider mana pun):
 
@@ -170,7 +176,7 @@ ditolak, jadi tidak ada jalur "kunci kosong = lolos"),
 nominal/nomor VA/waktu, tidak sensitif terhadap offset zona waktu),
 `TestCocokNominal` (9 kasus batas + toleransi negatif), `TestMemoriIdempotensiKlaimSekali`,
 `TestMockProviderMenolakTanpaRahasia`, `TestMockProviderTidakMembocorkanRahasia`,
-`TestNominalDariString`, `TestKanonikSNAPBentuk`,
+`TestAdapterTanpaPenjagaGagalTertutup`, `TestNominalBukanFloat`, `TestKanonikSNAPBentuk`,
 `TestTandaTanganRSASHA256BolakBalik` (kunci RSA dibangkitkan di uji; kunci lain,
 base64 rusak, tanda tangan terpotong, kunci `nil` → `ErrTandaTanganTidakSah`),
 `TestKunciPEMBolakBalik`.

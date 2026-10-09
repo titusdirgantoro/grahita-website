@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -352,17 +351,6 @@ func (m *MockProvider) JumlahVA() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.perReff)
-}
-
-// NominalDariString dipakai uji/kartu T8 untuk membaca nominal uang dari teks
-// rupiah sederhana (mis. "150000" atau "150.000"); nilai tak sah → galat.
-func NominalDariString(s string) (int64, error) {
-	bersih := strings.NewReplacer(".", "", ",", "", " ", "", "Rp", "").Replace(s)
-	v, err := strconv.ParseInt(bersih, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%w: nominal %q tidak dapat dibaca", ErrPayloadTidakSah, s)
-	}
-	return v, nil
 }
 
 var _ Provider = (*MockProvider)(nil)

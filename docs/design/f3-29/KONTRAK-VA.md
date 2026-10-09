@@ -240,6 +240,9 @@ callback masuk
 Urutan ini disengaja: **verifikasi tanda tangan lebih dahulu** (callback palsu
 tidak boleh "membakar" kunci peristiwa yang sah), **klaim paling akhir**
 (percobaan yang gagal tidak menutup kesempatan percobaan sah berikutnya).
+Bila fitur hidup tetapi penjaga idempotensi tidak dipasang, prototipe **menolak**
+(`KodeDitolak` + `ErrPenjagaIdempotensiTidakAda`) — gagal tertutup, karena
+callback duplikat yang dihitung dua kali adalah kerugian uang.
 
 ### 5.1 Yang tetap menjadi kewajiban F3-30
 

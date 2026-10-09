@@ -73,6 +73,11 @@ var (
 	// ErrNomorVATidakDikenal dikembalikan bila callback menunjuk nomor VA yang
 	// tidak pernah diterbitkan sistem ini.
 	ErrNomorVATidakDikenal = errors.New("nomor virtual account tidak dikenal")
+	// ErrPenjagaIdempotensiTidakAda dikembalikan bila `Adapter` dipasang tanpa
+	// penjaga idempotensi. Tanpa penjaga, callback yang diulang provider dapat
+	// dihitung dua kali — jadi keadaannya GAGAL TERTUTUP, bukan "lanjut tanpa
+	// penjaga".
+	ErrPenjagaIdempotensiTidakAda = errors.New("penjaga idempotensi callback belum dipasang")
 )
 
 // Bank adalah kode bank seperti pada enum `bank_code` (Database.md §3). Nilai
@@ -292,7 +297,9 @@ type HasilCallback struct {
 // Adapter adalah PROTOTIPE perakit callback: provider + penjaga idempotensi +
 // pencocokan nominal. Ia sengaja tidak menyentuh basis data: F3-30 mengganti
 // `PenyimpanIdempotensi` dengan implementasi PostgreSQL dan memasang rute
-// HTTP-nya.
+// HTTP-nya. `Provider` dan `Penjaga` dua-duanya WAJIB terisi saat `Terpasang`
+// bernilai benar — keadaannya gagal tertutup (`KodeDitolak` + galat), bukan
+// lanjut diam-diam tanpa idempotensi.
 type Adapter struct {
 	Provider Provider
 	Penjaga  PenyimpanIdempotensi
@@ -312,6 +319,9 @@ func (a *Adapter) TanganiCallback(ctx context.Context, in PermintaanCallback, to
 	if a.Provider == nil {
 		return HasilCallback{Kode: KodeDitolak, Total: totalPesanan}, ErrProviderBelumDipilih
 	}
+	if a.Penjaga == nil {
+		return HasilCallback{Kode: KodeDitolak, Total: totalPesanan}, ErrPenjagaIdempotensiTidakAda
+	}
 	peristiwa, err := a.Provider.TerimaCallback(ctx, in)
 	if err != nil {
 		return HasilCallback{Kode: KodeDitolak, Total: totalPesanan}, err
@@ -324,16 +334,14 @@ func (a *Adapter) TanganiCallback(ctx context.Context, in PermintaanCallback, to
 		Total:     totalPesanan,
 		Kunci:     peristiwa.Kunci(),
 	}
-	if a.Penjaga != nil {
-		baru, kerr := a.Penjaga.Klaim(ctx, hasil.Kunci)
-		if kerr != nil {
-			hasil.Kode = KodeDitolak
-			return hasil, kerr
-		}
-		if !baru {
-			hasil.Kode = KodeDuplikat
-			return hasil, nil
-		}
+	baru, kerr := a.Penjaga.Klaim(ctx, hasil.Kunci)
+	if kerr != nil {
+		hasil.Kode = KodeDitolak
+		return hasil, kerr
+	}
+	if !baru {
+		hasil.Kode = KodeDuplikat
+		return hasil, nil
 	}
 	if nominal == NominalCocok {
 		hasil.Kode = KodeDiterima

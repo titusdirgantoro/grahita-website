@@ -238,23 +238,39 @@ func TestMockProviderTidakMembocorkanRahasia(t *testing.T) {
 	}
 }
 
-func TestNominalDariString(t *testing.T) {
-	for s, ingin := range map[string]int64{
-		"150000":    150_000,
-		"150.000":   150_000,
-		"Rp150.000": 150_000,
-		" 1 000 ":   1_000,
-		"1,000":     1_000,
-	} {
-		v, err := NominalDariString(s)
-		if err != nil {
-			t.Fatalf("%q: %v", s, err)
-		}
-		if v != ingin {
-			t.Fatalf("%q: dapat %d, ingin %d", s, v, ingin)
-		}
+func TestAdapterTanpaPenjagaGagalTertutup(t *testing.T) {
+	// Penjaga idempotensi wajib: tanpa itu callback duplikat bisa dihitung dua
+	// kali, jadi keadaannya harus GAGAL TERTUTUP.
+	provider, err := NewMockProvider(MockConfig{Rahasia: rahasiaUjiUnit()})
+	if err != nil {
+		t.Fatalf("NewMockProvider: %v", err)
 	}
-	if _, err := NominalDariString("seratus ribu"); !errors.Is(err, ErrPayloadTidakSah) {
-		t.Fatalf("teks: ingin ErrPayloadTidakSah, dapat %v", err)
+	a := &Adapter{Provider: provider, Terpasang: true}
+	hasil, err := a.TanganiCallback(context.Background(), PermintaanCallback{}, 100_000, 0, 0)
+	if !errors.Is(err, ErrPenjagaIdempotensiTidakAda) {
+		t.Fatalf("tanpa penjaga: ingin ErrPenjagaIdempotensiTidakAda, dapat %v", err)
+	}
+	if hasil.Kode != KodeDitolak {
+		t.Fatalf("tanpa penjaga: ingin KodeDitolak, dapat %q", hasil.Kode)
+	}
+	// Toggle mati tetap mengalahkan segalanya (fitur mati = tanpa efek).
+	a.Terpasang = false
+	if hasil, err := a.TanganiCallback(context.Background(), PermintaanCallback{}, 100_000, 0, 0); err != nil || hasil.Kode != KodeDiabaikan {
+		t.Fatalf("toggle mati: kode=%q err=%v", hasil.Kode, err)
+	}
+}
+
+func TestNominalBukanFloat(t *testing.T) {
+	// Penjaga invarian uang: nominal VA adalah bilangan bulat Rupiah (BR-10).
+	// Uji ini menjaga agar tipe nominal tidak diam-diam berubah menjadi pecahan
+	// (mis. bila kelak ada yang mengganti `int64` ke `float64`).
+	peristiwa := PeristiwaBayar{Nominal: 150_000}
+	var nominal any = peristiwa.Nominal
+	if _, ok := nominal.(int64); !ok {
+		t.Fatalf("nominal bukan int64: %T", nominal)
+	}
+	hasil, selisih := CocokNominal(150_000, peristiwa.Nominal, 0, 0)
+	if hasil != NominalCocok || selisih != 0 {
+		t.Fatalf("nominal bulat tidak cocok: %q/%d", hasil, selisih)
 	}
 }
