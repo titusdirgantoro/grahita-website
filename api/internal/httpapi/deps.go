@@ -33,6 +33,7 @@ import (
 	"github.com/grahita/portal/api/internal/registration"
 	"github.com/grahita/portal/api/internal/report"
 	"github.com/grahita/portal/api/internal/settings"
+	"github.com/grahita/portal/api/internal/tutorial"
 	"github.com/grahita/portal/api/internal/users"
 )
 
@@ -104,6 +105,12 @@ type Deps struct {
 	// Registration melayani pendaftaran akun cabang dua langkah lewat token
 	// registrasi sekali pakai (F1-07).
 	Registration *registration.Service
+
+	// Tutorial melayani konten halaman Tutorial portal cabang (F2-27,
+	// PRD §3.8): baca untuk sesi mana pun, ubah hanya Superadmin
+	// (`admin.tutorial`). Konten disimpan di database sehingga perubahan
+	// langsung terlihat di portal tanpa build/deploy.
+	Tutorial *tutorial.Service
 
 	Storage   storage.Store
 	Gotenberg pdf.Renderer

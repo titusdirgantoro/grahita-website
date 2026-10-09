@@ -1,0 +1,33 @@
+# Bukti hidup F2-27 (kartu t_0856261e)
+# Biner dibangun dari ISI COMMIT (git checkout-index -a) — bukan working tree yang
+# masih memuat pekerjaan kartu lain — lalu dijalankan di PostgreSQL 16.15 lokal
+# (scripts/pg-dev-shim.sql) pada database baru. Perintah: bash f227_live.sh
+
+== build biner dari isi commit ==
+== migrate ==
+{"time":"2026-10-09T13:16:54.227671438Z","level":"INFO","msg":"migrasi selesai"}
+{"time":"2026-10-09T13:16:54.407999146Z","level":"INFO","msg":"migrasi river selesai","migrasi_diterapkan":8,"versi_terakhir":8}
+{"time":"2026-10-09T13:16:54.408710051Z","level":"INFO","msg":"berhenti dengan rapi","mode":"migrate"}
+== seed ==
+{"time":"2026-10-09T13:16:55.051332646Z","level":"INFO","msg":"seed selesai"}
+{"time":"2026-10-09T13:16:55.051579828Z","level":"INFO","msg":"berhenti dengan rapi","mode":"seed"}
+== jalankan api ==
+HEALTHZ=200
+== probe ==
+[1] cabang GET /tutorial -> 200 topik=4 ['Cara memesan', 'Cara unggah bukti transfer', 'Aturan produk Sertifikat', 'Pesanan Cash & Carry']
+[2] SA PUT /admin/tutorial -> 200 'Cara memesan (dari API)' langkah=['Langkah hasil pembaruan Pusat.', 'Selesai']
+[3] cabang (sesi baru) GET /tutorial -> 200 ['Cara memesan (dari API)', 'Cara unggah bukti transfer', 'Aturan produk Sertifikat', 'Pesanan Cash & Carry']
+[4] manager GET/PUT /admin/tutorial -> 403/403 code=FORBIDDEN
+[4] cabang GET/PUT /admin/tutorial -> 403/403 code=FORBIDDEN
+[5] cabang PUT /tutorial -> 405
+[5] cabang POST /tutorial -> 405
+[5] cabang DELETE /tutorial -> 405
+PROBE_OK
+PROBE_EXIT=0
+== topik di database (isi tersanitasi) ==
+Cara memesan (dari API) | ["Langkah hasil pembaruan Pusat.", "Selesai"]
+Cara unggah bukti transfer | ["Gunakan foto atau tangkapan layar yang jelas: JPG, PNG, atau PDF.", "Satu berkas maksimal 5 MB, dan bisa lebih dari satu berkas untuk pembayaran terpisah.", "Non-Cash & Carry wajib menyertakan minimal satu bukti saat mengirim pesanan.", "Bukti tambahan bisa diunggah dari detail pesanan selama statusnya masih Menunggu.", "Nominal seluruh bukti dijumlahkan saat verifikasi Pusat."]
+Aturan produk Sertifikat | ["Buat pesanan baru khusus untuk produk Sertifikat.", "Harga satuan Sertifikat selalu Rp0 berapa pun jumlah lembarnya.", "Biaya packaging ditambahkan otomatis satu baris per pesanan dan tidak bisa diubah.", "Produk reguler dipesan di pesanan terpisah; satu pesanan Sertifikat = satu invoice."]
+Pesanan Cash & Carry | ["Opsi Cash & Carry hanya muncul untuk cabang yang diizinkan Pusat.", "Saat mengirim pesanan, aktifkan centang Cash & Carry; bukti transfer boleh menyusul.", "Jatuh tempo = tanggal pesanan + jumlah hari C&C yang berlaku (bawaan 7 hari).", "Bayar sebelum tanggal jatuh tempo; pesanan baru selesai setelah pembayaran diverifikasi Pusat.", "Pengingat dikirim ke email cabang mendekati dan pada hari jatuh tempo."]
+== audit tutorial ==
+update|1

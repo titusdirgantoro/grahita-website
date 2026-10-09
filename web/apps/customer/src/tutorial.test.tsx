@@ -96,3 +96,102 @@ describe("Customer Portal — Tutorial (F1-19)", () => {
     expect(screen.getByText(/Panduan ini bisa dibaca di ponsel maupun desktop/)).toBeDefined();
   });
 });
+
+/**
+ * Uji konten dinamis (kartu F2-27): isi halaman datang dari
+ * `GET /api/v1/tutorial`, sehingga perubahan konten oleh Superadmin langsung
+ * terlihat saat portal di-refresh — tanpa build/deploy — dan konten berbahaya
+ * tidak pernah menjadi markup di halaman.
+ */
+
+/** fetchTutorial memasang fetch palsu: sesi cabang + konten tutorial tertentu. */
+function fetchTutorial(payload: unknown) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string) => {
+      if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
+      if (input.endsWith("/tutorial")) return json(payload);
+      return json({ error: { code: "NOT_FOUND", message: "tidak ada" } }, 404);
+    }),
+  );
+}
+
+describe("Customer Portal — Tutorial dinamis (F2-27)", () => {
+  it("menampilkan konten versi server apa adanya (tanpa build/deploy)", async () => {
+    fetchTutorial({
+      data: {
+        topik: [
+          {
+            id: "t1",
+            ikon: "memesan",
+            judul: "Cara memesan (versi baru)",
+            ringkas: "Ringkasan baru dari Pusat.",
+            langkah: ["Langkah baru pertama.", "Langkah baru kedua."],
+          },
+          {
+            id: "t2",
+            ikon: "ikon-tak-dikenal",
+            judul: "Topik tambahan",
+            ringkas: "Ringkas tambahan.",
+            langkah: ["Satu langkah."],
+          },
+        ],
+      },
+    });
+
+    render(<RouterProvider router={buatRouter()} />);
+
+    // Judul dan langkah versi server menggantikan konten bawaan.
+    expect(await screen.findByRole("heading", { name: "Cara memesan (versi baru)" })).toBeDefined();
+    expect(screen.getByText("Ringkasan baru dari Pusat.")).toBeDefined();
+    expect(screen.getByText("Langkah baru kedua.")).toBeDefined();
+    expect(screen.getByText("Topik tambahan")).toBeDefined();
+    // Empat topik bawaan tidak lagi ditampilkan seluruhnya.
+    expect(screen.queryByRole("heading", { name: "Cara memesan" })).toBeNull();
+    expect(screen.queryByText("Aturan produk Sertifikat")).toBeNull();
+    // Setiap topik tetap punya ilustrasi bawaan aplikasi (kunci tak dikenal
+    // memakai ilustrasi umum), dan topik pertama terbuka.
+    expect(screen.getAllByTestId("ilustrasi-topik")).toHaveLength(2);
+    const accordions = document.querySelectorAll("details");
+    expect(accordions).toHaveLength(2);
+    expect((accordions[0] as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it("menampilkan konten berbahaya sebagai teks, bukan HTML tersuntik", async () => {
+    fetchTutorial({
+      data: {
+        topik: [
+          {
+            id: "t1",
+            ikon: "umum",
+            judul: "Judul <b>tebal</b>",
+            ringkas: "Ringkas <script>alert(1)</script>aman.",
+            langkah: ["<img src=x onerror=alert(1)>Baik", "Kedua"],
+          },
+        ],
+      },
+    });
+
+    render(<RouterProvider router={buatRouter()} />);
+    await screen.findByRole("heading", { name: "Judul <b>tebal</b>" });
+
+    // Teks ditampilkan apa adanya (ter-escape React): tidak ada elemen yang
+    // lahir dari konten, dan tidak ada skrip yang berjalan.
+    expect(screen.getByText("<img src=x onerror=alert(1)>Baik")).toBeDefined();
+    const kartu = screen.getByRole("heading", { name: "Judul <b>tebal</b>" }).closest("section");
+    expect(kartu).not.toBeNull();
+    expect(kartu?.querySelector("img")).toBeNull();
+    expect(kartu?.querySelector("script")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Judul <b>tebal</b>" }).querySelector("b")).toBeNull();
+  });
+
+  it("tetap menampilkan empat topik bawaan bila permintaan gagal", async () => {
+    fetchPortal();
+
+    render(<RouterProvider router={buatRouter()} />);
+    await screen.findByRole("heading", { name: "Tutorial" });
+
+    expect(screen.getAllByTestId("ilustrasi-topik")).toHaveLength(4);
+    expect(screen.getByRole("heading", { name: "Pesanan Cash & Carry" })).toBeDefined();
+  });
+});

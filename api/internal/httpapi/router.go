@@ -116,6 +116,11 @@ func NewRouter(d Deps) http.Handler {
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
 			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
+			// Konten halaman Tutorial cabang (F2-27, PRD §3.8): dibaca dari
+			// database sehingga pembaruan Superadmin langsung terlihat di
+			// portal cabang tanpa build/deploy. Pembacaan cukup sesi yang
+			// sah; TIDAK ada jalur tulis di sini (lihat grup admin di bawah).
+			r.Get("/tutorial", a.adapt(a.tutorialRead))
 
 			r.Route("/admin", func(r chi.Router) {
 				// Dashboard admin Pusat (F1-20, PRD §4.1): metrik + chip "perlu
@@ -220,6 +225,16 @@ func NewRouter(d Deps) http.Handler {
 					// (jenis/status/ukuran/tujuan) + ringkasan "perlu tindakan".
 					// Tampil di halaman Pengaturan (Architecture.md §7).
 					r.Get("/backup-runs", a.adapt(a.adminBackupRuns))
+				})
+				// Konten tutorial portal cabang (F2-27, PRD §3.8): baca & ubah
+				// hanya Superadmin (`admin.tutorial`); Manager dan akun cabang
+				// ditolak 403 di sini DAN di layer service. Isi yang dikirim
+				// divalidasi/disanitasi domain (tanpa HTML arbitrer) dan
+				// perubahannya dicatat per topik ke audit log.
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminTutorial))
+					r.Get("/tutorial", a.adapt(a.adminTutorial))
+					r.Put("/tutorial", a.adapt(a.adminTutorialUpdate))
 				})
 				// Rekening bank: khusus Superadmin (PRD §2.1, §4.6).
 				r.Group(func(r chi.Router) {

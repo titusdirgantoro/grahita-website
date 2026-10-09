@@ -18,6 +18,7 @@ import (
 	"github.com/grahita/portal/api/internal/registration"
 	"github.com/grahita/portal/api/internal/report"
 	"github.com/grahita/portal/api/internal/settings"
+	"github.com/grahita/portal/api/internal/tutorial"
 	"github.com/grahita/portal/api/internal/users"
 )
 
@@ -72,6 +73,19 @@ func mapDomainErr(err error) error {
 		return apierr.Validation("Nilai pengaturan tidak valid.", nil)
 	case errors.Is(err, settings.ErrForbidden), errors.Is(err, catalog.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke tindakan ini.")
+	// Konten tutorial cabang (F2-27): hanya Superadmin yang boleh mengubah
+	// (`admin.tutorial`), dan seluruh konten divalidasi/disanitasi di layer
+	// domain. Pesan per bagian dikembalikan supaya UI bisa menempelkannya.
+	case errors.Is(err, tutorial.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses untuk mengubah konten tutorial.")
+	case errors.Is(err, tutorial.ErrNotFound):
+		return apierr.NotFound("Topik tutorial yang diminta tidak ditemukan.")
+	case errors.Is(err, tutorial.ErrInvalidContent):
+		var ve *tutorial.ValidationError
+		if errors.As(err, &ve) {
+			return apierr.Validation("Konten tutorial tidak valid.", ve.Fields)
+		}
+		return apierr.Validation("Konten tutorial tidak valid.", nil)
 	case errors.Is(err, catalog.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
 	case errors.Is(err, catalog.ErrKodeTaken):

@@ -62,6 +62,11 @@ const (
 	// pekerjaan terjadwal (F2-23): tahap (h-2/h-0/h+1/h+3), nomor pesanan, dan
 	// penerima ada di snapshot After.
 	ActionRemind = "remind"
+	// EntityTutorial mencatat perubahan konten halaman tutorial portal cabang
+	// (F2-27, PRD §3.8) oleh Superadmin: EntityID-nya adalah id topik
+	// (kosong saat dibuat), snapshot Before/After memuat ikon/judul/ringkas/
+	// langkah/urutan — tidak ada data sensitif.
+	EntityTutorial = "tutorial"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.

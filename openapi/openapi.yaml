@@ -2973,6 +2973,109 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 
+  /api/v1/tutorial:
+    get:
+      tags: [customer]
+      operationId: listTutorialTopics
+      summary: Konten halaman Tutorial portal cabang
+      description: |
+        Konten halaman `pTutorial` portal cabang (F2-27, PRD §3.8): empat topik
+        awal (cara memesan, unggah bukti transfer, aturan Sertifikat, dan
+        Cash & Carry) yang isinya DIKELOLA DI DATABASE, sehingga pembaruan
+        Superadmin langsung terlihat pada permintaan berikutnya — tanpa build
+        atau deploy portal.
+
+        Konten adalah TEKS BIASA: tidak ada HTML/SVG arbitrer. Teks disanitasi
+        di server (tag, komentar, dan blok script/style dibuang) dan ilustrasi
+        hanya dipilih dari kunci bawaan aplikasi (`ikon`), yang di-render
+        aplikasi sendiri mengikuti design prototype.
+
+        Pembacaan hanya menuntut sesi yang sah (halaman informasi). Tidak ada
+        jalur tulis di sini: perubahan konten hanya lewat
+        `PUT /api/v1/admin/tutorial` oleh Superadmin.
+      responses:
+        "200":
+          description: Konten tutorial yang berlaku
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/TutorialContent" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/admin/tutorial:
+    get:
+      tags: [admin]
+      operationId: listAdminTutorialTopics
+      summary: Konten tutorial (Superadmin)
+      description: |
+        Isi yang sama dengan pembacaan portal cabang, tetapi lewat jalur admin
+        yang eksplisit: hanya Superadmin (`admin.tutorial`, PRD §2.1). Manager
+        dan akun cabang dijawab `403 FORBIDDEN` di router DAN di layer service.
+      responses:
+        "200":
+          description: Konten tutorial yang berlaku
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/TutorialContent" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    put:
+      tags: [admin]
+      operationId: updateTutorialTopics
+      summary: Ganti seluruh konten tutorial (Superadmin)
+      description: |
+        Menggantikan SELURUH konten tutorial: urutan array = urutan tampil
+        (dinomori server sebagai 10, 20, 30, …), `id` kosong berarti topik
+        baru, dan topik yang tidak disertakan tetapi masih ada di database
+        DIHAPUS. Seluruh teks divalidasi + disanitasi lebih dahulu — bila ada
+        satu bagian yang tidak valid, tidak ada yang tersimpan (all-or-nothing)
+        dan jawabannya `400 VALIDATION_FAILED` dengan pesan per bagian
+        (`topik[i].<bagian>`).
+
+        Batas: maksimal 12 topik; judul ≤ 120, ringkasan ≤ 300, satu langkah
+        ≤ 500 karakter; 1–24 langkah per topik; `ikon` harus salah satu kunci
+        bawaan. Konten berbahaya dibersihkan di server (tidak ada HTML
+        arbitrer) dan setiap topik yang benar-benar berubah dicatat ke audit
+        log dengan snapshot before/after (F2-27) — mengirim ulang konten yang
+        sama bersifat no-op tanpa entri audit baru. Hanya Superadmin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TutorialUpdateRequest" }
+      responses:
+        "200":
+          description: Konten kanonik yang tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/TutorialContent" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -4290,6 +4393,66 @@ components:
         expires_in: { type: integer, description: Masa berlaku tautan dalam detik (300). }
         nama_file: { type: string }
         mime_type: { type: string }
+    TutorialTopic:
+      type: object
+      required: [id, ikon, judul, ringkas, langkah]
+      properties:
+        id: { type: string, format: uuid, description: id topik (dipakai saat mengirim perubahan). }
+        ikon:
+          type: string
+          enum: [memesan, bukti, sertifikat, cnc, umum]
+          description: |
+            Kunci ilustrasi bawaan aplikasi (bukan berkas/markup). Nilai di
+            luar daftar ini ditolak `400 VALIDATION_FAILED`.
+        judul: { type: string, maxLength: 120 }
+        ringkas: { type: string, maxLength: 300, description: Ringkasan satu baris di bawah judul. }
+        langkah:
+          type: array
+          minItems: 1
+          maxItems: 24
+          description: Butir langkah, urut sebagaimana ditampilkan.
+          items: { type: string, maxLength: 500 }
+    TutorialContent:
+      type: object
+      required: [topik]
+      properties:
+        topik:
+          type: array
+          maxItems: 12
+          description: Seluruh topik tutorial, urut sesuai urutan tampil.
+          items: { $ref: "#/components/schemas/TutorialTopic" }
+    TutorialTopicInput:
+      type: object
+      required: [ikon, judul, ringkas, langkah]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: |
+            id topik yang sedang diubah. Kosong/tidak dikirim berarti topik
+            BARU; id yang tidak dikenal dijawab `400 VALIDATION_FAILED`.
+        ikon:
+          type: string
+          enum: [memesan, bukti, sertifikat, cnc, umum]
+        judul: { type: string, maxLength: 120 }
+        ringkas: { type: string, maxLength: 300 }
+        langkah:
+          type: array
+          minItems: 1
+          maxItems: 24
+          items: { type: string, maxLength: 500 }
+    TutorialUpdateRequest:
+      type: object
+      required: [topik]
+      properties:
+        topik:
+          type: array
+          minItems: 1
+          maxItems: 12
+          description: |
+            Daftar lengkap topik yang menggantikan isi sekarang (urutan array =
+            urutan tampil; topik yang tidak disertakan dihapus).
+          items: { $ref: "#/components/schemas/TutorialTopicInput" }
 
 security:
   - cookieAuth: []

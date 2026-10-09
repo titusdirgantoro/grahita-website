@@ -64,6 +64,8 @@ import (
 	"github.com/grahita/portal/api/internal/seed"
 	"github.com/grahita/portal/api/internal/settings"
 	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
+	"github.com/grahita/portal/api/internal/tutorial"
+	tutorialpg "github.com/grahita/portal/api/internal/tutorial/postgres"
 	"github.com/grahita/portal/api/internal/users"
 	userspg "github.com/grahita/portal/api/internal/users/postgres"
 	"github.com/grahita/portal/api/internal/worker"
@@ -392,6 +394,11 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// Rekening bank tujuan transfer (F1-09).
 	bankSvc := bank.NewService(bankpg.New(pool))
 
+	// Konten halaman Tutorial portal cabang (F2-27, PRD §3.8) tersimpan di
+	// database: Superadmin mengubahnya lewat API dan portal cabang yang
+	// di-refresh langsung menampilkan versi barunya tanpa build/deploy.
+	tutorialSvc := tutorial.NewService(tutorialpg.New(pool))
+
 	// Pembatas percobaan login selalu aktif dan tidak digantungkan pada
 	// CSRF_ENABLED: keduanya tidak berhubungan (PRD CP-AUT-05).
 	// 5 percobaan GAGAL per 15 menit, dihitung terpisah per akun dan per IP.
@@ -494,6 +501,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Branches:            branchSvc,
 		Bank:                bankSvc,
 		Registration:        registrationSvc,
+		Tutorial:            tutorialSvc,
 		Emails:              notifSvc,
 		Backups:             backupSvc,
 		Storage:             store,

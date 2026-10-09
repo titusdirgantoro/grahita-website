@@ -155,7 +155,7 @@ func TestSkemaIntiLengkap(t *testing.T) {
 		"bank_accounts", "orders", "order_lines", "payment_proofs",
 		"verification_logs", "documents", "invoice_revisions", "order_events",
 		"email_outbox", "cnc_reminders", "settings", "audit_logs",
-		"backup_runs", "numbering_counters",
+		"backup_runs", "numbering_counters", "tutorial_topics",
 	}
 	for _, nama := range tabel {
 		var ada bool
@@ -242,6 +242,79 @@ func TestSeedPengaturanPRD(t *testing.T) {
 		if angka != ingin {
 			t.Errorf("ai.%s = %v, ingin %v", kunci, angka, ingin)
 		}
+	}
+}
+
+// TestSeedTutorialPRD memastikan konten awal halaman tutorial tetap tersedia
+// setelah migrasi (kriteria kartu F2-27): empat topik yang sekarang tampil di
+// portal cabang ikut terisi oleh migrasi 0006, sehingga tidak ada halaman
+// tutorial kosong pada basis data baru. Migrasinya sendiri idempoten —
+// mengulang migrasi tidak menggandakan atau menimpa konten.
+func TestSeedTutorialPRD(t *testing.T) {
+	ctx, pool := siapkanSkema(t)
+
+	ingin := []struct {
+		ikon, judul string
+		langkahMin  int
+	}{
+		{"memesan", "Cara memesan", 5},
+		{"bukti", "Cara unggah bukti transfer", 4},
+		{"sertifikat", "Aturan produk Sertifikat", 3},
+		{"cnc", "Pesanan Cash & Carry", 4},
+	}
+	rows, err := pool.Query(ctx,
+		`SELECT ikon, judul, ringkas, urutan, jsonb_array_length(langkah)
+		   FROM tutorial_topics ORDER BY urutan`)
+	if err != nil {
+		t.Fatalf("baca konten tutorial awal: %v", err)
+	}
+	defer rows.Close()
+	var dapat []struct {
+		ikon, judul, ringkas string
+		urutan, langkah      int
+	}
+	for rows.Next() {
+		var r struct {
+			ikon, judul, ringkas string
+			urutan, langkah      int
+		}
+		if err := rows.Scan(&r.ikon, &r.judul, &r.ringkas, &r.urutan, &r.langkah); err != nil {
+			t.Fatalf("scan konten tutorial: %v", err)
+		}
+		dapat = append(dapat, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterasi konten tutorial: %v", err)
+	}
+	if len(dapat) != len(ingin) {
+		t.Fatalf("konten awal = %d topik, ingin %d", len(dapat), len(ingin))
+	}
+	for i, w := range ingin {
+		d := dapat[i]
+		if d.ikon != w.ikon || d.judul != w.judul {
+			t.Errorf("topik[%d] = %s/%q, ingin %s/%q", i, d.ikon, d.judul, w.ikon, w.judul)
+		}
+		if d.ringkas == "" {
+			t.Errorf("topik[%d] tanpa ringkasan", i)
+		}
+		if d.urutan != (i+1)*10 {
+			t.Errorf("topik[%d] urutan = %d, ingin %d", i, d.urutan, (i+1)*10)
+		}
+		if d.langkah < w.langkahMin {
+			t.Errorf("topik[%d] hanya %d langkah, ingin minimal %d", i, d.langkah, w.langkahMin)
+		}
+	}
+
+	// Idempoten: menjalankan migrasi ulang tidak menambah topik.
+	if err := database.Up(ctx, os.Getenv("TEST_DATABASE_URL")); err != nil {
+		t.Fatalf("migrasi ulang: %v", err)
+	}
+	var jumlah int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM tutorial_topics`).Scan(&jumlah); err != nil {
+		t.Fatalf("hitung topik setelah migrasi ulang: %v", err)
+	}
+	if jumlah != len(ingin) {
+		t.Errorf("migrasi ulang menggandakan konten: %d topik", jumlah)
 	}
 }
 

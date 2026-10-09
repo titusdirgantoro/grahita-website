@@ -1,0 +1,9 @@
+# Bukti uji integrasi tutorial (kartu t_0856261e)
+# Perintah: TEST_DATABASE_URL=<db uji PG16 lokal> go test ./internal/httpapi -run 'TestPGKontenTutorial|TestPGTutorial' -count=1
+
+== DB grahita_f227 siap ==
+== seed & skema tutorial (internal/platform/database) ==
+ok  	github.com/grahita/portal/api/internal/platform/database	1.388s
+== integrasi httpapi tutorial (PG nyata) ==
+ok  	github.com/grahita/portal/api/internal/httpapi	6.358s
+PG_EXIT=0

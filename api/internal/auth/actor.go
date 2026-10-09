@@ -53,7 +53,11 @@ const (
 	CapAdminUsersBranch    Capability = "admin.users.branch"    // kelola akun cabang
 	CapAdminUsersAdmin     Capability = "admin.users.admin"     // kelola akun admin
 	CapAdminSettings       Capability = "admin.settings"        // pengaturan sistem
-	CapAdminAudit          Capability = "admin.audit"           // audit log
+	// CapAdminTutorial hanya dimiliki Superadmin: konten halaman tutorial
+	// portal cabang (F2-27, PRD §3.8) — Manager dan akun cabang tidak boleh
+	// mengubahnya.
+	CapAdminTutorial Capability = "admin.tutorial" // konten tutorial cabang
+	CapAdminAudit    Capability = "admin.audit"    // audit log
 )
 
 var capabilities = map[Role]map[Capability]bool{
@@ -84,6 +88,7 @@ var capabilities = map[Role]map[Capability]bool{
 		CapAdminUsersBranch:    true,
 		CapAdminUsersAdmin:     true,
 		CapAdminSettings:       true,
+		CapAdminTutorial:       true,
 		CapAdminAudit:          true,
 	},
 }

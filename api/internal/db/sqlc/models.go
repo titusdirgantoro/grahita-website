@@ -854,6 +854,18 @@ type Setting struct {
 	UpdatedAt time.Time   `json:"updated_at"`
 }
 
+type TutorialTopic struct {
+	ID        string      `json:"id"`
+	Ikon      string      `json:"ikon"`
+	Judul     string      `json:"judul"`
+	Ringkas   string      `json:"ringkas"`
+	Langkah   []byte      `json:"langkah"`
+	Urutan    int32       `json:"urutan"`
+	UpdatedBy pgtype.UUID `json:"updated_by"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
+}
+
 type VerificationLog struct {
 	ID           string           `json:"id"`
 	OrderID      string           `json:"order_id"`
