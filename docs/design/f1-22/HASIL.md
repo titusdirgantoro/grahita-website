@@ -116,6 +116,8 @@ mencatat durasi/hasil serta meneruskan error apa adanya.
 | `mulai.sh` tanpa `ALERT_SMTP_PASS` | **exit 1** — menolak render (fail closed) |
 | JSON kedua dasbor Grafana | parse OK |
 | `scripts/cek-uid-grafana.py` (uid sumber data dasbor ⊂ uid provisioning) | **LULUS** + kontrol negatif (uid palsu ditolak) |
+| `loki v3.5.0 -verify-config loki-config.yml` | **exit 0** (konfigurasi valid) |
+| `promtail v3.5.0 -dry-run promtail-config.yml` | konfigurasi terurai (klien `loki:3100` terbaca). `docker_sd` gagal karena socket Docker tidak dapat diakses di sesi ini — batas lingkungan, bukan cacat konfigurasi |
 | `docker compose config -q` (prod, observability, staging) | ketiganya exit 0 |
 
 ### 3. Uji asap dua host pada replika staging → `BUKTI-SMOKE-STAGING-DUA-HOST.txt`
@@ -233,9 +235,14 @@ dari suite penuh yang menyelesaikan seluruh paket berurutan.
    `promtool check rules --lint=all` dan metrik sumbernya terbukti hidup, tetapi
    belum ada bukti alarm dikirim ke email (tidak ada SMTP/Prometheus nyata).
    Prosedur simulasi alarm ada di `infra/observability/README.md`.
-6. **Sudah dicatat di `infra/observability/README.md`**: `grahita_backup_last_run_*`
-   tidak muncul selama `backup_runs` belum punya baris; alarm
-   `GrahitaCadanganBasi` menutup celah itu dengan `absent(...)`.
+6. **Grafana/Loki/Alertmanager belum berjalan sebagai container.** Berkas
+   konfigurasinya divalidasi dengan biner resmi (loki/promtail/promtool/amtool)
+   dan `docker compose config`, tetapi render dasbor, penyimpanan Loki, dan
+   pengiriman alarm end-to-end baru terbukti saat stack dijalankan di host
+   (T5).
+7. **Sudah dicatat di `infra/observability/README.md`**:
+   `grahita_backup_last_run_*` tidak muncul selama `backup_runs` belum punya
+   baris; alarm `GrahitaCadanganBasi` menutup celah itu dengan `absent(...)`.
 
 ## Kewajiban gerbang rilis (dibawa dari catatan CEO/QA — bukan diklaim selesai)
 

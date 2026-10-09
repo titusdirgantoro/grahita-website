@@ -25,9 +25,9 @@ Checking /home/hermes/projects/grahita-website/infra/observability/prometheus/ru
   -> LULUS
 
 ===== 6. amtool check-config (Alertmanager, dirender lewat mulai.sh) =====
-render selesai: /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.5Thj8PZBmF/alertmanager.yml
+render selesai: /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.ySGIex6pF4/alertmanager.yml
   -> LULUS
-Checking '/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.5Thj8PZBmF/alertmanager.yml'  SUCCESS
+Checking '/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.ySGIex6pF4/alertmanager.yml'  SUCCESS
 Found:
  - global config
  - route
@@ -57,6 +57,12 @@ uid dirujuk dasbor: ['loki', 'prometheus'] — semuanya tersedia
 ===== 8. docker compose config (tanpa daemon) =====
   -> LULUS
   -> LULUS
+  -> LULUS
+
+===== 9. Loki & Promtail: validasi dengan biner resmi =====
+  -> LULUS
+  konfigurasi promtail terurai (klien loki:3100 terbaca)
+  catatan: docker_sd gagal di sesi ini (socket Docker tidak dapat diakses) — batas lingkungan, bukan cacat konfigurasi
   -> LULUS
 
 SEMUA VERIFIKASI KONFIGURASI LULUS
