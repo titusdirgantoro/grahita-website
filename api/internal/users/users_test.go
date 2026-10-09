@@ -13,7 +13,8 @@ import (
 	"github.com/grahita/portal/api/internal/users"
 )
 
-// fakeResetter mencatat permintaan tautan atur ulang / aktivasi.
+// fakeResetter mencatat permintaan tautan atur ulang / aktivasi beserta fakta
+// audit yang ikut dituliskan bersama tokennya (F2-28).
 type fakeResetter struct {
 	mu     sync.Mutex
 	sent   []kirimanReset
@@ -25,20 +26,21 @@ type kirimanReset struct {
 	kind   auth.Kind
 	userID string
 	ttl    time.Duration
+	audit  *auth.ResetAudit
 }
 
-func (f *fakeResetter) SendPasswordResetFor(_ context.Context, kind auth.Kind, userID string, ttl time.Duration) error {
+func (f *fakeResetter) SendPasswordResetFor(_ context.Context, kind auth.Kind, userID string, ttl time.Duration, audit *auth.ResetAudit) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.sent = append(f.sent, kirimanReset{kind: kind, userID: userID, ttl: ttl})
+	f.sent = append(f.sent, kirimanReset{kind: kind, userID: userID, ttl: ttl, audit: audit})
 	return nil
 }
 
-func (f *fakeResetter) IssuePasswordResetFor(_ context.Context, kind auth.Kind, userID string, ttl time.Duration) (auth.IssuedReset, error) {
+func (f *fakeResetter) IssuePasswordResetFor(_ context.Context, kind auth.Kind, userID string, ttl time.Duration, audit *auth.ResetAudit) (auth.IssuedReset, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
-	f.issued = append(f.issued, kirimanReset{kind: kind, userID: userID, ttl: ttl})
+	f.issued = append(f.issued, kirimanReset{kind: kind, userID: userID, ttl: ttl, audit: audit})
 	return auth.IssuedReset{
 		Token:     fmt.Sprintf("token-aktivasi-%d", f.seq),
 		ExpiresAt: time.Now().UTC().Add(ttl),

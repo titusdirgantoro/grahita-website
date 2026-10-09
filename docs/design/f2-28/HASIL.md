@@ -88,13 +88,21 @@ nyata), bukan ringkasan kode.
     `before`/`after` hanya `{"nama": …}`, dan aktor yang tercatat adalah nama
     yang berlaku saat aksi (identitas pada saat itu). Email/role/kata sandi
     tidak pernah masuk diff.
-13. **Dua aksi tanpa transaksi sendiri memakai `audit.Recorder`.** Penerbitan
-    tautan atur ulang (`POST /admin/users/branch/{id}/reset`) dan kirim ulang
-    undangan admin terjadi di repositori auth/outbox, bukan di repositori
-    `users`. Entrinya ditulis SETELAH aksi itu berhasil (`users.WithAuditRecorder`,
-    produksi: `audit/postgres.Record`) dan hanya memuat id akun/cabang —
-    tautannya sendiri tidak pernah masuk audit. Ini satu-satunya jalur yang
-    tidak satu transaksi, dan sengaja didokumentasikan.
+13. **Penerbitan tautan ditulis di transaksi tokennya.** Penerbitan tautan atur
+    ulang (`POST /admin/users/branch/{id}/reset`) dan kirim ulang undangan admin
+    perubahannya hidup di repositori auth (`password_reset_tokens`), bukan di
+    repositori `users`. Karena itu fakta auditnya **diserahkan ke jalur token**
+    (`auth.ResetAudit` → `ResetStore.CreateResetToken`) dan ditulis di dalam
+    transaksi yang sama dengan token barunya: kegagalan menulis audit
+    membatalkan tokennya, permintaan gagal tanpa efek samping (tidak ada token,
+    tidak ada email diantre) dan bisa diulang dengan aman. Antrean email
+    menyusul SETELAH commit, sama seperti undangan admin.
+    `auth.ResetAudit` adalah tipe milik paket `auth` (bukan `audit.Entry`)
+    karena paket `audit` sudah mengimpor `auth`; `auth/postgres` yang
+    menerjemahkannya kembali menjadi `audit.Entry`. Tautannya sendiri tidak
+    pernah masuk snapshot.
+    *(Putaran 2: menggantikan desain lama `users.WithAuditRecorder` yang menulis
+    entri SETELAH aksi berhasil di transaksi terpisah — lihat bagian Putaran 2.)*
 14. **Kapabilitas `admin.audit` sudah ada sejak F1-04** dan hanya dimiliki
     Superadmin; router menegakkannya (`requireCap`) dan `audit.Service.List`
     memeriksanya ulang, jadi Manager/akun cabang dijawab 403 di dua tempat.
@@ -124,12 +132,20 @@ Backend:
   `GET /admin/audit-logs` (grup kapabilitas `admin.audit`), `Deps.Audit`,
   pemetaan error `audit.ErrForbidden`/`ErrFilterInvalid`.
 - `api/internal/users/users.go`, `memory.go`, `postgres/postgres.go` — mutasi
-  akun menulis entri audit (transaksional) + `WithAuditRecorder`,
-  `AdminSnapshot`/`BranchUserSnapshot`, no-op tanpa event.
-- `api/internal/auth/postgres/postgres.go` — `UpdateName` transaksional +
-  entri audit; `Repo` menyimpan pool.
+  akun menulis entri audit (transaksional), `AdminSnapshot`/`BranchUserSnapshot`,
+  no-op tanpa event; penerbitan tautan menitipkan fakta auditnya ke jalur token
+  (`resetAudit`) alih-alih menulisnya sendiri (putaran 2).
+- `api/internal/auth/reset.go` — `ResetToken.Audit` + tipe `ResetAudit`
+  (proyeksi `audit.Entry` milik paket auth agar tidak ada siklus import).
+- `api/internal/auth/service.go` — `IssuePasswordResetFor`/`SendPasswordResetFor`
+  menerima fakta audit dan meneruskannya ke `CreateResetToken`.
+- `api/internal/auth/postgres/postgres.go` — `CreateResetToken` transaksional
+  (token + entri audit commit bersama) + `UpdateName` transaksional;
+  `Repo` menyimpan pool.
+- `api/internal/auth/memory.go` — token in-memory menyimpan fakta auditnya
+  (`ResetAudits()` untuk pengujian).
 - `api/cmd/server/main.go` — perakitan `audit.NewService(auditpg.New(pool))`,
-  `users.WithAuditRecorder`, `Deps.Audit`.
+  `Deps.Audit`.
 - `openapi/openapi.yaml` — path `/api/v1/admin/audit-logs` + 3 skema
   (`AuditLogEntry`, `AuditLogFilter`, `AuditLogPage`).
 
@@ -137,15 +153,21 @@ Uji:
 
 - `api/internal/audit/audit_test.go` (baru) — redaksi, normalisasi filter,
   paginasi, otorisasi, redaksi saat baca.
+- `api/internal/auth/reset_audit_test.go` (baru) — fakta audit tersimpan bersama
+  token; alur publik (lupa kata sandi) tidak menambah catatan.
 - `api/internal/users/audit_test.go` (baru) — tepat satu event per mutasi,
-  no-op tanpa event, penolakan tanpa event, snapshot tanpa email/token.
+  no-op tanpa event, penolakan tanpa event, snapshot tanpa email/token, dan
+  fakta audit diteruskan ke jalur token untuk penerbitan tautan.
 - `api/internal/httpapi/router_audit_test.go` (baru) — HTTP in-memory: cabang
   & Manager 403, tanpa sesi 401, filter tak valid 400, 503 tanpa layanan.
 - `api/internal/httpapi/integration_audit_pg_test.go` (baru) — PostgreSQL
-  nyata: mutasi akun tercatat tepat sekali, rollback tanpa event, batas hari
-  WIB, tie-break `at` identik, redaksi baris sensitif, alasan/delta revisi.
+  nyata: mutasi akun tercatat tepat sekali, rollback tanpa event, **atomisitas
+  penerbitan tautan (reset cabang & resend undangan) dengan trigger penggagal**,
+  batas hari WIB, tie-break `at` identik, redaksi baris sensitif, alasan/delta
+  revisi.
 - `api/internal/httpapi/integration_pg_test.go` — fixture: service audit +
-  `WithAuditRecorder`.
+  service pengguna tanpa `WithAuditRecorder` (jalur audit kini milik transaksi
+  token).
 
 Frontend:
 
@@ -192,12 +214,14 @@ internal/audit (unit domain)
   --- PASS: TestListMenolakFilterTidakValid
   --- PASS: TestListMeneruskanGalatRepository
   --- PASS: TestDaftarEntitasDanAksiKonsisten
+internal/auth (unit domain)
+  --- PASS: TestCreateResetTokenMenyimpanAuditBersamaToken
 internal/users (unit domain)
   --- PASS: TestAuditUndanganAdminSatuEventAman
   --- PASS: TestAuditUbahAdminTepatSatuEventDanNoOpTanpaEvent
   --- PASS: TestAuditUbahAdminYangDitolakTidakMeninggalkanEvent
   --- PASS: TestAuditStatusAkunCabangSatuEventDanNoOp
-  --- PASS: TestAuditTautanResetDanKirimUlangUndanganLewatRecorder
+  --- PASS: TestAuditTautanResetDanKirimUlangUndanganLewatJalurToken
 internal/httpapi (HTTP penuh, in-memory)
   --- PASS: TestApiAuditLogHanyaSuperadmin
   --- PASS: TestApiAuditLogFilterTidakValidDitolak
@@ -207,6 +231,7 @@ internal/httpapi (integrasi PostgreSQL nyata)
   --- PASS: TestPGAuditRollbackTidakMeninggalkanEvent
   --- PASS: TestPGAuditInsertMeredaksiSebelumMenyimpan
   --- PASS: TestPGAuditFilterPaginasiDanRedaksi
+  --- PASS: TestPGAuditPenerbitanTautanAtomikDenganMutasi   (putaran 2)
 ```
 
 Yang benar-benar dibuktikan (bukan hanya status kode):
@@ -284,12 +309,75 @@ GET  /admin/audit-logs (akun cabang)                     → 403 FORBIDDEN
 GET  /admin/audit-logs (tanpa sesi)                      → 401
 ```
 
+## Putaran 2 — perubahan yang diminta QA (atomisitas audit penerbitan tautan)
+
+QA putaran 1 (`grahita_qa_f228r1`, commit `825a72e`) memblokir kartu ini karena
+dua jalur memakai `audit.Recorder`: `ResendBranchReset` dan `ResendInviteAdmin`
+menjalankan aksi auth/outbox LEBIH DULU, lalu menulis audit di transaksi
+terpisah. Probe QA dengan trigger penggagal `INSERT audit_logs` membuktikan
+`POST /admin/users/branch/{id}/reset` → 500 tetapi baris `password_reset_tokens`
+dan `email_outbox` tetap lahir, dan permintaan ulang menambah `email_outbox`
+lagi tanpa satu pun entri audit.
+
+Perbaikan yang dikerjakan:
+
+1. **Fakta audit pindah ke jalur token.** `auth.ResetToken.Audit` (tipe
+   `auth.ResetAudit`) diteruskan dari `users.Service` → `auth.Service` →
+   `ResetStore.CreateResetToken`; `auth/postgres.CreateResetToken` membuka
+   transaksi, menulis `password_reset_tokens` (CTE `ReplacePasswordResetToken`),
+   lalu `audit_logs` (`audit/postgres.Insert`), baru `COMMIT`. Kegagalan audit
+   membatalkan tokennya. `ForgetPassword`/`ForgotPassword` tetap tanpa audit
+   (`Audit == nil`, satu pernyataan SQL seperti sebelumnya).
+2. **Jalur `users.WithAuditRecorder` dihapus seluruhnya** (termasuk
+   `discardRecorder`), sehingga entri audit tidak bisa lagi hilang diam-diam
+   karena lupa memasang recorder: tidak ada lagi penulis audit "best effort".
+3. **Uji regresi `TestPGAuditPenerbitanTautanAtomikDenganMutasi`** (PostgreSQL
+   nyata): trigger menolak `branch_user/reset` dan `admin_user/resend` → kedua
+   permintaan 500, token/email/audit **tidak bertambah**, diulang tetap tidak
+   bertambah; setelah trigger dilepas satu permintaan = tepat satu entri audit +
+   satu baris token + satu email. Aktor/IP tercatat, snapshot tanpa tautan/token.
+4. Uji unit `TestCreateResetTokenMenyimpanAuditBersamaToken` (paket auth) dan
+   penyesuaian `TestAuditTautanResetDanKirimUlangUndanganLewatJalurToken`
+   (paket users) menjaga agar fakta audit benar-benar diteruskan, dan undangan
+   admin baru tetap TIDAK menitipkan audit ke jalur token (entri `create` sudah
+   ditulis `CreateAdmin` di transaksinya sendiri).
+
+Bukti putaran 2 (dijalankan sendiri di DB `grahita_f228r2`, PG16.15 +
+`scripts/pg-dev-shim.sql`):
+
+```
+gofmt -l .                              → kosong
+go vet ./...                            → exit 0
+go build ./...                          → exit 0
+sh scripts/check-secrets.sh             → exit 0
+go test -count=1 -run 'TestApiAudit|TestPGAudit' -v ./internal/httpapi/
+  → 8/8 PASS (termasuk TestPGAuditPenerbitanTautanAtomikDenganMutasi)
+go test -count=1 -run 'TestPGAkun|TestPGUser|TestPGAdmin|TestPGAturUlang|
+     TestApiUserManagement|TestApiUndangAdmin|TestApiKirimUlangResetCabang|
+     TestApiNonaktifkan|TestApiSuperadmin|TestApiDaftarAkunCabang|
+     TestApiKontrakPathUser|TestPGOCR|TestPGKontenTutorial|TestPGTutorial|
+     TestApiTutorial' ./internal/httpapi/   → 25/25 PASS (regresi akun + F2-26/F2-27)
+go test -race -p 1 -count=1 -timeout 30m ./...  → 27 paket ok, 0 FAIL,
+     0 DATA RACE, SUITE_EXIT=0 (internal/httpapi 691.0s)
+```
+
+Catatan: percobaan pertama tanpa `-timeout 30m` kena batas bawaan Go 10 menit di
+tengah paket `httpapi` (paket itu memang ~11,5 menit dengan `-race`); bukan
+kegagalan uji. Untuk isu atomisitas jalur `reset`, tangkapan log pada percobaan
+itu sudah memperlihatkan galat audit sekarang muncul di jalur token
+(`simpan token atur ulang: catat audit branch_user reset: ...`) — yaitu bukti
+bahwa penulisan audit benar-benar terjadi di dalam transaksi token, bukan
+sesudahnya.
+
+Uji frontend tidak disentuh pada putaran 2 (tidak ada berkas `web/` yang
+berubah); 4 uji `src/audit.test.tsx` sudah lulus di putaran 1 dan tetap berlaku.
+
 ## Perilaku & keputusan yang menyimpang/eksplisit
 
 - Entri audit untuk **penerbitan tautan atur ulang** dan **kirim ulang
-  undangan** ditulis setelah aksi berhasil, bukan di transaksi yang sama
-  (perubahannya milik repositori auth/outbox). Nilai tautannya tidak pernah
-  masuk snapshot.
+  undangan** ditulis di transaksi yang sama dengan baris
+  `password_reset_tokens` (putaran 2); antrean emailnya menyusul setelah commit.
+  Nilai tautannya tidak pernah masuk snapshot.
 - `POST /admin/users/admin` yang gagal di tahap pengiriman email undangan
   tetap meninggalkan entri `create`: akunnya memang sudah ter-commit dan
   pemulihannya lewat `POST /users/admin/{id}/resend` (yang juga tercatat).

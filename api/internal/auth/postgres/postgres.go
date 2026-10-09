@@ -261,17 +261,58 @@ func (r *Repo) UpdateName(ctx context.Context, kind auth.Kind, id, nama string) 
 // Pembatalan dan penyimpanan terjadi dalam SATU pernyataan SQL (data-modifying
 // CTE) supaya kegagalan separuh jalan tidak mungkin meninggalkan akun tanpa
 // tautan aktif (catatan QA F1-04 untuk F1-16).
+//
+// Bila t.Audit terisi (penerbitan tautan oleh admin, F2-28), entri auditnya
+// ditulis di dalam TRANSAKSI YANG SAMA dengan token barunya: kegagalan
+// menulis entri audit membatalkan token itu, sehingga tidak mungkin ada
+// tautan yang terbit tanpa catatan (temuan QA putaran 1 untuk F2-28).
 func (r *Repo) CreateResetToken(ctx context.Context, t auth.ResetToken, tokenHash []byte) error {
-	err := r.q.ReplacePasswordResetToken(ctx, sqlc.ReplacePasswordResetTokenParams{
+	params := sqlc.ReplacePasswordResetTokenParams{
 		ActorKind: sqlc.ActorKind(t.Kind),
 		UserID:    t.UserID,
 		TokenHash: tokenHash,
 		ExpiresAt: t.ExpiresAt,
-	})
+	}
+	if t.Audit == nil {
+		// Alur publik (lupa kata sandi): token saja, tanpa catatan audit.
+		if err := r.q.ReplacePasswordResetToken(ctx, params); err != nil {
+			return fmt.Errorf("query ReplacePasswordResetToken: %w", err)
+		}
+		return nil
+	}
+
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("mulai transaksi token atur ulang: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := r.q.WithTx(tx).ReplacePasswordResetToken(ctx, params); err != nil {
 		return fmt.Errorf("query ReplacePasswordResetToken: %w", err)
 	}
+	if err := auditpg.Insert(ctx, tx, resetAuditEntry(t.Audit)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit token atur ulang: %w", err)
+	}
 	return nil
+}
+
+// resetAuditEntry menerjemahkan fakta audit paket auth menjadi audit.Entry.
+// Penerjemahan ini hidup di lapisan penyimpanan karena paket auth tidak boleh
+// mengimpor paket audit (audit mengimpor auth).
+func resetAuditEntry(a *auth.ResetAudit) audit.Entry {
+	return audit.Entry{
+		ActorKind: a.ActorKind,
+		ActorID:   a.ActorID,
+		ActorNama: a.ActorNama,
+		IP:        a.IP,
+		Entity:    a.Entity,
+		EntityID:  a.EntityID,
+		Action:    a.Action,
+		Before:    audit.Redact(a.Before),
+		After:     audit.Redact(a.After),
+	}
 }
 
 // ConsumeResetToken memakai token sekali pakai secara atomik.

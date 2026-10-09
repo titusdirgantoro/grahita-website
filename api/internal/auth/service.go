@@ -341,8 +341,12 @@ type IssuedReset struct {
 //
 // Aturan penerima sama dengan pengiriman tautan: akun cabang harus boleh
 // login, admin harus masih aktif (undangan boleh, nonaktif tidak).
-func (s *Service) IssuePasswordResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration) (IssuedReset, error) {
-	creds, rt, err := s.issueResetFor(ctx, kind, userID, ttl)
+//
+// audit, bila terisi, ditulis DI DALAM transaksi yang sama dengan token
+// (F2-28): kegagalan menulisnya membatalkan token sehingga pemanggil bisa
+// mencoba ulang tanpa meninggalkan tautan aktif yang tidak tercatat.
+func (s *Service) IssuePasswordResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration, audit *ResetAudit) (IssuedReset, error) {
+	creds, rt, err := s.issueResetFor(ctx, kind, userID, ttl, audit)
 	if err != nil {
 		return IssuedReset{}, err
 	}
@@ -354,8 +358,12 @@ func (s *Service) IssuePasswordResetFor(ctx context.Context, kind Kind, userID s
 // mengirimkannya lewat ResetMailer. Dipakai admin saat mengirim ulang tautan
 // reset akun cabang (PRD §4.8) — jalur email yang sama dengan lupa kata sandi,
 // sehingga pemindahan ke email_outbox (F1-16) cukup di satu tempat.
-func (s *Service) SendPasswordResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration) error {
-	creds, rt, err := s.issueResetFor(ctx, kind, userID, ttl)
+//
+// audit ditulis bersama tokennya (F2-28); antrean/pengiriman email menyusul
+// SETELAH token + audit commit — sama seperti undangan admin, yang kegagalan
+// emailnya tidak membatalkan akunnya.
+func (s *Service) SendPasswordResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration, audit *ResetAudit) error {
+	creds, rt, err := s.issueResetFor(ctx, kind, userID, ttl, audit)
 	if err != nil {
 		return err
 	}
@@ -385,8 +393,8 @@ type issuedReset struct {
 }
 
 // issueResetFor adalah inti bersama: validasi akun, batalkan tautan lama,
-// lalu simpan tautan baru.
-func (s *Service) issueResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration) (Credentials, issuedReset, error) {
+// lalu simpan tautan baru bersama entri auditnya (bila ada).
+func (s *Service) issueResetFor(ctx context.Context, kind Kind, userID string, ttl time.Duration, audit *ResetAudit) (Credentials, issuedReset, error) {
 	if ttl <= 0 {
 		ttl = DefaultResetTTL
 	}
@@ -406,6 +414,7 @@ func (s *Service) issueResetFor(ctx context.Context, kind Kind, userID string, t
 		Kind:      creds.Kind,
 		UserID:    creds.UserID,
 		ExpiresAt: expiresAt,
+		Audit:     audit,
 	}, hash); err != nil {
 		return Credentials{}, issuedReset{}, fmt.Errorf("simpan token atur ulang: %w", err)
 	}

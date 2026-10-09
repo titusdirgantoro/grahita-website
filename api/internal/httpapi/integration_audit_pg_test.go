@@ -498,3 +498,161 @@ func TestPGAuditFilterPaginasiDanRedaksi(t *testing.T) {
 		t.Errorf("Manager harus 403, dapat %d (%v)", status, body)
 	}
 }
+
+// TestPGAuditPenerbitanTautanAtomikDenganMutasi membuktikan dua jalur yang
+// menerbitkan tautan — kirim ulang tautan atur ulang akun cabang dan kirim
+// ulang undangan admin — menulis entri auditnya DI DALAM transaksi yang sama
+// dengan baris password_reset_tokens (F2-28, temuan QA putaran 1).
+//
+// Buktinya: dengan trigger yang menolak kedua entri audit itu, permintaan
+// gagal TANPA efek samping apa pun (tidak ada token baru, tidak ada email baru,
+// tidak ada entri audit) dan pengulangan permintaan pun tidak menambah efek
+// samping; setelah trigger dilepas, satu permintaan menghasilkan tepat satu
+// entri audit plus satu efek samping.
+//
+// SQLSTATE/skema uji sama dengan integration_pg_test.go; uji dilewati bila
+// TEST_DATABASE_URL tidak diisi.
+func TestPGAuditPenerbitanTautanAtomikDenganMutasi(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	sa, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	// Admin undangan dari fixture: kirim ulang hanya berlaku untuk akun yang
+	// belum diaktivasi.
+	var adminUndang string
+	if err := f.pool.QueryRow(ctx,
+		`SELECT id::text FROM admin_users WHERE email = 'undang@example.test'`).Scan(&adminUndang); err != nil {
+		t.Fatalf("baca admin undangan: %v", err)
+	}
+
+	jumlah := func(nama, query string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := f.pool.QueryRow(ctx, query, args...).Scan(&n); err != nil {
+			t.Fatalf("hitung %s: %v", nama, err)
+		}
+		return n
+	}
+	tokenCabang := func() int {
+		return jumlah("token akun cabang", `SELECT count(*) FROM password_reset_tokens WHERE user_id = $1`, f.userB)
+	}
+	tokenAdmin := func() int {
+		return jumlah("token admin", `SELECT count(*) FROM password_reset_tokens WHERE user_id = $1`, adminUndang)
+	}
+	outbox := func() int { return jumlah("email outbox", `SELECT count(*) FROM email_outbox`) }
+
+	dirReset := f.srv.URL + "/api/v1/admin/users/branch/" + f.userB + "/reset"
+	dirUndang := f.srv.URL + "/api/v1/admin/users/admin/" + adminUndang + "/resend"
+
+	// Trigger penggagal HANYA untuk dua entri yang diuji supaya aksi lain
+	// (mis. login) tetap berjalan seperti biasa.
+	if _, err := f.pool.Exec(ctx, `
+		CREATE FUNCTION uji_tolak_audit_tautan() RETURNS trigger AS $$
+		BEGIN
+			IF (NEW.entity, NEW.action) IN (('branch_user', 'reset'), ('admin_user', 'resend')) THEN
+				RAISE EXCEPTION 'uji: audit penerbitan tautan ditolak';
+			END IF;
+			RETURN NEW;
+		END $$ LANGUAGE plpgsql;
+		CREATE TRIGGER uji_tolak_audit_tautan BEFORE INSERT ON audit_logs
+			FOR EACH ROW EXECUTE FUNCTION uji_tolak_audit_tautan();`); err != nil {
+		t.Fatalf("pasang trigger penggagal: %v", err)
+	}
+	lepasTrigger := func() {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, `DROP TRIGGER uji_tolak_audit_tautan ON audit_logs`); err != nil {
+			t.Fatalf("lepas trigger: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS uji_tolak_audit_tautan ON audit_logs`)
+		_, _ = f.pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS uji_tolak_audit_tautan()`)
+	})
+
+	baseTokenCabang, baseTokenAdmin, baseOutbox := tokenCabang(), tokenAdmin(), outbox()
+
+	// 1. Kirim ulang tautan akun cabang: gagal, tanpa efek samping; diulang
+	//    (perilaku admin setelah melihat 500) tetap tidak menambah apa pun.
+	for i := 0; i < 2; i++ {
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, dirReset, "", sa, csrf)
+		if status != http.StatusInternalServerError {
+			t.Fatalf("cabang percobaan %d: penulisan audit gagal harus 500, dapat %d (%v)", i+1, status, body)
+		}
+		if got := tokenCabang(); got != baseTokenCabang {
+			t.Fatalf("cabang percobaan %d: token tidak boleh terbit saat audit gagal: %d (mau %d)", i+1, got, baseTokenCabang)
+		}
+		if got := outbox(); got != baseOutbox {
+			t.Fatalf("cabang percobaan %d: email tidak boleh diantre saat audit gagal: %d (mau %d)", i+1, got, baseOutbox)
+		}
+	}
+	if n := hitungAudit(t, ctx, f, `entity='branch_user' AND action='reset'`); n != 0 {
+		t.Fatalf("audit yang gagal tidak boleh tertinggal: %d", n)
+	}
+
+	// 2. Kirim ulang undangan admin: sama.
+	for i := 0; i < 2; i++ {
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, dirUndang, "", sa, csrf)
+		if status != http.StatusInternalServerError {
+			t.Fatalf("undangan percobaan %d: penulisan audit gagal harus 500, dapat %d (%v)", i+1, status, body)
+		}
+		if got := tokenAdmin(); got != baseTokenAdmin {
+			t.Fatalf("undangan percobaan %d: token aktivasi tidak boleh terbit saat audit gagal: %d (mau %d)", i+1, got, baseTokenAdmin)
+		}
+		if got := outbox(); got != baseOutbox {
+			t.Fatalf("undangan percobaan %d: email tidak boleh diantre saat audit gagal: %d (mau %d)", i+1, got, baseOutbox)
+		}
+	}
+	if n := hitungAudit(t, ctx, f, `entity='admin_user' AND action='resend'`); n != 0 {
+		t.Fatalf("audit resend yang gagal tidak boleh tertinggal: %d", n)
+	}
+
+	// 3. Setelah trigger dilepas: tepat satu entri audit + satu efek samping.
+	lepasTrigger()
+
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, dirReset, "", sa, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("kirim tautan reset setelah pulih harus 200, dapat %d (%v)", status, body)
+	}
+	if got := tokenCabang(); got != baseTokenCabang+1 {
+		t.Errorf("tautan reset harus menghasilkan tepat satu token: %d (mau %d)", got, baseTokenCabang+1)
+	}
+	if got := outbox(); got != baseOutbox+1 {
+		t.Errorf("tautan reset harus menghasilkan tepat satu email: %d (mau %d)", got, baseOutbox+1)
+	}
+	if n := hitungAudit(t, ctx, f, `entity='branch_user' AND action='reset'`); n != 1 {
+		t.Errorf("tautan reset harus menghasilkan tepat satu entri audit: %d", n)
+	}
+
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, dirUndang, "", sa, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("kirim ulang undangan setelah pulih harus 200, dapat %d (%v)", status, body)
+	}
+	if got := tokenAdmin(); got != baseTokenAdmin+1 {
+		t.Errorf("kirim ulang undangan harus menghasilkan tepat satu token: %d (mau %d)", got, baseTokenAdmin+1)
+	}
+	if got := outbox(); got != baseOutbox+2 {
+		t.Errorf("kirim ulang undangan harus menghasilkan tepat satu email: %d (mau %d)", got, baseOutbox+2)
+	}
+	if n := hitungAudit(t, ctx, f, `entity='admin_user' AND action='resend'`); n != 1 {
+		t.Errorf("kirim ulang undangan harus menghasilkan tepat satu entri audit: %d", n)
+	}
+
+	// 4. Entri auditnya aman: aktor tercatat, tautan/token tidak pernah masuk.
+	var actorID, actorNama string
+	if err := f.pool.QueryRow(ctx,
+		`SELECT COALESCE(actor_id::text,''), COALESCE(actor_nama,'') FROM audit_logs
+		  WHERE entity='branch_user' AND action='reset'`).Scan(&actorID, &actorNama); err != nil {
+		t.Fatalf("baca aktor audit reset: %v", err)
+	}
+	if actorID != f.adminSA || actorNama != "Rina" {
+		t.Errorf("aktor audit reset salah: id=%q nama=%q", actorID, actorNama)
+	}
+	_, setelahReset := auditJSON(t, ctx, f, idAudit(t, ctx, f, "branch_user", "reset"))
+	if strings.Contains(strings.ToLower(setelahReset), "token") || strings.Contains(setelahReset, "lupa?token=") {
+		t.Errorf("snapshot audit reset memuat tautan/token: %s", setelahReset)
+	}
+	_, setelahResend := auditJSON(t, ctx, f, idAudit(t, ctx, f, "admin_user", "resend"))
+	if strings.Contains(strings.ToLower(setelahResend), "token") || strings.Contains(setelahResend, "@") {
+		t.Errorf("snapshot audit resend memuat data sensitif: %s", setelahResend)
+	}
+}

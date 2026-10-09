@@ -65,7 +65,7 @@ func TestAktivasiAdminUndanganMengisiPasswordDanAktivasi(t *testing.T) {
 	ctx := context.Background()
 
 	// Membuat tautan aktivasi TIDAK mengirim email apa pun.
-	issued, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-undang", 14*24*time.Hour)
+	issued, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-undang", 14*24*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("buat tautan aktivasi: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestTautanAktivasiSekaliPakaiDanKedaluwarsa(t *testing.T) {
 	f := newFixtureAktivasi(t)
 	ctx := context.Background()
 
-	issued, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-undang", 14*24*time.Hour)
+	issued, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-undang", 14*24*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("buat tautan aktivasi: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestTautanAktivasiSekaliPakaiDanKedaluwarsa(t *testing.T) {
 	}
 
 	// Tautan baru untuk admin yang sama, lalu dimajukan melewati masa berlaku.
-	lagi, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-undang", time.Hour)
+	lagi, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-undang", time.Hour, nil)
 	if err != nil {
 		t.Fatalf("buat tautan kedua: %v", err)
 	}
@@ -135,10 +135,10 @@ func TestAdminNonaktifTidakBolehMemegangTautan(t *testing.T) {
 	f := newFixtureAktivasi(t)
 	ctx := context.Background()
 
-	if _, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-mati", time.Hour); !errors.Is(err, ErrInactiveAccount) {
+	if _, err := f.svc.IssuePasswordResetFor(ctx, KindAdmin, "adm-mati", time.Hour, nil); !errors.Is(err, ErrInactiveAccount) {
 		t.Errorf("admin nonaktif tidak boleh memegang tautan, dapat %v", err)
 	}
-	if err := f.svc.SendPasswordResetFor(ctx, KindAdmin, "adm-mati", time.Hour); !errors.Is(err, ErrInactiveAccount) {
+	if err := f.svc.SendPasswordResetFor(ctx, KindAdmin, "adm-mati", time.Hour, nil); !errors.Is(err, ErrInactiveAccount) {
 		t.Errorf("kirim tautan ke admin nonaktif harus ditolak, dapat %v", err)
 	}
 	if len(f.mail.sent) != 0 {
@@ -150,7 +150,7 @@ func TestKirimTautanResetCabangHanyaUntukAkunYangBolehLogin(t *testing.T) {
 	f := newFixtureAktivasi(t)
 	ctx := context.Background()
 
-	if err := f.svc.SendPasswordResetFor(ctx, KindBranch, "u-1", 45*time.Minute); err != nil {
+	if err := f.svc.SendPasswordResetFor(ctx, KindBranch, "u-1", 45*time.Minute, nil); err != nil {
 		t.Fatalf("kirim tautan reset cabang: %v", err)
 	}
 	if len(f.mail.sent) != 1 {
@@ -168,7 +168,7 @@ func TestKirimTautanResetCabangHanyaUntukAkunYangBolehLogin(t *testing.T) {
 	}
 
 	// Cabang nonaktif: akunnya tidak boleh memegang tautan.
-	if err := f.svc.SendPasswordResetFor(ctx, KindBranch, "u-2", time.Hour); !errors.Is(err, ErrInactiveAccount) {
+	if err := f.svc.SendPasswordResetFor(ctx, KindBranch, "u-2", time.Hour, nil); !errors.Is(err, ErrInactiveAccount) {
 		t.Errorf("akun cabang nonaktif harus ditolak, dapat %v", err)
 	}
 }

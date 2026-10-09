@@ -310,16 +310,15 @@ func newPGFixture(t *testing.T) *pgFixture {
 
 	// Pengelolaan akun pengguna (F1-05): repository nyata di atas PostgreSQL,
 	// email undangan diantre lewat outbox produksi, tautan diarahkan ke portal
-	// admin. Mutasi akun menulis entri audit (F2-28) — transaksional untuk
-	// undang/ubah/nonaktifkan, lewat Recorder untuk penerbitan tautan.
-	auditRepo := auditpg.New(pool)
+	// admin. Setiap mutasi akun menulis entri audit (F2-28) di dalam transaksi
+	// yang sama — termasuk penerbitan tautan atur ulang/aktivasi, yang
+	// auditnya ikut ditulis di transaksi token (auth/postgres).
 	queue := &queueSpy{delegat: notification.NewQueue(notifSvc)}
 	usersSvc := users.NewService(userspg.New(pool), svc, svc,
 		users.WithEmailQueue(queue),
 		users.WithResetURLBuilder(func(kind auth.Kind, token string) string {
 			return "https://grahita-admin.tiusclaw.com/lupa?token=" + token
 		}),
-		users.WithAuditRecorder(auditRepo),
 	)
 	f.queue = queue
 	f.users = usersSvc
@@ -367,6 +366,8 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.selesai = selesaiSvc
 	f.revise = order.NewRevisionService(orderRepo, settingsSvc)
 
+	// Pembaca audit log (F2-28) untuk halaman Superadmin.
+	auditRepo := auditpg.New(pool)
 	deps := Deps{
 		Config:   testConfig(),
 		Version:  "test-pg",

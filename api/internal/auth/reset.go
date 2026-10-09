@@ -32,12 +32,45 @@ type ResetToken struct {
 	Kind      Kind
 	UserID    string
 	ExpiresAt time.Time
+	// Audit, bila terisi, WAJIB ditulis implementasi CreateResetToken di DALAM
+	// transaksi yang sama dengan tokennya (F2-28): kegagalan menulis entri
+	// audit membatalkan token barunya, sehingga tidak mungkin ada tautan yang
+	// terbit tanpa catatan — dan pemanggil bisa mencoba ulang dengan aman.
+	//
+	// Nil berarti token dibuat tanpa catatan audit, yaitu alur publik (lupa
+	// kata sandi), yang memang bukan aksi admin yang diaudit.
+	Audit *ResetAudit
+}
+
+// ResetAudit adalah fakta audit yang menyertai penerbitan satu tautan atur
+// ulang/aktivasi oleh admin (F2-28).
+//
+// Bentuknya milik paket ini — bukan audit.Entry — karena paket audit sudah
+// mengimpor auth (untuk actor.Kind), sehingga arah sebaliknya menjadi siklus
+// import. Lapisan penyimpanan (auth/postgres) yang menerjemahkannya kembali
+// menjadi audit.Entry dan menuliskannya bersama tokennya.
+type ResetAudit struct {
+	// ActorKind adalah jenis akun pelaku (selalu KindAdmin pada jalur admin).
+	ActorKind Kind
+	ActorID   string
+	ActorNama string
+	// IP adalah alamat klien peminta — metadata transport, bukan domain.
+	IP       string
+	Entity   string
+	EntityID string
+	Action   string
+	// Before/After adalah snapshot JSON yang sudah bebas data sensitif:
+	// tautan/token mentah TIDAK pernah masuk ke sini.
+	Before any
+	After  any
 }
 
 // ResetStore menyimpan token atur ulang kata sandi.
 //
 // CreateResetToken wajib membatalkan token aktif sebelumnya milik pengguna
-// yang sama sehingga hanya satu tautan yang berlaku pada satu waktu.
+// yang sama sehingga hanya satu tautan yang berlaku pada satu waktu, dan
+// wajib menyimpan t.Audit (bila terisi) di dalam transaksi yang sama —
+// kegagalan menyimpan audit membatalkan token barunya.
 // ConsumeResetToken wajib atomik: satu token hanya boleh terpakai sekali
 // meski ada dua permintaan bersamaan.
 type ResetStore interface {

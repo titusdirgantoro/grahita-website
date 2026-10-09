@@ -16,6 +16,9 @@ type Memory struct {
 	branches map[string]Credentials // key: id
 	sessions map[string]*memSession // key: hash heksadesimal
 	resets   map[string]*memReset   // key: hash heksadesimal
+	// audits adalah entri audit yang ditulis bersama token atur ulang
+	// (F2-28); implementasi PostgreSQL menyimpannya di tabel audit_logs.
+	audits []ResetAudit
 }
 
 type memSession struct {
@@ -171,7 +174,9 @@ func (m *Memory) UpdateName(_ context.Context, kind Kind, id, nama string) error
 }
 
 // CreateResetToken menyimpan token atur ulang dan membatalkan token aktif
-// sebelumnya milik pengguna yang sama (hanya satu tautan berlaku).
+// sebelumnya milik pengguna yang sama (hanya satu tautan berlaku). Entri audit
+// yang menyertai token (F2-28) disimpan bersama tokennya — di memori keduanya
+// selalu "satu transaksi".
 func (m *Memory) CreateResetToken(_ context.Context, t ResetToken, tokenHash []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -183,8 +188,22 @@ func (m *Memory) CreateResetToken(_ context.Context, t ResetToken, tokenHash []b
 	if t.ID == "" {
 		t.ID = fmt.Sprintf("reset-%x", tokenHash[:8])
 	}
+	if t.Audit != nil {
+		m.audits = append(m.audits, *t.Audit)
+	}
+	t.Audit = nil // token tersimpan tanpa pointer ke fakta auditnya
 	m.resets[string(tokenHash)] = &memReset{token: t}
 	return nil
+}
+
+// ResetAudits mengembalikan salinan entri audit yang ditulis bersama token
+// atur ulang (hanya untuk pengujian).
+func (m *Memory) ResetAudits() []ResetAudit {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]ResetAudit, len(m.audits))
+	copy(out, m.audits)
+	return out
 }
 
 // ConsumeResetToken memakai token sekali pakai secara atomik.

@@ -176,9 +176,15 @@ type Repository interface {
 
 // PasswordResetter membuat tautan atur ulang / aktivasi akun. Implementasinya
 // adalah auth.Service; pemindahan email ke outbox (F1-16) terjadi di sana.
+//
+// audit, bila terisi, diserahkan ke jalur token supaya tautan baru dan entri
+// auditnya commit bersama di dalam satu transaksi (F2-28): kegagalan menulis
+// audit membatalkan tautannya, jadi tidak ada tautan terbit tanpa catatan dan
+// permintaan bisa diulang dengan aman. Nil dipakai saat auditnya sudah ditulis
+// pemanggil di transaksinya sendiri (undangan admin baru).
 type PasswordResetter interface {
-	SendPasswordResetFor(ctx context.Context, kind auth.Kind, userID string, ttl time.Duration) error
-	IssuePasswordResetFor(ctx context.Context, kind auth.Kind, userID string, ttl time.Duration) (auth.IssuedReset, error)
+	SendPasswordResetFor(ctx context.Context, kind auth.Kind, userID string, ttl time.Duration, audit *auth.ResetAudit) error
+	IssuePasswordResetFor(ctx context.Context, kind auth.Kind, userID string, ttl time.Duration, audit *auth.ResetAudit) (auth.IssuedReset, error)
 }
 
 // SessionRevoker mencabut seluruh sesi satu akun, dipakai saat akun
@@ -220,7 +226,6 @@ type Service struct {
 	sessions SessionRevoker
 	queue    EmailQueue
 	resetURL auth.ResetURLBuilder
-	audit    audit.Recorder
 }
 
 // Option menyesuaikan Service.
@@ -244,28 +249,9 @@ func WithResetURLBuilder(b auth.ResetURLBuilder) Option {
 	}
 }
 
-// WithAuditRecorder memasang penulis entri audit untuk mutasi yang
-// perubahannya hidup di repositori domain lain (pengiriman tautan atur ulang
-// dan pengiriman ulang undangan, F2-28). Tanpa itu, mutasi transaksional tetap
-// menulis audit lewat repository-nya, sedangkan kedua aksi tersebut tidak
-// tercatat — hanya dipakai pada pengujian yang tidak menyentuh audit.
-func WithAuditRecorder(r audit.Recorder) Option {
-	return func(s *Service) {
-		if r != nil {
-			s.audit = r
-		}
-	}
-}
-
-// discardRecorder adalah Recorder yang tidak menulis apa pun.
-type discardRecorder struct{}
-
-// Record memenuhi audit.Recorder tanpa efek samping.
-func (discardRecorder) Record(context.Context, audit.Entry) error { return nil }
-
 // NewService membuat service pengelolaan akun pengguna.
 func NewService(repo Repository, resets PasswordResetter, sessions SessionRevoker, opts ...Option) *Service {
-	s := &Service{repo: repo, resets: resets, sessions: sessions, queue: LogQueue{}, audit: discardRecorder{}}
+	s := &Service{repo: repo, resets: resets, sessions: sessions, queue: LogQueue{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -381,8 +367,10 @@ func (s *Service) SetBranchUserActive(ctx context.Context, actor auth.Actor, id 
 // sehingga F1-16 cukup mengalihkannya ke email_outbox di satu tempat.
 //
 // Tautan lahir di repositori auth (domain lain), jadi entri auditnya
-// ditulis SETELAH tautan benar-benar terkirim ke antrean — dan hanya memuat
-// id akun/cabang, tidak pernah nilai tautannya (F2-28).
+// diserahkan ke jalur token itu dan ditulis DI DALAM transaksi yang sama
+// dengan token barunya (F2-28): kegagalan menulis audit membatalkan tokennya,
+// permintaan gagal tanpa efek samping, dan pengulangan aman. Snapshot-nya
+// hanya memuat id akun/cabang — tidak pernah nilai tautannya.
 func (s *Service) ResendBranchReset(ctx context.Context, actor auth.Actor, id string, ttl time.Duration) error {
 	if !actor.Can(auth.CapAdminUsersBranch) {
 		return ErrForbidden
@@ -394,13 +382,10 @@ func (s *Service) ResendBranchReset(ctx context.Context, actor auth.Actor, id st
 	if !u.HasAccount || u.UserID == "" {
 		return ErrNoAccount
 	}
-	if err := s.resets.SendPasswordResetFor(ctx, auth.KindBranch, u.UserID, ttl); err != nil {
-		return fmt.Errorf("kirim tautan atur ulang akun cabang: %w", err)
-	}
 	rec := audit.NewEntry(ctx, actor, audit.EntityBranchUser, u.UserID, audit.ActionReset, nil,
 		map[string]any{"branch_id": u.BranchID, "user_id": u.UserID})
-	if err := s.audit.Record(ctx, rec); err != nil {
-		return fmt.Errorf("catat audit tautan atur ulang akun cabang: %w", err)
+	if err := s.resets.SendPasswordResetFor(ctx, auth.KindBranch, u.UserID, ttl, resetAudit(rec)); err != nil {
+		return fmt.Errorf("kirim tautan atur ulang akun cabang: %w", err)
 	}
 	return nil
 }
@@ -463,11 +448,11 @@ func (s *Service) InviteAdmin(ctx context.Context, actor auth.Actor, in NewAdmin
 
 	// Catatan: CreateAdmin, tautan aktivasi, dan antrean email bukan satu
 	// transaksi database (repository pengguna dan repository token terpisah).
-	// Karena itu kegagalan di sini TIDAK boleh membiarkan undangan tanpa jalan
-	// pemulihan: admin yang sudah terlanjur dibuat selalu bisa dikirim ulang
-	// tautannya lewat ResendInviteAdmin, dan belum bisa login sampai
-	// mengaktivasi (password_hash/activated_at NULL).
-	if err := s.sendInvite(ctx, admin, ttl); err != nil {
+	// Kegagalan di sini TIDAK boleh membiarkan undangan tanpa jalan pemulihan:
+	// admin yang sudah terlanjur dibuat selalu bisa dikirim ulang tautannya
+	// lewat ResendInviteAdmin, dan belum bisa login sampai mengaktivasi
+	// (password_hash/activated_at NULL).
+	if err := s.sendInvite(ctx, admin, ttl, nil); err != nil {
 		return AdminUser{}, err
 	}
 	return admin, nil
@@ -476,8 +461,11 @@ func (s *Service) InviteAdmin(ctx context.Context, actor auth.Actor, in NewAdmin
 // sendInvite membuat tautan aktivasi baru untuk seorang admin undangan lalu
 // mengantre email undangannya lewat outbox. Tautan lama otomatis batal
 // (satu tautan aktif per akun).
-func (s *Service) sendInvite(ctx context.Context, admin AdminUser, ttl time.Duration) error {
-	issued, err := s.resets.IssuePasswordResetFor(ctx, auth.KindAdmin, admin.ID, ttl)
+//
+// audit, bila terisi, ditulis bersama tautan barunya (F2-28); email undangan
+// diantre setelah token + audit commit.
+func (s *Service) sendInvite(ctx context.Context, admin AdminUser, ttl time.Duration, audit *auth.ResetAudit) error {
+	issued, err := s.resets.IssuePasswordResetFor(ctx, auth.KindAdmin, admin.ID, ttl, audit)
 	if err != nil {
 		return fmt.Errorf("buat tautan aktivasi admin: %w", err)
 	}
@@ -526,18 +514,36 @@ func (s *Service) ResendInviteAdmin(ctx context.Context, actor auth.Actor, id st
 	if !admin.IsActive || admin.ActivatedAt != nil {
 		return AdminUser{}, ErrNotInvited
 	}
-	if err := s.sendInvite(ctx, admin, ttl); err != nil {
-		return AdminUser{}, err
-	}
 	// Undangan yang dikirim ulang adalah mutasi yang layak diaudit (F2-28):
 	// aktor memicu ulang akses orang lain. Snapshot-nya hanya nama/role/status
-	// — tidak ada email, kata sandi, maupun tautan aktivasi.
+	// — tidak ada email, kata sandi, maupun tautan aktivasi. Entri itu ditulis
+	// bersama token barunya di jalur auth (satu transaksi), sehingga audit yang
+	// gagal membatalkan tautannya.
 	rec := audit.NewEntry(ctx, actor, audit.EntityAdminUser, admin.ID, audit.ActionResend, nil,
 		map[string]any{"nama": admin.Nama, "role": string(admin.Role), "status": admin.Status})
-	if err := s.audit.Record(ctx, rec); err != nil {
-		return AdminUser{}, fmt.Errorf("catat audit kirim ulang undangan admin: %w", err)
+	if err := s.sendInvite(ctx, admin, ttl, resetAudit(rec)); err != nil {
+		return AdminUser{}, err
 	}
 	return admin, nil
+}
+
+// resetAudit menerjemahkan entri audit domain menjadi fakta audit paket auth
+// yang ditulis bersama token atur ulang (F2-28). Paket auth tidak boleh
+// mengimpor paket audit (audit mengimpor auth), jadi fakta itu diteruskan
+// lewat tipe milik auth; snapshot sudah diredaksi NewEntry dan penulis audit
+// (audit/postgres.Insert) mengulanginya sebagai jaring terakhir.
+func resetAudit(e audit.Entry) *auth.ResetAudit {
+	return &auth.ResetAudit{
+		ActorKind: e.ActorKind,
+		ActorID:   e.ActorID,
+		ActorNama: e.ActorNama,
+		IP:        e.IP,
+		Entity:    e.Entity,
+		EntityID:  e.EntityID,
+		Action:    e.Action,
+		Before:    e.Before,
+		After:     e.After,
+	}
 }
 
 // UpdateAdmin mengubah nama, role, flag notifikasi, dan/atau status aktif

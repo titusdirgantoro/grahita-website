@@ -422,14 +422,13 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	authSvc.SetResetMailer(notification.NewResetMailer(notifSvc, cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath))
 
 	// Pengelolaan akun pengguna. Undangan admin diantre lewat email_outbox.
-	// Mutasi akun (undang/ubah/nonaktifkan) menulis entri audit di dalam
-	// transaksi yang sama, sedangkan pengiriman tautan atur ulang — yang
-	// perubahannya hidup di repositori auth — memakai Recorder (F2-28).
+	// Setiap mutasi akun menulis entri audit di dalam transaksi yang sama,
+	// termasuk penerbitan tautan atur ulang/aktivasi yang perubahannya hidup di
+	// repositori auth: entri auditnya ikut ditulis di transaksi token (F2-28).
 	auditRepo := auditpg.New(pool)
 	usersSvc := users.NewService(userspg.New(pool), authSvc, authSvc,
 		users.WithEmailQueue(notification.NewQueue(notifSvc)),
 		users.WithResetURLBuilder(resetURL),
-		users.WithAuditRecorder(auditRepo),
 	)
 
 	// Master cabang + token registrasi sekali pakai (F1-06).

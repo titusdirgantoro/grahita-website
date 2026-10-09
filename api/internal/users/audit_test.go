@@ -11,30 +11,20 @@ import (
 	"github.com/grahita/portal/api/internal/users"
 )
 
-// spyRecorder menangkap entri audit yang ditulis lewat audit.Recorder (mutasi
-// yang transaksinya milik domain lain: tautan atur ulang & kirim ulang
-// undangan, F2-28).
-type spyRecorder struct {
-	recs []audit.Entry
-}
-
-func (s *spyRecorder) Record(_ context.Context, e audit.Entry) error {
-	s.recs = append(s.recs, e)
-	return nil
-}
-
-// harnessAudit menyiapkan service dengan penyimpanan in-memory (yang mencatat
-// entri audit transaksionalnya) dan Recorder palsu.
-func harnessAudit(t *testing.T) (*harness, *spyRecorder) {
+// harnessAudit menyiapkan service dengan penyimpanan in-memory yang mencatat
+// entri audit transaksionalnya, plus resetter palsu yang menangkap fakta audit
+// yang ikut ditulis bersama token atur ulang (F2-28).
+func harnessAudit(t *testing.T) *harness {
 	t.Helper()
 	repo := users.NewMemory()
-	rec := &spyRecorder{}
-	svc := users.NewService(repo, &fakeResetter{}, &fakeSessions{},
-		users.WithEmailQueue(&fakeQueue{}),
+	resetter := &fakeResetter{}
+	sessions := &fakeSessions{}
+	queue := &fakeQueue{}
+	svc := users.NewService(repo, resetter, sessions,
+		users.WithEmailQueue(queue),
 		users.WithResetURLBuilder(func(auth.Kind, string) string { return "https://admin.example.test/lupa" }),
-		users.WithAuditRecorder(rec),
 	)
-	return &harness{svc: svc, repo: repo, resetter: &fakeResetter{}, sessions: &fakeSessions{}}, rec
+	return &harness{svc: svc, repo: repo, resetter: resetter, sessions: sessions, queue: queue}
 }
 
 // emailDiSnapshot memastikan tidak ada kunci `email` di mana pun pada snapshot.
@@ -56,7 +46,7 @@ func emailDiSnapshot(t *testing.T, nama string, v any) {
 }
 
 func TestAuditUndanganAdminSatuEventAman(t *testing.T) {
-	h, _ := harnessAudit(t)
+	h := harnessAudit(t)
 	aktor := adminActor(auth.RoleSuperadmin)
 
 	admin, err := h.svc.InviteAdmin(context.Background(), aktor, users.NewAdmin{
@@ -91,7 +81,7 @@ func TestAuditUndanganAdminSatuEventAman(t *testing.T) {
 }
 
 func TestAuditUbahAdminTepatSatuEventDanNoOpTanpaEvent(t *testing.T) {
-	h, _ := harnessAudit(t)
+	h := harnessAudit(t)
 	aktif := time.Now().UTC()
 	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
 	h.repo.PutAdmin(users.AdminUser{ID: "adm-mgr", Nama: "Budi", Email: "budi@example.test", Role: auth.RoleManager, IsActive: true, ActivatedAt: &aktif})
@@ -131,7 +121,7 @@ func TestAuditUbahAdminTepatSatuEventDanNoOpTanpaEvent(t *testing.T) {
 }
 
 func TestAuditUbahAdminYangDitolakTidakMeninggalkanEvent(t *testing.T) {
-	h, _ := harnessAudit(t)
+	h := harnessAudit(t)
 	aktif := time.Now().UTC()
 	h.repo.PutAdmin(users.AdminUser{ID: "adm-sa", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktif})
 	aktor := adminActor(auth.RoleSuperadmin)
@@ -146,7 +136,7 @@ func TestAuditUbahAdminYangDitolakTidakMeninggalkanEvent(t *testing.T) {
 }
 
 func TestAuditStatusAkunCabangSatuEventDanNoOp(t *testing.T) {
-	h, _ := harnessAudit(t)
+	h := harnessAudit(t)
 	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", Email: "a@example.test", IsActive: true, BranchActive: true})
 	aktor := adminActor(auth.RoleManager)
 
@@ -185,9 +175,14 @@ func TestAuditStatusAkunCabangSatuEventDanNoOp(t *testing.T) {
 	}
 }
 
-func TestAuditTautanResetDanKirimUlangUndanganLewatRecorder(t *testing.T) {
-	h, rec := harnessAudit(t)
-	aktif := time.Now().UTC()
+// TestAuditTautanResetDanKirimUlangUndanganLewatJalurToken membuktikan kedua
+// aksi yang perubahannya hidup di repositori auth (penerbitan tautan atur ulang
+// akun cabang dan kirim ulang undangan admin) MENITIPKAN fakta auditnya ke
+// jalur token — bukan menulisnya sendiri setelah aksi berhasil. Penulisan
+// sesungguhnya terjadi di auth/postgres bersama tokennya (diuji di httpapi,
+// PostgreSQL nyata); di sini yang diperiksa adalah apa yang diteruskan service.
+func TestAuditTautanResetDanKirimUlangUndanganLewatJalurToken(t *testing.T) {
+	h := harnessAudit(t)
 	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", Email: "a@example.test", IsActive: true, BranchActive: true})
 	h.repo.PutAdmin(users.AdminUser{ID: "adm-undang", Nama: "Dewi", Email: "dewi@example.test", Role: auth.RoleManager, IsActive: true})
 	aktor := adminActor(auth.RoleSuperadmin)
@@ -199,18 +194,25 @@ func TestAuditTautanResetDanKirimUlangUndanganLewatRecorder(t *testing.T) {
 		t.Fatalf("kirim ulang undangan: %v", err)
 	}
 
-	if len(rec.recs) != 2 {
-		t.Fatalf("dua aksi harus menghasilkan dua entri, dapat %d: %+v", len(rec.recs), rec.recs)
+	if len(h.resetter.sent) != 1 || len(h.resetter.issued) != 1 {
+		t.Fatalf("kedua aksi harus lewat jalur token: sent=%d issued=%d", len(h.resetter.sent), len(h.resetter.issued))
 	}
-	reset, undang := rec.recs[0], rec.recs[1]
+	reset := h.resetter.sent[0].audit
+	undang := h.resetter.issued[0].audit
+	if reset == nil || undang == nil {
+		t.Fatalf("fakta audit tidak diteruskan ke jalur token: reset=%+v undang=%+v", reset, undang)
+	}
 	if reset.Entity != audit.EntityBranchUser || reset.Action != audit.ActionReset || reset.EntityID != "usr-a" {
 		t.Errorf("entri tautan reset salah: %+v", reset)
 	}
 	if undang.Entity != audit.EntityAdminUser || undang.Action != audit.ActionResend || undang.EntityID != "adm-undang" {
 		t.Errorf("entri kirim ulang undangan salah: %+v", undang)
 	}
+	if reset.ActorKind != auth.KindAdmin || reset.ActorID != aktor.UserID || reset.ActorNama != aktor.Nama || undang.ActorID != aktor.UserID {
+		t.Errorf("aktor tidak ikut diteruskan: reset=%+v undang=%+v", reset, undang)
+	}
 	// Tautan/token TIDAK pernah masuk snapshot — hanya id entitasnya.
-	for _, e := range rec.recs {
+	for _, e := range []*auth.ResetAudit{reset, undang} {
 		body := e.Before
 		if body == nil {
 			body = e.After
@@ -220,7 +222,24 @@ func TestAuditTautanResetDanKirimUlangUndanganLewatRecorder(t *testing.T) {
 		}
 		emailDiSnapshot(t, "aksi akun", body)
 	}
-	_ = aktif
+	// Tidak ada entri yang ditulis di luar jalur token (tidak ada jalur ganda).
+	if got := len(h.repo.AuditEntries()); got != 0 {
+		t.Errorf("jalur token tidak boleh menulis lewat repository pengguna: %d entri", got)
+	}
+
+	// Undangan admin BARU tidak menitipkan audit ke jalur token: entri
+	// `create` sudah ditulis CreateAdmin di transaksi yang sama.
+	if _, err := h.svc.InviteAdmin(context.Background(), aktor, users.NewAdmin{
+		Nama: "Bagus", Email: "bagus@example.test", Role: auth.RoleManager,
+	}, 24*time.Hour); err != nil {
+		t.Fatalf("undang admin baru: %v", err)
+	}
+	if got := len(h.repo.AuditEntries()); got != 1 {
+		t.Errorf("undangan baru harus menulis tepat satu entri create, dapat %d", got)
+	}
+	if len(h.resetter.issued) != 2 || h.resetter.issued[1].audit != nil {
+		t.Errorf("undangan baru tidak boleh menitipkan audit ke jalur token: %+v", h.resetter.issued[1].audit)
+	}
 }
 
 // snapshotTeks mengubah snapshot menjadi teks untuk pemeriksaan sederhana.
