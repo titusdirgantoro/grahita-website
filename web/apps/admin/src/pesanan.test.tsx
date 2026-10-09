@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { routeTree } from "./routes";
-import type { FilterPesanan, PesananDetail, PesananHalaman } from "./pages/pesanan";
+import { bolehRevisi, type FilterPesanan, type PesananDetail, type PesananHalaman } from "./pages/pesanan";
 
 const DETAIL_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -91,9 +91,93 @@ const DETAIL_UJI: PesananDetail = {
   verifikasi: [],
 };
 
+/** Pesanan Done (punya nomor + invoice) — prasyarat revisi invoice (AP-REV-01). */
+const DETAIL_DONE_UJI: PesananDetail = {
+  ...DETAIL_UJI,
+  status: "done",
+  verif_status: "cocok",
+  alasan_review: undefined,
+  versi: 0,
+  done_at: "2026-10-01T05:00:00Z",
+  verifikasi: [
+    {
+      id: "v1",
+      metode: "manual",
+      total_pesanan: 200000,
+      total_terbaca: 200000,
+      selisih: 0,
+      hasil: "cocok",
+      admin_nama: "Budi",
+      created_at: "2026-10-01T05:00:00Z",
+    },
+  ],
+};
+
+/** Hasil POST /revise (ReviseResult) untuk jawaban 200 pada uji. */
+const REVISE_HASIL_UJI = {
+  order_id: DETAIL_ID,
+  nomor: "2026-10-01",
+  versi: 1,
+  total: 600000,
+  jumlah_item: 5,
+  delta_total: 400000,
+  lines: [],
+  revisi: {
+    id: "rv1",
+    versi_lama: 0,
+    versi_baru: 1,
+    alasan: "salah harga",
+    delta_total: 400000,
+    admin_nama: "Budi",
+    created_at: "2026-10-01T06:00:00Z",
+  },
+};
+
+/**
+ * MATRIKS_UJI adalah jawaban GET /admin/prices (PriceMatrix) untuk pemilihan
+ * produk pada baris baru: hanya produk yang punya harga di cabang itu (sel).
+ */
+const MATRIKS_UJI = {
+  produk: [
+    {
+      id: "pr-1",
+      kode: "BM",
+      nama: "Bio Magnetik",
+      jenis: "reguler",
+      satuan: "pcs",
+      harga_default: 100000,
+      urutan: 1,
+      is_active: true,
+    },
+    {
+      id: "pr-2",
+      kode: "KK",
+      nama: "Kalung Kesehatan",
+      jenis: "reguler",
+      satuan: "pcs",
+      harga_default: 150000,
+      urutan: 2,
+      is_active: true,
+    },
+  ],
+  cabang: [{ id: "b1", nama: "Grahita Bandung", is_active: true }],
+  sel: [
+    { branch_id: "b1", product_id: "pr-1", harga: 100000 },
+    { branch_id: "b1", product_id: "pr-2", harga: 150000 },
+  ],
+};
+
+/** Jawaban semu satu panggilan POST /revise. */
+interface JawabanRevisi {
+  status: number;
+  code?: string;
+  message?: string;
+  fields?: Record<string, string>;
+}
+
 interface StubUji {
   panggilan: string[];
-  posts: { url: string; body: unknown }[];
+  posts: { url: string; body: unknown; headers: Record<string, string> }[];
 }
 
 /** stubPesanan memasang fetch semu untuk seluruh endpoint F1-15/F1-18. */
@@ -105,10 +189,15 @@ function stubPesanan(opsi?: {
   verifyGagal?: { status: number; code: string; message: string };
   /** Ditunggu sebelum POST /verify menjawab — untuk menguji keadaan sibuk. */
   verifyTertahan?: Promise<unknown>;
+  /** Jawaban berurutan POST /revise (F2-25); entri terakhir dipakai berulang. */
+  revise?: JawabanRevisi[];
+  /** Ditunggu sebelum POST /revise menjawab — untuk menguji klik ganda. */
+  reviseTertahan?: Promise<unknown>;
 }): StubUji {
   const panggilan: string[] = [];
-  const posts: { url: string; body: unknown }[] = [];
+  const posts: { url: string; body: unknown; headers: Record<string, string> }[] = [];
   const total = opsi?.total ?? 1;
+  let revisiKe = 0;
 
   vi.stubGlobal(
     "fetch",
@@ -122,7 +211,11 @@ function stubPesanan(opsi?: {
         });
       }
       if (init?.method === "POST") {
-        posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
+        posts.push({
+          url,
+          body: init.body ? JSON.parse(String(init.body)) : null,
+          headers: (init.headers ?? {}) as Record<string, string>,
+        });
         if (url.includes("/notes")) return json({ data: opsi?.detail ?? DETAIL_UJI });
         if (url.includes("/resend")) return json({ data: { id: "e2", jenis: "invoice_cabang", status: "queued" } });
         if (url.endsWith(`/admin/orders/${DETAIL_ID}/verify`)) {
@@ -155,10 +248,32 @@ function stubPesanan(opsi?: {
             },
           });
         }
+        if (url.endsWith(`/admin/orders/${DETAIL_ID}/revise`)) {
+          const daftar = opsi?.revise ?? [{ status: 200 }];
+          const jawab = daftar[Math.min(revisiKe, daftar.length - 1)];
+          revisiKe += 1;
+          if (opsi?.reviseTertahan) await opsi.reviseTertahan;
+          if (jawab.status >= 400) {
+            return json(
+              {
+                error: {
+                  code: jawab.code ?? "UNKNOWN",
+                  message: jawab.message ?? "gagal",
+                  ...(jawab.fields ? { fields: jawab.fields } : {}),
+                },
+              },
+              jawab.status,
+            );
+          }
+          return json({ data: REVISE_HASIL_UJI });
+        }
         return json({ data: {} }, 201);
       }
       if (url.includes("/admin/branches")) {
         return json({ data: [{ id: "b1", nama: "Grahita Bandung", is_active: true }] });
+      }
+      if (url.includes("/admin/prices")) {
+        return json({ data: MATRIKS_UJI });
       }
       if (url.includes("/download")) {
         return json({
@@ -512,6 +627,276 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
     expect(menunggu.hasAttribute("disabled")).toBe(true);
     fireEvent.click(menunggu);
     expect(posts.filter((p) => p.url === URL_VERIFY).length).toBe(1);
+
+    lepaskan();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
+describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
+  const URL_REVISE = `/api/v1/admin/orders/${DETAIL_ID}/revise`;
+
+  beforeEach(() => {
+    document.cookie = "grahita_csrf=uji-csrf; path=/";
+  });
+  afterEach(() => {
+    document.cookie = "grahita_csrf=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  });
+
+  /** bukaRevisi merender detail Done dan membuka modal revisi. */
+  async function bukaRevisi() {
+    const dialog = await screen.findByRole("dialog");
+    return dialog;
+  }
+
+  it("hanya peran berwenang yang punya aksi (cabang tidak; server tetap otoritas izin)", () => {
+    expect(bolehRevisi("superadmin")).toBe(true);
+    expect(bolehRevisi("manager")).toBe(true);
+    expect(bolehRevisi("branch")).toBe(false);
+  });
+
+  it("tombol revisi hanya muncul untuk pesanan Done", async () => {
+    stubPesanan();
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    expect(screen.queryByRole("button", { name: "Revisi invoice" })).toBeNull();
+  });
+
+  it("mengubah qty/harga + alasan: POST sekali dengan CSRF lalu menyegarkan detail & email", async () => {
+    const { posts, panggilan } = stubPesanan({ detail: DETAIL_DONE_UJI });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "salah harga jual" } });
+    fireEvent.change(within(dialog).getByLabelText("Qty Bio Magnetik"), { target: { value: "5" } });
+    fireEvent.change(within(dialog).getByLabelText("Harga satuan Bio Magnetik"), { target: { value: "120000" } });
+
+    const sebelum = panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    await waitFor(() => expect(posts.some((p) => p.url === URL_REVISE)).toBe(true));
+    const kirim = posts.find((p) => p.url === URL_REVISE);
+    expect(kirim?.body).toEqual({
+      alasan: "salah harga jual",
+      lines: [{ line_no: 1, qty: 5, harga_satuan: 120000 }],
+    });
+    expect(kirim?.headers["X-CSRF-Token"]).toBe("uji-csrf");
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => {
+      expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
+    });
+  });
+
+  it("mengubah komposisi baris: hapus baris lama + tambah produk baru (tanpa line_no)", async () => {
+    const { posts } = stubPesanan({ detail: DETAIL_DONE_UJI });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+
+    const pilih = await within(dialog).findByLabelText("Tambah produk");
+    await waitFor(() => expect(within(pilih).getByRole("option", { name: /Kalung Kesehatan/ })).toBeDefined());
+    fireEvent.change(pilih, { target: { value: "pr-2" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tambah baris" }));
+    expect(within(dialog).getByLabelText("Qty Kalung Kesehatan")).toBeDefined();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hapus Bio Magnetik" }));
+    expect(within(dialog).queryByLabelText("Qty Bio Magnetik")).toBeNull();
+
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ganti produk" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    await waitFor(() => expect(posts.some((p) => p.url === URL_REVISE)).toBe(true));
+    expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
+      alasan: "ganti produk",
+      lines: [{ product_id: "pr-2", qty: 1, harga_satuan: 150000 }],
+    });
+  });
+
+  it("409 INVOICE_NOT_READY: pesan jelas, form bertahan, refresh tanpa versi semu; retry manual lalu 200", async () => {
+    const { posts, panggilan } = stubPesanan({
+      detail: DETAIL_DONE_UJI,
+      revise: [
+        {
+          status: 409,
+          code: "INVOICE_NOT_READY",
+          message:
+            "Invoice versi ini belum selesai dirender sehingga revisi belum dapat dilakukan. Coba lagi setelah proses dokumennya selesai.",
+        },
+        { status: 200 },
+      ],
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "salah harga jual" } });
+    fireEvent.change(within(dialog).getByLabelText("Qty Bio Magnetik"), { target: { value: "5" } });
+
+    const sebelum = panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    const pesan = await screen.findByRole("alert");
+    expect(pesan.textContent).toMatch(/belum selesai dirender/i);
+    expect(pesan.textContent).toMatch(/kirim ulang/i);
+
+    // Tidak ada klaim sukses / versi palsu: modal & isian bertahan apa adanya.
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect((within(dialog).getByLabelText("Alasan revisi") as HTMLTextAreaElement).value).toBe("salah harga jual");
+    expect((within(dialog).getByLabelText("Qty Bio Magnetik") as HTMLInputElement).value).toBe("5");
+    expect(screen.queryByText("Revisi R1")).toBeNull();
+
+    // Detail & dokumen dimuat ulang supaya status dokumen terkini terlihat.
+    await waitFor(() => {
+      expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
+    });
+
+    // Dokumen sudah siap: pengajuan ulang MANUAL diterima 200 dan modal tertutup.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+    await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(2));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("409 ORDER_NOT_DONE dijelaskan terpisah dari INVOICE_NOT_READY", async () => {
+    const { posts } = stubPesanan({
+      detail: DETAIL_DONE_UJI,
+      revise: [
+        {
+          status: 409,
+          code: "ORDER_NOT_DONE",
+          message: "Revisi hanya untuk pesanan yang sudah selesai (Done).",
+        },
+      ],
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ubah qty" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    const pesan = await screen.findByRole("alert");
+    expect(pesan.textContent).toMatch(/sudah selesai \(Done\)/);
+    expect(screen.queryByText("Revisi R1")).toBeNull();
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
+  });
+
+  it("403 (Manager saat manager_boleh_revisi nonaktif) dijelaskan; tidak berujung sukses", async () => {
+    const { posts } = stubPesanan({
+      detail: DETAIL_DONE_UJI,
+      revise: [
+        {
+          status: 403,
+          code: "FORBIDDEN",
+          message: "Manager tidak diizinkan merevisi invoice saat ini (setelan manager_boleh_revisi nonaktif).",
+        },
+      ],
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ubah qty" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    const pesan = await screen.findByRole("alert");
+    expect(pesan.textContent).toMatch(/tidak diizinkan merevisi/i);
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(screen.queryByText("Revisi R1")).toBeNull();
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
+  });
+
+  it("400 menempelkan pesan field ke input terkait", async () => {
+    const { posts } = stubPesanan({
+      detail: DETAIL_DONE_UJI,
+      revise: [
+        {
+          status: 400,
+          code: "VALIDATION_FAILED",
+          message: "Alasan revisi wajib diisi.",
+          fields: { alasan: "alasan revisi maksimal 500 karakter" },
+        },
+      ],
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "terlalu panjang" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    expect(await within(dialog).findByText("alasan revisi maksimal 500 karakter")).toBeDefined();
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
+  });
+
+  it("503 (penjadwal invoice belum siap) dijelaskan tanpa klaim sukses", async () => {
+    const { posts } = stubPesanan({
+      detail: DETAIL_DONE_UJI,
+      revise: [
+        {
+          status: 503,
+          code: "UNAVAILABLE",
+          message: "Penjadwal pekerjaan invoice belum siap sehingga revisi belum dapat diselesaikan.",
+        },
+      ],
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ubah qty" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    const pesan = await screen.findByRole("alert");
+    expect(pesan.textContent).toMatch(/belum siap/i);
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
+  });
+
+  it("alasan wajib: kosong tidak pernah dikirim ke server", async () => {
+    const { posts } = stubPesanan({ detail: DETAIL_DONE_UJI });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    expect((await within(dialog).findAllByText(/Alasan revisi wajib/i)).length).toBeGreaterThan(0);
+    expect(posts.some((p) => p.url === URL_REVISE)).toBe(false);
+  });
+
+  it("mencegah klik ganda: tombol terkunci selama permintaan berjalan", async () => {
+    let lepaskan: () => void = () => undefined;
+    const tertahan = new Promise<void>((resolve) => {
+      lepaskan = resolve;
+    });
+    const { posts } = stubPesanan({ detail: DETAIL_DONE_UJI, reviseTertahan: tertahan });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ubah qty" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+
+    const menunggu = await screen.findByRole("button", { name: /Menyimpan/ });
+    expect(menunggu.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(menunggu);
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
 
     lepaskan();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

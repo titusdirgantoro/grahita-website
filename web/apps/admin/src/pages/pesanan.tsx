@@ -158,6 +158,46 @@ export interface PesananDetail {
   verifikasi: LogVerifikasi[];
 }
 
+/**
+ * BarisRevisi adalah satu baris pada daftar baris FINAL revisi (F2-25).
+ *
+ * `line_no > 0` menandai baris lama yang dipertahankan (serial/jenis/produknya
+ * tetap; hanya qty/harga yang boleh berubah). `line_no === 0` adalah baris
+ * produk BARU yang dikirim dengan `product_id` tanpa `line_no`. qty/harga
+ * disimpan sebagai teks mentah supaya admin bisa mengetik bebas; angka baru
+ * diurai saat dikirim.
+ */
+interface BarisRevisi {
+  kunci: string;
+  line_no: number;
+  product_id?: string;
+  nama: string;
+  satuan: string;
+  serial_number?: string;
+  qty: string;
+  harga: string;
+}
+
+/** Produk pada matriks harga (GET /admin/prices) untuk baris baru revisi. */
+interface ProdukMatriks {
+  id: string;
+  nama: string;
+  satuan: string;
+  is_active: boolean;
+}
+
+interface SelMatriks {
+  branch_id: string;
+  product_id: string;
+  harga: number;
+}
+
+interface MatriksHarga {
+  produk: ProdukMatriks[];
+  cabang: { id: string; nama: string }[];
+  sel: SelMatriks[];
+}
+
 /** Bukti transfer (endpoint F1-13; dipakai ulang oleh detail F1-15). */
 interface BuktiTransfer {
   id: string;
@@ -241,6 +281,17 @@ type KeputusanVerifikasi = "cocok" | "perlu_review";
  * tidak pernah muncul untuk peran yang tidak berhak — API tetap otoritas akhir.
  */
 export function bolehVerifikasi(peran: Role): boolean {
+  return peran === "manager" || peran === "superadmin";
+}
+
+/**
+ * bolehRevisi meniru peta kapabilitas server (api/internal/auth/actor.go):
+ * `admin.revise` hanya dimiliki staf Pusat — Superadmin selalu, Manager hanya
+ * bila setelan `manager_boleh_revisi` aktif (PRD §4.9). Setelan itu TIDAK
+ * dibaca UI; karena itu penjaga ini hanya menyembunyikan aksi dari peran yang
+ * memang bukan staf Pusat, dan API tetap otoritas akhir atas izin Manager.
+ */
+export function bolehRevisi(peran: Role): boolean {
   return peran === "manager" || peran === "superadmin";
 }
 
@@ -331,6 +382,31 @@ function pesanVerifikasi(err: unknown): string {
       default:
         return err.message;
     }
+  }
+  return "Terjadi kesalahan. Coba lagi.";
+}
+
+/**
+ * pesanRevisi menerjemahkan galat POST /api/v1/admin/orders/{id}/revise (F2-25)
+ * ke bahasa manusia. Kode 409 adalah fail-closed yang memang disengaja server:
+ * tidak ada versi/baris yang berubah, jadi UI tidak pernah boleh mengklaim
+ * berhasil, menaikkan versi lokal, atau mengulang sendiri.
+ */
+function pesanRevisi(err: unknown): string {
+  if (err instanceof ApiClientError) {
+    if (err.status === 409 && err.code === "INVOICE_NOT_READY") {
+      return "Invoice versi berjalan belum selesai dirender, jadi revisi belum bisa menaikkan versi. Tunggu proses dokumen selesai, lalu kirim ulang manual. Detail & dokumen dimuat ulang.";
+    }
+    if (err.status === 409 && err.code === "ORDER_NOT_DONE") {
+      return "Revisi hanya untuk pesanan yang sudah selesai (Done). Selesaikan verifikasi pembayaran lebih dulu.";
+    }
+    if (err.status === 403) {
+      return `Anda tidak diizinkan merevisi invoice ini. ${err.message}`;
+    }
+    if (err.status === 503) {
+      return `Layanan revisi belum siap. ${err.message} Coba lagi beberapa saat lagi.`;
+    }
+    return err.message;
   }
   return "Terjadi kesalahan. Coba lagi.";
 }
@@ -640,6 +716,7 @@ export function PesananDetailAdminPage() {
   const { tampilkan } = useToast();
   const { peran } = useSesi();
   const bolehVerif = bolehVerifikasi(peran);
+  const bolehRev = bolehRevisi(peran);
 
   // Keadaan modal verifikasi pembayaran manual (F1-18, PRD §4.2 AP-ORD-07).
   const [verifBuka, setVerifBuka] = useState(false);
@@ -649,6 +726,23 @@ export function PesananDetailAdminPage() {
   const [catatanVerif, setCatatanVerif] = useState("");
   const [sibukVerif, setSibukVerif] = useState(false);
   const [galatVerif, setGalatVerif] = useState<string | null>(null);
+
+  // Keadaan modal revisi invoice Done (F2-25, PRD §4.3 AP-REV-01..05).
+  const [revisiBuka, setRevisiBuka] = useState(false);
+  const [alasanRevisi, setAlasanRevisi] = useState("");
+  const [catatanRevisi, setCatatanRevisi] = useState("");
+  const [barisRevisi, setBarisRevisi] = useState<BarisRevisi[]>([]);
+  const [produkPilih, setProdukPilih] = useState("");
+  const [sibukRevisi, setSibukRevisi] = useState(false);
+  const [galatRevisi, setGalatRevisi] = useState<string | null>(null);
+  const [galatField, setGalatField] = useState<Record<string, string>>({});
+
+  // Daftar produk + harga khusus cabang hanya diambil saat modal revisi dibuka
+  // (matriks harga: sel tanpa harga = produk tidak dijual ke cabang itu).
+  const { data: matriks } = useApi<MatriksHarga>(
+    `/admin/prices?branch_id=${data?.branch_id ?? ""}&aktif=true`,
+    revisiBuka && Boolean(data?.branch_id),
+  );
 
   // Catatan awal dari server hanya dipakai sampai pengguna mulai mengetik,
   // supaya muat ulang tidak menimpa ketikan yang belum disimpan.
@@ -789,6 +883,139 @@ export function PesananDetailAdminPage() {
       setSibukVerif(false);
     }
   }, [id, keputusanVerif, alasanVerif, nominalVerif, catatanVerif, muatUlang, tampilkan]);
+
+  /** Produk yang benar-benar dijual ke cabang pesanan ini (matriks harga cabang). */
+  const produkRevisi = useMemo(() => {
+    if (!matriks || !data) return [];
+    const hargaPer = new Map<string, number>();
+    for (const s of matriks.sel) {
+      if (s.branch_id === data.branch_id) hargaPer.set(s.product_id, s.harga);
+    }
+    return matriks.produk
+      .filter((p) => p.is_active && hargaPer.has(p.id))
+      .map((p) => ({ id: p.id, nama: p.nama, satuan: p.satuan, harga: hargaPer.get(p.id) ?? 0 }));
+  }, [matriks, data]);
+
+  /**
+   * bukaRevisi menyiapkan modal dari keadaan bersih: daftar baris FINAL dimulai
+   * dari baris produk versi berjalan (baris biaya packaging tidak dapat diedit
+   * klien dan ditambahkan server sendiri).
+   */
+  const bukaRevisi = useCallback(() => {
+    setAlasanRevisi("");
+    setCatatanRevisi("");
+    setProdukPilih("");
+    setGalatRevisi(null);
+    setGalatField({});
+    setBarisRevisi(
+      (data?.lines ?? [])
+        .filter((l) => l.jenis !== "packaging")
+        .map((l, i) => ({
+          kunci: `lama-${l.line_no}-${i}`,
+          line_no: l.line_no,
+          nama: l.nama,
+          satuan: l.satuan,
+          serial_number: l.serial_number,
+          qty: String(l.qty),
+          harga: String(l.harga_satuan),
+        })),
+    );
+    setRevisiBuka(true);
+  }, [data?.lines]);
+
+  const ubahBaris = useCallback((kunci: string, patch: Partial<BarisRevisi>) => {
+    setBarisRevisi((kini) => kini.map((b) => (b.kunci === kunci ? { ...b, ...patch } : b)));
+  }, []);
+
+  const hapusBaris = useCallback((kunci: string) => {
+    setBarisRevisi((kini) => kini.filter((b) => b.kunci !== kunci));
+  }, []);
+
+  const tambahBaris = useCallback(() => {
+    const p = produkRevisi.find((x) => x.id === produkPilih);
+    if (!p) return;
+    setBarisRevisi((kini) => [
+      ...kini,
+      {
+        kunci: `baru-${p.id}-${kini.length}`,
+        line_no: 0,
+        product_id: p.id,
+        nama: p.nama,
+        satuan: p.satuan,
+        qty: "1",
+        harga: String(p.harga),
+      },
+    ]);
+    setProdukPilih("");
+  }, [produkRevisi, produkPilih]);
+
+  /**
+   * kirimRevisi mengirim daftar baris FINAL ke
+   * POST /api/v1/admin/orders/{id}/revise (PRD §4.3 AP-REV-01, SystemDesign.md
+   * §4.5). Alasan wajib; baris lama dikirim dengan `line_no`, baris baru dengan
+   * `product_id`; total dihitung ulang server, jadi klien tidak pernah mengirim
+   * total maupun versi. Server tetap otoritas izin (Manager hanya bila
+   * `manager_boleh_revisi` aktif).
+   */
+  const kirimRevisi = useCallback(async () => {
+    setGalatField({});
+    if (alasanRevisi.trim() === "") {
+      setGalatRevisi("Alasan revisi wajib diisi.");
+      setGalatField({ alasan: "alasan revisi wajib diisi" });
+      return;
+    }
+    if (barisRevisi.length === 0) {
+      setGalatRevisi("Revisi butuh minimal satu baris produk.");
+      return;
+    }
+    const lines: Record<string, unknown>[] = [];
+    for (const b of barisRevisi) {
+      const qty = Number.parseInt(b.qty.replace(/[^\d]/g, ""), 10);
+      const harga = Number.parseInt(b.harga.replace(/[^\d]/g, ""), 10);
+      if (!Number.isFinite(qty) || qty < 1) {
+        setGalatRevisi(`Qty baris "${b.nama}" minimal 1.`);
+        return;
+      }
+      if (!Number.isFinite(harga) || harga < 0) {
+        setGalatRevisi(`Harga baris "${b.nama}" tidak boleh negatif.`);
+        return;
+      }
+      lines.push(
+        b.line_no > 0
+          ? { line_no: b.line_no, qty, harga_satuan: harga }
+          : { product_id: b.product_id, qty, harga_satuan: harga },
+      );
+    }
+    setSibukRevisi(true);
+    setGalatRevisi(null);
+    try {
+      await api.post(`/admin/orders/${id}/revise`, {
+        alasan: alasanRevisi.trim(),
+        ...(catatanRevisi.trim() !== "" ? { catatan: catatanRevisi.trim() } : {}),
+        lines,
+      });
+      setRevisiBuka(false);
+      muatUlang();
+      muatEmail();
+      tampilkan(
+        "Revisi tersimpan. Nomor invoice tetap dan versi baru sedang dirender lalu dikirim ke cabang & admin ber-flag (invoice saja; surat jalan tidak dikirim ulang). Proses render & email berjalan asinkron.",
+      );
+    } catch (err) {
+      setGalatRevisi(pesanRevisi(err));
+      if (err instanceof ApiClientError) {
+        setGalatField(err.fields ?? {});
+        // Fail-closed 409 (dan 400 keadaan) berarti server berpindah keadaan:
+        // muat ulang detail + dokumen supaya status terkini terlihat, TANPA
+        // mengubah versi lokal atau mencoba ulang sendiri.
+        if (err.status === 409) {
+          muatUlang();
+          muatEmail();
+        }
+      }
+    } finally {
+      setSibukRevisi(false);
+    }
+  }, [id, alasanRevisi, catatanRevisi, barisRevisi, muatUlang, muatEmail, tampilkan]);
 
   const timeline = useMemo(() => data?.timeline ?? [], [data?.timeline]);
 
@@ -1046,6 +1273,25 @@ export function PesananDetailAdminPage() {
             </Card>
           ) : null}
 
+          {data.status === "done" && bolehRev ? (
+            <Card>
+              <CardHead title="Revisi invoice" />
+              <p className="muted small" style={{ marginBottom: 8 }}>
+                Nomor invoice tetap; versi naik (R1, R2, …) dan PDF versi lama tetap tersimpan. Alasan wajib diisi dan
+                total dihitung ulang server.
+              </p>
+              <Button
+                variant="secondary"
+                icon="pencil-simple"
+                block
+                onClick={bukaRevisi}
+                data-uji="buka-revisi"
+              >
+                Revisi invoice
+              </Button>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHead title="Catatan internal" />
             <p className="muted small" style={{ marginBottom: 8 }}>
@@ -1251,6 +1497,136 @@ export function PesananDetailAdminPage() {
           />
         </Field>
         {galatVerif ? <Notice tone="danger">{galatVerif}</Notice> : null}
+      </Modal>
+
+      <Modal
+        open={revisiBuka}
+        title="Revisi invoice"
+        onClose={() => {
+          if (!sibukRevisi) setRevisiBuka(false);
+        }}
+        wide
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRevisiBuka(false)} disabled={sibukRevisi}>
+              Batal
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => void kirimRevisi()}
+              disabled={sibukRevisi}
+              data-uji="kirim-revisi"
+            >
+              {sibukRevisi ? "Menyimpan…" : "Simpan revisi"}
+            </Button>
+          </>
+        }
+      >
+        <p className="muted small">
+          {data.nomor ? `Pesanan ${data.nomor} · ` : ""}
+          {`versi berjalan R${data.versi}; versi baru R${data.versi + 1}.`}
+        </p>
+        {galatRevisi ? <Notice tone="danger">{galatRevisi}</Notice> : null}
+        <Field
+          label="Alasan revisi"
+          htmlFor="revisi-alasan"
+          hint="Wajib. Tercatat di timeline dan audit log (AP-REV-05)."
+          error={galatField.alasan}
+        >
+          <Textarea
+            id="revisi-alasan"
+            maxLength={500}
+            placeholder="Contoh: harga satuan salah, cabang minta koreksi"
+            value={alasanRevisi}
+            onChange={(e) => setAlasanRevisi(e.target.value)}
+          />
+        </Field>
+        <Field label="Catatan revisi (opsional)" htmlFor="revisi-catatan" hint="Catatan bebas; tidak wajib.">
+          <Textarea
+            id="revisi-catatan"
+            maxLength={2000}
+            value={catatanRevisi}
+            onChange={(e) => setCatatanRevisi(e.target.value)}
+          />
+        </Field>
+
+        <div className={styles.row} style={{ justifyContent: "space-between", margin: "8px 0" }}>
+          <span className="muted small">Baris final (bukan diff)</span>
+          <span className="muted small">{`${barisRevisi.length} baris`}</span>
+        </div>
+        {barisRevisi.length === 0 ? (
+          <p className="muted small">Belum ada baris. Tambahkan minimal satu produk dari matriks harga cabang.</p>
+        ) : (
+          <Table caption="Baris final revisi invoice">
+            <thead>
+              <tr>
+                <th scope="col">Produk</th>
+                <th scope="col" className="num">
+                  Qty
+                </th>
+                <th scope="col" className="num">
+                  Harga satuan
+                </th>
+                <th scope="col">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {barisRevisi.map((b) => (
+                <tr key={b.kunci}>
+                  <td>
+                    {b.nama}
+                    {b.line_no === 0 ? <Badge tone="rev">Baru</Badge> : null}
+                    {b.serial_number ? <div className="muted small">{b.serial_number}</div> : null}
+                  </td>
+                  <td className="num">
+                    <Input
+                      aria-label={`Qty ${b.nama}`}
+                      inputMode="numeric"
+                      value={b.qty}
+                      onChange={(e) => ubahBaris(b.kunci, { qty: e.target.value })}
+                    />
+                  </td>
+                  <td className="num">
+                    <Input
+                      aria-label={`Harga satuan ${b.nama}`}
+                      inputMode="numeric"
+                      value={b.harga}
+                      onChange={(e) => ubahBaris(b.kunci, { harga: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <Button variant="ghost" aria-label={`Hapus ${b.nama}`} onClick={() => hapusBaris(b.kunci)}>
+                      Hapus
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+        {galatField.lines || galatField.pesanan ? (
+          <Notice tone="danger">{galatField.lines ?? galatField.pesanan}</Notice>
+        ) : null}
+
+        <Field
+          label="Tambah produk"
+          htmlFor="revisi-produk"
+          hint="Baris baru memakai serial baru bertanggal pesanan asli; baris lama mempertahankan serial/produknya."
+        >
+          <Select id="revisi-produk" value={produkPilih} onChange={(e) => setProdukPilih(e.target.value)}>
+            <option value="">Pilih produk…</option>
+            {produkRevisi.map((p) => (
+              <option key={p.id} value={p.id}>{`${p.nama} · ${rupiah.format(p.harga)}`}</option>
+            ))}
+          </Select>
+        </Field>
+        <Button variant="secondary" icon="plus" onClick={tambahBaris} disabled={produkPilih === ""}>
+          Tambah baris
+        </Button>
+        <p className="muted small" style={{ marginTop: 8 }}>
+          Total versi baru dihitung server dari baris di atas. Baris biaya packaging (pesanan Sertifikat) ditambahkan
+          otomatis dan tidak perlu dimasukkan di sini.
+        </p>
       </Modal>
     </>
   );
