@@ -85,16 +85,20 @@ pada rute `/invoice`.
    Seluruh angka dihitung klien dari daftar pesanan cabang sesi — himpunan yang
    sama dengan halaman Pesanan — jadi "jumlah/status sesuai data DB" tanpa
    endpoint agregat baru yang bisa menyimpang dari daftar tersebut (prototype
-   juga menghitung di klien). Ringkasan periode memakai bulan berjalan lokal
-   pengguna dan `orders.tanggal` (tanggal bisnis), sehingga pesanan bulan lalu
-   tidak pernah ikut terhitung.
+   juga menghitung di klien). Ringkasan periode memakai bulan **tanggal bisnis
+   WIB** yang dihitung sendiri di klien (`hariIni()` = UTC+7, bukan zona waktu
+   browser) dan `orders.tanggal` (tanggal bisnis), sehingga pesanan bulan lalu
+   tidak pernah ikut terhitung dan angka tidak bergeser bagi pengguna yang
+   membuka portal dari zona waktu lain dekat pergantian hari/bulan.
 6. **Pengingat C&C hanya tampilan; tidak ada auto-Done.** Beranda memilih
-   pesanan `is_cnc && status == submitted` dengan `jatuh_tempo` terdekat dan
+   pesanan `is_cnc && status == submitted` dengan `jatuh_tempo` terdekat
+   (kolom itu dibawa `GET /orders`; perbaikan putaran 2 di bawah) dan
    menampilkan "N hari lagi / hari ini / lewat jatuh tempo N hari". Statusnya
    tidak pernah diubah dari sini: C&C baru menjadi Done setelah Pusat
    memverifikasi pembayarannya (PRD CP-CNC-07, F1-18). Uji UI memastikan
    seluruh panggilan beranda adalah GET dan pesanan C&C yang lewat jatuh tempo
-   tetap berlabel "Menunggu verifikasi".
+   tetap berlabel "Menunggu verifikasi"; urutan "5 pesanan terakhir"
+   mengikuti urutan server apa adanya tanpa disortir ulang di klien.
 7. **Unduhan invoice lewat presigned URL berumur pendek.** Tombol Unduh
    memanggil `GET /api/v1/documents/{id}/download` (300 detik) lalu membuka URL
    yang dikembalikan; UI tidak pernah menyusun URL object storage sendiri dan
@@ -155,6 +159,41 @@ pada rute `/invoice`.
   pesanan terakhir; top product 3 bulan butuh baris pesanan (`order_lines`)
   yang tidak ada di daftar pesanan, jadi sengaja tidak dikerjakan di sini.
 
+### Putaran 2 — perbaikan dari review QA (putaran 1, lensa artifact)
+
+QA memblokir karena **pengingat C&C di beranda tidak akan pernah tampil pada
+data nyata**: `beranda.tsx` mensyaratkan `o.jatuh_tempo`, tetapi sumber datanya
+`GET /api/v1/orders` tidak pernah mengirim field itu (`ListOrdersForBranch`
+tidak memilih `o.jatuh_tempo` dan `Repo.List` tidak mengisi `Order.JatuhTempo`),
+padahal `Order.jatuh_tempo` sudah didokumentasikan di OpenAPI — drift kontrak.
+Pemeriksaan browser putaran 1 memakai API tiruan yang menyuntikkan `jatuh_tempo`
+sehingga celah ini tersembunyi.
+
+Perbaikan (pilihan a dari QA — membawa jatuh tempo sampai ke beranda):
+
+- `api/db/queries/order.sql` → `ListOrdersForBranch` kini memilih `o.jatuh_tempo`
+  (menyamai `GetOrderForBranch`); `sqlc generate` dijalankan ulang
+  (`internal/db/sqlc/order.sql.go` bertambah `JatuhTempo *time.Time`).
+- `api/internal/order/postgres/postgres.go` → `Repo.List` mengisi
+  `JatuhTempo: tanggalOr(row.JatuhTempo)` (menyamai `loadOrder`).
+- **Uji integrasi PostgreSQL nyata baru**
+  `api/internal/httpapi/integration_beranda_pg_test.go`
+  (`TestPGBerandaPengingatCNCOverdueDariResponsNyata`): pesanan C&C dibuat lewat
+  alur submit nyata, tanggalnya digeser ke masa lalu (jatuh tempo terlewat),
+  lalu `GET /api/v1/orders` harus (1) membawa `jatuh_tempo` yang sama dengan
+  kolom DB, (2) tetap `status=submitted` tanpa auto-Done, (3) memenuhi prasyarat
+  pengingat (`is_cnc && submitted && jatuh_tempo && sisa < 0`) dengan judul
+  "C&C lewat jatuh tempo 3 hari", (4) tidak membocorkan `jatuh_tempo` pesanan
+  non-C&C, (5) tidak mengubah apa pun saat dibaca (status/verif/done_at/events
+  tetap) dan idempoten. Pesanan non-C&C dan isolasi lintas cabang juga diperiksa.
+  Uji ini **MERAH tanpa perbaikan** (lihat bukti), jadi benar-benar menutup celah.
+- Catatan non-pemblokir QA juga dibereskan: "periode berjalan" kini memakai
+  tanggal bisnis **WIB** (`hariIni()` = UTC+7, bukan bulan lokal browser) dan
+  urutan "5 pesanan terakhir" memakai urutan server apa adanya (sortir klien
+  dengan kunci campuran `tanggal`/`created_at` dihapus). Uji vitest menambahkan
+  kasus `hariIni` (pergantian hari/bulan lintas zona) dan kasus `pengingatCNC`
+  yang membuktikan pengingat TIDAK muncul bila `jatuh_tempo` absen.
+
 ## Bukti verifikasi
 
 Semua perintah dijalankan dari `/home/hermes/projects/grahita-website`.
@@ -166,10 +205,10 @@ Gerbang backend (`api/`):
 | `gofmt -l .` | kosong |
 | `go vet ./...` | `exit 0` |
 | `go build ./...` | `exit 0` |
-| `sqlc-v1.31.1 generate` | 0 diff (md5 `internal/db/sqlc/document.sql.go` sebelum == sesudah: `3662f01a…`) |
+| `sqlc-v1.31.1 generate` | 0 diff (md5 19 berkas `internal/db/sqlc/*.go` sebelum == sesudah; putaran 2 menambah `order.sql.go`) |
 | `bash scripts/check-secrets.sh` | `exit 0` — "Tidak ada rahasia terdeteksi" |
-| `redocly lint openapi/openapi.yaml` | valid, 10 warning (baseline) — diverifikasi pada commit beku `3d316fa` DAN pada spec induk `a6a8718` |
-| `go test -race -p 1 -count=1 ./...` (DB `grahita_f119` + shim) | `SUITE_EXIT=0`, **21 paket ok, 0 FAIL, 0 SKIP** (`httpapi` 584 s; `document` 4,4 s) — dijalankan dua kali, log `cache/scratch/f119-suite-full.log` |
+| `redocly lint openapi/openapi.yaml` | valid, 10 warning (baseline) |
+| `go test -race -p 1 -count=1 ./...` (DB `grahita_f119r2` + shim) | `SUITE_EXIT=0`, **22 paket ok, 0 FAIL, 0 SKIP** (`httpapi` 138,8 s) — log `cache/scratch/f119r2_suite_final.log` |
 
 Uji fokus F1-19:
 
@@ -193,22 +232,49 @@ Uji fokus F1-19:
   `/invoices` dijawab `403`.
 - Ukuran suites/`benchmark` tidak ada; `-count=1` dipakai agar hasil bukan
   cache.
+- **`go test ./internal/httpapi/ -run TestPGBerandaPengingatCNCOverdueDariResponsNyata -count=1 -v`
+  (BARU, putaran 2)**: PASS. PostgreSQL 16.15 nyata + router nyata; pesanan C&C
+  dibuat lewat alur submit sungguhan lalu tanggalnya digeser ke masa lalu. Log
+  uji (bukti dari server nyata):
+  `GET /orders baris C&C: is_cnc=true status=submitted tanggal=2026-09-29 jatuh_tempo=2026-10-06`
+  dan `pengingat beranda dari data server: judul="C&C lewat jatuh tempo 3 hari" sisa_hari=-3 hari_ini_WIB=2026-10-09`.
+  Uji juga menegaskan `done_at` NULL, `verif_status` tetap, jumlah event tetap
+  setelah dibaca (tanpa efek samping), pesanan non-C&C tidak membawa
+  `jatuh_tempo`, dan daftar cabang lain tidak memuatnya (isolasi).
+  **Tanpa perbaikan uji ini MERAH** (kolom `JatuhTempo` dihapus sementara dari
+  `Repo.List`): `GET /orders harus membawa jatuh_tempo "2026-10-06", dapat <nil>`
+  dan `pengingat C&C tidak akan tampil: server mengirim jatuh_tempo kosong` —
+  persis galat yang dilaporkan QA putaran 1. Jadi uji ini benar-benar menutup
+  celah, bukan sekadar ikut hijau.
+- `go test ./internal/httpapi/ -run TestKontrakOpenAPIIkutRouter -count=1`: PASS.
 
 Gerbang frontend (`web/`):
 
 | Perintah | Hasil |
 |---|---|
 | `npm run typecheck` (4 workspace) | `exit 0` |
-| `npm test` | `exit 0` — 185 uji lulus (api-client 8, ui 64, admin 60, customer 53); dijalankan tiga kali dengan hasil sama |
+| `npx vitest run --no-file-parallelism` per workspace | `exit 0` — **197 uji lulus** (api-client 8, ui 64, admin 70, customer 55) |
 | `npm run build` | `exit 0` (kedua SPA) |
 
-Uji vitest baru (semuanya lulus):
+Catatan kejujuran (flake mesin, BUKAN regresi F1-19): `apps/customer/src/pesanan.test.tsx`
+(uji F1-11, bukan berkas F1-19) timeout 1 s pada `npm test` paralel karena
+delapan lingkungan jsdom dibuat bersamaan. Saya buktikan ini bukan akibat
+perubahan F1-19: dengan seluruh perubahan F1-19 di-`git stash`, run paralel pada
+HEAD bersih `0a03f02` juga gagal di uji yang sama (2× berturut), dan berkas itu
+lulus 21/21 saat dijalankan sendiri. Dengan `--no-file-parallelism` seluruh 55
+uji customer (termasuk 21 uji pesanan) lulus 100%. Uji F1-19 sendiri
+(`beranda/invoice/tutorial/App`) hijau di kedua mode.
 
-- `apps/customer/src/beranda.test.tsx` — 3 uji: ringkasan periode (2 pesanan
-  bulan ini, Rp500.000, 1 menunggu verifikasi, 1 draft) dengan pengingat
-  "C&C lewat jatuh tempo" yang pesanannya TETAP "Menunggu verifikasi"; keadaan
-  kosong; galat API ditampilkan tanpa angka palsu. Juga memastikan seluruh
-  panggilan beranda adalah GET ke `/api/v1/orders` tanpa parameter cabang.
+Uji vitest F1-19 (semuanya lulus):
+
+- `apps/customer/src/beranda.test.tsx` — 5 uji: tiga uji putaran 1 (ringkasan
+  periode, keadaan kosong, galat API) + dua uji putaran 2: `hariIni` memakai
+  tanggal bisnis **WIB** (2026-10-09T18:30Z → `2026-10-10`,
+  2026-10-31T17:00Z → `2026-11-01`), dan `pengingatCNC` menampilkan pengingat
+  hanya bila `jatuh_tempo` ada (`"C&C lewat jatuh tempo 4 hari"`) serta TIDAK
+  menampilkannya saat `jatuh_tempo` absen — bentuk respons `GET /orders` sebelum
+  perbaikan. Uji pertama juga menegaskan urutan "5 pesanan terakhir" sama persis
+  dengan urutan server (klien tidak menyortir ulang) dan seluruh panggilan GET.
 - `apps/customer/src/invoice.test.tsx` — 4 uji: baris invoice + "Revisi 1" +
   "versi lama" + tombol "Belum tersedia" nonaktif untuk pesanan yang belum
   selesai; unduhan memanggil `/documents/d-1/download` dan membuka URL presigned
@@ -221,32 +287,48 @@ Uji vitest baru (semuanya lulus):
 - `apps/customer/src/App.test.tsx` disesuaikan: rute `/tutorial` kini diuji
   dengan empat topik baru (dulu mengecek kerangka F1-03).
 
-Pemeriksaan browser nyata (SPA dilayani `vite dev` :5173 dengan API TIRUAN di
-:8088 — data contoh, bukan PostgreSQL; tujuannya memeriksa tata letak/HTML
-yang dihasilkan, bukan alur server). Enam tangkapan layar disimpan di luar repo,
-di workspace scratch profil: `cache/scratch/f119-shots/f119-{beranda,invoice,tutorial}-{desktop,mobile}-{1440x900,390x844}.png`.
+Pemeriksaan browser putaran 2 — **DENGAN API dan PostgreSQL NYATA** (menutup
+catatan QA bahwa putaran 1 memakai API tiruan sehingga celah `jatuh_tempo`
+tersembunyi):
 
-Nilai yang saya ukur sendiri lewat CDP (`getComputedStyle`) dan isi halaman:
+- Lingkungan: DB `grahita_f119live` (PostgreSQL 16.15, dimigrasi + `--mode=seed`),
+  binary API nyata `--mode=api` di `127.0.0.1:8088`, SPA `vite dev` di
+  `:5173` (proxy `/api` → `:8088`). Tidak ada mock.
+- Data: cabang Bandung punya pesanan C&C `2026-09-0001` (`status=submitted`,
+  `tanggal = wib_today()-10`, `jatuh_tempo = wib_today()-3`, total Rp 750.000)
+  dan satu pesanan non-C&C `2026-10-0002`.
+- `GET /api/v1/orders` lewat HTTP nyata (sesi cabang) mengembalikan
+  `"is_cnc":true, "tanggal":"2026-09-29", "jatuh_tempo":"2026-10-06"` untuk
+  pesanan C&C — dan **tidak** memuat `jatuh_tempo` untuk pesanan non-C&C.
+- Browser nyata (cookie sesi disuntik via CDP `Network.setCookie`, kata sandi
+  tidak pernah diketik di browser): elemen `[data-testid="banner-cnc"]` tampil
+  dengan teks **"C&C lewat jatuh tempo 3 hari"** / "Pesanan 2026-09-0001 ·
+  Rp 750.000. Bayar lalu unggah bukti transfer."; KPI 1 / Rp 125.000 / 2 / 0;
+  tabel "Pesanan terakhir" menampilkan baris C&C itu tetap berstatus
+  **"Menunggu verifikasi"** (bukan "Selesai").
+- mobile 390×844: banner tetap tampil, `aside` `display:none`, bottom-nav ada,
+  `scrollWidth - innerWidth = 0`.
+- **Tanpa auto-Done dibuktikan dua sisi**: log API hanya memuat GET dari SPA
+  (`/auth/me`, `/orders`) — satu-satunya POST adalah login skrip pengujian saya,
+  bukan browser; dan di DB setelah browsing, `2026-09-0001` masih `submitted`
+  dengan `done_at` NULL dan `verif_status = belum`.
+- Tangkapan layar baru (data nyata):
+  `cache/scratch/f119-shots/f119r2-beranda-nyata-desktop-1440x900.png` dan
+  `...-mobile-390x844.png`.
 
-- desktop 1440×900: `Beranda` menampilkan KPI "Pesanan bulan ini 3", "Total
-  belanja bulan ini Rp 1.900.000", "Menunggu verifikasi 2", "Draft 1", banner
-  C&C ("jatuh tempo hari ini" karena tanggal contoh = hari berjalan), tabel 5
-  pesanan terakhir (baris Draft + 4 ber-nomor); `/invoice` menampilkan 4 baris
-  dengan "Revisi 1", "Asli versi lama", "Belum tersedia" (tombol `disabled`
-  hanya pada baris Submitted) dan 3 tombol Unduh aktif; `/tutorial`
-  menampilkan 4 kartu topik + 4 ilustrasi + 4 accordion (pertama terbuka).
-  Tidak ada overflow horizontal pada ketiga halaman.
-- mobile 390×844: sidebar `display: none`, bottom-nav tampil, KPI menjadi
-  deretan geser (`.kpis` `display: flex`, `scrollWidth > clientWidth`), baris
-  tabel menjadi kartu (`tr` `display: grid`), ilustrasi tutorial 240 px dengan
-  kepala kartu `flex-direction: column`, dan `scrollWidth - innerWidth = 0`
+Pemeriksaan tata letak putaran 1 (SPA `vite dev` :5173 dengan API TIRUAN di
+:8088 — data contoh untuk memeriksa tata letak/HTML `/invoice` dan `/tutorial`
+yang tidak berubah di putaran 2). Enam tangkapan layar di
+`cache/scratch/f119-shots/f119-{beranda,invoice,tutorial}-{desktop,mobile}-{1440x900,390x844}.png`:
+
+- desktop 1440×900: `/invoice` menampilkan 4 baris dengan "Revisi 1", "Asli
+  versi lama", "Belum tersedia" (tombol `disabled` hanya pada baris Submitted)
+  dan 3 tombol Unduh aktif; `/tutorial` menampilkan 4 kartu topik + 4 ilustrasi
+  + 4 accordion (pertama terbuka). Tidak ada overflow horizontal.
+- mobile 390×844: KPI beranda menjadi deretan geser (`.kpis` `display: flex`),
+  baris tabel menjadi kartu (`tr` `display: grid`), ilustrasi tutorial 240 px
+  dengan kepala kartu `flex-direction: column`, dan `scrollWidth - innerWidth = 0`
   pada ketiga halaman.
-
-Catatan kejujuran: pada satu run `npm test` yang berjalan BARENGAN dengan suite
-Go `-race` di mesin yang sama, satu uji customer timeout (1 dari 53) dan tidak
-muncul lagi pada tiga run berikutnya (termasuk dua run penuh berurutan).
-Saya tidak bisa mereproduksinya, jadi saya catat sebagai flake beban mesin —
-bukan klaim "bersih tanpa catatan" untuk run itu.
 
 ## Risiko residu
 
@@ -263,6 +345,19 @@ bukan klaim "bersih tanpa catatan" untuk run itu.
   volume sekarang).
 - Ilustrasi tutorial adalah SVG hias (bukan tangkapan layar aplikasi); PRD
   fase 2 (konten statis yang bisa diperbarui tanpa deploy) belum dikerjakan.
+- Pemeriksaan browser putaran 2 memakai DB live dengan baris pesanan C&C
+  disemai lewat SQL (tanggal digeser ke masa lalu); jalur submit C&C yang
+  menghasilkan baris seperti itu dibuktikan uji PG
+  `TestPGBerandaPengingatCNCOverdueDariResponsNyata` (membuat pesanan lewat
+  `POST /orders/{id}/submit` sungguhan).
+- `apps/customer/src/pesanan.test.tsx` (F1-11) timeout 1 s pada `npm test`
+  paralel di mesin ini; terbukti juga gagal pada HEAD bersih tanpa perubahan
+  F1-19, dan lulus penuh dengan `--no-file-parallelism`. Bukan milik kartu ini,
+  tapi perlu dirapikan pemilik kartu F1-11 (naikkan timeout / kurangi
+  paralelisme jsdom) supaya gerbang `npm test` tidak merah acak.
+- Hotspot baru yang ikut disentuh: `api/db/queries/order.sql`,
+  `api/internal/db/sqlc/order.sql.go`, `api/internal/order/postgres/postgres.go`
+  (dipakai bersama F1-11/F1-12/F1-13/F1-14/F1-15/F1-18/F1-20).
 
 ## Kewajiban untuk kartu turunan
 

@@ -42,10 +42,15 @@ const rupiah = new Intl.NumberFormat("id-ID", {
   maximumFractionDigits: 0,
 });
 
-/** hariIni mengembalikan tanggal LOKAL pengguna sebagai YYYY-MM-DD. */
+/** hariIni mengembalikan tanggal bisnis WIB (UTC+7) sebagai YYYY-MM-DD. */
 export function hariIni(sekarang: Date = new Date()): string {
+  // Memakai WIB, BUKAN zona waktu browser: orders.tanggal adalah tanggal bisnis
+  // WIB (BR-04), sehingga "periode berjalan" dan pengingat C&C tidak bergeser
+  // bagi pengguna yang membuka portal dari zona waktu lain dekat pergantian
+  // hari/bulan. WIB tidak punya DST, jadi geserannya tetap +7 jam.
+  const wib = new Date(sekarang.getTime() + 7 * 60 * 60 * 1000);
   const p = (n: number) => String(n).padStart(2, "0");
-  return `${sekarang.getFullYear()}-${p(sekarang.getMonth() + 1)}-${p(sekarang.getDate())}`;
+  return `${wib.getUTCFullYear()}-${p(wib.getUTCMonth() + 1)}-${p(wib.getUTCDate())}`;
 }
 
 /** bulanDari mengambil YYYY-MM dari tanggal bisnis (YYYY-MM-DD). */
@@ -90,11 +95,6 @@ function tanggalRingkas(tanggal?: string): string {
 /** masukPeriode melaporkan apakah tanggal bisnis berada di bulan tertentu. */
 function masukPeriode(tanggal: string | undefined, bulan: string): boolean {
   return bulanDari(tanggal) === bulan;
-}
-
-/** kunciUrut adalah kunci pengurutan pesanan terakhir (tanggal lalu created_at). */
-function kunciUrut(o: Pesanan): string {
-  return o.tanggal ?? o.created_at ?? "";
 }
 
 /** labelStatus adalah teks status pesanan pada tabel beranda. */
@@ -157,9 +157,10 @@ export function BerandaPage() {
     const persen = totalLalu > 0 ? Math.round(((totalIni - totalLalu) / totalLalu) * 100) : 0;
     const menunggu = semua.filter((o) => o.status === "submitted");
     const draft = semua.filter((o) => o.status === "draft");
-    const terakhir = [...semua]
-      .sort((a, b) => kunciUrut(b).localeCompare(kunciUrut(a)))
-      .slice(0, 5);
+    // 5 pesanan terakhir mengikuti urutan server apa adanya: ListOrdersForBranch
+    // sudah mengurutkan COALESCE(tanggal, created_at) DESC, sehingga klien tidak
+    // perlu menyortir ulang dengan kunci campuran yang bisa salah urut.
+    const terakhir = semua.slice(0, 5);
     return {
       periodeIni,
       selesai,

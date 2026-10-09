@@ -11,8 +11,10 @@
 
 -- name: ListOrdersForBranch :many
 -- Daftar pesanan satu cabang: nomor, tanggal, jumlah item (Σ qty baris produk),
--- total, status, dan penanda C&C (PRD CP-ORD-01). Filter status opsional;
--- draft punya nomor/tanggal NULL sehingga diurutkan memakai created_at.
+-- total, status, penanda C&C (PRD CP-ORD-01), dan jatuh tempo C&C (CP-CNC-04)
+-- supaya beranda bisa menampilkan pengingat C&C lewat jatuh tempo (PRD §3.3).
+-- Filter status opsional; draft punya nomor/tanggal NULL sehingga diurutkan
+-- memakai created_at.
 SELECT o.id,
        o.nomor,
        o.status::text       AS status,
@@ -21,6 +23,7 @@ SELECT o.id,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
+       o.jatuh_tempo,
        COALESCE(o.catatan, '') AS catatan,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l

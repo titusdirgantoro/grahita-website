@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { routeTree } from "./routes";
 import type { Pesanan } from "./pages/pesanan";
+import { hariIni, pengingatCNC } from "./pages/beranda";
 
 /**
  * Uji pBeranda (kartu F1-19): jumlah/status diambil dari daftar pesanan yang
@@ -53,16 +54,23 @@ function buatRouter(path = "/") {
 /** pad melengkapi angka menjadi dua digit. */
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** bulanGeser mengembalikan YYYY-MM bulan ini digeser `delta` bulan. */
-function bulanGeser(delta: number, sekarang = new Date()): string {
-  const d = new Date(Date.UTC(sekarang.getFullYear(), sekarang.getMonth() + delta, 1));
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
+/** wib menggeser `sekarang` ke tanggal bisnis WIB (UTC+7), sama dengan produksi. */
+function wib(sekarang: Date): Date {
+  return new Date(sekarang.getTime() + 7 * 60 * 60 * 1000);
 }
 
-/** tanggalGeser mengembalikan tanggal LOKAL hari ini digeser `hari`. */
+/** bulanGeser mengembalikan YYYY-MM bulan WIB ini digeser `delta` bulan. */
+function bulanGeser(delta: number, sekarang = new Date()): string {
+  const d = wib(sekarang);
+  const m = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + delta, 1));
+  return `${m.getUTCFullYear()}-${pad(m.getUTCMonth() + 1)}`;
+}
+
+/** tanggalGeser mengembalikan tanggal WIB hari ini digeser `hari`. */
 function tanggalGeser(hari: number, sekarang = new Date()): string {
-  const d = new Date(sekarang.getFullYear(), sekarang.getMonth(), sekarang.getDate() + hari);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const d = wib(sekarang);
+  const g = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + hari));
+  return `${g.getUTCFullYear()}-${pad(g.getUTCMonth() + 1)}-${pad(g.getUTCDate())}`;
 }
 
 /** pesanan membuat satu pesanan uji dengan field minimum yang dipakai beranda. */
@@ -125,6 +133,12 @@ describe("Customer Portal — Beranda (F1-19)", () => {
     // Tepat 5 pesanan terakhir yang tampil (satu baris header + 5 baris data).
     expect(within(tabel).getAllByRole("row")).toHaveLength(6);
     expect(within(tabel).queryByText(/2026-10-0007/)).toBeNull();
+    // Urutan baris = urutan server apa adanya (klien tidak menyortir ulang).
+    const nomor = within(tabel)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector("b")?.textContent);
+    expect(nomor).toEqual(orders.slice(0, 5).map((o) => o.nomor ?? "Draft"));
 
     // Beranda tidak pernah mengubah data: seluruh panggilan adalah GET.
     expect(panggilan.every((p) => !p.init || (p.init.method ?? "GET") === "GET")).toBe(true);
@@ -164,5 +178,40 @@ describe("Customer Portal — Beranda (F1-19)", () => {
       expect(screen.getByText("Layanan pesanan belum tersedia.")).toBeDefined();
     });
     expect(screen.queryByTestId("kpi-pesanan-periode")).toBeNull();
+  });
+});
+
+describe("Customer Portal — pengingat C&C dari data server (F1-19)", () => {
+  it("hariIni memakai tanggal bisnis WIB, bukan zona waktu browser", () => {
+    // 2026-10-09T18:30Z = 2026-10-10 01:30 WIB (sudah ganti hari).
+    expect(hariIni(new Date("2026-10-09T18:30:00Z"))).toBe("2026-10-10");
+    // 2026-10-31T17:00Z = 2026-11-01 00:00 WIB (pergantian bulan).
+    expect(hariIni(new Date("2026-10-31T17:00:00Z"))).toBe("2026-11-01");
+    // Tengah hari UTC tetap hari yang sama di WIB.
+    expect(hariIni(new Date("2026-10-09T05:00:00Z"))).toBe("2026-10-09");
+  });
+
+  it("memunculkan pengingat hanya untuk C&C submitted yang membawa jatuh_tempo", () => {
+    const lewat = pesanan({
+      id: "0002",
+      is_cnc: true,
+      status: "submitted",
+      tanggal: "2026-10-01",
+      jatuh_tempo: "2026-10-05",
+    });
+    const r = pengingatCNC([lewat], "2026-10-09");
+    expect(r?.judul).toBe("C&C lewat jatuh tempo 4 hari");
+    // Status dibaca apa adanya: pengingat tidak menyentuh status pesanan.
+    expect(r?.pesanan.status).toBe("submitted");
+
+    // Tanpa jatuh_tempo (bentuk respons GET /orders sebelum perbaikan F1-19),
+    // pengingat TIDAK boleh tampil — inilah celah yang ditutup.
+    const tanpaTempo = pesanan({ id: "0003", is_cnc: true, status: "submitted", tanggal: "2026-10-01" });
+    expect(pengingatCNC([tanpaTempo], "2026-10-09")).toBeNull();
+
+    // Non-C&C dan yang sudah Done tidak pernah jadi pengingat.
+    const nonCNC = pesanan({ id: "0004", is_cnc: false, status: "submitted", jatuh_tempo: "2026-10-01" });
+    const selesai = pesanan({ id: "0005", is_cnc: true, status: "done", jatuh_tempo: "2026-10-01" });
+    expect(pengingatCNC([nonCNC, selesai], "2026-10-09")).toBeNull();
   });
 });

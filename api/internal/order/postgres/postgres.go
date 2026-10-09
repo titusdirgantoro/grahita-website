@@ -55,6 +55,7 @@ func (r *Repo) List(ctx context.Context, branchID, status string) ([]order.Order
 			IsCNC:        row.IsCnc,
 			IsSertifikat: row.IsSertifikat,
 			Tanggal:      tanggalOr(row.Tanggal),
+			JatuhTempo:   tanggalOr(row.JatuhTempo),
 			Catatan:      row.Catatan,
 			Total:        row.Total,
 			JumlahItem:   row.JumlahItem,

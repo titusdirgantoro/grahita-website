@@ -368,6 +368,7 @@ SELECT o.id,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
+       o.jatuh_tempo,
        COALESCE(o.catatan, '') AS catatan,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
@@ -395,6 +396,7 @@ type ListOrdersForBranchRow struct {
 	IsSertifikat bool        `json:"is_sertifikat"`
 	Versi        int32       `json:"versi"`
 	Tanggal      *time.Time  `json:"tanggal"`
+	JatuhTempo   *time.Time  `json:"jatuh_tempo"`
 	Catatan      string      `json:"catatan"`
 	Total        int64       `json:"total"`
 	JumlahItem   int64       `json:"jumlah_item"`
@@ -414,8 +416,10 @@ type ListOrdersForBranchRow struct {
 // Kolom enum dikembalikan sebagai teks (`status::text`) agar lapisan repository
 // tidak perlu mengimpor tipe enum hasil generate.
 // Daftar pesanan satu cabang: nomor, tanggal, jumlah item (Σ qty baris produk),
-// total, status, dan penanda C&C (PRD CP-ORD-01). Filter status opsional;
-// draft punya nomor/tanggal NULL sehingga diurutkan memakai created_at.
+// total, status, penanda C&C (PRD CP-ORD-01), dan jatuh tempo C&C (CP-CNC-04)
+// supaya beranda bisa menampilkan pengingat C&C lewat jatuh tempo (PRD §3.3).
+// Filter status opsional; draft punya nomor/tanggal NULL sehingga diurutkan
+// memakai created_at.
 func (q *Queries) ListOrdersForBranch(ctx context.Context, arg ListOrdersForBranchParams) ([]ListOrdersForBranchRow, error) {
 	rows, err := q.db.Query(ctx, listOrdersForBranch, arg.BranchID, arg.Status)
 	if err != nil {
@@ -434,6 +438,7 @@ func (q *Queries) ListOrdersForBranch(ctx context.Context, arg ListOrdersForBran
 			&i.IsSertifikat,
 			&i.Versi,
 			&i.Tanggal,
+			&i.JatuhTempo,
 			&i.Catatan,
 			&i.Total,
 			&i.JumlahItem,
