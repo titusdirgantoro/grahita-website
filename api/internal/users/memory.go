@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/grahita/portal/api/internal/audit"
 	"github.com/grahita/portal/api/internal/auth"
 )
 
@@ -23,6 +24,39 @@ type Memory struct {
 	// OnAdminCreated dipanggil setiap admin baru dibuat. Dipakai pengujian
 	// untuk mencerminkan akun yang sama ke auth.Memory (alur aktivasi).
 	OnAdminCreated func(AdminUser)
+
+	// recs adalah entri audit yang tercatat (F2-28). Implementasi produksi
+	// menulisnya ke tabel audit_logs; penyimpanan in-memory menyimpannya di
+	// sini supaya pengujian domain bisa memeriksa "tepat satu event per
+	// mutasi" tanpa database.
+	recs []audit.Entry
+}
+
+// AuditEntries mengembalikan salinan entri audit yang tercatat.
+func (m *Memory) AuditEntries() []audit.Entry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]audit.Entry, len(m.recs))
+	copy(out, m.recs)
+	return out
+}
+
+// catatAudit menambahkan entri audit yang perlu ditulis. Pemanggil sudah
+// memegang mutex.
+func (m *Memory) catatAudit(recs []audit.Entry) {
+	m.recs = append(m.recs, recs...)
+}
+
+// lengkapiAudit mengisi EntityID/Before/After entri audit dari baris yang
+// benar-benar berubah. Service hanya menyusun kerangkanya (aktor, IP, entitas,
+// aksi) supaya snapshot selalu berasal dari keadaan data — bukan dari nilai
+// yang dikirim klien.
+func lengkapiAudit(recs []audit.Entry, entityID string, before, after any) {
+	for i := range recs {
+		recs[i].EntityID = entityID
+		recs[i].Before = audit.Redact(before)
+		recs[i].After = audit.Redact(after)
+	}
 }
 
 // NewMemory membuat penyimpanan pengguna in-memory kosong.
@@ -79,16 +113,22 @@ func (m *Memory) BranchUserByID(_ context.Context, id string) (BranchUser, error
 	return BranchUser{}, ErrNotFound
 }
 
-// SetBranchUserActive mengubah status aktif satu akun cabang.
-func (m *Memory) SetBranchUserActive(_ context.Context, id string, active bool) (BranchUser, error) {
+// SetBranchUserActive mengubah status aktif satu akun cabang. Entri audit yang
+// diberikan dilengkapi before/after dari baris yang benar-benar berubah.
+func (m *Memory) SetBranchUserActive(_ context.Context, id string, active bool, recs []audit.Entry) (BranchUser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, b := range m.branches {
 		if b.UserID != "" && b.UserID == id {
+			lama := b
+			lama.HasAccount = true
+			lama.Status = BranchStatus(true, lama.IsActive, lama.BranchActive)
 			m.branches[i].IsActive = active
 			b = m.branches[i]
 			b.HasAccount = true
 			b.Status = BranchStatus(true, active, b.BranchActive)
+			lengkapiAudit(recs, b.UserID, BranchUserSnapshot(lama), BranchUserSnapshot(b))
+			m.catatAudit(recs)
 			return b, nil
 		}
 	}
@@ -136,8 +176,9 @@ func (m *Memory) AdminByEmail(_ context.Context, email string) (AdminUser, error
 	return AdminUser{}, ErrNotFound
 }
 
-// CreateAdmin membuat undangan admin (belum diaktivasi).
-func (m *Memory) CreateAdmin(_ context.Context, in NewAdmin) (AdminUser, error) {
+// CreateAdmin membuat undangan admin (belum diaktivasi). Entri audit yang
+// diberikan dilengkapi id akun + snapshotnya.
+func (m *Memory) CreateAdmin(_ context.Context, in NewAdmin, recs []audit.Entry) (AdminUser, error) {
 	m.mu.Lock()
 	for _, a := range m.admins {
 		if NormalizeEmail(a.Email) == in.Email {
@@ -160,6 +201,8 @@ func (m *Memory) CreateAdmin(_ context.Context, in NewAdmin) (AdminUser, error) 
 	a.Status = AdminStatus(a.IsActive, false)
 	m.admins[a.ID] = a
 	m.urut = append(m.urut, a.ID)
+	lengkapiAudit(recs, a.ID, nil, AdminSnapshot(a))
+	m.catatAudit(recs)
 	hook := m.OnAdminCreated
 	m.mu.Unlock()
 
@@ -170,8 +213,9 @@ func (m *Memory) CreateAdmin(_ context.Context, in NewAdmin) (AdminUser, error) 
 }
 
 // UpdateAdmin menyimpan perubahan admin sambil menegakkan larangan menurunkan
-// atau menonaktifkan superadmin aktif terakhir.
-func (m *Memory) UpdateAdmin(_ context.Context, next AdminUser) (AdminUser, error) {
+// atau menonaktifkan superadmin aktif terakhir. Penolakan (ErrLastSuperadmin)
+// tidak menulis apa pun dan tidak meninggalkan entri audit.
+func (m *Memory) UpdateAdmin(_ context.Context, next AdminUser, recs []audit.Entry) (AdminUser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cur, ok := m.admins[next.ID]
@@ -189,6 +233,8 @@ func (m *Memory) UpdateAdmin(_ context.Context, next AdminUser) (AdminUser, erro
 	next.LastLoginAt = cur.LastLoginAt
 	next.Status = AdminStatus(next.IsActive, next.ActivatedAt != nil)
 	m.admins[next.ID] = next
+	lengkapiAudit(recs, next.ID, AdminSnapshot(cur), AdminSnapshot(next))
+	m.catatAudit(recs)
 	return next, nil
 }
 

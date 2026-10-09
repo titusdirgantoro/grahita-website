@@ -3076,6 +3076,98 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 
+  /api/v1/admin/audit-logs:
+    get:
+      tags: [admin]
+      operationId: listAuditLogs
+      summary: Audit log aktivitas admin (Superadmin)
+      description: |
+        Satu halaman `audit_logs` (SystemDesign.md §5.4) untuk ditelusuri
+        Superadmin: siapa melakukan apa, kapan, dari IP mana, beserta snapshot
+        `before`/`after` (PRD §4.10 fase 2 "audit log UI").
+
+        Setiap mutasi admin yang BERHASIL menulis tepat satu entri di dalam
+        transaksi yang sama dengan perubahannya (cabang, harga, verifikasi,
+        revisi, pengaturan, tutorial, dan mutasi akun); permintaan yang gagal
+        atau tidak mengubah apa pun tidak meninggalkan entri.
+
+        Data sensitif TIDAK pernah masuk snapshot: kata sandi, token (termasuk
+        tautan atur ulang/aktivasi), secret/kunci, dan URL (termasuk URL bukti
+        transfer) diredaksi menjadi `[REDACTED]` — baik saat menyimpan maupun
+        saat menampilkan. Email akun juga tidak ikut dicatat pada snapshot
+        mutasi akun.
+
+        Filter: `entitas` (boleh diulang atau dipisah koma), `aksi`, `aktor`
+        (id akun berbentuk UUID atau potongan nama), serta rentang tanggal
+        bisnis WIB `dari`/`sampai` (inklusif). Nilai yang tidak dikenal dijawab
+        `400 VALIDATION_FAILED` supaya salah ketik tidak diam-diam
+        menghilangkan baris dari hasil.
+
+        Paginasi server: `halaman` (default 1) dan `per_halaman` (default 25,
+        maksimum 100). Urutan `at DESC, id DESC` STABIL sehingga menelusuri
+        halaman berikutnya tidak melewatkan atau mengulang baris. Hanya
+        Superadmin (`admin.audit`); Manager dan akun cabang dijawab `403`.
+      parameters:
+        - name: entitas
+          in: query
+          required: false
+          description: |
+            Kolom `entity` (mis. `order`, `branch`, `admin_user`). Boleh
+            diulang atau dipisah koma.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: aksi
+          in: query
+          required: false
+          description: Kolom `action` (mis. `create`, `update`, `verify`, `revise`, `reset`).
+          schema: { type: string }
+        - name: aktor
+          in: query
+          required: false
+          description: |
+            id akun pelaku (UUID) atau potongan nama pelaku — UUID dicocokkan
+            persis ke `actor_id`, selain itu dicari pada `actor_nama`.
+          schema: { type: string }
+        - name: dari
+          in: query
+          required: false
+          description: Tanggal awal rentang (YYYY-MM-DD, WIB, inklusif).
+          schema: { type: string, format: date }
+        - name: sampai
+          in: query
+          required: false
+          description: Tanggal akhir rentang (YYYY-MM-DD, WIB, inklusif).
+          schema: { type: string, format: date }
+        - name: halaman
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_halaman
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        "200":
+          description: Satu halaman audit log
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AuditLogPage" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -4453,6 +4545,67 @@ components:
             Daftar lengkap topik yang menggantikan isi sekarang (urutan array =
             urutan tampil; topik yang tidak disertakan dihapus).
           items: { $ref: "#/components/schemas/TutorialTopicInput" }
+    AuditLogEntry:
+      type: object
+      required: [id, at, actor_kind, entity, action]
+      description: |
+        Satu baris `audit_logs` — satu mutasi admin yang berhasil.
+        `before`/`after` adalah snapshot JSON keadaan sebelum/sesudah mutasi;
+        nilainya sudah diredaksi (kata sandi, token, secret, dan URL menjadi
+        `[REDACTED]`) sehingga aman ditampilkan apa adanya.
+      properties:
+        id: { type: string, format: uuid }
+        at:
+          type: string
+          format: date-time
+          description: Waktu kejadian (UTC; UI menampilkannya sebagai WIB).
+        actor_kind: { type: string, enum: [admin, branch, system] }
+        actor_id:
+          type: string
+          description: id akun pelaku (UUID); kosong untuk aktor sistem.
+        actor_nama: { type: string, description: Nama pelaku saat aksi dilakukan. }
+        ip: { type: string, description: Alamat IP asal permintaan; kosong untuk pekerjaan latar. }
+        entity:
+          type: string
+          description: Jenis objek yang berubah (mis. `order`, `branch`, `admin_user`).
+        entity_id: { type: string, description: id objek terkait (UUID); boleh kosong. }
+        action:
+          type: string
+          description: Aksi yang dilakukan (mis. `create`, `update`, `verify`, `revise`, `reset`).
+        before:
+          description: Snapshot sebelum mutasi (null bila tidak ada), sudah diredaksi.
+        after:
+          description: Snapshot sesudah mutasi (null bila tidak ada), sudah diredaksi.
+    AuditLogFilter:
+      type: object
+      description: Filter yang benar-benar dipakai untuk halaman ini.
+      properties:
+        entitas: { type: array, items: { type: string } }
+        aksi: { type: string }
+        aktor: { type: string, description: Kata kunci aktor seperti yang diminta klien. }
+        dari:
+          type: string
+          description: Tanggal awal rentang (YYYY-MM-DD, WIB).
+        sampai:
+          type: string
+          description: Tanggal akhir rentang (YYYY-MM-DD, WIB).
+        halaman: { type: integer }
+        per_halaman: { type: integer }
+    AuditLogPage:
+      type: object
+      required: [items, total, halaman, per_halaman, total_halaman, filter]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditLogEntry" }
+        total:
+          type: integer
+          format: int64
+          description: Jumlah seluruh entri yang lolos filter (bukan hanya halaman ini).
+        halaman: { type: integer }
+        per_halaman: { type: integer }
+        total_halaman: { type: integer }
+        filter: { $ref: "#/components/schemas/AuditLogFilter" }
 
 security:
   - cookieAuth: []

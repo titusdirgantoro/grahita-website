@@ -27,6 +27,7 @@ import { RekeningPage } from "./pages/rekening";
 import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
+import { AuditPage, type FilterAudit } from "./pages/audit";
 
 /** RouterLink menyambungkan shell (yang lepas router) ke <Link> TanStack. */
 function RouterLink({ to, className, active, children, title }: ShellLinkProps) {
@@ -178,6 +179,24 @@ const rekeningRoute = createRoute({ getParentRoute: () => shellRoute, path: "/re
 const reportingRoute = createRoute({ getParentRoute: () => shellRoute, path: "/reporting", component: ReportingPage });
 const penggunaRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pengguna", component: PenggunaPage });
 const pengaturanRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pengaturan", component: PengaturanPage });
+/**
+ * /audit (F2-28) menyimpan filter audit log di URL search param supaya hasil
+ * terfilter bisa di-bookmark/di-share (SystemDesign.md §7.2). Nilai yang tidak
+ * dikenal diabaikan, bukan membuat halaman gagal.
+ */
+const auditRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/audit",
+  validateSearch: (search: Record<string, unknown>): FilterAudit => ({
+    entitas: teksMungkin(search.entitas),
+    aksi: teksMungkin(search.aksi),
+    aktor: teksMungkin(search.aktor),
+    dari: teksMungkin(search.dari),
+    sampai: teksMungkin(search.sampai),
+    halaman: angkaMungkin(search.halaman),
+  }),
+  component: AuditPage,
+});
 const profilRoute = createRoute({ getParentRoute: () => shellRoute, path: "/profil", component: ProfilAdminPage });
 
 const routeTree = rootRoute.addChildren([
@@ -194,6 +213,7 @@ const routeTree = rootRoute.addChildren([
     reportingRoute,
     penggunaRoute,
     pengaturanRoute,
+    auditRoute,
     profilRoute,
   ]),
 ]);

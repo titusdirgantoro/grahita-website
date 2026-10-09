@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/grahita/portal/api/internal/audit"
+	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -62,7 +64,13 @@ func (r *Repo) ListBranchUsers(ctx context.Context) ([]users.BranchUser, error) 
 
 // BranchUserByID mencari akun cabang berdasarkan id branch_users.
 func (r *Repo) BranchUserByID(ctx context.Context, id string) (users.BranchUser, error) {
-	row, err := r.q.GetBranchAccountRow(ctx, id)
+	return branchUserByID(ctx, r.q, id)
+}
+
+// branchUserByID memuat satu baris akun cabang memakai query set yang diberikan
+// (pool atau transaksi).
+func branchUserByID(ctx context.Context, q *sqlc.Queries, id string) (users.BranchUser, error) {
+	row, err := q.GetBranchAccountRow(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return users.BranchUser{}, users.ErrNotFound
 	}
@@ -86,17 +94,50 @@ func (r *Repo) BranchUserByID(ctx context.Context, id string) (users.BranchUser,
 	}, nil
 }
 
-// SetBranchUserActive mengubah status aktif satu akun cabang.
-func (r *Repo) SetBranchUserActive(ctx context.Context, id string, active bool) (users.BranchUser, error) {
-	if _, err := r.q.GetBranchUserBrief(ctx, id); errors.Is(err, pgx.ErrNoRows) {
-		return users.BranchUser{}, users.ErrNotFound
-	} else if err != nil {
-		return users.BranchUser{}, fmt.Errorf("query GetBranchUserBrief: %w", err)
+// SetBranchUserActive mengubah status aktif satu akun cabang beserta catatan
+// auditnya dalam SATU transaksi (F2-28): baris dikunci lebih dulu
+// (FOR UPDATE) supaya snapshot before/after tidak pernah berasal dari keadaan
+// yang sudah basi, dan kegagalan menulis audit membatalkan perubahannya.
+func (r *Repo) SetBranchUserActive(ctx context.Context, id string, active bool, recs []audit.Entry) (users.BranchUser, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return users.BranchUser{}, fmt.Errorf("mulai transaksi ubah akun cabang: %w", err)
 	}
-	if err := r.q.SetBranchUserActive(ctx, sqlc.SetBranchUserActiveParams{ID: id, IsActive: active}); err != nil {
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := r.q.WithTx(tx)
+
+	var kunci string
+	if err := tx.QueryRow(ctx, `SELECT id FROM branch_users WHERE id = $1 FOR UPDATE`, id).Scan(&kunci); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return users.BranchUser{}, users.ErrNotFound
+		}
+		return users.BranchUser{}, fmt.Errorf("kunci akun cabang: %w", err)
+	}
+	cur, err := branchUserByID(ctx, q, id)
+	if err != nil {
+		return users.BranchUser{}, err
+	}
+	if err := q.SetBranchUserActive(ctx, sqlc.SetBranchUserActiveParams{ID: id, IsActive: active}); err != nil {
 		return users.BranchUser{}, fmt.Errorf("query SetBranchUserActive: %w", err)
 	}
-	return r.BranchUserByID(ctx, id)
+	next, err := branchUserByID(ctx, q, id)
+	if err != nil {
+		return users.BranchUser{}, err
+	}
+	for i := range recs {
+		recs[i].EntityID = next.UserID
+		recs[i].Before = audit.Redact(users.BranchUserSnapshot(cur))
+		recs[i].After = audit.Redact(users.BranchUserSnapshot(next))
+	}
+	for _, rec := range recs {
+		if err := auditpg.Insert(ctx, tx, rec); err != nil {
+			return users.BranchUser{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return users.BranchUser{}, fmt.Errorf("commit ubah akun cabang: %w", err)
+	}
+	return next, nil
 }
 
 // ListAdmins mengembalikan seluruh akun admin.
@@ -162,8 +203,18 @@ func (r *Repo) EmailTakenByBranch(ctx context.Context, email string) (bool, erro
 }
 
 // CreateAdmin membuat undangan admin: password_hash dan activated_at NULL.
-func (r *Repo) CreateAdmin(ctx context.Context, in users.NewAdmin) (users.AdminUser, error) {
-	row, err := r.q.CreateAdminInvitation(ctx, sqlc.CreateAdminInvitationParams{
+//
+// Pembuatan akun dan entri auditnya ditulis dalam SATU transaksi (F2-28):
+// kegagalan mencatat audit membatalkan undangannya, dan pelanggaran unik email
+// tidak meninggalkan entri audit apa pun.
+func (r *Repo) CreateAdmin(ctx context.Context, in users.NewAdmin, recs []audit.Entry) (users.AdminUser, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return users.AdminUser{}, fmt.Errorf("mulai transaksi undangan admin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	row, err := r.q.WithTx(tx).CreateAdminInvitation(ctx, sqlc.CreateAdminInvitationParams{
 		Nama:            in.Nama,
 		Email:           in.Email,
 		Role:            sqlc.AdminRole(in.Role),
@@ -176,19 +227,39 @@ func (r *Repo) CreateAdmin(ctx context.Context, in users.NewAdmin) (users.AdminU
 		}
 		return users.AdminUser{}, fmt.Errorf("query CreateAdminInvitation: %w", err)
 	}
-	return adminFromRow(row.ID, row.Nama, row.Email, row.Role, row.NotifInvoice,
-		row.NotifSuratJalan, row.IsActive, row.InvitedAt, row.ActivatedAt, row.LastLoginAt), nil
+	admin := adminFromRow(row.ID, row.Nama, row.Email, row.Role, row.NotifInvoice,
+		row.NotifSuratJalan, row.IsActive, row.InvitedAt, row.ActivatedAt, row.LastLoginAt)
+	for i := range recs {
+		recs[i].EntityID = admin.ID
+		recs[i].Before = nil
+		recs[i].After = audit.Redact(users.AdminSnapshot(admin))
+	}
+	for _, rec := range recs {
+		if err := auditpg.Insert(ctx, tx, rec); err != nil {
+			return users.AdminUser{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return users.AdminUser{}, fmt.Errorf("commit undangan admin: %w", err)
+	}
+	return admin, nil
 }
 
 // UpdateAdmin menyimpan perubahan admin dalam satu transaksi yang memegang
 // kunci penasihat, sehingga larangan menurunkan/menonaktifkan superadmin aktif
 // terakhir tetap berlaku walaupun dua permintaan datang bersamaan.
-func (r *Repo) UpdateAdmin(ctx context.Context, next users.AdminUser) (users.AdminUser, error) {
+//
+// Entri audit (F2-28) ditulis di transaksi yang sama dengan snapshot sebelum
+// (baris yang dikunci) dan sesudah (hasil UPDATE) — tanpa email. Penolakan
+// (ErrLastSuperadmin) membatalkan transaksi sehingga tidak ada entri
+// tertinggal.
+func (r *Repo) UpdateAdmin(ctx context.Context, next users.AdminUser, recs []audit.Entry) (users.AdminUser, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return users.AdminUser{}, fmt.Errorf("mulai transaksi ubah admin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	q := r.q.WithTx(tx)
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, AdminMutationLockKey); err != nil {
 		return users.AdminUser{}, fmt.Errorf("ambil kunci mutasi admin: %w", err)
@@ -204,6 +275,12 @@ func (r *Repo) UpdateAdmin(ctx context.Context, next users.AdminUser) (users.Adm
 	if err != nil {
 		return users.AdminUser{}, fmt.Errorf("baca admin saat ini: %w", err)
 	}
+	curRow, err := q.GetAdminUserRow(ctx, next.ID)
+	if err != nil {
+		return users.AdminUser{}, fmt.Errorf("baca baris admin saat ini: %w", err)
+	}
+	cur := adminFromRow(curRow.ID, curRow.Nama, curRow.Email, curRow.Role, curRow.NotifInvoice,
+		curRow.NotifSuratJalan, curRow.IsActive, curRow.InvitedAt, curRow.ActivatedAt, curRow.LastLoginAt)
 
 	// Turun role / nonaktifkan superadmin aktif: wajib masih ada superadmin
 	// aktif lain. Pemeriksaan dan UPDATE berada di transaksi yang sama dan
@@ -230,7 +307,7 @@ func (r *Repo) UpdateAdmin(ctx context.Context, next users.AdminUser) (users.Adm
 		}
 	}
 
-	row, err := r.q.WithTx(tx).UpdateAdminUserRow(ctx, sqlc.UpdateAdminUserRowParams{
+	row, err := q.UpdateAdminUserRow(ctx, sqlc.UpdateAdminUserRowParams{
 		ID:              next.ID,
 		Nama:            next.Nama,
 		Role:            sqlc.AdminRole(next.Role),
@@ -246,11 +323,22 @@ func (r *Repo) UpdateAdmin(ctx context.Context, next users.AdminUser) (users.Adm
 		}
 		return users.AdminUser{}, fmt.Errorf("query UpdateAdminUserRow: %w", err)
 	}
+	sesudah := adminFromRow(row.ID, row.Nama, row.Email, row.Role, row.NotifInvoice,
+		row.NotifSuratJalan, row.IsActive, row.InvitedAt, row.ActivatedAt, row.LastLoginAt)
+	for i := range recs {
+		recs[i].EntityID = sesudah.ID
+		recs[i].Before = audit.Redact(users.AdminSnapshot(cur))
+		recs[i].After = audit.Redact(users.AdminSnapshot(sesudah))
+	}
+	for _, rec := range recs {
+		if err := auditpg.Insert(ctx, tx, rec); err != nil {
+			return users.AdminUser{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return users.AdminUser{}, fmt.Errorf("commit ubah admin: %w", err)
 	}
-	return adminFromRow(row.ID, row.Nama, row.Email, row.Role, row.NotifInvoice,
-		row.NotifSuratJalan, row.IsActive, row.InvitedAt, row.ActivatedAt, row.LastLoginAt), nil
+	return sesudah, nil
 }
 
 // DocumentRecipients mengembalikan email admin ber-flag yang sudah diaktivasi.

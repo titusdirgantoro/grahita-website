@@ -14,6 +14,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/grahita/portal/api/internal/audit"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/backup"
 	"github.com/grahita/portal/api/internal/bank"
@@ -111,6 +112,12 @@ type Deps struct {
 	// (`admin.tutorial`). Konten disimpan di database sehingga perubahan
 	// langsung terlihat di portal tanpa build/deploy.
 	Tutorial *tutorial.Service
+
+	// Audit melayani pembacaan audit log untuk Superadmin (F2-28,
+	// SystemDesign.md §5.4 & §6): filter entitas/aktor/waktu + paginasi
+	// server. Penulisan entri tetap dilakukan produsennya masing-masing di
+	// dalam transaksinya; layanan ini hanya membaca.
+	Audit *audit.Service
 
 	Storage   storage.Store
 	Gotenberg pdf.Renderer

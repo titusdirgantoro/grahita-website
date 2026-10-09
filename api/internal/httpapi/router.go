@@ -236,6 +236,15 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/tutorial", a.adapt(a.adminTutorial))
 					r.Put("/tutorial", a.adapt(a.adminTutorialUpdate))
 				})
+				// Audit log (F2-28, SystemDesign.md §5.4 & §6): hanya
+				// Superadmin (`admin.audit`). Manager ditolak 403 di sini dan
+				// lagi di layer service; isi diff yang dikirim sudah bersih
+				// dari kata sandi, token, dan URL bukti (diredaksi produsennya
+				// dan diperiksa ulang saat ditampilkan).
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminAudit))
+					r.Get("/audit-logs", a.adapt(a.adminAuditLogs))
+				})
 				// Rekening bank: khusus Superadmin (PRD §2.1, §4.6).
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminBank))

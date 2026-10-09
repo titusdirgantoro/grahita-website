@@ -28,6 +28,8 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	"github.com/grahita/portal/api/internal/audit"
+	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
 	"github.com/grahita/portal/api/internal/backup"
@@ -420,9 +422,14 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	authSvc.SetResetMailer(notification.NewResetMailer(notifSvc, cfg.CustomerBaseURL(), cfg.AdminBaseURL(), cfg.PasswordResetPath))
 
 	// Pengelolaan akun pengguna. Undangan admin diantre lewat email_outbox.
+	// Mutasi akun (undang/ubah/nonaktifkan) menulis entri audit di dalam
+	// transaksi yang sama, sedangkan pengiriman tautan atur ulang — yang
+	// perubahannya hidup di repositori auth — memakai Recorder (F2-28).
+	auditRepo := auditpg.New(pool)
 	usersSvc := users.NewService(userspg.New(pool), authSvc, authSvc,
 		users.WithEmailQueue(notification.NewQueue(notifSvc)),
 		users.WithResetURLBuilder(resetURL),
+		users.WithAuditRecorder(auditRepo),
 	)
 
 	// Master cabang + token registrasi sekali pakai (F1-06).
@@ -553,6 +560,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Bank:                bankSvc,
 		Registration:        registrationSvc,
 		Tutorial:            tutorialSvc,
+		Audit:               audit.NewService(auditRepo),
 		Emails:              notifSvc,
 		Backups:             backupSvc,
 		Storage:             store,

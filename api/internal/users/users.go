@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grahita/portal/api/internal/audit"
 	"github.com/grahita/portal/api/internal/auth"
 )
 
@@ -135,10 +136,14 @@ type AdminPatch struct {
 }
 
 // BranchRepository menyimpan dan memutasi akun cabang.
+//
+// Setiap mutasi menerima entri audit yang WAJIB disimpan implementasinya di
+// dalam transaksi yang sama dengan perubahannya (F2-28); daftar kosong berarti
+// tidak ada catatan yang perlu ditulis (mis. permintaan no-op).
 type BranchRepository interface {
 	ListBranchUsers(ctx context.Context) ([]BranchUser, error)
 	BranchUserByID(ctx context.Context, id string) (BranchUser, error)
-	SetBranchUserActive(ctx context.Context, id string, active bool) (BranchUser, error)
+	SetBranchUserActive(ctx context.Context, id string, active bool, recs []audit.Entry) (BranchUser, error)
 	// EmailTakenByBranch melaporkan apakah email sudah dipakai cabang, baik
 	// sebagai email login akun cabang (branch_users) maupun email cabang itu
 	// sendiri (branches, termasuk cabang yang belum registrasi).
@@ -156,8 +161,8 @@ type AdminRepository interface {
 	ListAdmins(ctx context.Context) ([]AdminUser, error)
 	AdminByID(ctx context.Context, id string) (AdminUser, error)
 	AdminByEmail(ctx context.Context, email string) (AdminUser, error)
-	CreateAdmin(ctx context.Context, in NewAdmin) (AdminUser, error)
-	UpdateAdmin(ctx context.Context, next AdminUser) (AdminUser, error)
+	CreateAdmin(ctx context.Context, in NewAdmin, recs []audit.Entry) (AdminUser, error)
+	UpdateAdmin(ctx context.Context, next AdminUser, recs []audit.Entry) (AdminUser, error)
 	// DocumentRecipients mengembalikan email admin yang berhak menerima
 	// dokumen jenis tertentu: aktif, sudah diaktivasi, dan flag-nya menyala.
 	DocumentRecipients(ctx context.Context, kind DocKind) ([]string, error)
@@ -215,6 +220,7 @@ type Service struct {
 	sessions SessionRevoker
 	queue    EmailQueue
 	resetURL auth.ResetURLBuilder
+	audit    audit.Recorder
 }
 
 // Option menyesuaikan Service.
@@ -238,13 +244,61 @@ func WithResetURLBuilder(b auth.ResetURLBuilder) Option {
 	}
 }
 
+// WithAuditRecorder memasang penulis entri audit untuk mutasi yang
+// perubahannya hidup di repositori domain lain (pengiriman tautan atur ulang
+// dan pengiriman ulang undangan, F2-28). Tanpa itu, mutasi transaksional tetap
+// menulis audit lewat repository-nya, sedangkan kedua aksi tersebut tidak
+// tercatat — hanya dipakai pada pengujian yang tidak menyentuh audit.
+func WithAuditRecorder(r audit.Recorder) Option {
+	return func(s *Service) {
+		if r != nil {
+			s.audit = r
+		}
+	}
+}
+
+// discardRecorder adalah Recorder yang tidak menulis apa pun.
+type discardRecorder struct{}
+
+// Record memenuhi audit.Recorder tanpa efek samping.
+func (discardRecorder) Record(context.Context, audit.Entry) error { return nil }
+
 // NewService membuat service pengelolaan akun pengguna.
 func NewService(repo Repository, resets PasswordResetter, sessions SessionRevoker, opts ...Option) *Service {
-	s := &Service{repo: repo, resets: resets, sessions: sessions, queue: LogQueue{}}
+	s := &Service{repo: repo, resets: resets, sessions: sessions, queue: LogQueue{}, audit: discardRecorder{}}
 	for _, o := range opts {
 		o(s)
 	}
 	return s
+}
+
+// AdminSnapshot menyusun snapshot audit satu akun admin.
+//
+// Sengaja TIDAK memuat email: audit log mencatat APA yang berubah pada akun,
+// bukan identitas loginnya, sehingga tidak ada PII yang tersimpan di diff
+// (kartu F2-28).
+func AdminSnapshot(a AdminUser) map[string]any {
+	return map[string]any{
+		"nama":              a.Nama,
+		"role":              string(a.Role),
+		"notif_invoice":     a.NotifInvoice,
+		"notif_surat_jalan": a.NotifSuratJalan,
+		"is_active":         a.IsActive,
+		"status":            a.Status,
+	}
+}
+
+// BranchUserSnapshot menyusun snapshot audit satu akun cabang. Sama seperti
+// AuditSnapshot admin, email sengaja tidak ikut dicatat.
+func BranchUserSnapshot(b BranchUser) map[string]any {
+	return map[string]any{
+		"branch_id":     b.BranchID,
+		"user_id":       b.UserID,
+		"nama":          b.Nama,
+		"is_active":     b.IsActive,
+		"branch_active": b.BranchActive,
+		"status":        b.Status,
+	}
 }
 
 // BranchStatus menentukan status akun cabang yang ditampilkan di daftar.
@@ -291,6 +345,10 @@ func (s *Service) BranchUsers(ctx context.Context, actor auth.Actor) ([]BranchUs
 // SetBranchUserActive mengaktifkan atau menonaktifkan akun cabang. Menonaktifkan
 // akun langsung mencabut seluruh sesinya supaya akses berhenti saat itu juga
 // (PRD AP-CAB-03).
+//
+// Mengirim status yang sama dengan yang berlaku adalah no-op: tidak ada
+// perubahan, tidak ada entri audit (F2-28). Satu perubahan nyata menghasilkan
+// tepat satu entri `branch_user/update` di dalam transaksi yang sama.
 func (s *Service) SetBranchUserActive(ctx context.Context, actor auth.Actor, id string, active bool) (BranchUser, error) {
 	if !actor.Can(auth.CapAdminUsersBranch) {
 		return BranchUser{}, ErrForbidden
@@ -298,7 +356,15 @@ func (s *Service) SetBranchUserActive(ctx context.Context, actor auth.Actor, id 
 	if id == "" {
 		return BranchUser{}, ErrNotFound
 	}
-	u, err := s.repo.SetBranchUserActive(ctx, id, active)
+	cur, err := s.repo.BranchUserByID(ctx, id)
+	if err != nil {
+		return BranchUser{}, err
+	}
+	if cur.IsActive == active {
+		return cur, nil
+	}
+	rec := audit.NewEntry(ctx, actor, audit.EntityBranchUser, cur.UserID, audit.ActionUpdate, nil, nil)
+	u, err := s.repo.SetBranchUserActive(ctx, id, active, []audit.Entry{rec})
 	if err != nil {
 		return BranchUser{}, err
 	}
@@ -313,6 +379,10 @@ func (s *Service) SetBranchUserActive(ctx context.Context, actor auth.Actor, id 
 // ResendBranchReset mengirim ulang tautan atur ulang kata sandi akun cabang
 // (PRD §4.8). Email dikirim lewat jalur yang sama dengan lupa kata sandi
 // sehingga F1-16 cukup mengalihkannya ke email_outbox di satu tempat.
+//
+// Tautan lahir di repositori auth (domain lain), jadi entri auditnya
+// ditulis SETELAH tautan benar-benar terkirim ke antrean — dan hanya memuat
+// id akun/cabang, tidak pernah nilai tautannya (F2-28).
 func (s *Service) ResendBranchReset(ctx context.Context, actor auth.Actor, id string, ttl time.Duration) error {
 	if !actor.Can(auth.CapAdminUsersBranch) {
 		return ErrForbidden
@@ -326,6 +396,11 @@ func (s *Service) ResendBranchReset(ctx context.Context, actor auth.Actor, id st
 	}
 	if err := s.resets.SendPasswordResetFor(ctx, auth.KindBranch, u.UserID, ttl); err != nil {
 		return fmt.Errorf("kirim tautan atur ulang akun cabang: %w", err)
+	}
+	rec := audit.NewEntry(ctx, actor, audit.EntityBranchUser, u.UserID, audit.ActionReset, nil,
+		map[string]any{"branch_id": u.BranchID, "user_id": u.UserID})
+	if err := s.audit.Record(ctx, rec); err != nil {
+		return fmt.Errorf("catat audit tautan atur ulang akun cabang: %w", err)
 	}
 	return nil
 }
@@ -376,7 +451,9 @@ func (s *Service) InviteAdmin(ctx context.Context, actor auth.Actor, in NewAdmin
 		return AdminUser{}, ErrEmailTaken
 	}
 
-	admin, err := s.repo.CreateAdmin(ctx, in)
+	admin, err := s.repo.CreateAdmin(ctx, in, []audit.Entry{
+		audit.NewEntry(ctx, actor, audit.EntityAdminUser, "", audit.ActionCreate, nil, nil),
+	})
 	if err != nil {
 		if errors.Is(err, ErrEmailTaken) {
 			return AdminUser{}, ErrEmailTaken
@@ -452,12 +529,25 @@ func (s *Service) ResendInviteAdmin(ctx context.Context, actor auth.Actor, id st
 	if err := s.sendInvite(ctx, admin, ttl); err != nil {
 		return AdminUser{}, err
 	}
+	// Undangan yang dikirim ulang adalah mutasi yang layak diaudit (F2-28):
+	// aktor memicu ulang akses orang lain. Snapshot-nya hanya nama/role/status
+	// — tidak ada email, kata sandi, maupun tautan aktivasi.
+	rec := audit.NewEntry(ctx, actor, audit.EntityAdminUser, admin.ID, audit.ActionResend, nil,
+		map[string]any{"nama": admin.Nama, "role": string(admin.Role), "status": admin.Status})
+	if err := s.audit.Record(ctx, rec); err != nil {
+		return AdminUser{}, fmt.Errorf("catat audit kirim ulang undangan admin: %w", err)
+	}
 	return admin, nil
 }
 
 // UpdateAdmin mengubah nama, role, flag notifikasi, dan/atau status aktif
 // seorang admin (PRD §4.8). Menonaktifkan akun mencabut sesinya. Perlindungan
 // superadmin aktif terakhir ditegakkan repository secara atomik.
+//
+// Permintaan yang tidak mengubah apa pun adalah no-op: tidak ada tulisan dan
+// tidak ada entri audit. Satu perubahan nyata menghasilkan tepat satu entri
+// `admin_user/update` (before/after tanpa email) di dalam transaksi yang sama
+// (F2-28).
 func (s *Service) UpdateAdmin(ctx context.Context, actor auth.Actor, id string, p AdminPatch) (AdminUser, error) {
 	if !actor.Can(auth.CapAdminUsersAdmin) {
 		return AdminUser{}, ErrForbidden
@@ -492,8 +582,12 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor auth.Actor, id string, 
 	if next.Nama == "" {
 		return AdminUser{}, ErrInvalidData
 	}
+	if samaAdmin(cur, next) {
+		return cur, nil
+	}
 
-	updated, err := s.repo.UpdateAdmin(ctx, next)
+	rec := audit.NewEntry(ctx, actor, audit.EntityAdminUser, next.ID, audit.ActionUpdate, nil, nil)
+	updated, err := s.repo.UpdateAdmin(ctx, next, []audit.Entry{rec})
 	if err != nil {
 		return AdminUser{}, err
 	}
@@ -503,6 +597,13 @@ func (s *Service) UpdateAdmin(ctx context.Context, actor auth.Actor, id string, 
 		}
 	}
 	return updated, nil
+}
+
+// samaAdmin melaporkan apakah perubahan yang diminta tidak mengubah apa pun
+// pada akun (dipakai untuk melewatkan tulisan + entri audit yang sia-sia).
+func samaAdmin(a, b AdminUser) bool {
+	return a.Nama == b.Nama && a.Role == b.Role && a.NotifInvoice == b.NotifInvoice &&
+		a.NotifSuratJalan == b.NotifSuratJalan && a.IsActive == b.IsActive
 }
 
 // DocumentRecipients mengembalikan email penerima dokumen jenis tertentu.

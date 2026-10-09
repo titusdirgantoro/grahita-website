@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/grahita/portal/api/internal/audit"
+	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -18,11 +20,12 @@ import (
 
 // Repo mengimplementasikan auth.UserStore dan auth.SessionStore.
 type Repo struct {
-	q *sqlc.Queries
+	pool *database.Pool
+	q    *sqlc.Queries
 }
 
 // New membuat repository auth.
-func New(pool *database.Pool) *Repo { return &Repo{q: sqlc.New(pool)} }
+func New(pool *database.Pool) *Repo { return &Repo{pool: pool, q: sqlc.New(pool)} }
 
 // AdminByEmail memuat akun admin berdasarkan email.
 func (r *Repo) AdminByEmail(ctx context.Context, email string) (auth.Credentials, error) {
@@ -200,12 +203,54 @@ func (r *Repo) ActivateAdmin(ctx context.Context, id, passwordHash string) error
 
 // UpdateName menyimpan nama tampilan akun ADMIN. Akun cabang ditolak karena
 // namanya berasal dari master cabang (PRD §3.8).
+//
+// Perubahan dan catatan auditnya (F2-28) ditulis dalam SATU transaksi: nama
+// lama dibaca dengan FOR UPDATE, dan entri audit menyimpan before/after dari
+// baris yang sama sehingga snapshot-nya tidak pernah basi. Mengirim nama yang
+// sama dengan yang berlaku adalah no-op: tidak ada UPDATE dan tidak ada entri
+// audit. Kegagalan menulis entri audit membatalkan perubahan nama sekaligus.
 func (r *Repo) UpdateName(ctx context.Context, kind auth.Kind, id, nama string) error {
 	if kind != auth.KindAdmin {
 		return auth.ErrProfileNotEditable
 	}
-	if err := r.q.UpdateAdminNama(ctx, sqlc.UpdateAdminNamaParams{ID: id, Nama: nama}); err != nil {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("mulai transaksi ubah nama admin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lama string
+	if err := tx.QueryRow(ctx, `SELECT nama FROM admin_users WHERE id = $1 FOR UPDATE`, id).Scan(&lama); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return auth.ErrNoUser
+		}
+		return fmt.Errorf("baca nama admin saat ini: %w", err)
+	}
+	if lama == nama {
+		// Tidak ada perubahan nyata: tidak ada tulisan, tidak ada audit.
+		return nil
+	}
+	if err := r.q.WithTx(tx).UpdateAdminNama(ctx, sqlc.UpdateAdminNamaParams{ID: id, Nama: nama}); err != nil {
 		return fmt.Errorf("query UpdateAdminNama: %w", err)
+	}
+	rec := audit.Entry{
+		ActorKind: auth.KindAdmin,
+		ActorID:   id,
+		// Nama pelaku yang tercatat adalah nama yang berlaku saat aksi
+		// dilakukan (nama lama) — identitas yang dikenal pada saat itu.
+		ActorNama: lama,
+		IP:        audit.RequestMetaFrom(ctx).IP,
+		Entity:    audit.EntityAdminUser,
+		EntityID:  id,
+		Action:    audit.ActionUpdate,
+		Before:    map[string]any{"nama": lama},
+		After:     map[string]any{"nama": nama},
+	}
+	if err := auditpg.Insert(ctx, tx, rec); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit ubah nama admin: %w", err)
 	}
 	return nil
 }

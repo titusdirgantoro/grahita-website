@@ -28,6 +28,11 @@ INSERT INTO audit_logs
 VALUES ($1::actor_kind, $2::uuid, $3::text, $4::inet, $5::text, $6::uuid, $7::text, $8::jsonb, $9::jsonb)`
 
 // Insert menyimpan satu entri audit memakai executor yang diberikan.
+//
+// Snapshot Before/After diredaksi sekali lagi di sini (kartu F2-28) sebagai
+// jaring pengaman terakhir: entri yang disusun tanpa lewat audit.NewEntry —
+// atau nilai sensitif yang baru muncul di lapisan lain — tetap tidak bisa
+// masuk ke tabel. Redaksi bersifat idempoten.
 func Insert(ctx context.Context, db Execer, e audit.Entry) error {
 	if e.Entity == "" || e.Action == "" || e.ActorID == "" {
 		return fmt.Errorf("entri audit tidak lengkap: entity=%q action=%q actor=%q", e.Entity, e.Action, e.ActorID)
@@ -35,6 +40,8 @@ func Insert(ctx context.Context, db Execer, e audit.Entry) error {
 	if e.ActorKind == "" {
 		return fmt.Errorf("entri audit tanpa jenis aktor (entity=%s action=%s)", e.Entity, e.Action)
 	}
+	e.Before = audit.Redact(e.Before)
+	e.After = audit.Redact(e.After)
 	before, err := jsonOrNil(e.Before)
 	if err != nil {
 		return fmt.Errorf("audit %s %s: %w", e.Entity, e.Action, err)

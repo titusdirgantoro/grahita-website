@@ -72,6 +72,21 @@ const (
 	// (kosong saat dibuat), snapshot Before/After memuat ikon/judul/ringkas/
 	// langkah/urutan — tidak ada data sensitif.
 	EntityTutorial = "tutorial"
+	// EntityAdminUser mencatat mutasi akun ADMIN Pusat (F2-28): undangan baru
+	// (`create`), perubahan nama/role/flag/status aktif (`update`), dan
+	// pengiriman ulang undangan (`resend`). EntityID-nya adalah id admin_users.
+	// Snapshot Before/After hanya memuat nama, role, flag, dan status aktif —
+	// email, kata sandi, dan tautan aktivasi TIDAK pernah masuk audit.
+	EntityAdminUser = "admin_user"
+)
+
+// Aksi tambahan untuk mutasi akun (F2-28).
+const (
+	// ActionReset mencatat pengiriman tautan atur ulang/aktivasi untuk satu
+	// akun (lihat ActionResend untuk pengiriman ulang email transaksional).
+	// Snapshot After memuat id akun + masa berlaku tautan; nilai tautannya
+	// sendiri tidak pernah masuk audit.
+	ActionReset = "reset"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.
@@ -115,6 +130,10 @@ func RequestMetaFrom(ctx context.Context) RequestMeta {
 // actor diambil eksplisit dari pemanggil (service) supaya otorisasi tetap
 // terlihat di tanda tangan fungsi; IP request dibaca dari context karena ia
 // metadata transport, bukan bagian dari domain.
+//
+// Snapshot Before/After melewati Redact SEBELUM entri diserahkan ke repository,
+// sehingga kata sandi, token, secret, dan URL (bukti transfer) tidak pernah
+// sampai ke tabel audit_logs — bukan hanya disaring saat ditampilkan.
 func NewEntry(ctx context.Context, actor auth.Actor, entity, entityID, action string, before, after any) Entry {
 	return Entry{
 		ActorKind: actor.Kind,
@@ -124,7 +143,7 @@ func NewEntry(ctx context.Context, actor auth.Actor, entity, entityID, action st
 		Entity:    entity,
 		EntityID:  entityID,
 		Action:    action,
-		Before:    before,
-		After:     after,
+		Before:    Redact(before),
+		After:     Redact(after),
 	}
 }

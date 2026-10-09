@@ -28,6 +28,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/grahita/portal/api/internal/audit"
+	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
 	"github.com/grahita/portal/api/internal/bank"
@@ -308,13 +310,16 @@ func newPGFixture(t *testing.T) *pgFixture {
 
 	// Pengelolaan akun pengguna (F1-05): repository nyata di atas PostgreSQL,
 	// email undangan diantre lewat outbox produksi, tautan diarahkan ke portal
-	// admin.
+	// admin. Mutasi akun menulis entri audit (F2-28) — transaksional untuk
+	// undang/ubah/nonaktifkan, lewat Recorder untuk penerbitan tautan.
+	auditRepo := auditpg.New(pool)
 	queue := &queueSpy{delegat: notification.NewQueue(notifSvc)}
 	usersSvc := users.NewService(userspg.New(pool), svc, svc,
 		users.WithEmailQueue(queue),
 		users.WithResetURLBuilder(func(kind auth.Kind, token string) string {
 			return "https://grahita-admin.tiusclaw.com/lupa?token=" + token
 		}),
+		users.WithAuditRecorder(auditRepo),
 	)
 	f.queue = queue
 	f.users = usersSvc
@@ -382,6 +387,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Branches:            branchSvc,
 		Bank:                bankSvc,
 		Registration:        registrationSvc,
+		Audit:               audit.NewService(auditRepo),
 		Emails:              notifSvc,
 		Storage:             objek,
 		LoginLimiter:        httpx.NewRateLimiter(5, 15*time.Minute),

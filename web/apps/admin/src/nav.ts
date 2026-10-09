@@ -32,6 +32,7 @@ export const NAV_ADMIN: NavGroup[] = [
       { to: "/reporting", label: "Reporting", icon: "chart-line", superadminOnly: true },
       { to: "/pengguna", label: "User management", icon: "users-three" },
       { to: "/pengaturan", label: "Pengaturan", icon: "gear-six", superadminOnly: true },
+      { to: "/audit", label: "Audit log", icon: "clock-clockwise", superadminOnly: true },
     ],
   },
 ];

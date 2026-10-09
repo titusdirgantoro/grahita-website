@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/grahita/portal/api/internal/audit"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
@@ -86,6 +87,14 @@ func mapDomainErr(err error) error {
 			return apierr.Validation("Konten tutorial tidak valid.", ve.Fields)
 		}
 		return apierr.Validation("Konten tutorial tidak valid.", nil)
+	// Audit log (F2-28): hanya Superadmin yang boleh membacanya, dan filter
+	// yang tidak valid dijawab 400 supaya salah ketik tidak diam-diam
+	// menghilangkan baris dari hasil.
+	case errors.Is(err, audit.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke audit log.")
+	case errors.Is(err, audit.ErrFilterInvalid):
+		return apierr.Validation("Filter audit log tidak valid.",
+			map[string]string{"filter": err.Error()})
 	case errors.Is(err, catalog.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
 	case errors.Is(err, catalog.ErrKodeTaken):
