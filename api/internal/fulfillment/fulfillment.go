@@ -37,6 +37,10 @@ type Documents interface {
 	// Ensure memastikan Invoice PDF + Surat Jalan XLSX/PDF versi berjalan ada.
 	// Idempoten dan MENOLAK pesanan yang belum Done (document.ErrNotDone).
 	Ensure(ctx context.Context, orderID string) ([]document.Document, error)
+	// EnsureInvoice memastikan dokumen INVOICE versi berjalan ada dan
+	// mengembalikannya. Dipakai revisi (F2-25): versi pesanan sudah naik,
+	// sehingga invoice versi baru dirender TANPA menyentuh berkas versi lama.
+	EnsureInvoice(ctx context.Context, orderID string) (document.Document, error)
 }
 
 // Emailer adalah pengantre email dokumen (notification.Service).
@@ -44,6 +48,11 @@ type Emailer interface {
 	// EnqueueOrderEmailSekali mengantre email dokumen satu jenis hanya bila
 	// jenis itu belum pernah dibuat untuk pesanan tersebut.
 	EnqueueOrderEmailSekali(ctx context.Context, in notification.OrderEmailInput) (notification.Email, bool, error)
+	// EnqueueOrderEmailSekaliVersi mengantre email dokumen satu jenis hanya
+	// bila (pesanan, jenis, versi) itu belum pernah dibuat — dipakai revisi
+	// agar tiap versi baru boleh mendapat email baru (AP-REV-04) sementara
+	// pekerjaan worker yang diulang tidak menggandakannya (F2-25).
+	EnqueueOrderEmailSekaliVersi(ctx context.Context, in notification.OrderEmailInput) (notification.Email, bool, error)
 }
 
 // jenisEmailSaatDone adalah email yang diantre setelah dokumen siap
@@ -53,6 +62,15 @@ var jenisEmailSaatDone = []string{
 	notification.JenisInvoiceCabang,
 	notification.JenisInvoiceAdmin,
 	notification.JenisSuratJalanAdmin,
+}
+
+// jenisEmailSaatRevisi adalah email yang diantre setelah invoice versi baru
+// tersedia (SystemDesign.md §4.5, PRD AP-REV-04): HANYA invoice ke cabang dan
+// invoice ke admin ber-flag. Surat Jalan TIDAK dikirim ulang — revisi hanya
+// menyentuh invoice (§6.2).
+var jenisEmailSaatRevisi = []string{
+	notification.JenisInvoiceCabang,
+	notification.JenisInvoiceAdmin,
 }
 
 // Hasil merangkum satu penyelesaian pesanan (dipakai log & pengujian).
@@ -108,27 +126,81 @@ func (s *Service) PesananSelesai(ctx context.Context, orderID string) (Hasil, er
 	if len(dokumen) == 0 {
 		return hasil, fmt.Errorf("dokumen pesanan %s belum tersedia", id)
 	}
+	if err := s.antreEmail(ctx, id, jenisEmailSaatDone, false, &hasil); err != nil {
+		return hasil, err
+	}
+	return hasil, nil
+}
 
-	for _, jenis := range jenisEmailSaatDone {
-		_, dibuat, err := s.mail.EnqueueOrderEmailSekali(ctx, notification.OrderEmailInput{
-			OrderID: id,
-			Jenis:   jenis,
-		})
+// PesananDirevisi menjalankan rantai revisi → invoice versi baru → email
+// invoice untuk satu pesanan (SystemDesign.md §4.5, PRD AP-REV-04).
+//
+// Berbeda dari PesananSelesai, jalur ini:
+//
+//   - hanya memastikan dokumen INVOICE versi berjalan ada; Surat Jalan tidak
+//     disentuh dan tidak dikirim ulang — revisi hanya menyentuh invoice (§6.2);
+//   - mengantre HANYA email invoice (cabang + admin ber-flag) dan dijaga per
+//     (pesanan, jenis, versi), sehingga revisi berikutnya tetap mendapat email
+//     baru sementara pekerjaan yang dijalankan ulang tidak menggandakannya.
+//
+// Kegagalan render dikembalikan apa adanya supaya worker mengulang nanti;
+// ketiadaan penerima yang berhak bukan kegagalan.
+func (s *Service) PesananDirevisi(ctx context.Context, orderID string) (Hasil, error) {
+	var hasil Hasil
+	id := strings.TrimSpace(orderID)
+	if id == "" {
+		return hasil, fmt.Errorf("pesanan tanpa id tidak bisa direvisi")
+	}
+	if s.docs == nil || s.mail == nil {
+		return hasil, fmt.Errorf("layanan dokumen/email belum terpasang")
+	}
+
+	doc, err := s.docs.EnsureInvoice(ctx, id)
+	if err != nil {
+		return hasil, fmt.Errorf("render invoice pesanan %s: %w", id, err)
+	}
+	if strings.TrimSpace(doc.ID) == "" {
+		return hasil, fmt.Errorf("invoice pesanan %s belum tersedia", id)
+	}
+	hasil.Dokumen = 1
+	if err := s.antreEmail(ctx, id, jenisEmailSaatRevisi, true, &hasil); err != nil {
+		return hasil, err
+	}
+	return hasil, nil
+}
+
+// antreEmail mengantre sekumpulan email dokumen satu pesanan dan memilah
+// hasilnya (baru / sudah ada / tanpa penerima) ke dalam hasil.
+//
+// perVersi=true memakai penjaga (pesanan, jenis, VERSI) — jalur revisi;
+// perVersi=false memakai penjaga (pesanan, jenis) — jalur Done pertama.
+func (s *Service) antreEmail(ctx context.Context, id string, jenis []string, perVersi bool, hasil *Hasil) error {
+	for _, j := range jenis {
+		in := notification.OrderEmailInput{OrderID: id, Jenis: j}
+		var (
+			dibuat bool
+			err    error
+		)
+		if perVersi {
+			_, dibuat, err = s.mail.EnqueueOrderEmailSekaliVersi(ctx, in)
+		} else {
+			_, dibuat, err = s.mail.EnqueueOrderEmailSekali(ctx, in)
+		}
 		switch {
 		case err == nil && dibuat:
-			hasil.EmailDibuat = append(hasil.EmailDibuat, jenis)
+			hasil.EmailDibuat = append(hasil.EmailDibuat, j)
 		case err == nil:
-			hasil.EmailSudahAda = append(hasil.EmailSudahAda, jenis)
+			hasil.EmailSudahAda = append(hasil.EmailSudahAda, j)
 		case errors.Is(err, notification.ErrNoRecipient):
 			// Tidak ada admin ber-flag untuk jenis ini: bukan kegagalan yang
 			// bisa diperbaiki dengan mengulang pekerjaan. Dicatat supaya
 			// terlihat di log, sisanya tetap dikerjakan.
-			hasil.EmailTanpaPenerima = append(hasil.EmailTanpaPenerima, jenis)
+			hasil.EmailTanpaPenerima = append(hasil.EmailTanpaPenerima, j)
 			slog.WarnContext(ctx, "email dokumen dilewati: tidak ada penerima yang berhak",
-				"order_id", id, "jenis", jenis)
+				"order_id", id, "jenis", j)
 		default:
-			return hasil, fmt.Errorf("antre email %s pesanan %s: %w", jenis, id, err)
+			return fmt.Errorf("antre email %s pesanan %s: %w", j, id, err)
 		}
 	}
-	return hasil, nil
+	return nil
 }

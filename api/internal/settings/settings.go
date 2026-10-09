@@ -171,6 +171,33 @@ func Default(key string) (json.RawMessage, error) {
 	return json.RawMessage(sp.defaultRaw), nil
 }
 
+// Bool mengembalikan nilai boolean yang sedang berlaku untuk satu kunci
+// pengaturan: nilai tersimpan bila ada, selain itu nilai bawaannya.
+//
+// Dipakai domain lain yang butuh setelan IZIN tanpa membuka permukaan HTTP
+// pengaturan — mis. domain pesanan membaca `manager_boleh_revisi` saat
+// menegakkan siapa yang boleh merevisi invoice (F2-25, PRD §4.9). Sama seperti
+// Int, pembacaan ini TIDAK membuka akses tulis: pengaturan tetap hanya bisa
+// diubah Superadmin (PRD §2.1).
+func (s *Service) Bool(ctx context.Context, key string) (bool, error) {
+	sp, ok := specs[key]
+	if !ok {
+		return false, ErrNotFound
+	}
+	if sp.kind != kindBool {
+		return false, fmt.Errorf("%w: %s bukan boolean", ErrInvalidValue, key)
+	}
+	raw, err := s.effective(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	var b bool
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return false, fmt.Errorf("%w: nilai %s tidak dapat dibaca sebagai boolean", ErrInvalidValue, key)
+	}
+	return b, nil
+}
+
 // Update menyimpan satu atau beberapa pengaturan sekaligus (Superadmin).
 //
 // Seluruh nilai divalidasi LEBIH DAHULU: bila ada satu yang tidak valid, tidak

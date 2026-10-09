@@ -2216,6 +2216,106 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 
+  /api/v1/admin/orders/{id}/revise:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    post:
+      tags: [admin]
+      operationId: reviseAdminOrder
+      summary: Revisi invoice berversi pesanan Done (Superadmin; Manager bila diizinkan)
+      description: |
+        Revisi invoice satu pesanan berstatus `done` (PRD §4.3 AP-REV-01..05,
+        §3.8, §7, §10; SystemDesign.md §4.5; Database.md §4.6, §8).
+
+        Aturan yang ditegakkan server:
+
+        * **Alasan wajib** diisi dan dicatat di timeline + audit.
+        * Hanya staf Pusat ber-kapabilitas `admin.revise`. **Manager** hanya
+          boleh bila setelan `manager_boleh_revisi` sedang aktif; Superadmin
+          selalu boleh. Toggle dibaca server, jadi mematikannya benar-benar
+          menutup jalur ini (bukan hanya menyembunyikan tombol).
+        * Revisi mengirim **daftar baris FINAL** (bukan diff): baris dengan
+          `line_no` > 0 dipertahankan (qty/harga boleh berubah; serial, jenis,
+          dan produknya tetap), baris tanpa `line_no` adalah baris produk BARU
+          yang mendapat serial number baru bertanggal **pesanan asli**. Baris
+          lama yang tidak lagi disebut memang dihapus, tetapi nilainya tetap
+          terekam di snapshot.
+
+        Efek dalam SATU transaksi: baris diganti, `versi` naik satu langkah
+        (nomor invoice **TIDAK** berubah; versi tercetak `-R1`, `-R2`, …),
+        `total` dihitung ulang server dari barisnya, snapshot versi lama
+        tersimpan di `invoice_revisions` beserta `delta_total`, timeline +
+        audit mencatat aktor/alasan/delta, dan pekerjaan render Invoice PDF
+        versi **baru** + email invoice ke cabang dan admin ber-flag Invoice
+        dititipkan pada transaksi yang sama. **Surat Jalan tidak dikirim
+        ulang** — revisi hanya menyentuh invoice. Berkas versi lama tidak
+        pernah ditimpa (kunci storage per (pesanan, jenis, versi)).
+
+        Dua revisi bersamaan berbaris rapi karena baris pesanan dikunci; total
+        dan serial selalu dihitung di dalam transaksi, sehingga rollback tidak
+        menyisakan serial atau versi palsu.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alasan, lines]
+              properties:
+                alasan:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                  description: Alasan revisi (wajib, tercatat di timeline & audit).
+                catatan:
+                  type: string
+                  maxLength: 2000
+                  description: Catatan bebas opsional.
+                lines:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  description: Daftar baris FINAL versi baru.
+                  items: { $ref: "#/components/schemas/ReviseLineInput" }
+      responses:
+        "200":
+          description: Revisi tersimpan (versi naik, nomor tetap)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/ReviseResult" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          description: |
+            Aktor bukan staf Pusat ber-kapabilitas `admin.revise`, atau Manager
+            mencoba merevisi sedangkan `manager_boleh_revisi` nonaktif.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Pesanan belum selesai (`ORDER_NOT_DONE`) sehingga belum punya
+            invoice untuk direvisi. Tidak ada perubahan yang dilakukan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                belumSelesai:
+                  value:
+                    error:
+                      code: ORDER_NOT_DONE
+                      message: Revisi hanya untuk pesanan yang sudah selesai (Done).
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
   /api/v1/admin/orders/{id}/emails:
     parameters:
       - name: id
@@ -3468,6 +3568,64 @@ components:
           type: string
           enum: ["", kurang_bayar, lebih_bayar, tidak_terbaca, rekening_beda, lainnya]
         total: { type: integer, format: int64 }
+
+    ReviseLineInput:
+      type: object
+      required: [qty, harga_satuan]
+      description: |
+        Satu baris pada daftar baris FINAL revisi (F2-25). `line_no` > 0
+        menandai baris LAMA yang dipertahankan (serial/jenis/produknya tetap);
+        tanpa `line_no`, `product_id` wajib diisi dan baris itu adalah baris
+        produk BARU yang mendapat serial number baru bertanggal pesanan asli.
+      properties:
+        line_no:
+          type: integer
+          minimum: 0
+          description: Nomor baris versi lama yang dipertahankan; 0 = baris baru.
+        product_id:
+          type: string
+          format: uuid
+          description: Wajib untuk baris baru; diabaikan untuk baris lama.
+        qty: { type: integer, minimum: 1 }
+        harga_satuan:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Harga yang dipakai versi baru. Untuk produk Sertifikat server
+            memaksanya 0 (CP-SER-01).
+
+    RevisionRow:
+      type: object
+      required: [id, versi_lama, versi_baru, alasan, delta_total, created_at]
+      description: Satu baris `invoice_revisions` (snapshot versi lama, F2-25).
+      properties:
+        id: { type: string, format: uuid }
+        versi_lama: { type: integer, minimum: 0 }
+        versi_baru: { type: integer, minimum: 1 }
+        alasan: { type: string }
+        delta_total:
+          type: integer
+          format: int64
+          description: Total versi baru − total versi lama (bisa negatif).
+        admin_nama: { type: string }
+        created_at: { type: string, format: date-time }
+
+    ReviseResult:
+      type: object
+      required: [order_id, nomor, versi, total, jumlah_item, delta_total, lines, revisi]
+      description: Hasil satu revisi invoice (F2-25); `versi` = `revisi.versi_baru`.
+      properties:
+        order_id: { type: string, format: uuid }
+        nomor: { type: string }
+        versi: { type: integer, minimum: 1 }
+        total: { type: integer, format: int64, minimum: 0 }
+        jumlah_item: { type: integer, format: int64 }
+        delta_total: { type: integer, format: int64 }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/OrderLine" }
+        revisi: { $ref: "#/components/schemas/RevisionRow" }
 
     AdminOrderDetail:
       type: object

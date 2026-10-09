@@ -28,6 +28,29 @@ type RenderDokumenArgs struct {
 // Kind mengidentifikasi jenis job di tabel River.
 func (RenderDokumenArgs) Kind() string { return KindRenderDokumen }
 
+// KindRevisiInvoice adalah Kind pekerjaan "render invoice versi baru lalu
+// antre email invoice" setelah revisi invoice (F2-25, SystemDesign.md §4.5).
+const KindRevisiInvoice = "revisi_invoice"
+
+// RevisiInvoiceArgs meminta pekerjaan lanjutan setelah pesanan direvisi:
+// render Invoice PDF VERSI BARU (tanpa menyentuh berkas versi lama), lalu
+// mengantre email invoice ke cabang dan admin ber-flag Invoice. Surat Jalan
+// TIDAK ikut dikirim ulang (PRD AP-REV-04, §6.2) — revisi hanya menyentuh
+// invoice.
+//
+// Job ini dititipkan DI DALAM transaksi revisi, jadi tidak mungkin ada versi
+// pesanan yang naik tanpa invoice versi barunya disiapkan. Sifatnya idempoten:
+// render memakai kunci (order_id, jenis, versi) dan pengantrean email dijaga
+// per (pesanan, jenis, versi), sehingga job yang dijalankan ulang tidak
+// menggandakan dokumen maupun email.
+type RevisiInvoiceArgs struct {
+	// OrderID adalah id pesanan yang baru direvisi.
+	OrderID string `json:"order_id"`
+}
+
+// Kind mengidentifikasi jenis job di tabel River.
+func (RevisiInvoiceArgs) Kind() string { return KindRevisiInvoice }
+
 // KindReportXLSX adalah Kind pekerjaan "tulis laporan XLSX lalu simpan ke
 // object storage" (kartu F2-24, PRD §4.7 AP-REP-04).
 const KindReportXLSX = "report_xlsx"

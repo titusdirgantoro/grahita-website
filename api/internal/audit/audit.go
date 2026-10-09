@@ -50,6 +50,10 @@ const (
 	// persetujuan (Submitted -> Done) maupun penandaan perlu review (F1-18,
 	// SystemDesign.md §4.3). Alasan/keputusannya ada di snapshot After.
 	ActionVerify = "verify"
+	// ActionRevise mencatat revisi invoice berversi oleh admin Pusat (F2-25,
+	// PRD AP-REV-05): aktor, alasan, dan delta nilai ada di snapshot
+	// Before/After. EntityID-nya adalah id pesanan yang direvisi.
+	ActionRevise = "revise"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.

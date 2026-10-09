@@ -71,6 +71,12 @@ type Deps struct {
 	// Pusat: filter, grouping, paginasi server, dan catatan internal (F1-15).
 	AdminOrders *order.AdminService
 
+	// Revise melayani revisi invoice berversi pesanan Done: alasan wajib,
+	// versi naik, nomor tetap, snapshot versi lama tersimpan, dan invoice
+	// versi baru dirender + dikirim ulang ke cabang/admin ber-flag Invoice
+	// (F2-25, PRD §4.3).
+	Revise *order.RevisionService
+
 	// Dashboard melayani metrik dashboard admin Pusat + chip "perlu tindakan"
 	// (F1-20, PRD §4.1). Nilai rupiah hanya keluar untuk pemegang
 	// `admin.dashboard.value`; Manager menerima jumlah pesanan saja.

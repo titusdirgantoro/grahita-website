@@ -144,6 +144,16 @@ func NewRouter(d Deps) http.Handler {
 					r.Use(a.requireCap(auth.CapAdminVerify))
 					r.Post("/orders/{id}/verify", a.adapt(a.adminOrderVerify))
 				})
+				// Revisi invoice berversi (F2-25): kapabilitas sendiri
+				// `admin.revise` (Superadmin selalu; Manager hanya bila setelan
+				// `manager_boleh_revisi` aktif — ditegakkan lagi di layer service).
+				// Nomor invoice tetap, versi naik, snapshot versi lama tersimpan,
+				// dan invoice versi baru dirender + dikirim ulang ke cabang/admin
+				// ber-flag Invoice (Surat Jalan tidak dikirim ulang).
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminRevise))
+					r.Post("/orders/{id}/revise", a.adapt(a.adminOrderRevise))
+				})
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminBranches))
 					r.Get("/branches", a.adapt(a.adminBranches))

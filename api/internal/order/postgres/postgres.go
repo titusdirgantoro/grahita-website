@@ -28,10 +28,30 @@ import (
 type Repo struct {
 	pool *database.Pool
 	q    *sqlc.Queries
+	// jobs menitipkan pekerjaan lanjutan (render invoice versi baru + email)
+	// pada transaksi revisi invoice (F2-25). Boleh nil untuk jalur yang tidak
+	// butuh pekerjaan latar (mis. pengujian unit); revisi menolak jalan tanpa
+	// penjadwal supaya versi tidak naik tanpa invoice baru.
+	jobs JobInserter
+}
+
+// Option mengubah perilaku repository pesanan.
+type Option func(*Repo)
+
+// WithJobQueue memasang penjadwal pekerjaan River; revisi invoice menitipkan
+// pekerjaan render invoice versi baru pada transaksi revisi (F2-25).
+func WithJobQueue(q JobInserter) Option {
+	return func(r *Repo) { r.jobs = q }
 }
 
 // New membuat repository pesanan.
-func New(pool *database.Pool) *Repo { return &Repo{pool: pool, q: sqlc.New(pool)} }
+func New(pool *database.Pool, opts ...Option) *Repo {
+	r := &Repo{pool: pool, q: sqlc.New(pool)}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
+}
 
 // List mengembalikan daftar pesanan satu cabang (PRD CP-ORD-01).
 func (r *Repo) List(ctx context.Context, branchID, status string) ([]order.Order, error) {

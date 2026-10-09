@@ -109,9 +109,12 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 }
 
 // ServerSelesai adalah pekerjaan lanjutan setelah pesanan Done: render dokumen
-// lalu antre email dokumen (fulfillment.Service, kartu F1-18).
+// lalu antre email dokumen (fulfillment.Service, kartu F1-18), dan pekerjaan
+// setelah revisi invoice: render invoice versi baru lalu antre email invoice
+// (kartu F2-25). Keduanya dipenuhi *fulfillment.Service.
 type ServerSelesai interface {
 	PesananSelesai(ctx context.Context, orderID string) (fulfillment.Hasil, error)
+	PesananDirevisi(ctx context.Context, orderID string) (fulfillment.Hasil, error)
 }
 
 // Laporan adalah pelaksana ekspor XLSX (report.Service, kartu F2-24).
@@ -200,6 +203,45 @@ func (w *RenderDokumenWorker) Work(ctx context.Context, job *river.Job[jobs.Rend
 	return nil
 }
 
+// RevisiInvoiceWorker menjalankan job "revisi_invoice": memastikan Invoice PDF
+// VERSI BARU ada, lalu mengantre email invoice versi itu ke cabang dan admin
+// ber-flag Invoice (SystemDesign.md §4.5). Job ini dititipkan transaksi revisi
+// (F2-25), jadi versi pesanan yang naik tidak pernah kehilangan invoice baru.
+//
+// Surat Jalan TIDAK disentuh/dikirim ulang: revisi hanya menyentuh invoice.
+// Kegagalan render dikembalikan supaya River mengulanginya; email baru diantre
+// setelah invoice versi baru benar-benar ada.
+type RevisiInvoiceWorker struct {
+	river.WorkerDefaults[jobs.RevisiInvoiceArgs]
+	revisi ServerSelesai
+}
+
+// NewRevisiInvoiceWorker membuat worker pemenuhan revisi invoice.
+func NewRevisiInvoiceWorker(revisi ServerSelesai) *RevisiInvoiceWorker {
+	return &RevisiInvoiceWorker{revisi: revisi}
+}
+
+// Kind adalah Kind job di tabel River.
+func (RevisiInvoiceWorker) Kind() string { return jobs.KindRevisiInvoice }
+
+// Work menjalankan satu pemenuhan revisi invoice.
+func (w *RevisiInvoiceWorker) Work(ctx context.Context, job *river.Job[jobs.RevisiInvoiceArgs]) error {
+	if w.revisi == nil {
+		// Tanpa service, job tidak bisa dikerjakan — jangan dilepas begitu saja
+		// (pesanan yang direvisi akan kehilangan invoice versi barunya).
+		return fmt.Errorf("job %s: layanan pemenuhan revisi belum terpasang", w.Kind())
+	}
+	hasil, err := w.revisi.PesananDirevisi(ctx, job.Args.OrderID)
+	if err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "revisi invoice dipenuhi",
+		"order_id", job.Args.OrderID, "dokumen", hasil.Dokumen,
+		"email_dibuat", hasil.EmailDibuat, "email_sudah_ada", hasil.EmailSudahAda,
+		"email_tanpa_penerima", hasil.EmailTanpaPenerima)
+	return nil
+}
+
 // Client membungkus River client beserta pool-nya.
 type Client struct {
 	river *river.Client[pgx.Tx]
@@ -226,6 +268,7 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 	}
 	if selesai != nil {
 		river.AddWorker(workers, NewRenderDokumenWorker(selesai))
+		river.AddWorker(workers, NewRevisiInvoiceWorker(selesai))
 	}
 	if laporan != nil {
 		river.AddWorker(workers, NewReportXLSXWorker(laporan))

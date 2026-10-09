@@ -76,6 +76,52 @@ func (f *fakeStore) EnqueueOnce(_ context.Context, e Envelope) (Email, bool, err
 	return row, true, nil
 }
 
+// EnqueueOnceVersi meniru penjaga (order_id, jenis, versi) implementasi
+// PostgreSQL: baris dengan versi yang sama tidak dibuat dua kali, tetapi versi
+// berikutnya BOLEH mendapat email baru (revisi invoice, F2-25).
+func (f *fakeStore) EnqueueOnceVersi(_ context.Context, e Envelope, versi int) (Email, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range f.urut {
+		row := f.rows[id]
+		if row.OrderID != e.OrderID || row.Jenis != e.Jenis {
+			continue
+		}
+		if versiEmail(row.Payload) == versi {
+			return Email{}, false, nil
+		}
+	}
+	f.seq++
+	id := fmt.Sprintf("email-%d", f.seq)
+	now := time.Now().UTC()
+	row := Email{
+		ID: id, OrderID: e.OrderID, Jenis: e.Jenis, To: e.To, Cc: e.Cc,
+		Subject: e.Subject, Payload: e.Payload, Status: StatusQueued,
+		NextTryAt: time.Unix(0, 0).UTC(), CreatedAt: now,
+	}
+	f.rows[id] = row
+	f.urut = append(f.urut, id)
+	return row, true, nil
+}
+
+// versiEmail membaca versi pesanan dari payload email (bawaan 0), sama dengan
+// `COALESCE((payload->>'versi')::int, 0)` di implementasi PostgreSQL.
+func versiEmail(payload map[string]any) int {
+	if payload == nil {
+		return 0
+	}
+	switch v := payload["versi"].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
 func (f *fakeStore) Claim(_ context.Context, c Claim) ([]Email, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -830,6 +876,50 @@ func TestEnqueueOrderEmailSekaliTidakMenggandakan(t *testing.T) {
 	belumSiap := newOrderService(t, newFakeStore(), &fakeMailer{}, &fakeOrders{ref: fixtureOrder()}, admins)
 	if _, _, err := belumSiap.EnqueueOrderEmailSekali(ctx, in); !errors.Is(err, ErrDocumentNotReady) {
 		t.Errorf("dokumen belum siap harus ErrDocumentNotReady, dapat %v", err)
+	}
+}
+
+// TestEnqueueOrderEmailSekaliVersiMengizinkanVersiBaru membuktikan revisi
+// invoice boleh melahirkan email invoice BARU untuk versi berikutnya, tetapi
+// pekerjaan ulang untuk versi yang sama tetap tidak menggandakannya (F2-25).
+func TestEnqueueOrderEmailSekaliVersiMengizinkanVersiBaru(t *testing.T) {
+	store := newFakeStore()
+	orders := &fakeOrders{
+		ref:  fixtureOrder(),
+		docs: []Dokumen{{Jenis: "invoice_pdf", Versi: 0, StorageKey: "k/invoice.pdf"}},
+	}
+	admins := &fakeAdmins{invoice: []string{"sa@example.test"}}
+	s := newOrderService(t, store, &fakeMailer{}, orders, admins)
+	ctx := context.Background()
+	in := OrderEmailInput{OrderID: orderUUID, Jenis: JenisInvoiceAdmin}
+
+	pertama, dibuat, err := s.EnqueueOrderEmailSekaliVersi(ctx, in)
+	if err != nil {
+		t.Fatalf("pengantrean versi 0: %v", err)
+	}
+	if !dibuat {
+		t.Fatalf("versi 0 harus membuat baris baru: %+v", pertama)
+	}
+	if _, dibuat, err := s.EnqueueOrderEmailSekaliVersi(ctx, in); err != nil || dibuat {
+		t.Fatalf("ulangan versi 0 tidak boleh menggandakan: dibuat=%v err=%v", dibuat, err)
+	}
+
+	// Versi pesanan naik (revisi): dokumen versi 1 tersedia dan email baru
+	// untuk versi 1 BOLEH dibuat.
+	orders.ref.Versi = 1
+	orders.docs = append(orders.docs, Dokumen{Jenis: "invoice_pdf", Versi: 1, StorageKey: "k/invoice.pdf"})
+	baru, dibuat, err := s.EnqueueOrderEmailSekaliVersi(ctx, in)
+	if err != nil {
+		t.Fatalf("pengantrean versi 1: %v", err)
+	}
+	if !dibuat {
+		t.Fatalf("versi 1 harus boleh punya email baru: %+v", baru)
+	}
+	if versiEmail(baru.Payload) != 1 {
+		t.Errorf("email versi 1 harus membawa versi 1 di payload: %v", baru.Payload)
+	}
+	if n := len(store.semua()); n != 2 {
+		t.Errorf("harus ada dua email (versi 0 dan 1), dapat %d", n)
 	}
 }
 

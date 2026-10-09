@@ -156,6 +156,15 @@ type Store interface {
 	// menjalankan ulang pekerjaan render dokumen (River bersifat
 	// at-least-once) tidak boleh menggandakan email dokumen pesanan yang sama.
 	EnqueueOnce(ctx context.Context, e Envelope) (Email, bool, error)
+	// EnqueueOnceVersi menyimpan satu email dokumen HANYA bila
+	// (order_id, jenis, VERSI pesanan) belum pernah ada, dalam SATU transaksi
+	// yang diserialkan (advisory lock). Bool kedua bernilai true bila barisnya
+	// baru dibuat.
+	//
+	// Dipakai revisi invoice (F2-25): setiap versi baru boleh melahirkan SATU
+	// email invoice baru (AP-REV-04), tetapi pekerjaan worker yang dijalankan
+	// ulang untuk versi yang sama tidak menggandakannya.
+	EnqueueOnceVersi(ctx context.Context, e Envelope, versi int) (Email, bool, error)
 	Claim(ctx context.Context, c Claim) ([]Email, error)
 	MarkSent(ctx context.Context, id string, at time.Time) error
 	Reschedule(ctx context.Context, id string, nextTryAt time.Time, cause string) error
@@ -505,6 +514,31 @@ func (s *Service) EnqueueOrderEmailSekali(ctx context.Context, in OrderEmailInpu
 		return Email{}, false, fmt.Errorf("%w: email dokumen wajib punya pesanan", ErrInvalidData)
 	}
 	return s.store.EnqueueOnce(ctx, env)
+}
+
+// EnqueueOrderEmailSekaliVersi mengantre email dokumen satu pesanan HANYA bila
+// (pesanan, jenis, VERSI) itu belum pernah dibuat. Bool kedua bernilai true
+// bila barisnya baru dibuat.
+//
+// Dipakai revisi invoice (F2-25) lewat worker: revisi menghasilkan invoice versi
+// BARU yang memang harus dikirim ulang ke cabang dan admin ber-flag
+// (AP-REV-04), tetapi pekerjaan worker yang dijalankan ulang untuk versi yang
+// sama tidak boleh menggandakan emailnya. Versi yang dipakai adalah versi
+// pesanan saat ini kecuali `in.Versi` diisi eksplisit.
+func (s *Service) EnqueueOrderEmailSekaliVersi(ctx context.Context, in OrderEmailInput) (Email, bool, error) {
+	env, ref, err := s.buildOrderEnvelope(ctx, in)
+	if err != nil {
+		return Email{}, false, err
+	}
+	env.Jenis = strings.TrimSpace(env.Jenis)
+	if env.OrderID == "" {
+		return Email{}, false, fmt.Errorf("%w: email dokumen wajib punya pesanan", ErrInvalidData)
+	}
+	versi := in.Versi
+	if versi <= 0 {
+		versi = ref.Versi
+	}
+	return s.store.EnqueueOnceVersi(ctx, env, versi)
 }
 
 // validJenis melaporkan apakah jenis email dikenal.

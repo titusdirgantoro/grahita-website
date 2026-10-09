@@ -148,6 +148,10 @@ type pgFixture struct {
 	jobs    *river.Client[pgx.Tx]
 	selesai *fulfillment.Service
 
+	// Revisi invoice berversi (F2-25): service revisi di atas repository
+	// pesanan yang sama (dengan penjadwal River).
+	revise *order.RevisionService
+
 	branchA, branchB, branchC string
 	userA, userB, userC       string
 	adminSA, adminMgr         string
@@ -345,7 +349,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.paymentsRepo = payRepo
 	f.jobs = jobQueue
 
-	orderRepo := orderpg.New(pool)
+	orderRepo := orderpg.New(pool, orderpg.WithJobQueue(jobQueue))
 	docRepo := documentpg.New(pool)
 	docSvc := document.NewService(docRepo, objek, rendererUji{})
 	f.docRepo = docRepo
@@ -353,6 +357,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 	// Pemenuhan pesanan Done (F1-18) — peran worker di produksi.
 	selesaiSvc := fulfillment.NewService(docSvc, notifSvc)
 	f.selesai = selesaiSvc
+	f.revise = order.NewRevisionService(orderRepo, settingsSvc)
 
 	deps := Deps{
 		Config:      testConfig(),
@@ -363,6 +368,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Catalog:     catalogSvc,
 		Orders:      order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
 		AdminOrders: order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
+		Revise:      f.revise,
 		Dashboard: dashboard.NewService(dashboardpg.New(pool),
 			dashboard.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,

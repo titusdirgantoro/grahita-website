@@ -399,6 +399,13 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc)
 	verifySvc := payment.NewVerificationService(paymentRepo)
 
+	// Revisi invoice berversi (F2-25): repository pesanan dengan penjadwal
+	// River supaya transaksi revisi menitipkan pekerjaan "render invoice versi
+	// baru + email invoice" pada transaksi yang sama. Setelan sistem dipakai
+	// untuk izin Manager (`manager_boleh_revisi`) dan biaya packaging pesanan
+	// Sertifikat.
+	reviseSvc := order.NewRevisionService(orderpg.New(pool, orderpg.WithJobQueue(jobQueue)), settingsSvc)
+
 	// Dokumen pesanan (F1-17): render Invoice PDF + Surat Jalan XLSX/PDF ke
 	// object storage, catat di tabel `documents`, dan sediakan tautan unduh
 	// berumur pendek. Service yang sama dipakai transisi Done (F1-18) dan
@@ -431,6 +438,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Catalog:             catalogSvc,
 		Orders:              orderSvc,
 		AdminOrders:         adminOrderSvc,
+		Revise:              reviseSvc,
 		Dashboard:           dashboardSvc,
 		Payments:            paymentSvc,
 		Verify:              verifySvc,

@@ -107,6 +107,19 @@ func mapDomainErr(err error) error {
 		// Pesanan non-C&C wajib disertai bukti transfer (PRD CP-ORD-04).
 		return apierr.Validation("Pesanan belum disertai bukti transfer.",
 			map[string]string{"bukti": "minimal satu bukti transfer, kecuali pesanan Cash & Carry"})
+	// Revisi invoice berversi (F2-25). Diperiksa SEBELUM ErrInvalidData karena
+	// ErrAlasanWajib membungkusnya.
+	case errors.Is(err, order.ErrAlasanWajib):
+		return apierr.Validation("Alasan revisi wajib diisi.",
+			map[string]string{"alasan": "alasan revisi wajib diisi"})
+	case errors.Is(err, order.ErrNotDone):
+		return apierr.Conflict("ORDER_NOT_DONE",
+			"Revisi hanya untuk pesanan yang sudah selesai (Done). Selesaikan verifikasi pembayaran terlebih dahulu.")
+	case errors.Is(err, order.ErrRevisiTidakDiizinkan):
+		return apierr.Forbidden("Manager tidak diizinkan merevisi invoice saat ini (setelan manager_boleh_revisi nonaktif).")
+	case errors.Is(err, order.ErrQueueUnavailable):
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
+			"Penjadwal pekerjaan invoice belum siap sehingga revisi belum dapat diselesaikan.")
 	case errors.Is(err, order.ErrInvalidData):
 		return apierr.Validation("Data pesanan tidak valid.",
 			map[string]string{"pesanan": err.Error()})
