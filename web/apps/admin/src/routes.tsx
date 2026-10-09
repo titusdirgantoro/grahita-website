@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   Link,
   Outlet,
@@ -9,16 +9,13 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 
-import { AdminShell, Button, Segmented, SkeletonList, type ShellLinkProps } from "@grahita/ui";
+import { AdminShell, Button, SkeletonList, type ShellLinkProps } from "@grahita/ui";
 
 import { SessionProvider, useSesi } from "./session";
 import { NAV_ADMIN } from "./nav";
 import { HalamanLupa, HalamanMasuk } from "./pages/auth";
-import {
-  DashboardPage,
-  ProfilAdminPage,
-  ReportingPage,
-} from "./pages/shell-pages";
+import { ProfilAdminPage, ReportingPage } from "./pages/shell-pages";
+import { DashboardPage, type FilterDashboard } from "./pages/dashboard";
 import {
   PesananAdminPage,
   PesananDetailAdminPage,
@@ -40,23 +37,19 @@ function RouterLink({ to, className, active, children, title }: ShellLinkProps) 
   );
 }
 
-const PERIODE = [
-  { value: "hari", label: "Hari ini" },
-  { value: "minggu", label: "Minggu ini" },
-  { value: "bulan", label: "Bulan ini" },
-  { value: "tahun", label: "Tahun ini" },
-] as const;
-
 /**
  * ShellLayout menjaga rute ber-shell admin: skeleton saat sesi dimuat,
  * alihkan ke /masuk bila belum masuk, lalu pasang AdminShell dengan menu
  * yang sudah disaring peran.
+ *
+ * Filter periode TIDAK lagi dipasang di topbar: kendali itu hanya ada di
+ * dashboard (F1-20) dan disimpan di URL search param halaman itu, supaya tidak
+ * ada dua pemilih periode yang salah satunya tidak berpengaruh.
  */
 function ShellLayout() {
   const { status, pengguna, peran, keluar } = useSesi();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const [periode, setPeriode] = useState<(typeof PERIODE)[number]["value"]>("bulan");
 
   useEffect(() => {
     if (status === "belum") void navigate({ to: "/masuk", replace: true });
@@ -71,8 +64,6 @@ function ShellLayout() {
   }
   if (!pengguna) return null;
 
-  const tampilPeriode = pathname === "/" || pathname === "/pesanan";
-
   return (
     <AdminShell
       groups={NAV_ADMIN}
@@ -81,13 +72,8 @@ function ShellLayout() {
       Link={RouterLink}
       onLogout={() => void keluar()}
       topLeft={
-        tampilPeriode ? (
+        pathname === "/" || pathname === "/pesanan" ? (
           <Button iconOnly icon="plus" aria-label="Tambah cabang" title="Tambah cabang" />
-        ) : undefined
-      }
-      topCenter={
-        tampilPeriode ? (
-          <Segmented label="Periode" options={PERIODE} value={periode} onChange={setPeriode} />
         ) : undefined
       }
       topRight={<Button iconOnly icon="bell" aria-label="Perlu tindakan" />}
@@ -125,7 +111,20 @@ const lupaRoute = createRoute({
 const gayaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gaya", component: GayaPage });
 
 const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "shell", component: ShellLayout });
-const dashboardRoute = createRoute({ getParentRoute: () => shellRoute, path: "/", component: DashboardPage });
+/**
+ * / (dashboard admin) menyimpan filter cabang & periode di URL search param
+ * (SystemDesign.md §7.2) supaya ringkasan bisa di-bookmark/di-share. Nilai
+ * yang tidak dikenal diabaikan, bukan membuat halaman gagal.
+ */
+const dashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/",
+  validateSearch: (search: Record<string, unknown>): FilterDashboard => ({
+    cabang: teksMungkin(search.cabang),
+    periode: teksMungkin(search.periode),
+  }),
+  component: DashboardPage,
+});
 
 /** teksMungkin menormalkan search param teks (kosong -> undefined). */
 function teksMungkin(v: unknown): string | undefined {

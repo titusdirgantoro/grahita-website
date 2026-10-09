@@ -36,6 +36,8 @@ import (
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
+	"github.com/grahita/portal/api/internal/dashboard"
+	dashboardpg "github.com/grahita/portal/api/internal/dashboard/postgres"
 	"github.com/grahita/portal/api/internal/document"
 	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/fulfillment"
@@ -353,14 +355,16 @@ func newPGFixture(t *testing.T) *pgFixture {
 	f.selesai = selesaiSvc
 
 	deps := Deps{
-		Config:              testConfig(),
-		Version:             "test-pg",
-		Health:              fakeHealth{migrasi: 9},
-		Auth:                svc,
-		Settings:            settingsSvc,
-		Catalog:             catalogSvc,
-		Orders:              order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
-		AdminOrders:         order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
+		Config:      testConfig(),
+		Version:     "test-pg",
+		Health:      fakeHealth{migrasi: 9},
+		Auth:        svc,
+		Settings:    settingsSvc,
+		Catalog:     catalogSvc,
+		Orders:      order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
+		AdminOrders: order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
+		Dashboard: dashboard.NewService(dashboardpg.New(pool),
+			dashboard.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,
 		Verify:              payment.NewVerificationService(payRepo),
 		Documents:           docSvc,

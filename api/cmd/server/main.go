@@ -37,6 +37,8 @@ import (
 	branchpg "github.com/grahita/portal/api/internal/branch/postgres"
 	"github.com/grahita/portal/api/internal/catalog"
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
+	"github.com/grahita/portal/api/internal/dashboard"
+	dashboardpg "github.com/grahita/portal/api/internal/dashboard/postgres"
 	"github.com/grahita/portal/api/internal/document"
 	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/fulfillment"
@@ -371,6 +373,14 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// jadi domain pesanan tidak pernah membaca email_outbox langsung.
 	adminOrderSvc := order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc))
 
+	// Dashboard admin Pusat (F1-20, PRD §4.1): metrik periode + chip "perlu
+	// tindakan". Sumber "hari ini" adalah jam aplikasi pada zona Asia/Jakarta,
+	// dan daftar pesanan ber-email gagal diserahkan domain notification lewat
+	// interface — sama seperti riwayat pesanan (F1-15) sehingga angka chip dan
+	// daftar terfilternya tidak pernah berbeda.
+	dashboardSvc := dashboard.NewService(dashboardpg.New(pool),
+		dashboard.WithEmailGagal(notifSvc), dashboard.WithClock(clock.System()))
+
 	// Bukti transfer pesanan (F1-13). Satu repository melayani dua peran:
 	// metadata bukti (termasuk komit atomik + timeline) dan konteks pesanan
 	// untuk otorisasi. Batas unggah (max_file/max_mb) dibaca dari setelan yang
@@ -421,6 +431,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Catalog:             catalogSvc,
 		Orders:              orderSvc,
 		AdminOrders:         adminOrderSvc,
+		Dashboard:           dashboardSvc,
 		Payments:            paymentSvc,
 		Verify:              verifySvc,
 		Documents:           documentSvc,

@@ -227,3 +227,73 @@
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* ---------- Dashboard admin (F1-20) ---------- */
+
+/* Grafik SVG buatan sendiri: responsif lewat viewBox + lebar 100%. */
+.chart {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.batang {
+  fill: var(--brand-500);
+}
+
+.batangKosong {
+  fill: var(--line);
+}
+
+.sumbu {
+  fill: var(--text-muted);
+  font-size: 10px;
+}
+
+.peringkat {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.peringkat li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.peringkat li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.peringkatNo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  font-size: 12px;
+  font-weight: 600;
+  flex: none;
+}
+
+.peringkatNama {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.peringkatNilai {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+

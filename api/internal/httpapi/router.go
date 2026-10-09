@@ -101,6 +101,15 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
 
 			r.Route("/admin", func(r chi.Router) {
+				// Dashboard admin Pusat (F1-20, PRD §4.1): metrik + chip "perlu
+				// tindakan". Manager maupun Superadmin boleh membukanya
+				// (`admin.dashboard`); yang dibatasi role adalah NILAI RUPIAH —
+				// service menghilangkan field `nilai` untuk Manager
+				// (`admin.dashboard.value`, AP-DSH-02).
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminDashboard))
+					r.Get("/dashboard", a.adapt(a.adminDashboard))
+				})
 				// Riwayat email pesanan + kirim ulang (F1-16). Manager maupun
 				// Superadmin boleh memakainya (PRD §2.1).
 				r.Group(func(r chi.Router) {

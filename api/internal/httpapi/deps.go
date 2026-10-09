@@ -19,6 +19,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/dashboard"
 	"github.com/grahita/portal/api/internal/document"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
@@ -69,6 +70,11 @@ type Deps struct {
 	// AdminOrders melayani riwayat & detail pesanan seluruh cabang untuk admin
 	// Pusat: filter, grouping, paginasi server, dan catatan internal (F1-15).
 	AdminOrders *order.AdminService
+
+	// Dashboard melayani metrik dashboard admin Pusat + chip "perlu tindakan"
+	// (F1-20, PRD §4.1). Nilai rupiah hanya keluar untuk pemegang
+	// `admin.dashboard.value`; Manager menerima jumlah pesanan saja.
+	Dashboard *dashboard.Service
 
 	// Verify melayani verifikasi pembayaran manual: persetujuan (Submitted →
 	// Done, lengkap dengan dokumen + email) atau penandaan perlu review

@@ -1881,6 +1881,69 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/v1/admin/dashboard:
+    get:
+      tags: [admin]
+      operationId: getAdminDashboard
+      summary: Metrik dashboard admin + chip perlu tindakan (Manager & Superadmin)
+      description: |
+        Metrik dashboard admin Pusat (PRD §4.1 AP-DSH-01..06): ringkasan periode
+        terpilih, chip "perlu tindakan", tren 12 bulan, tren harian bulan
+        berjalan, ringkasan status pembayaran, dan peringkat cabang.
+
+        Catatan perilaku:
+
+        - **Filter** ada di query string supaya bisa di-bookmark/di-share
+          (SystemDesign §7.2). `cabang` kosong atau `semua` berarti seluruh
+          cabang; `periode` kosong berarti `bulan`.
+        - **Metrik berbasis role (AP-DSH-02).** Manager menerima `jumlah`
+          pesanan; field `nilai` (rupiah) HANYA ada untuk Superadmin
+          (kapabilitas `admin.dashboard.value`) dan **tidak dikirim sama sekali**
+          untuk Manager — bukan dikirim sebagai nol.
+        - **Chip TIDAK dibatasi periode** (Database.md §7.2): ia keadaan yang
+          menunggu penanganan sekarang. Tiap angkanya sama dengan `total` daftar
+          `/api/v1/admin/orders` bila chip diklik dengan filter padanannya:
+          `menunggu` → `status=submitted&verif=belum`, `perlu_review` →
+          `verif=perlu_review`, `lewat_jatuh_tempo` → `terlambat=true`,
+          `email_gagal` → `email_gagal=true`.
+        - **C&C lewat jatuh tempo tetap `submitted`**: sistem tidak mengubah
+          status pesanan karena tenggat terlewat, ia hanya muncul sebagai chip
+          (PRD CP-CNC-06).
+        - **Tanggal bisnis** memakai zona Asia/Jakarta. Rentang periode mengikuti
+          prototype: minggu mulai Senin, bulan & tahun berjalan berakhir HARI INI
+          (bukan akhir bulan/tahun). `harian` selalu bulan berjalan, tidak
+          terpengaruh `periode`.
+        - **Tren 12 bulan** memuat seluruh bulan tahun bisnis berjalan
+          (Januari–Desember); bulan tanpa pesanan dikirim dengan `jumlah` 0.
+        - **Peringkat cabang** dibatasi 5 teratas, diurutkan jumlah lalu nilai
+          lalu nama cabang.
+      parameters:
+        - name: cabang
+          in: query
+          description: Filter satu cabang (uuid). Kosong atau `semua` berarti seluruh cabang.
+          schema: { type: string }
+        - name: periode
+          in: query
+          description: Periode ringkasan. Kosong berarti `bulan`.
+          schema:
+            type: string
+            enum: [hari, minggu, bulan, tahun, ""]
+            default: bulan
+      responses:
+        "200":
+          description: Metrik dashboard
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/AdminDashboard" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/admin/orders:
     get:
       tags: [admin]
@@ -3143,6 +3206,122 @@ components:
           type: array
           description: Ringkasan seluruh grup pada himpunan terfilter.
           items: { $ref: "#/components/schemas/AdminOrderGroup" }
+
+    AdminDashboardMetric:
+      type: object
+      required: [jumlah]
+      description: |
+        Satu angka metrik dashboard yang berbasis role (PRD AP-DSH-02).
+        `jumlah` selalu ada; `nilai` (rupiah) HANYA ada untuk Superadmin dan
+        tidak dikirim sama sekali untuk Manager.
+      properties:
+        jumlah: { type: integer, format: int64, minimum: 0 }
+        nilai:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Σ nilai pesanan dalam rupiah (hanya Superadmin).
+
+    AdminDashboardFilter:
+      type: object
+      required: [periode, dari, sampai, hari_ini, zona]
+      description: Filter yang benar-benar dipakai server setelah normalisasi.
+      properties:
+        cabang:
+          type: string
+          format: uuid
+          description: Terisi hanya bila satu cabang dipilih.
+        periode: { type: string, enum: [hari, minggu, bulan, tahun] }
+        dari:
+          type: string
+          format: date
+          description: Awal rentang tanggal bisnis (WIB, inklusif).
+        sampai:
+          type: string
+          format: date
+          description: Akhir rentang tanggal bisnis (WIB, inklusif).
+        hari_ini:
+          type: string
+          format: date
+          description: Tanggal bisnis hari ini (WIB) menurut jam aplikasi.
+        zona: { type: string, description: Selalu `Asia/Jakarta`. }
+
+    AdminDashboardPayment:
+      type: object
+      required: [terverifikasi, menunggu, perlu_review]
+      description: Ringkasan status pembayaran periode terpilih (PRD AP-DSH-05).
+      properties:
+        terverifikasi: { $ref: "#/components/schemas/AdminDashboardMetric" }
+        menunggu: { $ref: "#/components/schemas/AdminDashboardMetric" }
+        perlu_review: { $ref: "#/components/schemas/AdminDashboardMetric" }
+
+    AdminDashboardChip:
+      type: object
+      required: [kunci, label, jumlah]
+      description: |
+        Satu chip "perlu tindakan" (PRD AP-DSH-03). Angkanya sama dengan
+        `total` daftar `/api/v1/admin/orders` bila chip diklik dengan filter
+        padanannya.
+      properties:
+        kunci:
+          type: string
+          enum: [menunggu, perlu_review, lewat_jatuh_tempo, email_gagal]
+        label: { type: string }
+        jumlah: { type: integer, format: int64, minimum: 0 }
+
+    AdminDashboardPoint:
+      type: object
+      required: [kunci, label, jumlah]
+      description: Satu batang grafik tren (bulan `YYYY-MM` atau hari `YYYY-MM-DD`).
+      properties:
+        kunci: { type: string }
+        label:
+          type: string
+          description: Label pendek siap tampil (mis. `Okt` atau `7`).
+        jumlah: { type: integer, format: int64, minimum: 0 }
+        nilai:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Σ nilai pesanan pada titik itu (hanya Superadmin).
+
+    AdminDashboardRank:
+      type: object
+      required: [branch_id, nama, jumlah]
+      description: Satu baris peringkat cabang pada periode terpilih (PRD AP-DSH-06).
+      properties:
+        branch_id: { type: string, format: uuid }
+        nama: { type: string }
+        jumlah: { type: integer, format: int64, minimum: 0 }
+        nilai:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Σ nilai pesanan cabang itu (hanya Superadmin).
+
+    AdminDashboard:
+      type: object
+      required: [filter, ringkasan, pembayaran, chip, tren_bulanan, harian, peringkat_cabang]
+      description: Metrik dashboard admin Pusat (PRD §4.1).
+      properties:
+        filter: { $ref: "#/components/schemas/AdminDashboardFilter" }
+        ringkasan: { $ref: "#/components/schemas/AdminDashboardMetric" }
+        pembayaran: { $ref: "#/components/schemas/AdminDashboardPayment" }
+        chip:
+          type: array
+          items: { $ref: "#/components/schemas/AdminDashboardChip" }
+        tren_bulanan:
+          type: array
+          description: Selalu 12 titik, Januari–Desember tahun bisnis berjalan.
+          items: { $ref: "#/components/schemas/AdminDashboardPoint" }
+        harian:
+          type: array
+          description: Hari 1 sampai hari ini pada bulan bisnis berjalan.
+          items: { $ref: "#/components/schemas/AdminDashboardPoint" }
+        peringkat_cabang:
+          type: array
+          description: Maksimal 5 cabang teratas pada periode terpilih.
+          items: { $ref: "#/components/schemas/AdminDashboardRank" }
 
     OrderEvent:
       type: object

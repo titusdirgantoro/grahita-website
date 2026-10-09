@@ -8,6 +8,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
+	"github.com/grahita/portal/api/internal/dashboard"
 	"github.com/grahita/portal/api/internal/document"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
@@ -250,6 +251,13 @@ func mapDomainErr(err error) error {
 	// Riwayat invoice cabang (F1-19): filter periode yang tidak terbaca
 	// dijawab 400, bukan daftar kosong; akun tanpa cabang dijawab 409 sama
 	// seperti domain lain.
+	case errors.Is(err, dashboard.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke dashboard admin.")
+	case errors.Is(err, dashboard.ErrFilterInvalid):
+		// Filter dashboard (F1-20) yang tidak dikenal ditolak 400 supaya salah
+		// ketik tidak diam-diam menghilangkan filter.
+		return apierr.Validation("Filter dashboard tidak valid.",
+			map[string]string{"filter": err.Error()})
 	case errors.Is(err, document.ErrFilterInvalid):
 		return apierr.Validation("Filter periode tidak valid.",
 			map[string]string{"periode": err.Error()})
