@@ -54,6 +54,55 @@ func (r *Repo) EnqueueTx(ctx context.Context, tx pgx.Tx, e notification.Envelope
 	return r.insert(ctx, tx, e)
 }
 
+// EnqueueOnce menyimpan satu email HANYA bila (order_id, jenis) belum ada.
+//
+// Dipakai worker transisi Done (F1-18) yang boleh dijalankan ULANG: River
+// bersifat at-least-once, jadi pekerjaan render dokumen yang gagal di tengah
+// (setelah sebagian email diantre) akan dicoba lagi. Pemeriksaan dan penulisan
+// berada di SATU transaksi yang diserialkan lewat advisory lock per
+// (order_id, jenis) — pola yang sama dengan Resend — sehingga dua worker
+// bersamaan tidak bisa sama-sama membuat baris untuk jenis yang sama.
+//
+// Baris yang SUDAH ada (termasuk yang `failed`) dianggap cukup: mengantre ulang
+// email yang pernah dibuat adalah tindakan admin eksplisit (ResendOrder), bukan
+// efek samping worker.
+func (r *Repo) EnqueueOnce(ctx context.Context, e notification.Envelope) (notification.Email, bool, error) {
+	if e.OrderID == "" {
+		return notification.Email{}, false, fmt.Errorf("%w: email dokumen wajib punya pesanan", notification.ErrInvalidData)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return notification.Email{}, false, fmt.Errorf("mulai transaksi email sekali: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, e.OrderID, e.Jenis); err != nil {
+		return notification.Email{}, false, fmt.Errorf("kunci email dokumen: %w", err)
+	}
+
+	var ada bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1 FROM email_outbox
+		    WHERE order_id = $1::uuid AND jenis = $2::email_kind)`,
+		e.OrderID, e.Jenis).Scan(&ada); err != nil {
+		return notification.Email{}, false, fmt.Errorf("periksa email dokumen: %w", err)
+	}
+	if ada {
+		return notification.Email{}, false, nil
+	}
+
+	email, err := r.insert(ctx, tx, e)
+	if err != nil {
+		return notification.Email{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return notification.Email{}, false, fmt.Errorf("simpan email dokumen: %w", err)
+	}
+	return email, true, nil
+}
+
 // insert menyimpan satu baris outbox memakai executor (pool atau transaksi).
 func (r *Repo) insert(ctx context.Context, db execer, e notification.Envelope) (notification.Email, error) {
 	payload, err := json.Marshal(e.Payload)

@@ -66,3 +66,12 @@ func BoolPtr(p *bool) pgtype.Bool {
 	}
 	return pgtype.Bool{Bool: *p, Valid: true}
 }
+
+// Int8Ptr mengubah *int64 menjadi pgtype.Int8 (NULL bila nil) — dipakai untuk
+// argumen sqlc.narg bilangan besar (mis. nominal yang belum terbaca).
+func Int8Ptr(p *int64) pgtype.Int8 {
+	if p == nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: *p, Valid: true}
+}

@@ -52,6 +52,30 @@ func (f *fakeStore) Enqueue(_ context.Context, e Envelope) (Email, error) {
 	return row, nil
 }
 
+// EnqueueOnce meniru penjaga (order_id, jenis) implementasi PostgreSQL: baris
+// kedua untuk pasangan yang sama tidak pernah dibuat.
+func (f *fakeStore) EnqueueOnce(_ context.Context, e Envelope) (Email, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range f.urut {
+		row := f.rows[id]
+		if row.OrderID == e.OrderID && row.Jenis == e.Jenis {
+			return Email{}, false, nil
+		}
+	}
+	f.seq++
+	id := fmt.Sprintf("email-%d", f.seq)
+	now := time.Now().UTC()
+	row := Email{
+		ID: id, OrderID: e.OrderID, Jenis: e.Jenis, To: e.To, Cc: e.Cc,
+		Subject: e.Subject, Payload: e.Payload, Status: StatusQueued,
+		NextTryAt: time.Unix(0, 0).UTC(), CreatedAt: now,
+	}
+	f.rows[id] = row
+	f.urut = append(f.urut, id)
+	return row, true, nil
+}
+
 func (f *fakeStore) Claim(_ context.Context, c Claim) ([]Email, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -766,6 +790,46 @@ func TestEnqueueOrderEmailInvoiceCabangKeEmailCabangSaja(t *testing.T) {
 	}
 	if len(lampiran) != 1 || lampiran[0].Nama != "Invoice-2026-10-0001.pdf" {
 		t.Fatalf("lampiran harus tepat satu invoice dengan nama benar, dapat %+v", lampiran)
+	}
+}
+
+func TestEnqueueOrderEmailSekaliTidakMenggandakan(t *testing.T) {
+	store := newFakeStore()
+	orders := &fakeOrders{ref: fixtureOrder(), docs: []Dokumen{{Jenis: "invoice_pdf", Versi: 0, StorageKey: "k/invoice.pdf"}}}
+	admins := &fakeAdmins{invoice: []string{"sa@example.test"}}
+	s := newOrderService(t, store, &fakeMailer{}, orders, admins)
+	ctx := context.Background()
+	in := OrderEmailInput{OrderID: orderUUID, Jenis: JenisInvoiceAdmin}
+
+	pertama, dibuat, err := s.EnqueueOrderEmailSekali(ctx, in)
+	if err != nil {
+		t.Fatalf("pengantrean pertama: %v", err)
+	}
+	if !dibuat || pertama.ID == "" {
+		t.Fatalf("pengantrean pertama harus membuat baris baru: dibuat=%v %+v", dibuat, pertama)
+	}
+
+	// Pekerjaan worker yang diulang (River at-least-once) tidak boleh
+	// menggandakan email dokumen pesanan yang sama.
+	kedua, dibuat, err := s.EnqueueOrderEmailSekali(ctx, in)
+	if err != nil {
+		t.Fatalf("pengantrean kedua: %v", err)
+	}
+	if dibuat {
+		t.Errorf("pengantrean kedua tidak boleh membuat baris baru: %+v", kedua)
+	}
+	if n := len(store.semua()); n != 1 {
+		t.Errorf("harus tetap satu baris outbox, dapat %d", n)
+	}
+	// Penerima dihitung ULANG di kedua jalur, jadi tetap sama.
+	if n := len(pertama.To); n != 1 || pertama.To[0] != "sa@example.test" {
+		t.Errorf("penerima pertama salah: %v", pertama.To)
+	}
+
+	// Dokumen belum siap: jalur ini pun menahan email (sama dengan EnqueueOrderEmail).
+	belumSiap := newOrderService(t, newFakeStore(), &fakeMailer{}, &fakeOrders{ref: fixtureOrder()}, admins)
+	if _, _, err := belumSiap.EnqueueOrderEmailSekali(ctx, in); !errors.Is(err, ErrDocumentNotReady) {
+		t.Errorf("dokumen belum siap harus ErrDocumentNotReady, dapat %v", err)
 	}
 }
 

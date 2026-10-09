@@ -125,6 +125,23 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, payment.ErrStorageUnavailable):
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
 			"Penyimpanan berkas belum siap sehingga bukti tidak dapat disimpan.")
+	// Verifikasi pembayaran (F1-18). Keputusannya eksplisit: sudah selesai
+	// berarti 409 tanpa efek samping, dan pesanan yang belum dikirim tidak
+	// pernah bisa diselesaikan.
+	case errors.Is(err, payment.ErrAlreadyDone):
+		return apierr.Conflict("ORDER_ALREADY_DONE",
+			"Pesanan ini sudah selesai diverifikasi. Tidak ada perubahan yang dilakukan.")
+	case errors.Is(err, payment.ErrNotSubmitted):
+		return apierr.Conflict("ORDER_NOT_SUBMITTED",
+			"Verifikasi hanya untuk pesanan yang sudah dikirim. Pesanan draf belum punya nomor/tanggal untuk diselesaikan.")
+	case errors.Is(err, payment.ErrAlasanInvalid), errors.Is(err, payment.ErrHasilInvalid),
+		errors.Is(err, payment.ErrNominalInvalid), errors.Is(err, payment.ErrCatatanInvalid),
+		errors.Is(err, payment.ErrMetodeInvalid), errors.Is(err, payment.ErrInvalidData):
+		return apierr.Validation("Data verifikasi tidak valid.",
+			map[string]string{"verifikasi": err.Error()})
+	case errors.Is(err, payment.ErrQueueUnavailable), errors.Is(err, payment.ErrVerifierUnavailable):
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
+			"Penjadwal pekerjaan dokumen belum siap sehingga verifikasi belum dapat diselesaikan.")
 	case errors.Is(err, payment.ErrTooLarge), errors.Is(err, payment.ErrTooMany),
 		errors.Is(err, payment.ErrDuplicate), errors.Is(err, payment.ErrUnsupported),
 		errors.Is(err, payment.ErrFakeExt), errors.Is(err, payment.ErrNoFile):

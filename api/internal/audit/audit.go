@@ -26,6 +26,9 @@ const (
 	// EntityEmail mencatat email transaksional (email_outbox). EntityID-nya
 	// adalah id baris outbox yang bersangkutan (F1-16).
 	EntityEmail = "email"
+	// EntityOrder mencatat mutasi pesanan oleh admin Pusat. Dipakai verifikasi
+	// pembayaran (F1-18): EntityID-nya adalah id pesanan yang diverifikasi.
+	EntityOrder = "order"
 )
 
 // Aksi yang dicatat (kolom audit_logs.action).
@@ -43,6 +46,10 @@ const (
 	// ActionResend mencatat kirim ulang email transaksional oleh admin
 	// (SystemDesign.md §6, kartu F1-16).
 	ActionResend = "resend"
+	// ActionVerify mencatat keputusan verifikasi pembayaran pesanan — baik
+	// persetujuan (Submitted -> Done) maupun penandaan perlu review (F1-18,
+	// SystemDesign.md §4.3). Alasan/keputusannya ada di snapshot After.
+	ActionVerify = "verify"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.

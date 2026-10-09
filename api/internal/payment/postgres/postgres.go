@@ -30,10 +30,20 @@ import (
 type Repo struct {
 	pool *database.Pool
 	q    *sqlc.Queries
+	// jobs menitipkan pekerjaan River pada transaksi verifikasi (F1-18).
+	// Boleh nil: tanpa penjadwal, verifikasi ditolak alih-alih menyelesaikan
+	// pesanan tanpa dokumen/email.
+	jobs JobInserter
 }
 
 // New membuat repository bukti transfer.
-func New(pool *database.Pool) *Repo { return &Repo{pool: pool, q: sqlc.New(pool)} }
+func New(pool *database.Pool, opts ...Option) *Repo {
+	r := &Repo{pool: pool, q: sqlc.New(pool)}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
+}
 
 // Sha256ByOrder mengembalikan sidik jari isi seluruh bukti satu pesanan,
 // terlama dulu. Dipakai domain memeriksa duplikat SEBELUM berkas ditulis ke

@@ -69,6 +69,11 @@ type Deps struct {
 	// Pusat: filter, grouping, paginasi server, dan catatan internal (F1-15).
 	AdminOrders *order.AdminService
 
+	// Verify melayani verifikasi pembayaran manual: persetujuan (Submitted →
+	// Done, lengkap dengan dokumen + email) atau penandaan perlu review
+	// (F1-18, PRD AP-ORD-07).
+	Verify *payment.VerificationService
+
 	// Payments melayani bukti transfer: unggah multi-berkas, daftar, dan
 	// tautan unduh berumur pendek (F1-13).
 	Payments *payment.Service

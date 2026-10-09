@@ -25,6 +25,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
 	"github.com/grahita/portal/api/internal/backup"
@@ -36,6 +39,7 @@ import (
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/document"
 	documentpg "github.com/grahita/portal/api/internal/document/postgres"
+	"github.com/grahita/portal/api/internal/fulfillment"
 	"github.com/grahita/portal/api/internal/httpapi"
 	"github.com/grahita/portal/api/internal/notification"
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
@@ -178,12 +182,24 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 
 	if mode == "worker" {
 		// Object storage juga dipasang di worker: pengiriman lampiran dokumen
-		// (F1-16) dan sinkronisasi cadangan (F1-21) membacanya di sini.
+		// (F1-16), render Invoice/Surat Jalan setelah pesanan selesai (F1-18),
+		// dan sinkronisasi cadangan (F1-21) membacanya di sini.
 		store, err := buildStorage(cfg, logger)
 		if err != nil {
 			return err
 		}
 		notif := buildNotification(pool, cfg, store, buildMailer(cfg))
+
+		// Pekerjaan lanjutan Done (F1-18): render dokumen lalu antre email
+		// dokumen. Renderer yang sama dengan mode api (Gotenberg; Disabled
+		// berarti job gagal dan diulang sampai mesinnya siap — bukan mengirim
+		// email tanpa lampiran).
+		renderer := pdf.Renderer(pdf.Disabled{})
+		if cfg.GotenbergURL != "" {
+			renderer = pdf.NewGotenberg(cfg.GotenbergURL)
+		}
+		documentSvc := document.NewService(documentpg.New(pool), store, renderer)
+		selesai := fulfillment.NewService(documentSvc, notif)
 
 		// Service cadangan hanya dijalankan bila tujuan dikonfigurasi; tanpa
 		// itu tidak ada job jadwal cadangan yang didaftarkan sama sekali
@@ -196,7 +212,7 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 			logger.Info("jadwal cadangan aktif", "tujuan", bk.Target().Nama(), "jadwal", bk.Jadwal())
 		}
 
-		client, err := worker.New(pool, cfg, notif, bk)
+		client, err := worker.New(pool, cfg, notif, bk, selesai)
 		if err != nil {
 			return err
 		}
@@ -354,8 +370,18 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// untuk otorisasi. Batas unggah (max_file/max_mb) dibaca dari setelan yang
 	// sama dengan pengaturan sistem, jadi angka di UI dan server tidak pernah
 	// berbeda.
-	paymentRepo := paymentpg.New(pool)
+	//
+	// Repository yang sama juga menyimpan transaksi VERIFIKASI pembayaran
+	// (F1-18): status, log, timeline, audit, dan penjadwalan pekerjaan dokumen
+	// dalam satu transaksi. Klien River di bawah hanya dipakai untuk
+	// MENITIPKAN job (insert-only); worker-lah yang menjalankannya.
+	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
+	}
+	paymentRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
 	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc)
+	verifySvc := payment.NewVerificationService(paymentRepo)
 
 	// Dokumen pesanan (F1-17): render Invoice PDF + Surat Jalan XLSX/PDF ke
 	// object storage, catat di tabel `documents`, dan sediakan tautan unduh
@@ -385,6 +411,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Orders:              orderSvc,
 		AdminOrders:         adminOrderSvc,
 		Payments:            paymentSvc,
+		Verify:              verifySvc,
 		Documents:           documentSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,

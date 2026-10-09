@@ -148,6 +148,14 @@ type Claim struct {
 // Store menyimpan dan memutasi email_outbox.
 type Store interface {
 	Enqueue(ctx context.Context, e Envelope) (Email, error)
+	// EnqueueOnce menyimpan satu email HANYA bila (order_id, jenis) belum
+	// pernah ada, dalam SATU transaksi yang diserialkan per pasangan itu
+	// (advisory lock). Bool kedua bernilai true bila barisnya baru dibuat.
+	//
+	// Ini jalur idempoten yang dipakai transisi Done (F1-18): worker yang
+	// menjalankan ulang pekerjaan render dokumen (River bersifat
+	// at-least-once) tidak boleh menggandakan email dokumen pesanan yang sama.
+	EnqueueOnce(ctx context.Context, e Envelope) (Email, bool, error)
 	Claim(ctx context.Context, c Claim) ([]Email, error)
 	MarkSent(ctx context.Context, id string, at time.Time) error
 	Reschedule(ctx context.Context, id string, nextTryAt time.Time, cause string) error
@@ -476,6 +484,27 @@ func (s *Service) Kirim(ctx context.Context, e Email) error {
 // sendiri, jadi method ini tidak menerima Actor — ia bukan permukaan publik.
 func (s *Service) PesananEmailGagal(ctx context.Context) ([]string, error) {
 	return s.store.PesananEmailGagal(ctx)
+}
+
+// EnqueueOrderEmailSekali mengantre email dokumen satu pesanan HANYA bila jenis
+// itu belum pernah dibuat untuk pesanan tersebut. Bool kedua bernilai true bila
+// barisnya baru dibuat; false berarti email itu sudah ada dan TIDAK digandakan.
+//
+// Dipakai transisi Done (F1-18) lewat worker render dokumen: worker River
+// bersifat at-least-once, jadi pekerjaan yang harus dijalankan ulang (mis.
+// proses mati setelah dokumen dirender) tidak boleh melahirkan email dokumen
+// kedua untuk pesanan yang sama. Ketentuan lain — dokumen harus sudah dirender
+// dan penerimanya harus berhak — sama persis dengan EnqueueOrderEmail.
+func (s *Service) EnqueueOrderEmailSekali(ctx context.Context, in OrderEmailInput) (Email, bool, error) {
+	env, _, err := s.buildOrderEnvelope(ctx, in)
+	if err != nil {
+		return Email{}, false, err
+	}
+	env.Jenis = strings.TrimSpace(env.Jenis)
+	if env.OrderID == "" {
+		return Email{}, false, fmt.Errorf("%w: email dokumen wajib punya pesanan", ErrInvalidData)
+	}
+	return s.store.EnqueueOnce(ctx, env)
 }
 
 // validJenis melaporkan apakah jenis email dikenal.

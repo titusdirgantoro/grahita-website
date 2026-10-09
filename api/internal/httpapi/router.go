@@ -106,6 +106,10 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/orders", a.adapt(a.adminOrdersList))
 					r.Get("/orders/{id}", a.adapt(a.adminOrderDetail))
 					r.Post("/orders/{id}/notes", a.adapt(a.adminOrderNote))
+					// Verifikasi pembayaran manual (F1-18): setujui (→ Done
+					// beserta dokumen + email) atau tandai perlu review dengan
+					// alasan. Idempoten terhadap klik ganda: yang kedua 409.
+					r.Post("/orders/{id}/verify", a.adapt(a.adminOrderVerify))
 					r.Get("/orders/{id}/emails", a.adapt(a.adminOrderEmails))
 					r.Post("/orders/{id}/emails/{kind}/resend", a.adapt(a.adminOrderEmailResend))
 					// Bukti transfer: admin boleh melihat semua cabang dan

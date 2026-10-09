@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/grahita/portal/api/internal/auth"
 	authpg "github.com/grahita/portal/api/internal/auth/postgres"
 	"github.com/grahita/portal/api/internal/bank"
@@ -36,6 +38,7 @@ import (
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/document"
 	documentpg "github.com/grahita/portal/api/internal/document/postgres"
+	"github.com/grahita/portal/api/internal/fulfillment"
 	"github.com/grahita/portal/api/internal/notification"
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
 	"github.com/grahita/portal/api/internal/order"
@@ -52,6 +55,10 @@ import (
 	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
 	"github.com/grahita/portal/api/internal/users"
 	userspg "github.com/grahita/portal/api/internal/users/postgres"
+
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
 
 // objekHitung membungkus storage.Memory sekaligus menghitung objek yang
@@ -132,6 +139,12 @@ type pgFixture struct {
 	documents *document.Service
 	docRepo   *documentpg.Repo
 	deps      Deps
+
+	// Verifikasi pembayaran (F1-18): klien River insert-only yang menitipkan
+	// job render dokumen pada transaksi verifikasi, dan service pemenuhan yang
+	// menjalankan pekerjaan itu (peran worker di produksi).
+	jobs    *river.Client[pgx.Tx]
+	selesai *fulfillment.Service
 
 	branchA, branchB, branchC string
 	userA, userB, userC       string
@@ -225,6 +238,10 @@ func newPGFixture(t *testing.T) *pgFixture {
 	t.Cleanup(pool.Close)
 
 	pgEnsureSchema(t, ctx, scoped, pool)
+	// Tabel internal River (river_job, dll) pada skema uji: transisi verifikasi
+	// (F1-18) menitipkan pekerjaan dokumen pada transaksi yang sama, jadi tabel
+	// itu harus ada di skema yang sedang dipakai.
+	pgEnsureRiver(t, ctx, pool)
 	if err := kosongkanDomain(ctx, pool); err != nil {
 		t.Fatalf("mengosongkan tabel domain: %v", err)
 	}
@@ -314,16 +331,26 @@ func newPGFixture(t *testing.T) *pgFixture {
 
 	// Bukti transfer (F1-13): repository nyata di atas PostgreSQL, object
 	// storage in-memory, batas unggah dari setelan yang sama dengan produksi.
-	payRepo := paymentpg.New(pool)
+	// Repository yang sama menyimpan transaksi verifikasi (F1-18); klien River
+	// di bawah hanya menitipkan job (insert-only), worker-lah yang menjalankan.
+	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		t.Fatalf("siapkan penjadwal pekerjaan: %v", err)
+	}
+	payRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
 	paySvc := payment.NewService(payRepo, payRepo, objek, settingsSvc)
 	f.payments = paySvc
 	f.paymentsRepo = payRepo
+	f.jobs = jobQueue
 
 	orderRepo := orderpg.New(pool)
 	docRepo := documentpg.New(pool)
 	docSvc := document.NewService(docRepo, objek, rendererUji{})
 	f.docRepo = docRepo
 	f.documents = docSvc
+	// Pemenuhan pesanan Done (F1-18) — peran worker di produksi.
+	selesaiSvc := fulfillment.NewService(docSvc, notifSvc)
+	f.selesai = selesaiSvc
 
 	deps := Deps{
 		Config:              testConfig(),
@@ -335,6 +362,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Orders:              order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc), order.WithClock(clock.System())),
 		AdminOrders:         order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,
+		Verify:              payment.NewVerificationService(payRepo),
 		Documents:           docSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
@@ -381,6 +409,21 @@ func pgEnsureSchema(t *testing.T, ctx context.Context, scopedURL string, pool *d
 	}
 	if err := database.Up(ctx, scopedURL); err != nil {
 		t.Fatalf("menjalankan migrasi pada skema uji: %v", err)
+	}
+}
+
+// pgEnsureRiver membuat/memperbarui tabel internal River (river_job, dll) pada
+// skema uji yang sedang aktif — sama seperti `--mode=migrate` di produksi.
+// Driver River memakai CURRENT_SCHEMA bila skema tidak disebut eksplisit,
+// sehingga tabelnya lahir di skema uji (search_path terdepan).
+func pgEnsureRiver(t *testing.T, ctx context.Context, pool *database.Pool) {
+	t.Helper()
+	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
+	if err != nil {
+		t.Fatalf("siapkan migrasi River: %v", err)
+	}
+	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		t.Fatalf("menjalankan migrasi River pada skema uji: %v", err)
 	}
 }
 

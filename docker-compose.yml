@@ -160,6 +160,14 @@ services:
       SMTP_PORT: ${SMTP_PORT:-1025}
       MAIL_FROM: ${MAIL_FROM:-no-reply@grahita.id}
       GOTENBERG_URL: ${GOTENBERG_URL:-http://gotenberg:3000}
+      # Object storage yang SAMA dengan service api: pekerjaan "render dokumen
+      # lalu antre email" (F1-18) berjalan di worker, jadi ia harus bisa menulis
+      # Invoice/Surat Jalan dan membaca lampirannya saat mengirim email.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_BUCKET: ${S3_BUCKET:-grahita}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-grahita}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-grahita123}
+      S3_USE_PATH_STYLE: "true"
       WORKER_INTERVAL: ${WORKER_INTERVAL:-15s}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}

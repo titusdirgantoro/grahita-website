@@ -16,9 +16,11 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
 	"github.com/grahita/portal/api/internal/backup"
+	"github.com/grahita/portal/api/internal/fulfillment"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
+	"github.com/grahita/portal/api/internal/platform/jobs"
 )
 
 // PingArgs adalah job contoh yang dipakai untuk memverifikasi rantai
@@ -105,6 +107,52 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 	return nil
 }
 
+// ServerSelesai adalah pekerjaan lanjutan setelah pesanan Done: render dokumen
+// lalu antre email dokumen (fulfillment.Service, kartu F1-18).
+type ServerSelesai interface {
+	PesananSelesai(ctx context.Context, orderID string) (fulfillment.Hasil, error)
+}
+
+// RenderDokumenWorker menjalankan job "render_dokumen_pesanan": memastikan
+// Invoice/Surat Jalan pesanan ada, lalu mengantre email dokumennya
+// (SystemDesign.md §4.4). Job ini dititipkan transaksi verifikasi (F1-18),
+// jadi pesanan yang baru selesai tidak mungkin kehilangan pekerjaan dokumennya.
+//
+// Kegagalan render (mesin PDF/object storage belum siap) dikembalikan supaya
+// River mengulanginya; email baru diantre setelah dokumennya benar-benar ada.
+type RenderDokumenWorker struct {
+	river.WorkerDefaults[jobs.RenderDokumenArgs]
+	selesai ServerSelesai
+}
+
+// NewRenderDokumenWorker membuat worker pemenuhan pesanan Done. Dipakai
+// composition root (mode worker) dan pengujian yang menjalankan satu pekerjaan
+// secara langsung.
+func NewRenderDokumenWorker(selesai ServerSelesai) *RenderDokumenWorker {
+	return &RenderDokumenWorker{selesai: selesai}
+}
+
+// Kind adalah Kind job di tabel River.
+func (RenderDokumenWorker) Kind() string { return jobs.KindRenderDokumen }
+
+// Work menjalankan satu penyelesaian pesanan.
+func (w *RenderDokumenWorker) Work(ctx context.Context, job *river.Job[jobs.RenderDokumenArgs]) error {
+	if w.selesai == nil {
+		// Tanpa service, job tidak bisa dikerjakan — jangan lepas begitu saja
+		// (pesanan Done akan kehilangan dokumen & email).
+		return fmt.Errorf("job %s: layanan pemenuhan pesanan belum terpasang", w.Kind())
+	}
+	hasil, err := w.selesai.PesananSelesai(ctx, job.Args.OrderID)
+	if err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "pesanan selesai dipenuhi",
+		"order_id", job.Args.OrderID, "dokumen", hasil.Dokumen,
+		"email_dibuat", hasil.EmailDibuat, "email_sudah_ada", hasil.EmailSudahAda,
+		"email_tanpa_penerima", hasil.EmailTanpaPenerima)
+	return nil
+}
+
 // Client membungkus River client beserta pool-nya.
 type Client struct {
 	river *river.Client[pgx.Tx]
@@ -115,8 +163,9 @@ type Client struct {
 // notif boleh nil (mis. pengujian unit worker tanpa database domain); bila
 // diisi, worker mengirim email_outbox secara berkala. bk boleh nil: tanpa
 // service cadangan (BACKUP_TARGET kosong) tidak ada job cadangan yang
-// dijadwalkan sama sekali.
-func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service) (*Client, error) {
+// dijadwalkan sama sekali. selesai boleh nil (mis. mode lokal tanpa dokumen);
+// bila diisi, worker menjalankan job render dokumen + antre email (F1-18).
+func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service, selesai ServerSelesai) (*Client, error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &PingWorker{})
 	if notif != nil {
@@ -124,6 +173,9 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 	}
 	if bk != nil {
 		river.AddWorker(workers, &BackupWorker{svc: bk})
+	}
+	if selesai != nil {
+		river.AddWorker(workers, NewRenderDokumenWorker(selesai))
 	}
 
 	queues := map[string]river.QueueConfig{}

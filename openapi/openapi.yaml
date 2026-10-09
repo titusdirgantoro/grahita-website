@@ -2056,6 +2056,103 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/admin/orders/{id}/verify:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    post:
+      tags: [admin]
+      operationId: verifyAdminOrder
+      summary: Verifikasi pembayaran pesanan (Manager & Superadmin)
+      description: |
+        Verifikasi pembayaran manual satu pesanan (PRD §4.2 AP-ORD-07, §5, §7;
+        SystemDesign.md §4.3–4.4).
+
+        Dua keputusan:
+
+        * `hasil: cocok` — MENYETUJUI: status berpindah ke `done`,
+          `done_at` diisi, dan efek sampingnya dijalankan TEPAT SEKALI dalam
+          transaksi yang sama: `verification_logs`, timeline, audit, dan
+          penjadwalan pekerjaan render Invoice/Surat Jalan lalu email dokumen
+          sesuai flag penerima admin. `total_terbaca` adalah nominal yang
+          dibaca admin dari bukti (diisi manual untuk bukti non-OCR);
+          `selisih` = `total_terbaca` − total pesanan, dihitung server.
+        * `hasil: perlu_review` — pesanan TETAP `submitted` (sub-status
+          verifikasi `perlu_review`) dan `alasan` WAJIB diisi.
+
+        Metode verifikasi ditetapkan server (`manual`); jalur AI/OCR (Fase 2)
+        memakai service yang sama dengan metode `ai` dan tidak lewat endpoint
+        ini. Verifikasi kedua pada pesanan yang sudah `done` dijawab `409`
+        tanpa efek samping; idempotensi efek samping dijaga kunci baris
+        pesanan.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hasil]
+              properties:
+                hasil:
+                  type: string
+                  enum: [cocok, perlu_review]
+                  description: |
+                    `cocok` menyetujui (→ Done); `perlu_review` menandai pesanan
+                    perlu review (tetap Submitted).
+                total_terbaca:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Nominal yang dibaca/ diisi admin untuk bukti (Rupiah bulat).
+                    Kosong berarti tidak ada nominal terbaca.
+                alasan:
+                  type: string
+                  enum: [kurang_bayar, lebih_bayar, tidak_terbaca, rekening_beda, lainnya]
+                  description: |
+                    Wajib bila `hasil: perlu_review`, dan harus kosong bila
+                    `hasil: cocok`.
+                catatan:
+                  type: string
+                  maxLength: 2000
+                  description: Catatan bebas pemeriksa.
+      responses:
+        "200":
+          description: Verifikasi tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/VerifyResult" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Pesanan sudah selesai diverifikasi (`ORDER_ALREADY_DONE`) atau belum
+            dikirim (`ORDER_NOT_SUBMITTED`). Tidak ada perubahan yang dilakukan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                sudahSelesai:
+                  value:
+                    error:
+                      code: ORDER_ALREADY_DONE
+                      message: Pesanan ini sudah selesai diverifikasi. Tidak ada perubahan yang dilakukan.
+                belumDikirim:
+                  value:
+                    error:
+                      code: ORDER_NOT_SUBMITTED
+                      message: Verifikasi hanya untuk pesanan yang sudah dikirim.
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
   /api/v1/admin/orders/{id}/emails:
     parameters:
       - name: id
@@ -2828,7 +2925,7 @@ components:
       description: Satu baris log verifikasi pembayaran pesanan.
       properties:
         id: { type: string, format: uuid }
-        metode: { type: string, enum: [manual, ai] }
+        metode: { type: string, enum: [manual, ai, virtual_account] }
         total_pesanan: { type: integer, format: int64 }
         total_terbaca: { type: integer, format: int64 }
         selisih: { type: integer, format: int64 }
@@ -2841,6 +2938,35 @@ components:
           type: string
           description: Nama admin pemeriksa; kosong bila diverifikasi AI.
         created_at: { type: string, format: date-time }
+
+    VerifyResult:
+      type: object
+      required: [order, verifikasi]
+      description: |
+        Hasil satu permintaan verifikasi pembayaran: keadaan pesanan sesudahnya
+        beserta baris log verifikasi yang tersimpan (F1-18).
+      properties:
+        order: { $ref: "#/components/schemas/VerifiedOrder" }
+        verifikasi: { $ref: "#/components/schemas/VerificationLog" }
+
+    VerifiedOrder:
+      type: object
+      required: [id, versi, status, verif_status, total]
+      description: |
+        Ringkasan pesanan setelah verifikasi. `status` tetap `submitted` bila
+        hasilnya `perlu_review` (PRD §7.1: perlu review adalah sub-status
+        verifikasi, bukan status pesanan).
+      properties:
+        id: { type: string, format: uuid }
+        nomor: { type: string }
+        versi: { type: integer, minimum: 0 }
+        branch_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, submitted, done] }
+        verif_status: { type: string, enum: [belum, cocok, perlu_review] }
+        alasan_review:
+          type: string
+          enum: ["", kurang_bayar, lebih_bayar, tidak_terbaca, rekening_beda, lainnya]
+        total: { type: integer, format: int64 }
 
     AdminOrderDetail:
       type: object
@@ -2932,6 +3058,8 @@ components:
                   PRODUCT_IN_USE,
                   ORDER_LOCKED,
                   ORDER_NOT_DONE,
+                  ORDER_ALREADY_DONE,
+                  ORDER_NOT_SUBMITTED,
                   DOCUMENT_NOT_READY,
                   DOCUMENT_RENDER_UNAVAILABLE,
                   PROOF_LIMIT,

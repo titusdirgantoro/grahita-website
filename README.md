@@ -118,10 +118,11 @@ membaca import graph kode sumber. Melanggarnya = CI merah.
    └─ internal/
       ├─ httpapi                # router, middleware, handler
       ├─ auth catalog settings  # service + kontrak repository
+      ├─ document fulfillment   # dokumen pesanan + pekerjaan setelah Done
       ├─ notification           # outbox email: template, retry, worker
       ├─ */postgres             # implementasi repository (sqlc)
       ├─ db/sqlc                # kode hasil generate
-      ├─ platform/*             # config, database, httpx, apierr, clock, storage, mailer, pdf, pgtypes
+      ├─ platform/*             # config, database, httpx, apierr, clock, storage, mailer, pdf, pgtypes, jobs
       ├─ worker                 # River
       ├─ seed                   # data contoh
       └─ arch                   # pengujian batas lapisan
@@ -391,6 +392,42 @@ satu baris `documents` per `(order_id, jenis, versi)`:
 - **Catatan bisnis terbuka**: PRD §8 no.7 (format Surat Jalan resmi) dan no.9
   (tanda tangan/stempel digital) belum diputuskan → dokumen memakai template
   awal tanpa tanda tangan/stempel.
+
+## Verifikasi pembayaran manual & transisi Done (F1-18)
+
+Satu jalur transisi untuk semua cara verifikasi: `payment.VerificationService.MarkVerified`
+(dipakai endpoint admin sekarang sebagai `metode = manual`; kelak OCR/AI dan
+Virtual Account memakai method yang sama). Efek sampingnya selalu identik.
+
+- **Endpoint**: `POST /api/v1/admin/orders/{id}/verify` — Manager & Superadmin
+  (kapabilitas `admin.verify`). Body:
+  `{"hasil":"cocok"|"perlu_review","total_terbaca":<rupiah>,"alasan":<...>,"catatan":<...>}`.
+  `metode` **tidak** diterima dari klien: endpoint ini adalah verifikasi manual.
+- **`cocok` (setujui)** → `status = done`, `done_at` terisi,
+  `verif_status = cocok`.
+- **`perlu_review`** → pesanan **tetap `submitted`** (PRD §7.1: perlu review
+  adalah sub-status verifikasi) dengan `alasan_review` wajib dari
+  `kurang_bayar`, `lebih_bayar`, `tidak_terbaca`, `rekening_beda`, `lainnya`.
+  Admin boleh menimpanya nanti dengan persetujuan.
+- **Satu transaksi**: `orders` (status/`verif_status`/`done_at`),
+  `verification_logs` (`total_pesanan` dari baris terkunci, `total_terbaca`
+  dari admin, `selisih` kolom generated), `order_events`, `audit_logs`, dan
+  **penjadwalan job River** `render_dokumen_pesanan` (SystemDesign.md §4.2/§5.1)
+  — tidak ada pesanan Done tanpa pekerjaan dokumennya.
+- **Tepat sekali**: baris pesanan dikunci `FOR UPDATE`; verifikasi kedua pada
+  pesanan yang sudah `done` dijawab `409 ORDER_ALREADY_DONE` tanpa efek samping
+  kedua. Pesanan `draft` dijawab `409 ORDER_NOT_SUBMITTED`.
+- **Worker**: job `render_dokumen_pesanan` merender Invoice/Surat Jalan
+  (`document.Ensure`) **lalu** mengantre email dokumen
+  (`notification.EnqueueOrderEmailSekali`, idempoten per (pesanan, jenis)).
+  Bila mesin PDF/storage belum siap, job gagal dan diulang — email tidak pernah
+  keluar tanpa lampiran. Penerima yang belum berflag dilewati (bukan gagal).
+- **C&C**: submit tanpa bukti tetap sah (BR-08) dan pesanan yang lewat jatuh
+  tempo **tidak** auto-Done — ia baru selesai setelah diverifikasi.
+- **Paket**: `internal/payment` (`verify.go` + `payment/postgres/verify.go`),
+  `internal/fulfillment`, `internal/platform/jobs`, `internal/worker`.
+- **Konfigurasi**: worker kini memakai object storage yang sama
+  (`S3_*`) dan `GOTENBERG_URL`; tanpa itu pekerjaan dokumen gagal `503`/diulang.
 
 ## Produksi
 
