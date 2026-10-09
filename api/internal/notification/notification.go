@@ -265,13 +265,14 @@ type Hasil struct {
 
 // Service adalah logika bisnis outbox email.
 type Service struct {
-	store  Store
-	mail   mailer.Mailer
-	obj    ObjectStore
-	orders OrderReader
-	admins AdminRecipients
-	clk    clock.Clock
-	cfg    Config
+	store    Store
+	mail     mailer.Mailer
+	obj      ObjectStore
+	orders   OrderReader
+	admins   AdminRecipients
+	reminder ReminderStore
+	clk      clock.Clock
+	cfg      Config
 }
 
 // Option menyesuaikan Service.

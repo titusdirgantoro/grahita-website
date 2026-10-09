@@ -29,6 +29,10 @@ const (
 	// EntityOrder mencatat mutasi pesanan oleh admin Pusat. Dipakai verifikasi
 	// pembayaran (F1-18): EntityID-nya adalah id pesanan yang diverifikasi.
 	EntityOrder = "order"
+	// EntityCNCReminder mencatat pengingat pembayaran Cash & Carry yang
+	// diantre pekerjaan terjadwal (F2-23, SystemDesign.md §4.6). EntityID-nya
+	// adalah id pesanan yang diingatkan; aktornya pekerjaan latar ('system').
+	EntityCNCReminder = "cnc_reminder"
 )
 
 // Aksi yang dicatat (kolom audit_logs.action).
@@ -54,6 +58,10 @@ const (
 	// PRD AP-REV-05): aktor, alasan, dan delta nilai ada di snapshot
 	// Before/After. EntityID-nya adalah id pesanan yang direvisi.
 	ActionRevise = "revise"
+	// ActionRemind mencatat pengingat pembayaran Cash & Carry yang diantre
+	// pekerjaan terjadwal (F2-23): tahap (h-2/h-0/h+1/h+3), nomor pesanan, dan
+	// penerima ada di snapshot After.
+	ActionRemind = "remind"
 )
 
 // Entry adalah satu baris audit_logs yang belum disimpan.

@@ -326,6 +326,10 @@ func buildNotification(pool *database.Pool, cfg config.Config, store storage.Sto
 		notification.WithObjectStore(store),
 		notification.WithOrderReader(repo),
 		notification.WithAdminRecipients(userspg.New(pool)),
+		// Pengingat pembayaran C&C terjadwal (F2-23): repository yang sama
+		// menulis baris cnc_reminders + email_outbox + audit dalam satu
+		// transaksi.
+		notification.WithReminderStore(repo),
 		notification.WithConfig(notification.Config{
 			MaxAttempts: cfg.OutboxMaxAttempts,
 			SendTimeout: cfg.SMTPTimeout,

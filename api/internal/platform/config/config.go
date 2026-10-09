@@ -121,6 +121,10 @@ type Config struct {
 	WorkerShutdown  time.Duration
 	JobPollInterval time.Duration
 
+	// ReminderJamWIB adalah jam (WIB) pekerjaan pengingat pembayaran C&C
+	// dijalankan setiap hari (F2-23, SystemDesign.md §4.6: 07:00 Asia/Jakarta).
+	ReminderJamWIB int
+
 	// Observability (Architecture.md §8). METRICS_ENABLED menyalakan endpoint
 	// /metrics beserta penghitung permintaan; endpoint itu hanya dijangkau
 	// Prometheus di jaringan internal (Caddy tidak mem-proxy /metrics dan
@@ -218,6 +222,7 @@ func Load() (Config, error) {
 		SentryEnvironment:    env("SENTRY_ENVIRONMENT", ""),
 		SentrySampleRate:     envFloat("SENTRY_TRACES_SAMPLE_RATE", 0),
 		WorkerMetricsAddr:    env("WORKER_METRICS_ADDR", ":9091"),
+		ReminderJamWIB:       envInt("REMINDER_JAM_WIB", 7),
 	}
 
 	// Cara menjangkau tujuan cadangan ditentukan otomatis bila tidak disebut
