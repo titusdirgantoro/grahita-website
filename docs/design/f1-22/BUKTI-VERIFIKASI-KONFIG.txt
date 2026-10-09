@@ -25,9 +25,9 @@ Checking /home/hermes/projects/grahita-website/infra/observability/prometheus/ru
   -> LULUS
 
 ===== 6. amtool check-config (Alertmanager, dirender lewat mulai.sh) =====
-render selesai: /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.DVpXw8S30Q/alertmanager.yml
+render selesai: /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.5Thj8PZBmF/alertmanager.yml
   -> LULUS
-Checking '/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.DVpXw8S30Q/alertmanager.yml'  SUCCESS
+Checking '/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.5Thj8PZBmF/alertmanager.yml'  SUCCESS
 Found:
  - global config
  - route
@@ -42,9 +42,17 @@ Alertmanager tidak dapat dirender: variabel wajib belum diisi: ALERT_SMTP_PASS
 Isi lewat environment (mekanisme rahasia operator); jangan tulis di repo.
   -> LULUS: exit != 0
 
-===== 7. Grafana: JSON dasbor valid =====
+===== 7. Grafana: JSON dasbor valid + uid sumber data konsisten =====
   OK   grahita-api.json
   OK   grahita-operasional.json
+uid sumber data tersedia: ['loki', 'prometheus']
+  OK  grahita-api.json
+  OK  grahita-operasional.json
+uid dirujuk dasbor: ['loki', 'prometheus'] — semuanya tersedia
+  -> LULUS
+
+----- 7b. kontrol negatif: uid palsu harus DITOLAK -----
+  -> LULUS: uid palsu ditolak
 
 ===== 8. docker compose config (tanpa daemon) =====
   -> LULUS

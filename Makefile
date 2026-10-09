@@ -113,9 +113,12 @@ observability-prom-cek: ## Validasi konfigurasi & aturan Prometheus (butuh promt
 	promtool check config infra/observability/prometheus/prometheus.yml
 	promtool check rules infra/observability/prometheus/rules/grahita-alerts.yml
 
+observability-grafana-cek: ## Validasi uid sumber data dasbor Grafana vs provisioning
+	python3 scripts/cek-uid-grafana.py .
+
 ci-lokal: fmt vet test web-typecheck web-test web-build openapi secrets migrasi-cek ## Menjalankan gerbang CI secara lokal
 
 .PHONY: help up down reset logs ps migrate seed psql smoke fmt vet test test-integrasi \
         build sqlc shim-pg web-install web-dev-customer web-dev-admin web-typecheck \
         web-test web-build openapi secrets migrasi-cek smoke-staging observability-up \
-        observability-caddy-cek observability-prom-cek ci-lokal
+        observability-caddy-cek observability-prom-cek observability-grafana-cek ci-lokal

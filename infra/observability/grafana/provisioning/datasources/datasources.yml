@@ -3,6 +3,9 @@ apiVersion: 1
 
 datasources:
   - name: Prometheus
+    # uid EKSPLISIT: dasbor yang diprovisioning merujuk uid ini; tanpa uid
+    # eksplisit Grafana membuat uid acak dan panel dasbor kehilangan sumber data.
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090
@@ -14,6 +17,7 @@ datasources:
     # Tanpa kredensial: Prometheus internal Compose.
 
   - name: Loki
+    uid: loki
     type: loki
     access: proxy
     url: http://loki:3100

@@ -115,6 +115,7 @@ mencatat durasi/hasil serta meneruskan error apa adanya.
 | `amtool v0.34.1 check-config` pada keluaran `mulai.sh` (jalur render yang sama dengan container) | **SUCCESS** (route + 2 inhibit rules + 1 receiver) |
 | `mulai.sh` tanpa `ALERT_SMTP_PASS` | **exit 1** — menolak render (fail closed) |
 | JSON kedua dasbor Grafana | parse OK |
+| `scripts/cek-uid-grafana.py` (uid sumber data dasbor ⊂ uid provisioning) | **LULUS** + kontrol negatif (uid palsu ditolak) |
 | `docker compose config -q` (prod, observability, staging) | ketiganya exit 0 |
 
 ### 3. Uji asap dua host pada replika staging → `BUKTI-SMOKE-STAGING-DUA-HOST.txt`
@@ -198,6 +199,19 @@ HASIL: LULUS — gerbang menolak migrasi destruktif (exit != 0)
 --- gerbang atas repo bersih ---
 Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.
 ```
+
+### 6. Suite backend penuh (PostgreSQL nyata)
+
+```
+$ TEST_DATABASE_URL=postgres://...@127.0.0.1:5455/grahita_f122suite?sslmode=disable \
+  go test -race -p 1 -count=1 -timeout 45m ./...
+23 paket ok, 0 FAIL, 0 SKIP
+SUITE_EXIT=0   (mulai 08:55:47, selesai 09:12:02)
+```
+
+Catatan: paket `internal/httpapi` dijalankan ulang sendiri pada HEAD (setelah
+urutan middleware metrik diubah) dengan hasil yang sama; angka di atas berasal
+dari suite penuh yang menyelesaikan seluruh paket berurutan.
 
 ## Batas yang TIDAK diklaim
 
