@@ -319,8 +319,8 @@ func (s *Service) Ensure(ctx context.Context, orderID string) ([]Document, error
 }
 
 // EnsureInvoice memastikan dokumen INVOICE versi berjalan sudah tersedia dan
-// mengembalikannya. Dipakai revisi invoice (F2-25): setelah versi pesanan
-// naik, invoice versi baru dirender tanpa menyentuh berkas versi lama.
+// mengembalikannya. Dipakai revisi invoice (F2-25) untuk versi berjalan;
+// pekerjaan lanjutan yang DIPATOK ke satu versi memakai EnsureInvoiceVersi.
 func (s *Service) EnsureInvoice(ctx context.Context, orderID string) (Document, error) {
 	docs, err := s.ensure(ctx, orderID, []string{JenisInvoicePDF})
 	if err != nil {
@@ -332,6 +332,52 @@ func (s *Service) EnsureInvoice(ctx context.Context, orderID string) (Document, 
 		}
 	}
 	return Document{}, ErrNotFound
+}
+
+// EnsureInvoiceVersi memastikan dokumen INVOICE VERSI TERTENTU tersedia dan
+// mengembalikannya (F2-25).
+//
+// Dipakai pekerjaan lanjutan revisi yang DIPATOK ke versinya: revisi yang
+// sudah dijawab 200 menjanjikan invoice versi itu, jadi worker-nya harus
+// memastikan VERSI ITU ada — bukan invoice versi berjalan saat worker
+// kebetulan berjalan (temuan QA putaran 1; lihat ErrInvoiceVersiBelumAda di
+// paket order untuk penjaga sisi revisinya).
+//
+//   - versi <= 0 berarti "versi berjalan" (perilaku sama dengan
+//     EnsureInvoice) — sikap kompatibel untuk job lama tanpa kolom versi;
+//   - bila dokumen versi itu sudah ada, dikembalikan apa adanya: idempoten,
+//     tanpa render ulang dan tanpa menyentuh berkas versi lain;
+//   - bila belum ada, invoice dirender lewat jalur biasa (versi berjalan) dan
+//     hasilnya WAJIB ber-versi sama. Versi berjalan yang sudah MELEBIHI versi
+//     yang dipatok tanpa dokumen versi itu menandakan pelanggaran invarian
+//     (pesanan naik versi tanpa invoice versi lama); dijawab error supaya
+//     terlihat, bukan diam-diam mengembalikan versi yang salah.
+func (s *Service) EnsureInvoiceVersi(ctx context.Context, orderID string, versi int) (Document, error) {
+	if versi <= 0 {
+		return s.EnsureInvoice(ctx, orderID)
+	}
+	id := strings.TrimSpace(orderID)
+	if !uuidRe.MatchString(id) {
+		return Document{}, ErrNotFound
+	}
+	tersimpan, err := s.repo.ListByOrder(ctx, id)
+	if err != nil {
+		return Document{}, err
+	}
+	for _, d := range tersimpan {
+		if d.Jenis == JenisInvoicePDF && d.Versi == versi {
+			return d, nil
+		}
+	}
+	doc, err := s.EnsureInvoice(ctx, id)
+	if err != nil {
+		return Document{}, err
+	}
+	if doc.Versi != versi {
+		return Document{}, fmt.Errorf("%w: invoice versi %d belum tersedia (versi berjalan %d)",
+			ErrInvalidData, versi, doc.Versi)
+	}
+	return doc, nil
 }
 
 // Generate memastikan ketiga dokumen satu pesanan atas permintaan admin

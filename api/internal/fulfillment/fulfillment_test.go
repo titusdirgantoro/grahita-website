@@ -17,6 +17,7 @@ import (
 type docsPalsu struct {
 	dipanggil        int
 	dipanggilInvoice int
+	versiInvoice     int
 	docs             []document.Document
 	invoice          document.Document
 	err              error
@@ -28,8 +29,9 @@ func (d *docsPalsu) Ensure(_ context.Context, _ string) ([]document.Document, er
 	return d.docs, d.err
 }
 
-func (d *docsPalsu) EnsureInvoice(_ context.Context, _ string) (document.Document, error) {
+func (d *docsPalsu) EnsureInvoiceVersi(_ context.Context, _ string, versi int) (document.Document, error) {
 	d.dipanggilInvoice++
+	d.versiInvoice = versi
 	return d.invoice, d.invoiceErr
 }
 
@@ -207,17 +209,24 @@ func TestPesananSelesaiMenolakMasukanTidakLengkap(t *testing.T) {
 // ---------- revisi invoice (F2-25) ----------
 
 // TestPesananDirevisiHanyaInvoiceTanpaSuratJalan membuktikan jalur revisi
-// merender/memastikan HANYA invoice versi baru, lalu mengantre HANYA email
-// invoice (cabang + admin ber-flag) — Surat Jalan tidak disentuh/dikirim ulang.
+// merender/memastikan HANYA invoice VERSI YANG DIPATOK, lalu mengantre HANYA
+// email invoice (cabang + admin ber-flag) — Surat Jalan tidak disentuh/dikirim
+// ulang.
 func TestPesananDirevisiHanyaInvoiceTanpaSuratJalan(t *testing.T) {
 	docs := &docsPalsu{invoice: document.Document{ID: "doc-v1", Jenis: document.JenisInvoicePDF, Versi: 1}}
 	mail := newMailPalsu()
-	hasil, err := NewService(docs, mail).PesananDirevisi(context.Background(), "order-1")
+	hasil, err := NewService(docs, mail).PesananDirevisi(context.Background(), "order-1", 1)
 	if err != nil {
 		t.Fatalf("revisi harus berhasil: %v", err)
 	}
 	if docs.dipanggilInvoice != 1 {
 		t.Errorf("invoice harus dipastikan tepat sekali, dapat %d", docs.dipanggilInvoice)
+	}
+	if docs.versiInvoice != 1 {
+		t.Errorf("invoice harus dipastikan pada VERSI YANG DIPATOK (1), dapat %d", docs.versiInvoice)
+	}
+	if mail.versiTerakhir != 1 {
+		t.Errorf("email invoice harus memakai versi yang dipatok (1), dapat %d", mail.versiTerakhir)
 	}
 	if docs.dipanggil != 0 {
 		t.Errorf("jalur revisi tidak boleh merender ketiga dokumen Done, dapat %d", docs.dipanggil)
@@ -249,10 +258,10 @@ func TestPesananDirevisiIdempotenUntukVersiYangSama(t *testing.T) {
 	mail := newMailPalsu()
 	svc := NewService(docs, mail)
 
-	if _, err := svc.PesananDirevisi(context.Background(), "order-1"); err != nil {
+	if _, err := svc.PesananDirevisi(context.Background(), "order-1", 1); err != nil {
 		t.Fatalf("pemanggilan pertama harus berhasil: %v", err)
 	}
-	hasil, err := svc.PesananDirevisi(context.Background(), "order-1")
+	hasil, err := svc.PesananDirevisi(context.Background(), "order-1", 1)
 	if err != nil {
 		t.Fatalf("pemanggilan kedua harus berhasil: %v", err)
 	}
@@ -268,25 +277,53 @@ func TestPesananDirevisiIdempotenUntukVersiYangSama(t *testing.T) {
 }
 
 // TestPesananDirevisiVersiBaruMendapatEmailBaru: ketika model versi bergerak
-// (penjaga per (pesanan, jenis, versi) meloloskan versi berikutnya), revisi
-// berikutnya tetap mengantre email invoice baru.
+// (penjaga per (pesanan, jenis, versi) meloloskan versi berikutnya), pekerjaan
+// revisi berikutnya tetap mengantre email invoice barunya — dan versi yang
+// dipakai adalah versi YANG DIPATOK pada pekerjaan itu.
 func TestPesananDirevisiVersiBaruMendapatEmailBaru(t *testing.T) {
 	docs := &docsPalsu{invoice: document.Document{ID: "doc-v1", Jenis: document.JenisInvoicePDF, Versi: 1}}
 	mail := newMailPalsu()
 	svc := NewService(docs, mail)
 
-	if _, err := svc.PesananDirevisi(context.Background(), "order-1"); err != nil {
+	if _, err := svc.PesananDirevisi(context.Background(), "order-1", 1); err != nil {
 		t.Fatalf("revisi pertama harus berhasil: %v", err)
 	}
-	// Versi berikutnya: penjaga fake dibuka supaya perilaku "versi baru boleh
-	// email baru" terlihat.
-	mail.adaSudahVersi = map[string]bool{}
-	hasil, err := svc.PesananDirevisi(context.Background(), "order-1")
+	if mail.versiTerakhir != 1 {
+		t.Fatalf("revisi pertama harus memakai versi 1, dapat %d", mail.versiTerakhir)
+	}
+	hasil, err := svc.PesananDirevisi(context.Background(), "order-1", 2)
 	if err != nil {
 		t.Fatalf("revisi kedua harus berhasil: %v", err)
 	}
 	if len(hasil.EmailDibuat) != 2 {
 		t.Errorf("versi baru harus mendapat dua email invoice baru, dapat %v", hasil.EmailDibuat)
+	}
+	if docs.versiInvoice != 2 {
+		t.Errorf("revisi kedua harus memastikan invoice versi 2, dapat %d", docs.versiInvoice)
+	}
+	if mail.versiTerakhir != 2 {
+		t.Errorf("revisi kedua harus mengantre email versi 2, dapat %d", mail.versiTerakhir)
+	}
+}
+
+// TestPesananDirevisiTanpaVersiMemakaiVersiInvoice: muatan job lama (tanpa
+// kolom versi, Versi == 0) tetap berperilaku seperti sebelumnya — invoice
+// versi berjalan yang dipastikan, dan emailnya memakai versi invoice itu.
+func TestPesananDirevisiTanpaVersiMemakaiVersiInvoice(t *testing.T) {
+	docs := &docsPalsu{invoice: document.Document{ID: "doc-v3", Jenis: document.JenisInvoicePDF, Versi: 3}}
+	mail := newMailPalsu()
+	hasil, err := NewService(docs, mail).PesananDirevisi(context.Background(), "order-1", 0)
+	if err != nil {
+		t.Fatalf("job lama harus tetap berhasil: %v", err)
+	}
+	if docs.versiInvoice != 0 {
+		t.Errorf("job lama harus meminta versi berjalan (0), dapat %d", docs.versiInvoice)
+	}
+	if mail.versiTerakhir != 3 {
+		t.Errorf("email job lama harus memakai versi invoice (3), dapat %d", mail.versiTerakhir)
+	}
+	if len(hasil.EmailDibuat) != 2 {
+		t.Errorf("dua email invoice harus diantre, dapat %v", hasil.EmailDibuat)
 	}
 }
 
@@ -295,7 +332,7 @@ func TestPesananDirevisiVersiBaruMendapatEmailBaru(t *testing.T) {
 func TestPesananDirevisiMenahanEmailSaatInvoiceGagal(t *testing.T) {
 	docs := &docsPalsu{invoiceErr: document.ErrRenderUnavailable}
 	mail := newMailPalsu()
-	_, err := NewService(docs, mail).PesananDirevisi(context.Background(), "order-1")
+	_, err := NewService(docs, mail).PesananDirevisi(context.Background(), "order-1", 1)
 	if err == nil {
 		t.Fatal("kegagalan render harus diteruskan supaya pekerjaan diulang")
 	}

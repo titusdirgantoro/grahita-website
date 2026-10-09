@@ -136,6 +136,60 @@ func (q *Queries) InsertOrderLineProductWithSerial(ctx context.Context, arg Inse
 	return err
 }
 
+const invoiceVersiAda = `-- name: InvoiceVersiAda :one
+
+SELECT EXISTS (
+    SELECT 1
+      FROM documents d
+     WHERE d.order_id = $1::uuid
+       AND d.jenis = 'invoice_pdf'
+       AND d.versi = $2::int
+)::bool AS ada
+`
+
+type InvoiceVersiAdaParams struct {
+	OrderID string `json:"order_id"`
+	Versi   int32  `json:"versi"`
+}
+
+// Revisi invoice berversi (F2-25; SystemDesign.md §4.5, PRD §4.3 AP-REV-01..05,
+// Database.md §4.6).
+//
+// SATU permintaan revisi = SATU transaksi:
+//
+//	LockOrderForRevise      -> baris pesanan dikunci; keadaan versi lama dibaca
+//	InvoiceVersiAda         -> invoice VERSI BERJALAN wajib sudah dirender
+//	                           (fail closed; tanpa ini versi bisa dilewati)
+//	ListOrderLinesForRevise -> baris versi lama + jenis produk master
+//	DeleteOrderLines        -> seluruh baris diganti (editor mengirim daftar final)
+//	InsertOrderLineProductWithSerial / InsertOrderLinePackaging -> baris baru
+//	SetOrderVersi            -> versi + 1 (nomor invoice TIDAK berubah)
+//	SumOrderLineSubtotals    -> total dihitung server dari barisnya (BR-10)
+//	InsertInvoiceRevision    -> snapshot versi lama (jsonb) + delta nilai
+//	InsertOrderEvent         -> timeline (aktor, alasan)
+//
+// Karena baris pesanan dikunci lebih dahulu, dua revisi yang bersamaan
+// berbaris rapi: yang kedua membaca versi yang sudah dinaikkan yang pertama.
+// Serial number baris lama dipertahankan apa adanya; baris produk yang benar-
+// benar BARU mendapat serial dari tabel counter dengan periode TANGGAL PESANAN
+// ASLI (SystemDesign.md §4.5), jadi nomor tidak bolong dan tetap unik.
+//
+// Kolom enum dikembalikan sebagai teks (`status::text`) agar lapisan repository
+// tidak perlu mengimpor tipe enum hasil generate.
+// Memeriksa invoice VERSI BERJALAN pesanan sudah dirender (fail closed,
+// temuan QA putaran 1). Pekerjaan lanjutan revisi merender invoice versi
+// pesanan SAAT ITU, jadi revisi hanya boleh menaikkan versi bila versi
+// berjalan sudah punya baris invoice di `documents` — bila tidak, versi itu
+// bisa dilewati selamanya (tidak ada baris maupun berkasnya) padahal API
+// sudah menjawab 200 (melanggar AP-REV-03/AP-REV-04).
+// Invarian F1-17 berlaku: bila barisnya ada, berkasnya ada.
+func (q *Queries) InvoiceVersiAda(ctx context.Context, arg InvoiceVersiAdaParams) (bool, error) {
+	row := q.db.QueryRow(ctx, invoiceVersiAda, arg.OrderID, arg.Versi)
+	var ada bool
+	err := row.Scan(&ada)
+	return ada, err
+}
+
 const listOrderLinesForRevise = `-- name: ListOrderLinesForRevise :many
 SELECT l.line_no,
        l.jenis::text                    AS jenis,
@@ -208,7 +262,6 @@ func (q *Queries) ListOrderLinesForRevise(ctx context.Context, orderID string) (
 }
 
 const lockOrderForRevise = `-- name: LockOrderForRevise :one
-
 SELECT o.id,
        o.branch_id,
        COALESCE(o.nomor, '')::text        AS nomor,
@@ -237,28 +290,6 @@ type LockOrderForReviseRow struct {
 	Catatan      string     `json:"catatan"`
 }
 
-// Revisi invoice berversi (F2-25; SystemDesign.md §4.5, PRD §4.3 AP-REV-01..05,
-// Database.md §4.6).
-//
-// SATU permintaan revisi = SATU transaksi:
-//
-//	LockOrderForRevise      -> baris pesanan dikunci; keadaan versi lama dibaca
-//	ListOrderLinesForRevise -> baris versi lama + jenis produk master
-//	DeleteOrderLines        -> seluruh baris diganti (editor mengirim daftar final)
-//	InsertOrderLineProductWithSerial / InsertOrderLinePackaging -> baris baru
-//	SetOrderVersi            -> versi + 1 (nomor invoice TIDAK berubah)
-//	SumOrderLineSubtotals    -> total dihitung server dari barisnya (BR-10)
-//	InsertInvoiceRevision    -> snapshot versi lama (jsonb) + delta nilai
-//	InsertOrderEvent         -> timeline (aktor, alasan)
-//
-// Karena baris pesanan dikunci lebih dahulu, dua revisi yang bersamaan
-// berbaris rapi: yang kedua membaca versi yang sudah dinaikkan yang pertama.
-// Serial number baris lama dipertahankan apa adanya; baris produk yang benar-
-// benar BARU mendapat serial dari tabel counter dengan periode TANGGAL PESANAN
-// ASLI (SystemDesign.md §4.5), jadi nomor tidak bolong dan tetap unik.
-//
-// Kolom enum dikembalikan sebagai teks (`status::text`) agar lapisan repository
-// tidak perlu mengimpor tipe enum hasil generate.
 // Mengunci baris pesanan selama transaksi revisi sekaligus membaca keadaan
 // versi lama (nomor, versi, status, total, tanggal bisnis, penanda sertifikat,
 // catatan) untuk snapshot & audit Before. Status diperiksa di service/

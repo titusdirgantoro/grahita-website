@@ -123,15 +123,38 @@ func reviseHTTP(t *testing.T, f *pgFixture, cookies []*http.Cookie, csrf, id, bo
 }
 
 // jalankanPekerjaanRevisi menjalankan pekerjaan worker "revisi_invoice" untuk
-// satu pesanan — peran worker River di produksi.
-func jalankanPekerjaanRevisi(t *testing.T, f *pgFixture, orderID string) error {
+// satu pesanan PADA VERSI YANG DIPATOK — peran worker River di produksi, yang
+// membaca `versi` dari muatan job (F2-25).
+func jalankanPekerjaanRevisi(t *testing.T, f *pgFixture, orderID string, versi int) error {
 	t.Helper()
 	w := worker.NewRevisiInvoiceWorker(f.selesai)
 	job := &river.Job[jobs.RevisiInvoiceArgs]{
 		JobRow: &rivertype.JobRow{ID: 1},
-		Args:   jobs.RevisiInvoiceArgs{OrderID: orderID},
+		Args:   jobs.RevisiInvoiceArgs{OrderID: orderID, Versi: versi},
 	}
 	return w.Work(context.Background(), job)
+}
+
+// versiJobRevisi membaca `versi` pada muatan setiap job revisi satu pesanan —
+// job harus DIPATOK ke versi yang menjadi haknya (temuan QA putaran 1).
+func versiJobRevisi(t *testing.T, f *pgFixture, orderID string) []int {
+	t.Helper()
+	rows, err := f.pool.Query(context.Background(),
+		`SELECT COALESCE((args->>'versi')::int, 0) FROM river_job
+		  WHERE kind = $1 AND args->>'order_id' = $2 ORDER BY id`, jobs.KindRevisiInvoice, orderID)
+	if err != nil {
+		t.Fatalf("baca versi job revisi: %v", err)
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			t.Fatalf("scan versi job revisi: %v", err)
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // dokumenPesanans mengembalikan kunci storage per (jenis, versi) milik pesanan.
@@ -376,13 +399,17 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 		t.Errorf("audit revisi harus tepat satu, dapat %d", n)
 	}
 
-	// Pekerjaan render invoice versi baru dititipkan pada transaksi yang sama.
+	// Pekerjaan render invoice versi baru dititipkan pada transaksi yang sama,
+	// DIPATOK ke versi barunya.
 	if n := hitungJobRevisi(t, f, id); n != 1 {
 		t.Errorf("job revisi_invoice harus tepat satu, dapat %d", n)
 	}
+	if v := versiJobRevisi(t, f, id); len(v) != 1 || v[0] != 1 {
+		t.Errorf("job revisi harus dipatok ke versi 1, dapat %v", v)
+	}
 
 	// Jalankan pekerjaan worker: invoice versi baru dirender, versi lama utuh.
-	if err := jalankanPekerjaanRevisi(t, f, id); err != nil {
+	if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
 		t.Fatalf("pekerjaan revisi: %v", err)
 	}
 	docAkhir := dokumenPesanans(t, f, id)
@@ -416,7 +443,7 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	}
 
 	// Pekerjaan dijalankan ulang: idempoten (tidak menggandakan email).
-	if err := jalankanPekerjaanRevisi(t, f, id); err != nil {
+	if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
 		t.Fatalf("pekerjaan revisi ulang: %v", err)
 	}
 	if n := hitungEmail(t, f, id, "invoice_cabang", 1); n != 1 {
@@ -436,7 +463,7 @@ func TestPGRevisiUnduhVersiLamaDanBaru(t *testing.T) {
 	if status, hasil := reviseHTTP(t, f, cookies, csrf, id, body); status != http.StatusOK {
 		t.Fatalf("revisi harus 200, dapat %d (%v)", status, hasil)
 	}
-	if err := jalankanPekerjaanRevisi(t, f, id); err != nil {
+	if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
 		t.Fatalf("pekerjaan revisi: %v", err)
 	}
 
@@ -479,6 +506,8 @@ func TestPGRevisiManagerDitolakSaatToggleMati(t *testing.T) {
 	setSetting(t, f, settings.ManagerBolehRevisi, "false")
 	cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
 	body := reviseBody("coba revisi", `{"line_no":1,"qty":2,"harga_satuan":100000}`)
+	// Larangan Manager ditegakkan SEBELUM pemeriksaan invoice: walau invoice
+	// versi 0 belum dirender, jawabannya tetap 403 (bukan 409).
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
 	if status != http.StatusForbidden {
 		t.Fatalf("Manager saat toggle mati harus 403, dapat %d (%v)", status, hasil)
@@ -488,6 +517,12 @@ func TestPGRevisiManagerDitolakSaatToggleMati(t *testing.T) {
 	}
 	if n := hitungBaris(t, f, "invoice_revisions", "order_id", id); n != 0 {
 		t.Errorf("tidak boleh ada baris revisi saat Manager ditolak: %d", n)
+	}
+
+	// Invoice versi 0 (pesanan Done) dirender — prasyarat revisi (fail closed,
+	// temuan QA putaran 1).
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("pekerjaan Done: %v", err)
 	}
 
 	// Toggle dihidupkan: Manager boleh merevisi.
@@ -502,33 +537,79 @@ func TestPGRevisiManagerDitolakSaatToggleMati(t *testing.T) {
 }
 
 // TestPGRevisiConcurrentBerurutan membuktikan dua revisi bersamaan berbaris
-// rapi: keduanya sukses dengan versi berurutan (1 lalu 2), bukan dua versi 1.
+// rapi: baris pesanan dikunci sehingga HANYA SATU yang boleh menaikkan versi,
+// dan yang kalah dijawab 409 INVOICE_NOT_READY (fail closed) karena invoice
+// versi barunya belum dirender — bukan dua versi 1, dan bukan versi yang
+// dilewati. Setelah invoice versi 1 dirender, revisi kedua diterima (versi 2)
+// dan pekerjaannya menghasilkan invoice + email versi 2 sendiri.
 func TestPGRevisiConcurrentBerurutan(t *testing.T) {
 	f, id, _, cookies, csrf := jalurUtamaRevisi(t)
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("pekerjaan Done: %v", err)
+	}
 	body := reviseBody("ganti qty", `{"line_no":1,"qty":2,"harga_satuan":110000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
 
 	const n = 2
 	var wg sync.WaitGroup
 	statuses := make([]int, n)
+	bodies := make([]map[string]any, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			c := append([]*http.Cookie{}, cookies...)
-			st, _ := reviseHTTP(t, f, c, csrf, id, body)
+			st, hasil := reviseHTTP(t, f, c, csrf, id, body)
 			statuses[i] = st
+			bodies[i] = hasil
 		}(i)
 	}
 	wg.Wait()
 
+	sukses, ditolak := 0, 0
 	for i, st := range statuses {
-		if st != http.StatusOK {
-			t.Fatalf("revisi ke-%d harus 200 (berurutan), dapat %d", i+1, st)
+		switch st {
+		case http.StatusOK:
+			sukses++
+		case http.StatusConflict:
+			ditolak++
+			if kode := errorKode(t, bodies[i]); kode != "INVOICE_NOT_READY" {
+				t.Errorf("penolakan revisi bersamaan harus INVOICE_NOT_READY, dapat %q", kode)
+			}
+		default:
+			t.Fatalf("revisi bersamaan hanya boleh 200 atau 409, dapat %d (%v)", st, bodies[i])
 		}
 	}
+	if sukses != 1 || ditolak != 1 {
+		t.Fatalf("harus tepat satu sukses dan satu ditolak (berurutan), dapat sukses=%d ditolak=%d", sukses, ditolak)
+	}
 	versi, _ := versiPesanan(t, f, id)
+	if versi != 1 {
+		t.Errorf("sesudah satu revisi sukses, versi harus 1, dapat %d", versi)
+	}
+	if v := versiJobRevisi(t, f, id); len(v) != 1 || v[0] != 1 {
+		t.Errorf("hanya satu job revisi (versi 1) yang boleh tertitip, dapat %v", v)
+	}
+
+	// Job versi 1 dijalankan: invoice + email versi 1 lahir.
+	if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
+		t.Fatalf("pekerjaan revisi v1: %v", err)
+	}
+	if _, ada := dokumenPesanans(t, f, id)["invoice_pdf-1"]; !ada {
+		t.Fatal("invoice versi 1 harus tercipta sebelum revisi kedua diterima")
+	}
+
+	// Revisi kedua (yang tadinya ditolak) kini diterima: versi 2.
+	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
+	if status != http.StatusOK {
+		t.Fatalf("revisi kedua sesudah invoice v1 ada harus 200, dapat %d (%v)", status, hasil)
+	}
+	if err := jalankanPekerjaanRevisi(t, f, id, 2); err != nil {
+		t.Fatalf("pekerjaan revisi v2: %v", err)
+	}
+
+	versi, _ = versiPesanan(t, f, id)
 	if versi != 2 {
-		t.Errorf("dua revisi harus menghasilkan versi 2, dapat %d", versi)
+		t.Errorf("dua revisi berurutan harus menghasilkan versi 2, dapat %d", versi)
 	}
 	var jumlah int
 	if err := f.pool.QueryRow(context.Background(),
@@ -537,6 +618,141 @@ func TestPGRevisiConcurrentBerurutan(t *testing.T) {
 	}
 	if jumlah != 2 {
 		t.Errorf("harus ada dua baris revisi (versi 1 dan 2), dapat %d", jumlah)
+	}
+
+	// Tiap versi punya invoice DAN email invoice cabangnya sendiri, tepat satu.
+	docs := dokumenPesanans(t, f, id)
+	for _, v := range []int{0, 1, 2} {
+		if _, ada := docs[fmt.Sprintf("invoice_pdf-%d", v)]; !ada {
+			t.Errorf("invoice versi %d harus ada: %v", v, docs)
+		}
+		if got := hitungEmail(t, f, id, "invoice_cabang", v); got != 1 {
+			t.Errorf("email invoice cabang v%d harus tepat satu, dapat %d", v, got)
+		}
+	}
+}
+
+// TestPGRevisiPekerjaanDipatokVersiTidakMenghilangkanInvoice menutup temuan QA
+// putaran 1: revisi kedua atas versi yang invoice-nya BELUM dirender ditolak
+// (409 INVOICE_NOT_READY, tanpa menaikkan versi dan tanpa pekerjaan tambahan),
+// sehingga tidak mungkin ada revisi 200 yang invoice versinya hilang. Sesudah
+// pekerjaan versi 1 dijalankan (dan dijalankan ULANG untuk idempotensi),
+// revisi kedua diterima, pekerjaan versi 2 dijalankan, dan tiap versi punya
+// invoice + email sendiri — termasuk invoice versi lama yang tetap dapat
+// diunduh untuk audit.
+func TestPGRevisiPekerjaanDipatokVersiTidakMenghilangkanInvoice(t *testing.T) {
+	f, id, _, cookies, csrf := jalurUtamaRevisi(t)
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("pekerjaan Done: %v", err)
+	}
+	body := reviseBody("koreksi bertahap", `{"line_no":1,"qty":2,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+
+	// Revisi #1 -> 200 versi 1, pekerjaan DIPATOK ke versi 1.
+	if status, hasil := reviseHTTP(t, f, cookies, csrf, id, body); status != http.StatusOK {
+		t.Fatalf("revisi pertama harus 200, dapat %d (%v)", status, hasil)
+	}
+	if v := versiJobRevisi(t, f, id); len(v) != 1 || v[0] != 1 {
+		t.Fatalf("pekerjaan revisi harus dipatok ke versi 1, dapat %v", v)
+	}
+
+	// Revisi #2 SEBELUM pekerjaan versi 1 berjalan: DITOLAK tanpa menaikkan
+	// versi (fail closed) — inilah situasi yang dilaporkan QA putaran 1.
+	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
+	if status != http.StatusConflict {
+		t.Fatalf("revisi kedua sebelum invoice v1 ada harus 409, dapat %d (%v)", status, hasil)
+	}
+	if kode := errorKode(t, hasil); kode != "INVOICE_NOT_READY" {
+		t.Errorf("kode penolakan harus INVOICE_NOT_READY, dapat %q", kode)
+	}
+	if versi, _ := versiPesanan(t, f, id); versi != 1 {
+		t.Errorf("penolakan tidak boleh menaikkan versi: %d", versi)
+	}
+	if n := hitungBaris(t, f, "invoice_revisions", "order_id", id); n != 1 {
+		t.Errorf("tidak boleh ada baris revisi kedua saat ditolak, dapat %d", n)
+	}
+	if v := versiJobRevisi(t, f, id); len(v) != 1 {
+		t.Errorf("tidak boleh ada pekerjaan revisi tambahan saat ditolak, dapat %v", v)
+	}
+
+	// Pekerjaan versi 1 dijalankan DUA KALI (River at-least-once): invoice v1
+	// lahir sekali, emailnya tidak digandakan, Surat Jalan tidak disentuh.
+	for i := 0; i < 2; i++ {
+		if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
+			t.Fatalf("pekerjaan revisi v1 ke-%d: %v", i+1, err)
+		}
+	}
+	docs := dokumenPesanans(t, f, id)
+	if _, ada := docs["invoice_pdf-1"]; !ada {
+		t.Fatalf("invoice versi 1 harus ada sesudah pekerjaan: %v", docs)
+	}
+	if _, ada := docs["surat_jalan_pdf-1"]; ada {
+		t.Error("surat jalan versi revisi tidak boleh dibuat")
+	}
+	if got := hitungEmail(t, f, id, "invoice_cabang", 1); got != 1 {
+		t.Errorf("email invoice cabang v1 harus tepat satu, dapat %d", got)
+	}
+	if got := hitungEmail(t, f, id, "invoice_admin", 1); got != 1 {
+		t.Errorf("email invoice admin v1 harus tepat satu, dapat %d", got)
+	}
+	if got := hitungEmail(t, f, id, "surat_jalan_admin", 1); got != 0 {
+		t.Errorf("email surat jalan revisi tidak boleh dibuat, dapat %d", got)
+	}
+
+	// Revisi #2 diulang sesudah invoice v1 ada: 200 versi 2, pekerjaan v2.
+	status, hasil = reviseHTTP(t, f, cookies, csrf, id, body)
+	if status != http.StatusOK {
+		t.Fatalf("revisi kedua sesudah invoice v1 ada harus 200, dapat %d (%v)", status, hasil)
+	}
+	if v := versiJobRevisi(t, f, id); len(v) != 2 || v[1] != 2 {
+		t.Fatalf("pekerjaan revisi kedua harus dipatok ke versi 2, dapat %v", v)
+	}
+	if err := jalankanPekerjaanRevisi(t, f, id, 2); err != nil {
+		t.Fatalf("pekerjaan revisi v2: %v", err)
+	}
+	docs = dokumenPesanans(t, f, id)
+	for _, v := range []int{0, 1, 2} {
+		if _, ada := docs[fmt.Sprintf("invoice_pdf-%d", v)]; !ada {
+			t.Errorf("invoice versi %d harus ada: %v", v, docs)
+		}
+		if got := hitungEmail(t, f, id, "invoice_cabang", v); got != 1 {
+			t.Errorf("email invoice cabang v%d harus tepat satu, dapat %d", v, got)
+		}
+	}
+
+	// Pekerjaan versi 1 dijalankan ULANG sesudah versi pesanan maju ke 2:
+	// dipatok ke versinya, jadi tidak merender atau menggandakan versi lain.
+	if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
+		t.Fatalf("pekerjaan revisi v1 ulang: %v", err)
+	}
+	if lagi := dokumenPesanans(t, f, id); len(lagi) != len(docs) {
+		t.Errorf("pekerjaan ulang versi lama tidak boleh menambah dokumen: %v -> %v", docs, lagi)
+	}
+	if got := hitungEmail(t, f, id, "invoice_cabang", 2); got != 1 {
+		t.Errorf("pekerjaan ulang versi lama tidak boleh menggandakan email v2, dapat %d", got)
+	}
+	if versi, _ := versiPesanan(t, f, id); versi != 2 {
+		t.Errorf("versi pesanan harus tetap 2, dapat %d", versi)
+	}
+
+	// Semua versi invoice tetap dapat diunduh cabang (audit AP-REV-03).
+	cabang, csrfCabang := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	st, list, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/orders/"+id+"/documents", "", cabang, csrfCabang)
+	if st != http.StatusOK {
+		t.Fatalf("daftar dokumen cabang harus 200, dapat %d (%v)", st, list)
+	}
+	items := dataList(t, list)
+	if len(items) != 3 {
+		t.Fatalf("cabang harus melihat TIGA versi invoice (0, 1, 2), dapat %d (%v)", len(items), items)
+	}
+	for _, it := range items {
+		doc, _ := it.(map[string]any)
+		docID, _ := doc["id"].(string)
+		st, dl, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+			f.srv.URL+"/api/v1/documents/"+docID+"/download", "", cabang, csrfCabang)
+		if st != http.StatusOK {
+			t.Fatalf("unduh invoice versi %v harus 200, dapat %d (%v)", doc["versi"], st, dl)
+		}
 	}
 }
 
@@ -687,6 +903,12 @@ func TestPGRevisiSertifikatPertahankanPackagingDanHargaNol(t *testing.T) {
 	})
 	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 
+	// Invoice versi 0 (pesanan Done) dirender — prasyarat revisi (fail closed,
+	// temuan QA putaran 1).
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("pekerjaan Done: %v", err)
+	}
+
 	// Coba naikkan harga Sertifikat: server harus memaksanya 0.
 	body := reviseBody("koreksi qty sertifikat", `{"line_no":1,"qty":5,"harga_satuan":999999}`)
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
@@ -728,7 +950,13 @@ func TestPGRevisiSertifikatPertahankanPackagingDanHargaNol(t *testing.T) {
 		t.Errorf("pesanan Sertifikat harus punya tepat satu baris packaging, dapat %d", nPackaging)
 	}
 
-	// Mencampur produk reguler ke pesanan sertifikat ditolak.
+	// Mencampur produk reguler ke pesanan sertifikat ditolak. Invoice versi 1
+	// dirender lebih dahulu supaya penolakannya dinilai sebagai aturan BARIS
+	// (400), bukan prasyarat invoice versi berjalan (409) — prasyarat itu
+	// memang diperiksa lebih dahulu bersama status Done.
+	if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
+		t.Fatalf("pekerjaan revisi v1: %v", err)
+	}
 	reguler := produkKode(t, f, "P-01")
 	bodyCampur := reviseBody("coba campur", `{"line_no":1,"qty":1,"harga_satuan":0},`+
 		`{"product_id":"`+reguler+`","qty":1,"harga_satuan":1000}`)
@@ -786,7 +1014,7 @@ func TestPGRevisiPDFNyataVersiLamaDanBaru(t *testing.T) {
 	w := worker.NewRevisiInvoiceWorker(selesaiNyata)
 	job := &river.Job[jobs.RevisiInvoiceArgs]{
 		JobRow: &rivertype.JobRow{ID: 1},
-		Args:   jobs.RevisiInvoiceArgs{OrderID: pesanan.ID},
+		Args:   jobs.RevisiInvoiceArgs{OrderID: pesanan.ID, Versi: 1},
 	}
 	if err := w.Work(context.Background(), job); err != nil {
 		t.Fatalf("pekerjaan revisi (PDF nyata): %v", err)

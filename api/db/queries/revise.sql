@@ -4,6 +4,8 @@
 -- SATU permintaan revisi = SATU transaksi:
 --
 --   LockOrderForRevise      -> baris pesanan dikunci; keadaan versi lama dibaca
+--   InvoiceVersiAda         -> invoice VERSI BERJALAN wajib sudah dirender
+--                              (fail closed; tanpa ini versi bisa dilewati)
 --   ListOrderLinesForRevise -> baris versi lama + jenis produk master
 --   DeleteOrderLines        -> seluruh baris diganti (editor mengirim daftar final)
 --   InsertOrderLineProductWithSerial / InsertOrderLinePackaging -> baris baru
@@ -20,6 +22,22 @@
 --
 -- Kolom enum dikembalikan sebagai teks (`status::text`) agar lapisan repository
 -- tidak perlu mengimpor tipe enum hasil generate.
+
+-- name: InvoiceVersiAda :one
+-- Memeriksa invoice VERSI BERJALAN pesanan sudah dirender (fail closed,
+-- temuan QA putaran 1). Pekerjaan lanjutan revisi merender invoice versi
+-- pesanan SAAT ITU, jadi revisi hanya boleh menaikkan versi bila versi
+-- berjalan sudah punya baris invoice di `documents` — bila tidak, versi itu
+-- bisa dilewati selamanya (tidak ada baris maupun berkasnya) padahal API
+-- sudah menjawab 200 (melanggar AP-REV-03/AP-REV-04).
+-- Invarian F1-17 berlaku: bila barisnya ada, berkasnya ada.
+SELECT EXISTS (
+    SELECT 1
+      FROM documents d
+     WHERE d.order_id = sqlc.arg(order_id)::uuid
+       AND d.jenis = 'invoice_pdf'
+       AND d.versi = sqlc.arg(versi)::int
+)::bool AS ada;
 
 -- name: LockOrderForRevise :one
 -- Mengunci baris pesanan selama transaksi revisi sekaligus membaca keadaan

@@ -145,7 +145,7 @@ func (s *Service) buildOrderEnvelope(ctx context.Context, in OrderEmailInput) (E
 		OrderID: ref.ID,
 		Jenis:   in.Jenis,
 		To:      to,
-		Subject: subjectDokumen(in.Jenis, ref),
+		Subject: subjectDokumen(in.Jenis, ref, versi),
 		Payload: payload,
 	}, ref, nil
 }
@@ -184,15 +184,18 @@ func (s *Service) orderRecipients(ctx context.Context, jenis string, ref OrderRe
 	return out, nil
 }
 
-func subjectDokumen(jenis string, ref OrderRef) string {
+// subjectDokumen menyusun subjek email dokumen. `versi` adalah versi dokumen
+// yang benar-benar dilampirkan (bukan selalu versi pesanan berjalan), supaya
+// email yang dipatok ke satu versi tidak menyebut versi yang lain.
+func subjectDokumen(jenis string, ref OrderRef, versi int) string {
 	switch jenis {
 	case JenisInvoiceCabang, JenisInvoiceAdmin:
 		subjek := "Invoice " + ref.Nomor
 		if ref.Cabang != "" {
 			subjek += " — " + ref.Cabang
 		}
-		if ref.Versi > 0 {
-			subjek += fmt.Sprintf(" (revisi v%d)", ref.Versi)
+		if versi > 0 {
+			subjek += fmt.Sprintf(" (revisi v%d)", versi)
 		}
 		return subjek
 	case JenisSuratJalanAdmin:

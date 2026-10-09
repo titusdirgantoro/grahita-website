@@ -15,7 +15,9 @@
 //   - render dokumen memakai kunci unik (order_id, jenis, versi) — menjalankan
 //     ulang tidak menyentuh berkas yang sudah ada;
 //   - pengantrean email memakai jalur "sekali per (pesanan, jenis)" sehingga
-//     pekerjaan yang diulang tidak menggandakan email dokumen pesanan yang sama.
+//     pekerjaan yang diulang tidak menggandakan email dokumen pesanan yang
+//     sama; jalur revisi memakai "sekali per (pesanan, jenis, VERSI)" karena
+//     tiap versi invoice berhak atas emailnya sendiri (AP-REV-04).
 //
 // Paket ini sengaja tipis: keputusan bisnis (status, log, audit, penjadwalan)
 // ada di domain verifikasi, dan pembuatan dokumen ada di domain dokumen.
@@ -37,10 +39,14 @@ type Documents interface {
 	// Ensure memastikan Invoice PDF + Surat Jalan XLSX/PDF versi berjalan ada.
 	// Idempoten dan MENOLAK pesanan yang belum Done (document.ErrNotDone).
 	Ensure(ctx context.Context, orderID string) ([]document.Document, error)
-	// EnsureInvoice memastikan dokumen INVOICE versi berjalan ada dan
-	// mengembalikannya. Dipakai revisi (F2-25): versi pesanan sudah naik,
-	// sehingga invoice versi baru dirender TANPA menyentuh berkas versi lama.
-	EnsureInvoice(ctx context.Context, orderID string) (document.Document, error)
+	// EnsureInvoiceVersi memastikan dokumen INVOICE VERSI TERTENTU ada dan
+	// mengembalikannya. Dipakai revisi (F2-25) yang DIPATOK ke versinya:
+	// versi pesanan sudah naik, sehingga invoice versi itu dirender TANPA
+	// menyentuh berkas versi lama — dan pekerjaan yang diulang tidak pernah
+	// merender versi yang bukan haknya.
+	//
+	// versi <= 0 berarti "versi berjalan" (perilaku lama).
+	EnsureInvoiceVersi(ctx context.Context, orderID string, versi int) (document.Document, error)
 }
 
 // Emailer adalah pengantre email dokumen (notification.Service).
@@ -126,7 +132,7 @@ func (s *Service) PesananSelesai(ctx context.Context, orderID string) (Hasil, er
 	if len(dokumen) == 0 {
 		return hasil, fmt.Errorf("dokumen pesanan %s belum tersedia", id)
 	}
-	if err := s.antreEmail(ctx, id, jenisEmailSaatDone, false, &hasil); err != nil {
+	if err := s.antreEmail(ctx, id, jenisEmailSaatDone, 0, &hasil); err != nil {
 		return hasil, err
 	}
 	return hasil, nil
@@ -135,17 +141,25 @@ func (s *Service) PesananSelesai(ctx context.Context, orderID string) (Hasil, er
 // PesananDirevisi menjalankan rantai revisi → invoice versi baru → email
 // invoice untuk satu pesanan (SystemDesign.md §4.5, PRD AP-REV-04).
 //
+// `versi` adalah versi invoice yang MENJADI HAK pekerjaan ini (versi pesanan
+// sesudah revisi, dipatok pada muatan job). Nilai <= 0 berarti "versi berjalan
+// saat pekerjaan dijalankan" — sikap kompatibel untuk job lama yang
+// dititipkan sebelum kolom versi ada. Mematok versi penting: tanpa itu, revisi
+// yang sudah dijawab 200 bisa kehilangan invoice versinya karena worker
+// merender versi pesanan yang sedang berjalan (temuan QA putaran 1).
+//
 // Berbeda dari PesananSelesai, jalur ini:
 //
-//   - hanya memastikan dokumen INVOICE versi berjalan ada; Surat Jalan tidak
-//     disentuh dan tidak dikirim ulang — revisi hanya menyentuh invoice (§6.2);
+//   - hanya memastikan dokumen INVOICE versi yang dipatok ada; Surat Jalan
+//     tidak disentuh dan tidak dikirim ulang — revisi hanya menyentuh invoice
+//     (§6.2);
 //   - mengantre HANYA email invoice (cabang + admin ber-flag) dan dijaga per
-//     (pesanan, jenis, versi), sehingga revisi berikutnya tetap mendapat email
+//     (pesanan, jenis, VERSI), sehingga revisi berikutnya tetap mendapat email
 //     baru sementara pekerjaan yang dijalankan ulang tidak menggandakannya.
 //
 // Kegagalan render dikembalikan apa adanya supaya worker mengulang nanti;
 // ketiadaan penerima yang berhak bukan kegagalan.
-func (s *Service) PesananDirevisi(ctx context.Context, orderID string) (Hasil, error) {
+func (s *Service) PesananDirevisi(ctx context.Context, orderID string, versi int) (Hasil, error) {
 	var hasil Hasil
 	id := strings.TrimSpace(orderID)
 	if id == "" {
@@ -155,7 +169,7 @@ func (s *Service) PesananDirevisi(ctx context.Context, orderID string) (Hasil, e
 		return hasil, fmt.Errorf("layanan dokumen/email belum terpasang")
 	}
 
-	doc, err := s.docs.EnsureInvoice(ctx, id)
+	doc, err := s.docs.EnsureInvoiceVersi(ctx, id, versi)
 	if err != nil {
 		return hasil, fmt.Errorf("render invoice pesanan %s: %w", id, err)
 	}
@@ -163,7 +177,13 @@ func (s *Service) PesananDirevisi(ctx context.Context, orderID string) (Hasil, e
 		return hasil, fmt.Errorf("invoice pesanan %s belum tersedia", id)
 	}
 	hasil.Dokumen = 1
-	if err := s.antreEmail(ctx, id, jenisEmailSaatRevisi, true, &hasil); err != nil {
+	v := versi
+	if v <= 0 {
+		// Job lama tanpa kolom versi: pakai versi invoice yang baru dipastikan.
+		// Revisi selalu menaikkan versi, jadi v > 0 pada jalur ini.
+		v = doc.Versi
+	}
+	if err := s.antreEmail(ctx, id, jenisEmailSaatRevisi, v, &hasil); err != nil {
 		return hasil, err
 	}
 	return hasil, nil
@@ -172,16 +192,17 @@ func (s *Service) PesananDirevisi(ctx context.Context, orderID string) (Hasil, e
 // antreEmail mengantre sekumpulan email dokumen satu pesanan dan memilah
 // hasilnya (baru / sudah ada / tanpa penerima) ke dalam hasil.
 //
-// perVersi=true memakai penjaga (pesanan, jenis, VERSI) — jalur revisi;
-// perVersi=false memakai penjaga (pesanan, jenis) — jalur Done pertama.
-func (s *Service) antreEmail(ctx context.Context, id string, jenis []string, perVersi bool, hasil *Hasil) error {
+// versi > 0 memakai penjaga (pesanan, jenis, VERSI) dan lampiran VERSI ITU —
+// jalur revisi; versi <= 0 memakai penjaga (pesanan, jenis) pada versi
+// berjalan — jalur Done pertama.
+func (s *Service) antreEmail(ctx context.Context, id string, jenis []string, versi int, hasil *Hasil) error {
 	for _, j := range jenis {
-		in := notification.OrderEmailInput{OrderID: id, Jenis: j}
+		in := notification.OrderEmailInput{OrderID: id, Jenis: j, Versi: versi}
 		var (
 			dibuat bool
 			err    error
 		)
-		if perVersi {
+		if versi > 0 {
 			_, dibuat, err = s.mail.EnqueueOrderEmailSekaliVersi(ctx, in)
 		} else {
 			_, dibuat, err = s.mail.EnqueueOrderEmailSekali(ctx, in)

@@ -46,6 +46,15 @@ const KindRevisiInvoice = "revisi_invoice"
 type RevisiInvoiceArgs struct {
 	// OrderID adalah id pesanan yang baru direvisi.
 	OrderID string `json:"order_id"`
+	// Versi adalah versi pesanan/invoice yang MENJADI HAK pekerjaan ini
+	// (versi sesudah revisi). Pekerjaan dipatok ke versinya supaya revisi
+	// yang sudah dijawab 200 tidak pernah kehilangan invoice versinya: worker
+	// memastikan invoice VERSI INI ada, bukan invoice versi berjalan saat
+	// worker kebetulan berjalan (temuan QA putaran 1, F2-25).
+	//
+	// Nilai <= 0 berarti "versi berjalan saat pekerjaan dijalankan" — sikap
+	// kompatibel untuk job lama yang dititipkan sebelum kolom ini ada.
+	Versi int `json:"versi"`
 }
 
 // Kind mengidentifikasi jenis job di tabel River.

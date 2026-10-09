@@ -20,6 +20,10 @@
 //     pernah lolos apa adanya untuk produk sertifikat.
 //   - Nomor invoice TIDAK berubah; versi naik satu langkah di dalam transaksi
 //     yang mengunci baris pesanan, sehingga dua revisi bersamaan berbaris rapi.
+//   - Revisi DITOLAK (409, fail closed) selama invoice VERSI BERJALAN belum
+//     dirender. Pekerjaan lanjutan merender invoice versi pesanan saat itu,
+//     jadi tanpa penjaga ini revisi yang sudah dijawab 200 bisa kehilangan
+//     invoice versinya (versi dilewati) — lihat ErrInvoiceVersiBelumAda.
 //   - Total TIDAK pernah datang dari klien: repository menghitungnya dari
 //     baris final (BR-10, SystemDesign §3).
 //
@@ -55,6 +59,15 @@ var (
 	// terpasang: revisi DITOLAK alih-alih menaikkan versi tanpa invoice versi
 	// baru dan email (fail closed).
 	ErrQueueUnavailable = errors.New("penjadwal pekerjaan revisi belum tersedia")
+	// ErrInvoiceVersiBelumAda dikembalikan bila invoice VERSI BERJALAN pesanan
+	// belum dirender saat revisi diminta (fail closed, temuan QA putaran 1).
+	//
+	// Pekerjaan lanjutan revisi merender invoice versi pesanan SAAT ITU, jadi
+	// revisi berikutnya hanya boleh menaikkan versi bila versi berjalan sudah
+	// punya invoice. Tanpa penjaga ini, dua revisi yang commit sebelum worker
+	// menjalankan job pertama membuat invoice versi antara TIDAK pernah
+	// dirender walau API sudah menjawab 200 (melanggar AP-REV-03/AP-REV-04).
+	ErrInvoiceVersiBelumAda = errors.New("invoice versi berjalan belum tersedia")
 )
 
 // Batas panjang teks revisi (kolom text) dan jumlah baris per revisi.

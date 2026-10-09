@@ -120,6 +120,12 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, order.ErrQueueUnavailable):
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
 			"Penjadwal pekerjaan invoice belum siap sehingga revisi belum dapat diselesaikan.")
+	case errors.Is(err, order.ErrInvoiceVersiBelumAda):
+		// Fail closed (temuan QA putaran 1): invoice versi berjalan belum
+		// dirender, jadi revisi belum boleh menaikkan versi — setiap revisi
+		// yang dijawab 200 harus punya invoice sendiri.
+		return apierr.Conflict("INVOICE_NOT_READY",
+			"Invoice versi ini belum selesai dirender sehingga revisi belum dapat dilakukan. Coba lagi setelah proses dokumennya selesai.")
 	case errors.Is(err, order.ErrInvalidData):
 		return apierr.Validation("Data pesanan tidak valid.",
 			map[string]string{"pesanan": err.Error()})

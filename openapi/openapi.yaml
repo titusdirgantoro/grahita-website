@@ -2254,6 +2254,16 @@ paths:
         Dua revisi bersamaan berbaris rapi karena baris pesanan dikunci; total
         dan serial selalu dihitung di dalam transaksi, sehingga rollback tidak
         menyisakan serial atau versi palsu.
+
+        Revisi juga **gagal-tertutup (fail closed)**: selama invoice VERSI
+        BERJALAN pesanan belum dirender, revisi berikutnya dijawab `409`
+        `INVOICE_NOT_READY` tanpa menaikkan versi. Pekerjaan lanjutan revisi
+        memang merender invoice versi pesanan saat itu, jadi tanpa penjaga ini
+        revisi yang sudah dijawab `200` bisa kehilangan invoice versinya
+        (versinya dilewati; tidak ada berkas untuk audit). Karena itu pula
+        pekerjaan lanjutan DIPATOK ke versinya: revisi ke-*n* menuntut invoice
+        versi *n* yang menjadi haknya, bukan invoice versi berjalan saat
+        worker kebetulan berjalan.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -2302,8 +2312,13 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           description: |
-            Pesanan belum selesai (`ORDER_NOT_DONE`) sehingga belum punya
-            invoice untuk direvisi. Tidak ada perubahan yang dilakukan.
+            Tidak ada perubahan yang dilakukan. Dua sebab:
+
+            * `ORDER_NOT_DONE` — pesanan belum selesai sehingga belum punya
+              invoice untuk direvisi;
+            * `INVOICE_NOT_READY` — invoice VERSI BERJALAN pesanan belum
+              dirender (pekerjaan dokumen belum selesai), sehingga revisi baru
+              belum boleh menaikkan versi. Ulangi setelah dokumennya siap.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -2313,6 +2328,11 @@ paths:
                     error:
                       code: ORDER_NOT_DONE
                       message: Revisi hanya untuk pesanan yang sudah selesai (Done).
+                invoiceBelumSiap:
+                  value:
+                    error:
+                      code: INVOICE_NOT_READY
+                      message: Invoice versi ini belum selesai dirender sehingga revisi belum dapat dilakukan. Coba lagi setelah proses dokumennya selesai.
         "503":
           $ref: "#/components/responses/Unavailable"
 
@@ -3721,6 +3741,7 @@ components:
                   ORDER_NOT_SUBMITTED,
                   DOCUMENT_NOT_READY,
                   DOCUMENT_RENDER_UNAVAILABLE,
+                  INVOICE_NOT_READY,
                   PROOF_LIMIT,
                   PROOF_DUPLICATE,
                   PAYLOAD_TOO_LARGE,

@@ -113,11 +113,13 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 
 // ServerSelesai adalah pekerjaan lanjutan setelah pesanan Done: render dokumen
 // lalu antre email dokumen (fulfillment.Service, kartu F1-18), dan pekerjaan
-// setelah revisi invoice: render invoice versi baru lalu antre email invoice
-// (kartu F2-25). Keduanya dipenuhi *fulfillment.Service.
+// setelah revisi invoice: render invoice VERSI YANG DIPATOK lalu antre email
+// invoice (kartu F2-25). Keduanya dipenuhi *fulfillment.Service.
 type ServerSelesai interface {
 	PesananSelesai(ctx context.Context, orderID string) (fulfillment.Hasil, error)
-	PesananDirevisi(ctx context.Context, orderID string) (fulfillment.Hasil, error)
+	// PesananDirevisi memastikan invoice `versi` ada lalu mengantre email
+	// invoice versi itu (versi <= 0 = versi berjalan).
+	PesananDirevisi(ctx context.Context, orderID string, versi int) (fulfillment.Hasil, error)
 }
 
 // Laporan adalah pelaksana ekspor XLSX (report.Service, kartu F2-24).
@@ -207,13 +209,22 @@ func (w *RenderDokumenWorker) Work(ctx context.Context, job *river.Job[jobs.Rend
 }
 
 // RevisiInvoiceWorker menjalankan job "revisi_invoice": memastikan Invoice PDF
-// VERSI BARU ada, lalu mengantre email invoice versi itu ke cabang dan admin
-// ber-flag Invoice (SystemDesign.md §4.5). Job ini dititipkan transaksi revisi
-// (F2-25), jadi versi pesanan yang naik tidak pernah kehilangan invoice baru.
+// VERSI YANG DIPATOK pada muatan job ada, lalu mengantre email invoice versi
+// itu ke cabang dan admin ber-flag Invoice (SystemDesign.md §4.5). Job ini
+// dititipkan transaksi revisi (F2-25), jadi versi pesanan yang naik tidak
+// pernah kehilangan invoice baru.
+//
+// Versi dipatok (bukan "versi berjalan saat worker berjalan") supaya revisi
+// yang sudah dijawab 200 selalu mendapat invoice versinya sendiri walau versi
+// pesanan sempat naik lagi sebelum job ini dijalankan — dan supaya pekerjaan
+// yang diulang setelah versinya dijawab revisi berikutnya tidak merender
+// versi yang bukan haknya (temuan QA putaran 1, F2-25). Muatan tanpa versi
+// (baris river_job lama, Versi == 0) tetap diperlakukan sebagai "versi
+// berjalan" seperti sebelumnya.
 //
 // Surat Jalan TIDAK disentuh/dikirim ulang: revisi hanya menyentuh invoice.
 // Kegagalan render dikembalikan supaya River mengulanginya; email baru diantre
-// setelah invoice versi baru benar-benar ada.
+// setelah invoice versinya benar-benar ada.
 type RevisiInvoiceWorker struct {
 	river.WorkerDefaults[jobs.RevisiInvoiceArgs]
 	revisi ServerSelesai
@@ -234,12 +245,12 @@ func (w *RevisiInvoiceWorker) Work(ctx context.Context, job *river.Job[jobs.Revi
 		// (pesanan yang direvisi akan kehilangan invoice versi barunya).
 		return fmt.Errorf("job %s: layanan pemenuhan revisi belum terpasang", w.Kind())
 	}
-	hasil, err := w.revisi.PesananDirevisi(ctx, job.Args.OrderID)
+	hasil, err := w.revisi.PesananDirevisi(ctx, job.Args.OrderID, job.Args.Versi)
 	if err != nil {
 		return err
 	}
 	slog.InfoContext(ctx, "revisi invoice dipenuhi",
-		"order_id", job.Args.OrderID, "dokumen", hasil.Dokumen,
+		"order_id", job.Args.OrderID, "versi", job.Args.Versi, "dokumen", hasil.Dokumen,
 		"email_dibuat", hasil.EmailDibuat, "email_sudah_ada", hasil.EmailSudahAda,
 		"email_tanpa_penerima", hasil.EmailTanpaPenerima)
 	return nil

@@ -8,18 +8,23 @@ package postgres
 //  1. kunci baris pesanan (`FOR UPDATE`) dan baca keadaan versi lama;
 //  2. tolak pesanan yang belum Done (ORDER_NOT_DONE) — invoice baru terbit
 //     saat Done (PRD §6.1);
-//  3. baca baris versi lama + jenis produk master, lalu SUSUN baris final di
+//  3. FAIL CLOSED: tolak revisi selama invoice VERSI BERJALAN belum dirender
+//     (INVOICE_NOT_READY). Pekerjaan lanjutan merender invoice versi pesanan
+//     SAAT ITU, jadi tanpa penjaga ini revisi berikutnya yang menaikkan versi
+//     lebih dahulu membuat invoice versi ini terlewat permanen walau API
+//     sudah menjawab 200 (temuan QA putaran 1);
+//  4. baca baris versi lama + jenis produk master, lalu SUSUN baris final di
 //     server: baris lama mempertahankan serial/jenis/produknya, baris baru
 //     mendapat serial dari tabel counter dengan periode TANGGAL PESANAN ASLI;
-//  4. ganti seluruh baris (daftar final, bukan diff);
-//  5. naikkan versi SATU langkah (nomor invoice tidak berubah);
-//  6. baca total dari barisnya (BR-10) dan hitung delta nilai;
-//  7. tulis snapshot versi lama ke `invoice_revisions` (jsonb) + alasan + delta;
-//  8. tulis peristiwa timeline + entri audit (aktor/alasan/delta);
-//  9. TITIPKAN pekerjaan River "render invoice versi baru + email invoice"
-//     pada transaksi YANG SAMA.
+//  5. ganti seluruh baris (daftar final, bukan diff);
+//  6. naikkan versi SATU langkah (nomor invoice tidak berubah);
+//  7. baca total dari barisnya (BR-10) dan hitung delta nilai;
+//  8. tulis snapshot versi lama ke `invoice_revisions` (jsonb) + alasan + delta;
+//  9. tulis peristiwa timeline + entri audit (aktor/alasan/delta);
+//  10. TITIPKAN pekerjaan River "render invoice versi baru + email invoice"
+//     pada transaksi YANG SAMA, DIPATOK ke versi barunya.
 //
-// Langkah 9 memakai `InsertTx` dari klien River sehingga baris river_job ikut
+// Langkah 10 memakai `InsertTx` dari klien River sehingga baris river_job ikut
 // rollback bila transaksi batal. Bila penjadwal belum terpasang, revisi
 // DITOLAK alih-alih menaikkan versi tanpa invoice baru dan email — gagal
 // terang-terangan, bukan setengah jalan.
@@ -28,6 +33,11 @@ package postgres
 // serialnya apa adanya. Serial baris BARU diambil dari tabel counter, bukan
 // SEQUENCE, sehingga rollback tidak membuang nomor (BR-09) dan tidak ada versi
 // atau serial "palsu" yang tertinggal saat transaksi batal.
+//
+// Penjaga langkah 3 diperiksa DI DALAM transaksi yang mengunci baris pesanan:
+// baris `documents` tidak pernah dihapus (F1-17) dan versi tidak bisa naik
+// tanpa kunci ini, sehingga tidak ada celah balapan antara pemeriksaan dan
+// kenaikan versi.
 
 import (
 	"context"
@@ -119,7 +129,26 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		return order.ReviseOutcome{}, fmt.Errorf("%w: tanggal pesanan kosong", order.ErrInvalidData)
 	}
 
-	// 3. Baca baris versi lama.
+	// 3. FAIL CLOSED (temuan QA putaran 1): invoice VERSI BERJALAN wajib sudah
+	//    dirender. Pekerjaan lanjutan revisi merender invoice versi pesanan
+	//    SAAT ITU (document.EnsureInvoice), jadi bila revisi berikutnya
+	//    menaikkan versi lebih dahulu, invoice versi ini TIDAK akan pernah
+	//    dirender dan emailnya tidak pernah dikirim — padahal API sudah
+	//    menjawab 200. Menolak di sini berarti setiap versi yang dijawab 200
+	//    PASTI punya invoice, dan berkas versi sebelumnya selalu tersedia.
+	adaInvoice, err := q.InvoiceVersiAda(ctx, sqlc.InvoiceVersiAdaParams{
+		OrderID: req.OrderID,
+		Versi:   row.Versi,
+	})
+	if err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("query InvoiceVersiAda: %w", err)
+	}
+	if !adaInvoice {
+		return order.ReviseOutcome{}, fmt.Errorf("%w: invoice versi %d belum dirender",
+			order.ErrInvoiceVersiBelumAda, row.Versi)
+	}
+
+	// 4. Baca baris versi lama.
 	rowsLama, err := q.ListOrderLinesForRevise(ctx, req.OrderID)
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query ListOrderLinesForRevise: %w", err)
@@ -145,13 +174,13 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		return order.ReviseOutcome{}, fmt.Errorf("%w: pesanan tanpa baris", order.ErrInvalidData)
 	}
 
-	// 4. Susun baris final di server (serial baris baru diambil di sini).
+	// 5. Susun baris final di server (serial baris baru diambil di sini).
 	final, err := r.susunBarisFinal(ctx, q, row, lama, req)
 	if err != nil {
 		return order.ReviseOutcome{}, err
 	}
 
-	// 5. Ganti seluruh baris.
+	// 6. Ganti seluruh baris.
 	if err := q.DeleteOrderLines(ctx, req.OrderID); err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query DeleteOrderLines: %w", err)
 	}
@@ -182,7 +211,7 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		}
 	}
 
-	// 6. Versi naik SATU langkah; nomor invoice tidak disentuh.
+	// 7. Versi naik SATU langkah; nomor invoice tidak disentuh.
 	changed, err := q.SetOrderVersi(ctx, req.OrderID)
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query SetOrderVersi: %w", err)
@@ -194,7 +223,7 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	}
 	versiBaru := int(row.Versi) + 1
 
-	// 7. Total dihitung ULANG dari barisnya (BR-10) — angka klien tidak dipakai.
+	// 8. Total dihitung ULANG dari barisnya (BR-10) — angka klien tidak dipakai.
 	totalBaru, err := q.SumOrderLineSubtotals(ctx, req.OrderID)
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query SumOrderLineSubtotals(revisi): %w", err)
@@ -218,7 +247,7 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		return order.ReviseOutcome{}, fmt.Errorf("query InsertInvoiceRevision: %w", err)
 	}
 
-	// 8a. Timeline.
+	// 9a. Timeline.
 	if err := q.InsertOrderEvent(ctx, sqlc.InsertOrderEventParams{
 		OrderID:   req.OrderID,
 		Icon:      pgtypes.Text(order.IconEventRevisi),
@@ -229,7 +258,7 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		return order.ReviseOutcome{}, fmt.Errorf("query InsertOrderEvent(revisi): %w", err)
 	}
 
-	// 8b. Audit: Before/After dari baris yang dikunci + hasil akhir, sehingga
+	// 9b. Audit: Before/After dari baris yang dikunci + hasil akhir, sehingga
 	//     entri audit tidak pernah memuat snapshot basi.
 	rec := req.Audit
 	rec.EntityID = req.OrderID
@@ -247,9 +276,14 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		return order.ReviseOutcome{}, err
 	}
 
-	// 9. Pekerjaan lanjutan: render invoice versi baru + antre email invoice,
-	//    dititipkan pada transaksi yang sama.
-	if _, err := r.jobs.InsertTx(ctx, tx, jobs.RevisiInvoiceArgs{OrderID: req.OrderID}, nil); err != nil {
+	// 10. Pekerjaan lanjutan: render invoice VERSI BARU + antre email invoice,
+	//     dititipkan pada transaksi yang sama. Versinya DIPATOK pada muatan job
+	//     supaya worker memastikan invoice versi INI ada — bukan invoice versi
+	//     berjalan saat worker kebetulan berjalan (temuan QA putaran 1).
+	if _, err := r.jobs.InsertTx(ctx, tx, jobs.RevisiInvoiceArgs{
+		OrderID: req.OrderID,
+		Versi:   versiBaru,
+	}, nil); err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("titipkan pekerjaan revisi invoice: %w", err)
 	}
 
