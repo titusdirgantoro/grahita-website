@@ -3,7 +3,7 @@ import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { routeTree } from "./routes";
-import { bolehRevisi, type FilterPesanan, type PesananDetail, type PesananHalaman } from "./pages/pesanan";
+import { bolehRevisi, uraiBilanganBulat, type FilterPesanan, type PesananDetail, type PesananHalaman } from "./pages/pesanan";
 
 const DETAIL_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -655,6 +655,18 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     expect(bolehRevisi("branch")).toBe(false);
   });
 
+  it("uraiBilanganBulat hanya menerima bilangan bulat non-negatif (menolak -5/1.5, bukan mengubahnya)", () => {
+    expect(uraiBilanganBulat("5")).toBe(5);
+    expect(uraiBilanganBulat("0")).toBe(0);
+    expect(uraiBilanganBulat(" 12 ")).toBe(12);
+    expect(uraiBilanganBulat("-5")).toBeNull();
+    expect(uraiBilanganBulat("1.5")).toBeNull();
+    expect(uraiBilanganBulat("1,5")).toBeNull();
+    expect(uraiBilanganBulat("1e3")).toBeNull();
+    expect(uraiBilanganBulat("")).toBeNull();
+    expect(uraiBilanganBulat("abc")).toBeNull();
+  });
+
   it("tombol revisi hanya muncul untuk pesanan Done", async () => {
     stubPesanan();
     render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
@@ -717,6 +729,105 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
       alasan: "ganti produk",
       lines: [{ product_id: "pr-2", qty: 1, harga_satuan: 150000 }],
+    });
+  });
+
+  it("kunci baris baru unik: produk sama ditambah ulang setelah hapus tidak saling merembet", async () => {
+    const { posts } = stubPesanan({ detail: DETAIL_DONE_UJI });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+
+    const pilih = await within(dialog).findByLabelText("Tambah produk");
+    await waitFor(() => expect(within(pilih).getByRole("option", { name: /Kalung Kesehatan/ })).toBeDefined());
+
+    // Tambah Kalung (panjang 2), lalu hapus Bio Magnetik supaya panjang
+    // kembali 1 — persis keadaan yang dulu membuat kunci `baru-…-${length}`
+    // terpakai ulang saat produk yang sama ditambahkan lagi.
+    fireEvent.change(pilih, { target: { value: "pr-2" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tambah baris" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hapus Bio Magnetik" }));
+
+    fireEvent.change(within(dialog).getByLabelText("Tambah produk"), { target: { value: "pr-2" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Tambah baris" }));
+
+    const awal = within(dialog).getAllByLabelText("Qty Kalung Kesehatan");
+    expect(awal.length).toBe(2);
+
+    // Mengubah SATU baris tidak boleh mengubah baris kembarannya.
+    fireEvent.change(awal[0], { target: { value: "7" } });
+    const setelahUbah = within(dialog).getAllByLabelText("Qty Kalung Kesehatan");
+    expect((setelahUbah[0] as HTMLInputElement).value).toBe("7");
+    expect((setelahUbah[1] as HTMLInputElement).value).toBe("1");
+
+    // Menghapus SATU baris hanya menghapus baris itu (dulu keduanya terhapus).
+    fireEvent.click(within(dialog).getAllByRole("button", { name: "Hapus Kalung Kesehatan" })[0]);
+    const tersisa = within(dialog).getAllByLabelText("Qty Kalung Kesehatan");
+    expect(tersisa.length).toBe(1);
+    expect((tersisa[0] as HTMLInputElement).value).toBe("1");
+
+    // Payload tetap satu baris produk_id serta tidak pernah dikirim dua kali.
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ganti produk" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
+    await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1));
+    expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
+      alasan: "ganti produk",
+      lines: [{ product_id: "pr-2", qty: 1, harga_satuan: 150000 }],
+    });
+  });
+
+  it("qty/harga negatif atau desimal ditolak tanpa dikirim (bukan diam-diam diubah)", async () => {
+    const { posts } = stubPesanan({ detail: DETAIL_DONE_UJI });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revisi invoice" }));
+    const dialog = await bukaRevisi();
+    const kirim = () => within(dialog).getByRole("button", { name: "Simpan revisi" });
+    fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ubah qty" } });
+
+    // "-5" tidak boleh menjadi 5.
+    fireEvent.change(within(dialog).getByLabelText("Qty Bio Magnetik"), { target: { value: "-5" } });
+    fireEvent.click(kirim());
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toMatch(/Qty baris .*bilangan bulat minimal 1/),
+    );
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(0);
+
+    // "1.5" tidak boleh menjadi 15.
+    fireEvent.change(within(dialog).getByLabelText("Qty Bio Magnetik"), { target: { value: "1.5" } });
+    fireEvent.click(kirim());
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toMatch(/Qty baris .*bilangan bulat minimal 1/),
+    );
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(0);
+
+    // qty sah, harga "-100" ditolak (bukan menjadi 100).
+    fireEvent.change(within(dialog).getByLabelText("Qty Bio Magnetik"), { target: { value: "2" } });
+    fireEvent.change(within(dialog).getByLabelText("Harga satuan Bio Magnetik"), { target: { value: "-100" } });
+    fireEvent.click(kirim());
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toMatch(/Harga satuan .*non-negatif/),
+    );
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(0);
+
+    // harga "1.5" ditolak.
+    fireEvent.change(within(dialog).getByLabelText("Harga satuan Bio Magnetik"), { target: { value: "1.5" } });
+    fireEvent.click(kirim());
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toMatch(/Harga satuan .*non-negatif/),
+    );
+    expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(0);
+
+    // Nilai sah: dikirim sekali dengan angka apa adanya.
+    fireEvent.change(within(dialog).getByLabelText("Harga satuan Bio Magnetik"), { target: { value: "120000" } });
+    fireEvent.click(kirim());
+    await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1));
+    expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
+      alasan: "ubah qty",
+      lines: [{ line_no: 1, qty: 2, harga_satuan: 120000 }],
     });
   });
 

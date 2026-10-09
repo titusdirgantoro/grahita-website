@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 
@@ -293,6 +293,21 @@ export function bolehVerifikasi(peran: Role): boolean {
  */
 export function bolehRevisi(peran: Role): boolean {
   return peran === "manager" || peran === "superadmin";
+}
+
+/**
+ * uraiBilanganBulat membaca qty/harga revisi yang diketik admin dengan KETAT:
+ * hanya digit 0-9 (bilangan bulat non-negatif). Teks kosong, negatif, desimal,
+ * atau bersimbol lain dikembalikan `null` supaya ditolak dan dilaporkan ke
+ * operator — bukan diam-diam dibersihkan menjadi angka lain. Tanpa ini
+ * penyaringan digit membuat "-5" menjadi 5 dan "1.5" menjadi 15 sehingga
+ * penjaga qty<1/harga<0 praktis mati dan salah ketik tersamarkan.
+ */
+export function uraiBilanganBulat(nilai: string): number | null {
+  const teks = nilai.trim();
+  if (!/^\d+$/.test(teks)) return null;
+  const n = Number.parseInt(teks, 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -931,13 +946,21 @@ export function PesananDetailAdminPage() {
     setBarisRevisi((kini) => kini.filter((b) => b.kunci !== kunci));
   }, []);
 
+  // Penghitung monoton untuk kunci baris baru. Kunci TIDAK boleh diturunkan
+  // dari panjang daftar: setelah sebuah baris dihapus lalu produk yang sama
+  // ditambahkan lagi, kunci lama akan terpakai ulang (duplikat) sehingga
+  // ubahBaris/hapusBaris ikut mengenai baris kembarannya.
+  const urutanKunciBaris = useRef(0);
+
   const tambahBaris = useCallback(() => {
     const p = produkRevisi.find((x) => x.id === produkPilih);
     if (!p) return;
+    urutanKunciBaris.current += 1;
+    const kunci = `baru-${p.id}-${urutanKunciBaris.current}`;
     setBarisRevisi((kini) => [
       ...kini,
       {
-        kunci: `baru-${p.id}-${kini.length}`,
+        kunci,
         line_no: 0,
         product_id: p.id,
         nama: p.nama,
@@ -970,14 +993,14 @@ export function PesananDetailAdminPage() {
     }
     const lines: Record<string, unknown>[] = [];
     for (const b of barisRevisi) {
-      const qty = Number.parseInt(b.qty.replace(/[^\d]/g, ""), 10);
-      const harga = Number.parseInt(b.harga.replace(/[^\d]/g, ""), 10);
-      if (!Number.isFinite(qty) || qty < 1) {
-        setGalatRevisi(`Qty baris "${b.nama}" minimal 1.`);
+      const qty = uraiBilanganBulat(b.qty);
+      const harga = uraiBilanganBulat(b.harga);
+      if (qty === null || qty < 1) {
+        setGalatRevisi(`Qty baris "${b.nama}" harus bilangan bulat minimal 1.`);
         return;
       }
-      if (!Number.isFinite(harga) || harga < 0) {
-        setGalatRevisi(`Harga baris "${b.nama}" tidak boleh negatif.`);
+      if (harga === null) {
+        setGalatRevisi(`Harga satuan baris "${b.nama}" harus bilangan bulat non-negatif.`);
         return;
       }
       lines.push(
