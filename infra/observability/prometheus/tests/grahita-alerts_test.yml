@@ -1,0 +1,241 @@
+# Uji satuan aturan alarm Grahita (promtool test rules).
+#
+# Ini adalah SIMULASI alarm: deret waktu sintetis dimasukkan, lalu promtool
+# membuktikan aturan benar-benar MENYALA (bukan hanya berkas aturan yang valid)
+# dan TIDAK menyala saat sistem sehat. Tidak butuh Prometheus/Alertmanager
+# berjalan, sehingga dapat dijalankan di CI maupun di mesin tanpa Docker.
+#
+# Jalankan dari direktori berkas ini:
+#   promtool test rules grahita-alerts_test.yml
+#
+# Berkas ini sengaja diletakkan di subdirektori `tests/`, BUKAN di `rules/`,
+# karena Prometheus memuat `rules/*.yml` sebagai berkas aturan (berkas bergaya
+# uji akan membuat Prometheus gagal start).
+
+rule_files:
+  - ../rules/grahita-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------- 1. laju error API > 2% ----------
+  - name: "API sehat: tidak ada alarm error rate"
+    interval: 1m
+    input_series:
+      - series: 'grahita_http_requests_total{route="/api/v1/orders",method="POST",status="200"}'
+        values: '0+100x30'
+      - series: 'grahita_http_requests_total{route="/api/v1/orders",method="POST",status="500"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GrahitaAPILajuErrorTINGGI
+        exp_alerts: []
+
+  - name: "API banyak 5xx: GrahitaAPILajuErrorTINGGI menyala"
+    interval: 1m
+    input_series:
+      - series: 'grahita_http_requests_total{route="/api/v1/orders",method="POST",status="200"}'
+        values: '0+100x30'
+      - series: 'grahita_http_requests_total{route="/api/v1/orders",method="POST",status="500"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GrahitaAPILajuErrorTINGGI
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaAPILajuErrorTINGGI
+              tingkat: kritis
+              tim: backend
+            exp_annotations:
+              ringkasan: "Laju error API di atas 2% selama 5 menit"
+              keterangan: >-
+                Rasio respons 5xx 9.091% dari seluruh permintaan. Periksa log
+                Loki (job grahita-api) dan Sentry untuk stack trace; cek /readyz
+                apakah database/storage bermasalah.
+
+  # ---------- 2. API tidak terjangkau (up == 0) ----------
+  - name: "API mati: GrahitaAPITidakTerjangkau menyala"
+    interval: 1m
+    input_series:
+      - series: 'up{job="grahita-api"}'
+        values: '1x3 0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GrahitaAPITidakTerjangkau
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaAPITidakTerjangkau
+              job: grahita-api
+              tingkat: kritis
+              tim: backend
+            exp_annotations:
+              ringkasan: "Prometheus tidak bisa memanen API"
+              keterangan: >-
+                Periksa `docker compose ps api` dan log container. Endpoint
+                /healthz hanya menjawab bila proses hidup; /readyz menambahkan
+                status database & migrasi.
+
+  # ---------- 3. job gagal > 3 dalam 10 menit (risiko residu F1-18) ----------
+  - name: "Render dokumen gagal berulang: GrahitaJobSeringGagal menyala"
+    interval: 1m
+    input_series:
+      - series: 'grahita_jobs_completed_total{kind="render_dokumen_pesanan",outcome="gagal"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GrahitaJobSeringGagal
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaJobSeringGagal
+              kind: render_dokumen_pesanan
+              outcome: gagal
+              tingkat: peringatan
+              tim: backend
+            exp_annotations:
+              ringkasan: "Pekerjaan latar belakang sering gagal (render_dokumen_pesanan)"
+              keterangan: >-
+                10 kegagalan render_dokumen_pesanan dalam 10 menit. Periksa log
+                worker; kegagalan render biasanya berarti Gotenberg/S3 belum
+                siap, kegagalan email biasanya SMTP.
+
+  - name: "Satu kegagalan saja tidak cukup memicu alarm job"
+    interval: 1m
+    input_series:
+      - series: 'grahita_jobs_completed_total{kind="render_dokumen_pesanan",outcome="gagal"}'
+        values: '0+0x10 1x10'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: GrahitaJobSeringGagal
+        exp_alerts: []
+
+  # ---------- 4. job menyerah permanen (discarded) ----------
+  - name: "Job discarded: GrahitaJobGagalPermanen menyala setelah 10 menit"
+    interval: 1m
+    input_series:
+      - series: 'grahita_jobs_current{state="discarded"}'
+        values: '0x5 1x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: GrahitaJobGagalPermanen
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: GrahitaJobGagalPermanen
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaJobGagalPermanen
+              state: discarded
+              tingkat: kritis
+              tim: backend
+            exp_annotations:
+              ringkasan: "Ada pekerjaan yang menyerah permanen (discarded)"
+              keterangan: >-
+                1 job berakhir `discarded`. Jalankan prosedur rekonsiliasi
+                (infra/observability/README.md §Rekonsiliasi) supaya pesanan
+                tidak tertinggal tanpa dokumen/email.
+
+  # ---------- 5. email tertahan > 30 menit ----------
+  - name: "Email tertahan: GrahitaEmailTertahan menyala"
+    interval: 1m
+    input_series:
+      - series: 'grahita_outbox_oldest_pending_seconds'
+        values: '0x3 2000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GrahitaEmailTertahan
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaEmailTertahan
+              tingkat: kritis
+              tim: backend
+            exp_annotations:
+              ringkasan: "Email tertua tertahan lebih dari 30 menit"
+              keterangan: >-
+                Umur email tertua yang belum terkirim 33m 20s. Periksa
+                kredensial SMTP, konektivitas jaringan, dan log worker.
+
+  # ---------- 6. cadangan gagal & cadangan basi ----------
+  - name: "Cadangan terakhir gagal: GrahitaCadanganGagal menyala"
+    interval: 1m
+    input_series:
+      - series: 'grahita_backup_last_run_success{jenis="postgres"}'
+        values: '1x3 0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GrahitaCadanganGagal
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaCadanganGagal
+              jenis: postgres
+              tingkat: kritis
+              tim: backend
+            exp_annotations:
+              ringkasan: "Cadangan postgres terakhir gagal"
+              keterangan: >-
+                Periksa `backup_runs.pesan` di halaman Pengaturan, kunci age,
+                kredensial rclone/Drive, dan ruang disk tujuan.
+
+  - name: "Cadangan tak pernah terlihat: GrahitaCadanganBasi menyala (absent)"
+    interval: 1m
+    input_series:
+      - series: 'grahita_build_info{env="production",version="test"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: GrahitaCadanganBasi
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaCadanganBasi
+              jenis: postgres
+              tingkat: kritis
+              tim: backend
+            exp_annotations:
+              ringkasan: "Tidak ada cadangan harian yang terlihat lebih dari 26 jam"
+              keterangan: >-
+                Backup yang tidak pernah dijalankan/diuji tidak dihitung sebagai
+                backup. Periksa jadwal worker dan tabel backup_runs.
+
+  # ---------- 7. disk ----------
+  - name: "Disk 85%: GrahitaDiskHampirPenuh menyala, Kritis tidak"
+    interval: 1m
+    input_series:
+      - series: 'grahita_disk_used_ratio{mount="/"}'
+        values: '0.85x30'
+      - series: 'grahita_build_info{env="production",version="test"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GrahitaDiskHampirPenuh
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaDiskHampirPenuh
+              mount: /
+              tingkat: peringatan
+              tim: infrastruktur
+            exp_annotations:
+              ringkasan: "Disk / terpakai di atas 80%"
+              keterangan: >-
+                Pemakaian 85%. Bersihkan cadangan lama, log container, atau
+                perbesar volume sebelum penuh.
+      - eval_time: 20m
+        alertname: GrahitaDiskKritis
+        exp_alerts: []
+
+  - name: "Disk 95%: GrahitaDiskKritis menyala"
+    interval: 1m
+    input_series:
+      - series: 'grahita_disk_used_ratio{mount="/"}'
+        values: '0.95x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GrahitaDiskKritis
+        exp_alerts:
+          - exp_labels:
+              alertname: GrahitaDiskKritis
+              mount: /
+              tingkat: kritis
+              tim: infrastruktur
+            exp_annotations:
+              ringkasan: "Disk / di atas 92% — risiko gagal tulis"
+              keterangan: >-
+                PostgreSQL/MinIO/Loki dapat gagal menulis. Tindakan segera:
+                kosongkan cadangan lama dan log.

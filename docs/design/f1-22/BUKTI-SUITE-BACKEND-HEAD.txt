@@ -1,0 +1,55 @@
+HEAD: 91ca217
+NOTICE:  database "grahita_f122r3" does not exist, skipping
+mulai: 11:14:17
+?   	github.com/grahita/portal/api/cmd/server	[no test files]
+?   	github.com/grahita/portal/api/db/migrations	[no test files]
+ok  	github.com/grahita/portal/api/internal/arch	1.091s
+?   	github.com/grahita/portal/api/internal/audit	[no test files]
+?   	github.com/grahita/portal/api/internal/audit/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/auth	28.861s
+?   	github.com/grahita/portal/api/internal/auth/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/backup	5.583s
+?   	github.com/grahita/portal/api/internal/backup/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/bank	1.782s
+?   	github.com/grahita/portal/api/internal/bank/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/branch	1.646s
+?   	github.com/grahita/portal/api/internal/branch/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/catalog	1.777s
+?   	github.com/grahita/portal/api/internal/catalog/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/dashboard	1.680s
+?   	github.com/grahita/portal/api/internal/dashboard/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/db/sqlc	[no test files]
+ok  	github.com/grahita/portal/api/internal/document	3.632s
+?   	github.com/grahita/portal/api/internal/document/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/fulfillment	1.909s
+ok  	github.com/grahita/portal/api/internal/httpapi	706.702s
+ok  	github.com/grahita/portal/api/internal/notification	17.541s
+?   	github.com/grahita/portal/api/internal/notification/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/order	1.910s
+?   	github.com/grahita/portal/api/internal/order/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment	1.963s
+?   	github.com/grahita/portal/api/internal/payment/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/apierr	1.041s
+?   	github.com/grahita/portal/api/internal/platform/clock	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/config	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/database	4.323s
+?   	github.com/grahita/portal/api/internal/platform/httpx	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/jobs	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/mailer	1.446s
+ok  	github.com/grahita/portal/api/internal/platform/observability	1.228s
+?   	github.com/grahita/portal/api/internal/platform/pdf	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/pgtypes	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/storage	1.067s
+ok  	github.com/grahita/portal/api/internal/registration	3.225s
+?   	github.com/grahita/portal/api/internal/registration/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/report	2.143s
+?   	github.com/grahita/portal/api/internal/report/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/seed	[no test files]
+ok  	github.com/grahita/portal/api/internal/settings	1.742s
+?   	github.com/grahita/portal/api/internal/settings/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/users	1.770s
+?   	github.com/grahita/portal/api/internal/users/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/worker	3.736s
+SUITE_EXIT=0
+selesai: 11:28:41
+DONE=0

@@ -69,23 +69,39 @@ yang muncul adalah penyebabnya, bukan bising.
 
 Verifikasi bahwa jalur alarm benar-benar bekerja (bukan sekadar berkas aturan):
 
-```sh
-# 1. aturan valid
-promtool check rules infra/observability/prometheus/rules/grahita-alerts.yml
+**a. Simulasi otomatis (tanpa Prometheus/Docker, dipakai CI).**
+`infra/observability/prometheus/tests/grahita-alerts_test.yml` menyuntikkan deret
+waktu sintetis lalu membuktikan tiap alarm MENYALA pada keadaan buruk dan TIDAK
+menyala pada keadaan sehat:
 
-# 2. API tidak terjangkau: hentikan container api sebentar
+```sh
+promtool check rules --lint=all infra/observability/prometheus/rules/grahita-alerts.yml
+cd infra/observability/prometheus/tests && promtool test rules grahita-alerts_test.yml
+```
+
+Cakupan uji: laju 5xx > 2% (nyala) vs sehat (tidak), `up == 0`, job gagal > 3
+(dan kontrol negatif satu kegagalan), `jobs_current{state="discarded"}`,
+email tertahan > 30 menit, cadangan gagal, cadangan tak pernah terlihat
+(`absent`), disk > 80% / > 92%. Job CI `observability` menjalankan ketiga
+perintah itu pada setiap push/PR. Berkas uji sengaja berada di `tests/`, bukan
+`rules/`, karena Prometheus memuat `rules/*.yml`.
+
+**b. Simulasi manual pada host (butuh container berjalan):**
+
+```sh
+# 1. API tidak terjangkau: hentikan container api sebentar
 docker compose stop api            # tunggu ~2 menit → GrahitaAPITidakTerjangkau
 docker compose start api
 
-# 3. job gagal permanen (efek nyata saat Gotenberg/S3 belum siap):
+# 2. job gagal permanen (efek nyata saat Gotenberg/S3 belum siap):
 #    matikan Gotenberg lalu buat pesanan uji sampai job render `discarded`.
 docker compose stop gotenberg
 
-# 4. email tertahan: hentikan worker, biarkan email_outbox menumpuk
+# 3. email tertahan: hentikan worker, biarkan email_outbox menumpuk
 docker compose stop worker         # GrahitaEmailTertahan setelah 30 menit
 docker compose start worker
 
-# 5. disk > 80%: cukup andalkan metrik grahita_disk_used_ratio bila volume
+# 4. disk > 80%: cukup andalkan metrik grahita_disk_used_ratio bila volume
 #    produksi memang di atas ambang; jangan memenuhi disk untuk menguji.
 ```
 

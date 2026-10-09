@@ -172,6 +172,34 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
+  # Observability: konfigurasi Prometheus harus valid DAN aturan alarm harus
+  # benar-benar MENYALA pada deret waktu sintetis (simulasi alarm). Tanpa
+  # langkah ini, kesalahan ekspresi/ambang hanya terlihat saat insiden nyata.
+  observability:
+    name: Observability (aturan alarm + simulasi)
+    runs-on: ubuntu-latest
+    env:
+      PROM_VERSION: "3.15.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pasang promtool (versi disematkan)
+        run: |
+          curl -sSfL -o /tmp/prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          tar -xzf /tmp/prometheus.tar.gz -C /tmp
+          echo "PROMTOOL=/tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool" >> "$GITHUB_ENV"
+
+      - name: Validasi konfigurasi Prometheus
+        run: $PROMTOOL check config infra/observability/prometheus/prometheus.yml
+
+      - name: Validasi aturan alarm (lint penuh)
+        run: $PROMTOOL check rules --lint=all infra/observability/prometheus/rules/grahita-alerts.yml
+
+      - name: Simulasi alarm (uji satuan promtool)
+        working-directory: infra/observability/prometheus/tests
+        run: $PROMTOOL test rules grahita-alerts_test.yml
+
   # Pemindaian keamanan image: build image api (dipakai api DAN worker) lalu
   # pindai paket OS + pustaka Go (Architecture.md §9: "scan (govulncheck,
   # trivy, npm audit)"). Kerentanan HIGH/CRITICAL yang sudah ada perbaikannya

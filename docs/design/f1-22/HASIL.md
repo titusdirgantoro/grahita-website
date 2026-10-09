@@ -22,10 +22,10 @@ nyata), serta batas yang **tidak** diklaim.
 | `api/internal/worker` | opsi `DenganPencatatJob` + hook River `HookMetrikJob` (durasi & hasil tiap job) |
 | `api/internal/httpapi` | `GET /metrics` (tanpa sesi, tidak dijangkau publik) + middleware metrik pada router produksi |
 | `api/internal/platform/httpx` | panic pada `Recoverer` juga dikirim ke Sentry |
-| `infra/observability` | Prometheus (scrape api/worker/node + 12 aturan alarm), Alertmanager (route + inhibit + email dari environment), Loki/Promtail, Grafana (provisioning + 2 dasbor), README runbook |
+| `infra/observability` | Prometheus (scrape api/worker/node + 12 aturan alarm), Alertmanager (route + inhibit + email dari environment), Loki/Promtail, Grafana (provisioning + 2 dasbor), **uji satuan alarm `prometheus/tests/grahita-alerts_test.yml`**, README runbook |
 | `infra/caddy` | `Caddyfile.prod` diperketat (CSP + Permissions-Policy + blokir `/metrics` di tepi), `Caddyfile.staging` baru (basic-auth, `X-Robots-Tag`, HSTS pendek) |
 | Compose | `docker-compose.observability.yml` baru; `docker-compose.staging.yml` baru; overlay prod/staging kini memakai image GHCR bertag commit |
-| CI/CD | `ci.yml` + gerbang migrasi kompatibel mundur, govulncheck jadi blocking, job Trivy (image + Dockerfile); `release.yml` baru: staging otomatis, produksi menunggu persetujuan reviewer GitHub Environment |
+| CI/CD | `ci.yml` + gerbang migrasi kompatibel mundur, govulncheck jadi blocking, job Trivy (image + Dockerfile), **job `observability`** (promtool: config + `--lint=all` + uji satuan alarm); `release.yml` baru: staging otomatis, produksi menunggu persetujuan reviewer GitHub Environment |
 | Skrip | `scripts/check-migration-kompatibel.sh`, `scripts/smoke-staging.sh`; `infra/deploy/deploy.sh` + README |
 
 ## Keputusan desain
@@ -83,6 +83,13 @@ nyata), serta batas yang **tidak** diklaim.
 12. **Compose produksi/staging memakai image bertag commit** (`IMAGE_PREFIX`/
     `IMAGE_TAG`) supaya yang berjalan di host adalah artefak yang sudah lolos
     CI, bukan hasil build di host.
+13. **Alarm disimulasikan dengan uji satuan `promtool test rules`, bukan hanya
+    di-lint.** `infra/observability/prometheus/tests/grahita-alerts_test.yml`
+    menyuntikkan deret waktu sintetis dan membuktikan tiap alarm MENYALA pada
+    keadaan buruk serta TIDAK menyala pada keadaan sehat (termasuk kontrol
+    negatif: satu kegagalan job tidak memicu alarm, disk 85% tidak memicu alarm
+    kritis, `for:` dihormati). Berkas uji sengaja di `tests/` karena Prometheus
+    memuat `rules/*.yml`; job CI `observability` menjalankannya setiap push/PR.
 
 ## Bukti verifikasi (perintah + hasil nyata)
 
@@ -215,6 +222,33 @@ Catatan: paket `internal/httpapi` dijalankan ulang sendiri pada HEAD (setelah
 urutan middleware metrik diubah) dengan hasil yang sama; angka di atas berasal
 dari suite penuh yang menyelesaikan seluruh paket berurutan.
 
+### 7. Verifikasi ulang pada HEAD (91ca217) → `BUKTI-VERIFIKASI-ULANG-HEAD.txt`
+
+Karena HEAD bergerak setelah commit F1-22 (kartu lain: F1-19/F1-20/F1-21/F2-23),
+seluruh gerbang dan bukti perilaku **dijalankan ulang pada HEAD 91ca217**, bukan
+sekadar mengutip bukti commit `5bbffb4`:
+
+- gerbang statis: `gofmt -l` kosong, `go vet`, `go build`, gerbang migrasi,
+  `check-secrets.sh`, `actionlint` (ci.yml + release.yml) — semuanya exit 0;
+- validasi konfigurasi: caddy (prod + staging), promtool (config + 12 aturan),
+  loki `-verify-config`, promtail `-dry-run`, `amtool` lewat `mulai.sh`
+  (menolak render tanpa kredensial SMTP = fail closed), `docker compose config -q`
+  (prod + staging + observability), uid Grafana;
+- replika staging dua host dibangun ulang dari `Caddyfile.staging` asli:
+  kedua host 200 dengan CSP/HSTS/nosniff/X-Frame-Options, tanpa basic-auth 401,
+  `/metrics` di tepi 404, dan `scripts/smoke-staging.sh` → **login → katalog →
+  draft → submit → verifikasi (done) lulus; unduh dokumen TERHALANG** (`SMOKE_EXIT=2`);
+- metrik API + worker hidup kembali (termasuk `grahita_jobs_completed_total
+  {kind="render_dokumen_pesanan",outcome="gagal"}` — risiko residu F1-18 terukur
+  dan dapat dialarmkan), label `route` tetap pola chi bukan id mentah;
+- **simulasi alarm** `promtool test rules infra/observability/prometheus/tests/
+  grahita-alerts_test.yml` → `SUCCESS` (11 kasus: alarm menyala pada keadaan
+  buruk, tidak menyala pada keadaan sehat), dijalankan pula oleh job CI
+  `observability` yang divalidasi `actionlint`;
+- suite backend penuh `-race -p 1` pada database `grahita_f122r3` (PostgreSQL
+  nyata) di HEAD: **`SUITE_EXIT=0`, 23 paket ok, 0 FAIL, 0 SKIP**
+  (`internal/httpapi` 706,7 s; log: `BUKTI-SUITE-BACKEND-HEAD.txt`).
+
 ## Batas yang TIDAK diklaim
 
 1. **Tidak ada deployment nyata.** Tidak ada VPS/DNS/kredensial di sesi ini, dan
@@ -231,10 +265,13 @@ dari suite penuh yang menyelesaikan seluruh paket berurutan.
 4. **PG18 asli tidak tersedia** (PG 16.15 + `scripts/pg-dev-shim.sql`), dan
    `golangci-lint` tidak terpasang di sesi ini — dua gerbang itu hanya
    dijalankan di CI.
-5. **Alarm belum "berbunyi" di Prometheus nyata.** Aturannya lolos
-   `promtool check rules --lint=all` dan metrik sumbernya terbukti hidup, tetapi
-   belum ada bukti alarm dikirim ke email (tidak ada SMTP/Prometheus nyata).
-   Prosedur simulasi alarm ada di `infra/observability/README.md`.
+5. **Alarm belum dikirim ke email.** Aturannya lolos
+   `promtool check rules --lint=all` **dan** dibuktikan MENYALA oleh uji satuan
+   `promtool test rules` (`prometheus/tests/grahita-alerts_test.yml`, dijalankan
+   juga oleh job CI `observability`), dan metrik sumbernya terbukti hidup —
+   tetapi pengiriman alarm ke email end-to-end baru terbukti saat Prometheus +
+   Alertmanager + SMTP nyata berjalan (T5). Prosedur simulasi manual pada host
+   ada di `infra/observability/README.md`.
 6. **Grafana/Loki/Alertmanager belum berjalan sebagai container.** Berkas
    konfigurasinya divalidasi dengan biner resmi (loki/promtail/promtool/amtool)
    dan `docker compose config`, tetapi render dasbor, penyimpanan Loki, dan

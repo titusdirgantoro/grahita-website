@@ -1,0 +1,163 @@
+VERIFIKASI ULANG F1-22 PADA HEAD (bukan sekadar mengutip bukti commit 5bbffb4)
+HEAD saat verifikasi: 91ca217 ("feat(f2-23): pengingat pembayaran C&C terjadwal")
+Mesin: sama (tanpa VPS/DNS; Docker daemon tidak dapat diakses).
+Tujuan: membuktikan gerbang, replika staging dua host, dan metrik masih hijau
+pada HEAD yang berisi commit-commit kartu lain setelah F1-22.
+
+=====================================================================
+1. GERBANG STATIS & VALIDASI KONFIGURASI
+=====================================================================
+$ git status --short            -> kosong (tree bersih)
+$ (cd api && gofmt -l .)        -> kosong, exit 0
+$ (cd api && go vet ./...)      -> exit 0
+$ (cd api && go build ./...)    -> exit 0
+$ ./scripts/check-migration-kompatibel.sh
+    Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.   exit 0
+$ ./scripts/check-secrets.sh
+    Tidak ada rahasia terdeteksi pada berkas yang dilacak.                     exit 0
+$ actionlint v1.7.7 .github/workflows/ci.yml .github/workflows/release.yml     exit 0
+$ caddy v2.11.7 validate --config infra/caddy/Caddyfile.prod --adapter caddyfile
+    Valid configuration                                                        exit 0
+$ STAGING_* terisi; caddy validate --config infra/caddy/Caddyfile.staging
+    Valid configuration                                                        exit 0
+    (tanpa STAGING_BASIC_AUTH_HASH caddy MENOLAK: "username and password
+     cannot be empty or missing" -> fail closed, bukan cacat konfigurasi)
+$ promtool check config infra/observability/prometheus/prometheus.yml
+    SUCCESS: valid prometheus config file syntax
+$ promtool check rules --lint=all infra/observability/prometheus/rules/grahita-alerts.yml
+    SUCCESS: 12 rules found
+$ loki v3.5.0 -verify-config -config.file=infra/observability/loki/loki-config.yml
+    exit 0
+$ promtail -dry-run -config.file=infra/observability/promtail/promtail-config.yml
+    konfigurasi terurai + 1 rujukan loki:3100; docker_sd gagal karena socket
+    Docker tidak dapat diakses (permission denied) = batas lingkungan
+$ bash infra/observability/alertmanager/mulai.sh   (tanpa kredensial SMTP)
+    Alertmanager tidak dapat dirender: variabel wajib belum diisi:
+    ALERT_SMTP_SMARTHOST ALERT_SMTP_FROM ALERT_SMTP_USER ALERT_SMTP_PASS
+    ALERT_EMAIL_TO                                                     exit 1 (fail closed)
+$ python3 scripts/cek-uid-grafana.py <repo>
+    uid sumber data ['loki','prometheus'] == uid dirujuk dasbor kedua JSON    exit 0
+$ docker compose config -q (POSTGRES_PASSWORD/GRAFANA_PASSWORD/SMTP_*/STAGING_* terisi)
+    prod exit 0 ; staging exit 0 ; observability exit 0
+    (tanpa variabel wajib compose MENOLAK dengan pesan "wajib diisi ..."
+     -> fail closed, bukan cacat compose)
+$ (cd api && go test -count=1 ./internal/platform/observability/ ./internal/arch/)
+    ok  .../internal/platform/observability   ok  .../internal/arch
+
+=====================================================================
+2. UJI ASAP DUA HOST PADA REPLIKA STAGING (dari Caddyfile.staging ASLI)
+=====================================================================
+Binary API dibangun ulang dari HEAD 91ca217; DB grahita_f122 dibuat ulang,
+dimigrasi (goose v5 + 8 migrasi River) dan di-seed; API :8088.
+Replika Caddy: `caddy adapt` atas infra/caddy/Caddyfile.staging, hanya nilai
+bergantung-lingkungan yang dipatch (listen :8443, upstream 127.0.0.1:8088,
+akar SPA dist, TLS ACME -> CA internal Caddy); rute/header/basic-auth/blokir
+/metrics tidak disentuh.
+
+Uji cepat tepi:
+  customer 200 | admin 200 | tanpa basic-auth 401 | /metrics via edge 404
+
+$ bash scripts/smoke-staging.sh  (CUSTOMER_BASE/ADMIN_BASE replika lokal)
+1. Kedua host menyajikan UI dan API same-origin
+  LULUS cabang: halaman SPA tersaji (200); CSP/HSTS/nosniff/X-Frame-Options ada
+  LULUS admin : halaman SPA tersaji (200); CSP/HSTS/nosniff/X-Frame-Options ada
+  LULUS kedua host: /api/v1/meta 200 (env staging)
+2. Login cabang + atribut cookie sesi
+  LULUS login cabang 200
+  LULUS cookie sesi memuat HttpOnly / SameSite=Lax / Secure
+  LULUS cookie sesi host-only (tanpa Domain)
+3. Katalog cabang 200 (produk uji dari harga cabang sesi)
+4. Draft dibuat (201, total 700000) -> submit 200 (submitted, nomor 2026-10-01)
+5. Isolasi sesi antar host: sesi cabang -> host admin 401 (tidak bocor)
+6. Login admin 200 (superadmin) -> verifikasi 200 (status done, hasil cocok)
+7. Daftar dokumen: KOSONG -> TERHALANG (butuh Gotenberg + object storage)
+HASIL: TERHALANG — login->submit->verify lulus; unduh dokumen BELUM terbukti
+SMOKE_EXIT=2   (bukan 0: unduh dokumen belum bisa dibuktikan di mesin ini)
+
+=====================================================================
+3. METRIK HIDUP (API dan WORKER) DI HEAD
+=====================================================================
+Kutipan nyata dari GET /metrics API setelah alur di atas:
+  grahita_http_requests_total{method="POST",route="/api/v1/orders",status="201"} 1
+  grahita_http_requests_total{method="POST",route="/api/v1/orders/{id}/submit",status="200"} 1
+  grahita_http_requests_total{method="POST",route="/api/v1/admin/orders/{id}/verify",status="200"} 1
+  grahita_http_requests_total{method="GET",route="/api/v1/auth/me",status="401"} 1
+  grahita_orders_current{status="done"} 1
+  grahita_disk_used_ratio{mount="/"} 0.7379...
+  grahita_build_info{env="staging",version="dev"} 1
+Label route memakai POLA chi ("/api/v1/orders/{id}/submit"), bukan id pesanan
+mentah -> tidak meledakkan jumlah deret waktu.
+
+Worker (WORKER_METRICS_ADDR=:9091, /healthz -> "ok"):
+  grahita_jobs_completed_total{kind="email_outbox_pindai",outcome="sukses"} 1
+  grahita_jobs_completed_total{kind="reminder_cnc",outcome="sukses"} 1
+  grahita_jobs_completed_total{kind="render_dokumen_pesanan",outcome="gagal"} 1
+  grahita_jobs_current{state="available"} 1
+Baris "render_dokumen_pesanan outcome=gagal" adalah bukti langsung bahwa risiko
+residu F1-18 (job render gagal karena Gotenberg/S3 belum terpasang) TERUKUR dan
+dapat dialarmkan (GrahitaJobSeringGagal / GrahitaJobGagalPermanen menyala pada
+keadaan itu). Tidak ada kredensial pada keluaran metrik.
+
+/readyz tetap jujur:
+  {"checks":{"database":"ok","gotenberg":"tidak dikonfigurasi","migrations":"ok
+   (versi 5)","smtp":"ok","storage":"tidak dikonfigurasi"},"status":"ready",
+   "version":"dev"}
+
+=====================================================================
+4. SUITE BACKEND PENUH (PostgreSQL nyata) DI HEAD
+=====================================================================
+Perintah: TEST_DATABASE_URL=postgres://...@127.0.0.1:5455/grahita_f122r3
+(+ scripts/pg-dev-shim.sql) ; cd api && go test -race -p 1 -count=1 -timeout 45m ./...
+
+mulai 11:14:17 — selesai 11:28:41 ; SUITE_EXIT=0
+Seluruh 23 paket beruji "ok", 0 FAIL, 0 SKIP (termasuk
+internal/httpapi 706.7s, internal/auth, internal/backup, internal/worker,
+internal/notification, internal/registration, internal/report).
+Log mentah: docs/design/f1-22/BUKTI-SUITE-BACKEND-HEAD.txt
+
+=====================================================================
+5. SIMULASI ALARM (promtool test rules) — TANPA Prometheus BERJALAN
+=====================================================================
+Berkas uji: infra/observability/prometheus/tests/grahita-alerts_test.yml
+(di tests/, bukan rules/, agar Prometheus tidak memuatnya sebagai aturan).
+
+$ promtool check rules --lint=all infra/observability/prometheus/rules/grahita-alerts.yml
+    SUCCESS: 12 rules found
+$ cd infra/observability/prometheus/tests && promtool test rules grahita-alerts_test.yml
+    SUCCESS   exit 0
+
+11 kasus: tiap alarm dibuktikan MENYALA pada keadaan buruk dan TIDAK menyala
+pada keadaan sehat (deret waktu sintetis, nilai label+anotasi dicocokkan persis):
+  - GrahitaAPILajuErrorTINGGI: sehat (0 5xx) tidak menyala; 10 5xx/menit dari
+    110 permintaan (9,091%) -> menyala
+  - GrahitaAPITidakTerjangkau: up{job="grahita-api"} == 0 -> menyala
+  - GrahitaJobSeringGagal: 10 kegagalan render/10 menit -> menyala;
+    kontrol negatif 1 kegagalan -> TIDAK menyala
+  - GrahitaJobGagalPermanen: jobs_current{state="discarded"}=1 -> TIDAK menyala
+    di menit 12 (belum lewat `for: 10m`), menyala di menit 25
+  - GrahitaEmailTertahan: email tertua 2000s (> 30 menit) -> menyala
+  - GrahitaCadanganGagal: backup_last_run_success=0 -> menyala
+  - GrahitaCadanganBasi: metrik cadangan tidak ada sama sekali -> menyala (absent)
+  - GrahitaDiskHampirPenuh: 85% -> menyala; GrahitaDiskKritis TIDAK menyala
+  - GrahitaDiskKritis: 95% -> menyala
+
+Job CI baru `observability` (.github/workflows/ci.yml) menjalankan ketiga
+perintah di atas pada setiap push/PR; ketiganya direproduksi lokal di sini
+(actionlint atas ci.yml + release.yml tetap exit 0). Ini menjawab kriteria
+kartu "monitor/alarm disimulasikan" dengan bukti yang dapat diulang, bukan
+sekadar "berkas aturan lolos lint".
+
+=====================================================================
+BATAS YANG TETAP TIDAK DIKLAIM (tidak berubah)
+=====================================================================
+- Tidak ada deployment nyata: tanpa DNS/VPS/kredensial, Docker daemon ditolak,
+  sehingga `docker compose up`, Caddy produksi, Prometheus/Grafana/Alertmanager
+  tidak pernah dijalankan sebagai container. Yang dibuktikan hanya validitas
+  konfigurasi (biner resmi) + perilaku tepi/API/DB pada replika lokal.
+- Unduh dokumen (Gotenberg + object storage) tidak terbukti; smoke exit 2.
+- Aturan alarm terbukti MENYALA pada simulasi promtool (bagian 5), tetapi
+  pengiriman email alarm end-to-end belum berbukti: butuh Prometheus +
+  Alertmanager + SMTP nyata (T5).
+- PG18 asli & golangci-lint tidak tersedia di sesi ini (PG16.15 + pg-dev-shim).
+- Gerbang lint CI masih MERAH karena 13 temuan di kode kartu lain -> kartu
+  tindak lanjut t_cf36bd3d.
