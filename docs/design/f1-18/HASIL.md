@@ -28,13 +28,15 @@ beserta seluruh efek sampingnya. Yang baru:
 | `api/internal/httpapi/handlers_verify.go` + router + `errors.go` + `deps.go` | endpoint `POST /api/v1/admin/orders/{id}/verify` |
 | `openapi/openapi.yaml` | path + skema `VerifyResult`/`VerifiedOrder` (+ dua kode error baru di enum `ErrorEnvelope`) |
 | `cmd/server/main.go` | wiring mode `api` (klien River insert-only) dan mode `worker` |
+| `web/apps/admin/src/pages/pesanan.tsx` | halaman detail admin `/pesanan/{id}`: kartu + tombol + modal **Verifikasi** (total pesanan, nominal terbaca, selisih, setujui/perlu review + alasan tertutup + catatan) — PRD §4.2 `AP-ORD-07` |
+| `web/apps/admin/src/pesanan.test.tsx` | uji perilaku vitest jalur setujui & perlu review, 409, klik ganda, gerbang status |
 | `docker-compose.yml`, `README.md` | worker memakai object storage yang sama (`S3_*`) + dokumentasi F1-18 |
 
 Endpoint:
 
 | Method | Path | Peran | Catatan |
 |---|---|---|---|
-| POST | `/api/v1/admin/orders/{id}/verify` | Manager & Superadmin (`admin.verify`) | `hasil: cocok` → Done; `hasil: perlu_review` → tetap Submitted |
+| POST | `/api/v1/admin/orders/{id}/verify` | Manager & Superadmin (`admin.verify`) — rute dijaga `requireCap(CapAdminVerify)` **dan** service memeriksa kapabilitas yang sama | `hasil: cocok` → Done; `hasil: perlu_review` → tetap Submitted |
 
 Tidak ada migrasi baru: seluruh kolom yang dibutuhkan sudah ada di
 Database.md §4.4–4.6 (`status`, `verif_status`, `done_at`, `alasan_review`,
@@ -185,6 +187,105 @@ Kriteria kartu → bukti:
 | efek samping tepat sekali | audit/timeline/log masing-masing 1 baris pada kedua uji transisi; pengulangan pekerjaan tidak menambah dokumen/email |
 | tidak ada pesanan Done tanpa pekerjaan dokumen | `TestPGVerifikasiTanpaPenjadwalDitolak` (repository tanpa `WithJobQueue` → `ErrQueueUnavailable`, pesanan tetap `submitted/belum`, tanpa log) |
 
+## Putaran 2 — perbaikan permintaan QA putaran 1
+
+QA putaran 1 (`qa-tiusapp`, dinilai pada salinan bersih `49c9b7a`) menyatakan
+sisi API **LULUS** dan meminta dua hal. Keduanya dikerjakan pada commit
+`a02103c` (hanya berkas milik F1-18; perubahan belum-commit F2-24 TIDAK ikut
+di-commit — lihat *Koordinasi* di bawah).
+
+1. **(Pemblokir) UI Verifikasi `AP-ORD-07` (Must) yang belum ada.**
+   `web/apps/admin/src/pages/pesanan.tsx` — halaman `/pesanan/{id}` kini punya:
+   - kartu **Verifikasi pembayaran** + tombol **Verifikasi**, hanya muncul saat
+     `status === "submitted"` dan peran ber-`admin.verify`
+     (`bolehVerifikasi()`, cermin peta kapabilitas `api/internal/auth/actor.go`);
+   - modal: total pesanan, **Nominal di bukti transfer** (boleh pemisah ribuan;
+     kosong ⇒ `total_terbaca` tidak dikirim), **selisih** dihitung live
+     (`nominal − total`, server tetap menghitung ulang dari kolom generated),
+     `Keputusan` (setujui → Done / tandai perlu review), `Alasan review`
+     (daftar TERTUTUP 5 nilai, hanya saat perlu review), dan `Catatan verifikasi`;
+   - `POST /api/v1/admin/orders/{id}/verify` lewat `@grahita/api-client` yang
+     otomatis mengirim header `X-CSRF-Token` dari cookie `grahita_csrf`;
+   - penanganan `200/400/403/409/503`: `ORDER_ALREADY_DONE` &
+     `ORDER_NOT_SUBMITTED` dijelaskan (`pesanVerifikasi`), dan pada
+     `ORDER_ALREADY_DONE` detail **disegarkan**; tombol dikunci
+     (`disabled` + label "Mengirim…") selama permintaan berjalan ⇒ klik ganda
+     tidak menghasilkan permintaan kedua; setelah sukses modal ditutup dan
+     detail (`muatUlang`) disegarkan supaya log verifikasi + dokumen baru muncul.
+2. **(Kecil) guard rute.** `api/internal/httpapi/router.go`: rute
+   `POST /admin/orders/{id}/verify` dipindah ke grup sendiri dengan
+   `requireCap(auth.CapAdminVerify)` (sebelumnya menumpang `CapAdminOrders`),
+   sehingga penjaga rute == penjaga domain (`payment.adminVerifikator`).
+   Komentar `handlers_verify.go` dan doc `payment/verify.go` yang menyebut
+   `admin.orders` diperbaiki menjadi `admin.verify`.
+
+Bukti putaran 2 (perintah + hasil nyata):
+
+```
+# commit yang diuji (hanya berkas F1-18)
+git rev-parse HEAD                       -> a02103cf8b0dd7e88925bc252b71bc0229318fb3
+
+# gerbang web (repo /home/hermes/projects/grahita-website/web)
+npm run typecheck                        -> exit 0 (4 workspace)
+npm test                                 -> api-client 8, ui 64, admin 60, customer 44 lulus; exit 0
+npm run build                            -> exit 0 (dua SPA ter-build)
+npx vitest run src/pesanan.test.tsx      -> 17/17 lulus (11 lama + 6 baru)
+
+# gerbang go pada SALINAN BERSIH a02103c (git archive, tanpa F2-24)
+gofmt -l .                               -> kosong
+go vet ./...                             -> exit 0
+go build ./...                           -> exit 0
+go test -race -p 1 -count=1 ./...        -> SUITE_EXIT=0, 20 paket ok, 0 FAIL (httpapi 363.1s)
+
+# gerbang integrasi pada commit GABUNGAN (a02103c + perubahan belum-commit F2-24)
+gofmt -l . / go vet ./... / go build ./...   -> kosong / exit 0 / exit 0
+go test -race -p 1 -count=1 ./internal/httpapi \
+  -run 'TestPGVerifikasi|TestPGCnC|TestPGPekerjaan' -v   -> 8/8 PASS (30.6s)
+go test ./internal/payment/... ./internal/notification/... \
+  ./internal/fulfillment/... ./internal/document/...     -> semua ok
+```
+
+6 uji vitest baru (di `src/pesanan.test.tsx`):
+
+| Uji | Yang dibuktikan |
+|---|---|
+| `menyetujui lewat modal…` | tombol tampil; modal menampilkan total + selisih; body = `{hasil:"cocok",total_terbaca:200000}`; modal tertutup; detail disegarkan |
+| `menandai perlu review…` | daftar alasan = 5 nilai tertutup; body = `{hasil:"perlu_review",alasan:"rekening_beda",catatan:"…"}` |
+| `tanpa nominal terbaca…` | body = `{hasil:"cocok"}` (tanpa `total_terbaca`) — bukti non-OCR / tunai C&C |
+| `tombol Verifikasi hanya muncul untuk pesanan Submitted` | gerbang status: tidak ada tombol saat `done` |
+| `409 ORDER_ALREADY_DONE dijelaskan…` | pesan dijelaskan + detail disegarkan |
+| `mencegah klik ganda…` | selama permintaan menggantung tombol `disabled` "Mengirim…" dan hanya 1 POST |
+
+Tangkapan layar (SPA nyata hasil `npm run build`, CSS/layout sebenarnya,
+**API tiruan dengan data contoh** — bukan DB nyata; dilampirkan ke kartu):
+
+- `f118-verifikasi-1440x900.png` — detail pesanan Submitted + kartu Verifikasi
+- `f118-modal-verifikasi-1440x900.png` — modal verifikasi
+- `f118-modal-perlu-review-1440x900.png` — keputusan "perlu review" + nominal
+  200.000 ⇒ selisih **−Rp 50.000** + daftar alasan tertutup
+- `f118-verifikasi-390x844.png`, `f118-modal-verifikasi-390x844.png` — mobile
+
+Harness tangkapan: `mock_ui.py` (server statis `dist/` + `/api/v1` contoh) di
+workspace scratch pekerja; tidak ada berkas uji yang ditambahkan ke repo.
+
+### Koordinasi repo bersama (F2-24 sedang berjalan)
+
+Saat putaran ini, pohon kerja `/home/hermes/projects/grahita-website` TIDAK
+bersih: kartu **F2-24** (`t_0e8a5872`, running) menulis perubahan belum-commit
+(`handlers_reports.go`, `router_reports_test.go`, `report/`, migrasi
+`0005_report_jobs.sql`, `openapi.yaml`, `worker.go`, `jobs.go`, `main.go`,
+`deps.go`, `errors.go`, `models.go`, `router.go`). Tindakan yang diambil:
+
+- perubahan F1-18 **dipisah** ke commit sendiri (`a02103c`); router.go yang
+  di-commit memuat HANYA dua hunk F1-18 (`git diff --cached | grep -c '^@@'` = 2),
+  bukan hunk `reports/*` milik F2-24;
+- berkas F2-24 **tidak** di-stash/reset/ditimpa: versi pohon kerja (yang memuat
+  perubahan F2-24) disalin ke scratch lebih dulu dan **dipulihkan apa adanya**
+  sesudah commit — sha256 pohon kerja sebelum & sesudah identik
+  (`e20c32b…`);
+- gerbang integrasi dijalankan pada commit gabungan (pohon kerja) **dan** pada
+  arsip bersih `a02103c`, agar kegagalan bisa diatribusikan per kartu.
+
 ## Batas bukti (tidak diklaim)
 
 - **Gotenberg dan S3/MinIO nyata tidak dijalankan.** Uji integrasi memakai
@@ -193,10 +294,11 @@ Kriteria kartu → bukti:
   dibuktikan di kartu ini (render + lampiran sudah diuji F1-17/F1-16).
 - **PG18 asli + `golangci-lint`** tidak tersedia di sesi ini (PG16.15 +
   shim `uuidv7()`, gate lint tidak direproduksi) — sama dengan kartu lain.
-- **UI belum dibuat.** Tombol **Verifikasi** (PRD `AP-ORD-07`) di halaman detail
-  pesanan admin belum ada; kartu ini menyediakan kontrak API-nya
-  (endpoint + skema OpenAPI + angka total/nominal/selisih di respons dan
-  `AdminOrderDetail`). Wiring UI adalah kartu halaman pesanan/dashboard.
+- **UI kini ADA** (putaran 2): tombol + modal **Verifikasi** di halaman detail
+  pesanan admin (`web/apps/admin/src/pages/pesanan.tsx`) memakai endpoint ini.
+  Tangkapan layarnya memakai **API tiruan dengan data contoh** (bukan DB nyata);
+  jalur klik-ke-server yang sesungguhnya dibuktikan uji vitest (POST + body) dan
+  uji integrasi PostgreSQL di sisi server.
 - **Kirim email end-to-end ke SMTP nyata** tidak dijalankan di sini (SMTP diuji
   di F1-16; lampiran dokumen pada binary sungguhan menunggu storage S3 F1-22).
 - **`river_job` pada skema `public`** belum ada di database uji, jadi
