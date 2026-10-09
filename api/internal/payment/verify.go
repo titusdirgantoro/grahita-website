@@ -13,7 +13,7 @@ package payment
 //
 // Keputusan yang diambil di lapisan ini:
 //
-//   - hanya staf Pusat ber-kapabilitas `admin.orders` (Manager maupun
+//   - hanya staf Pusat ber-kapabilitas `admin.verify` (Manager maupun
 //     Superadmin, PRD §2.1) yang boleh memverifikasi; akun cabang ditolak;
 //   - `cocok` berarti MENYETUJUI: pesanan berpindah ke Done. `perlu_review`
 //     berarti menandai sub-status verifikasi dan alasan WAJIB diisi dari daftar

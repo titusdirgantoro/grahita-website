@@ -21,9 +21,11 @@ import {
   Textarea,
   useToast,
   type BadgeTone,
+  type Role,
 } from "@grahita/ui";
 
 import { useApi } from "../useApi";
+import { useSesi } from "../session";
 import { formatWaktu } from "./pengguna";
 import styles from "./admin-pages.module.css";
 
@@ -221,6 +223,39 @@ const LABEL_ALASAN: Record<string, string> = {
   rekening_beda: "Rekening tidak sesuai",
   lainnya: "Lainnya",
 };
+
+/**
+ * PILIHAN_ALASAN adalah daftar tertutup alasan review (PRD §4.2 AP-ORD-07,
+ * §7.1). Urutannya sama dengan enum review_reason di server; klien tidak
+ * pernah mengirim alasan di luar daftar ini.
+ */
+const PILIHAN_ALASAN = ["kurang_bayar", "lebih_bayar", "tidak_terbaca", "rekening_beda", "lainnya"] as const;
+
+/** Keputusan verifikasi: `cocok` menyetujui (→ Done), `perlu_review` menandai. */
+type KeputusanVerifikasi = "cocok" | "perlu_review";
+
+/**
+ * bolehVerifikasi meniru peta kapabilitas server (api/internal/auth/actor.go):
+ * `admin.verify` dimiliki Manager maupun Superadmin. Portal admin memang hanya
+ * dihuni kedua peran itu, tetapi penjaga ini tetap ada supaya tombol verifikasi
+ * tidak pernah muncul untuk peran yang tidak berhak — API tetap otoritas akhir.
+ */
+export function bolehVerifikasi(peran: Role): boolean {
+  return peran === "manager" || peran === "superadmin";
+}
+
+/**
+ * parseNominal membaca nominal yang diketik admin (boleh memakai titik/spasi
+ * pemisah ribuan). Kosong berarti tidak ada nominal terbaca (dikirim sebagai
+ * null), bukan nol — selisih lalu dihitung server dari 0 − total.
+ */
+export function parseNominal(nilai: string): number | null {
+  const digit = nilai.replace(/[^\d]/g, "");
+  if (digit === "") return null;
+  const n = Number(digit);
+  return Number.isFinite(n) ? n : null;
+}
+
 const LABEL_DOKUMEN: Record<string, string> = {
   invoice_pdf: "Invoice",
   surat_jalan_pdf: "Surat jalan (PDF)",
@@ -279,6 +314,25 @@ export function queryPesanan(f: FilterPesanan): string {
 
 function pesanGalat(err: unknown): string {
   return err instanceof ApiClientError ? err.message : "Terjadi kesalahan. Coba lagi.";
+}
+
+/**
+ * pesanVerifikasi menerjemahkan galat POST /verify (F1-18) ke bahasa manusia.
+ * Kode 409 bermakna pesanannya sudah berpindah keadaan di sisi server —
+ * bukan kesalahan admin — sehingga jawabannya menjelaskan, bukan menuduh.
+ */
+function pesanVerifikasi(err: unknown): string {
+  if (err instanceof ApiClientError) {
+    switch (err.code) {
+      case "ORDER_ALREADY_DONE":
+        return "Pesanan ini sudah selesai diverifikasi. Tampilan dimuat ulang.";
+      case "ORDER_NOT_SUBMITTED":
+        return "Verifikasi hanya untuk pesanan yang sudah dikirim.";
+      default:
+        return err.message;
+    }
+  }
+  return "Terjadi kesalahan. Coba lagi.";
 }
 
 /**
@@ -584,6 +638,17 @@ export function PesananDetailAdminPage() {
   const [sibukEmail, setSibukEmail] = useState<string | null>(null);
   const [sibukDokumen, setSibukDokumen] = useState(false);
   const { tampilkan } = useToast();
+  const { peran } = useSesi();
+  const bolehVerif = bolehVerifikasi(peran);
+
+  // Keadaan modal verifikasi pembayaran manual (F1-18, PRD §4.2 AP-ORD-07).
+  const [verifBuka, setVerifBuka] = useState(false);
+  const [keputusanVerif, setKeputusanVerif] = useState<KeputusanVerifikasi>("cocok");
+  const [nominalVerif, setNominalVerif] = useState("");
+  const [alasanVerif, setAlasanVerif] = useState<string>(PILIHAN_ALASAN[0]);
+  const [catatanVerif, setCatatanVerif] = useState("");
+  const [sibukVerif, setSibukVerif] = useState(false);
+  const [galatVerif, setGalatVerif] = useState<string | null>(null);
 
   // Catatan awal dari server hanya dipakai sampai pengguna mulai mengetik,
   // supaya muat ulang tidak menimpa ketikan yang belum disimpan.
@@ -674,6 +739,57 @@ export function PesananDetailAdminPage() {
     }
   }, [id, muatUlang, tampilkan]);
 
+  /** bukaVerifikasi menyiapkan modal verifikasi dari keadaan bersih. */
+  const bukaVerifikasi = useCallback(() => {
+    setKeputusanVerif("cocok");
+    setNominalVerif("");
+    setAlasanVerif(PILIHAN_ALASAN[0]);
+    setCatatanVerif("");
+    setGalatVerif(null);
+    setVerifBuka(true);
+  }, []);
+
+  /**
+   * kirimVerifikasi mengirim keputusan verifikasi MANUAL ke
+   * POST /api/v1/admin/orders/{id}/verify (PRD §4.2 AP-ORD-07, §5).
+   *
+   * `cocok` menyetujui → pesanan menjadi Done; dokumen + email lahir dari
+   * worker setelahnya, jadi halaman ini cukup menyegarkan detail. `perlu_review`
+   * hanya menandai sub-status verifikasi dan WAJIB punya alasan tertutup;
+   * pesanan tetap Submitted.
+   */
+  const kirimVerifikasi = useCallback(async () => {
+    if (keputusanVerif === "perlu_review" && alasanVerif === "") {
+      setGalatVerif("Pilih alasan review terlebih dahulu.");
+      return;
+    }
+    setSibukVerif(true);
+    setGalatVerif(null);
+    const terbaca = parseNominal(nominalVerif);
+    try {
+      await api.post(`/admin/orders/${id}/verify`, {
+        hasil: keputusanVerif,
+        ...(terbaca !== null ? { total_terbaca: terbaca } : {}),
+        ...(keputusanVerif === "perlu_review" ? { alasan: alasanVerif } : {}),
+        ...(catatanVerif.trim() !== "" ? { catatan: catatanVerif.trim() } : {}),
+      });
+      setVerifBuka(false);
+      muatUlang();
+      tampilkan(
+        keputusanVerif === "cocok"
+          ? "Pembayaran diverifikasi. Invoice & surat jalan sedang dibuat."
+          : "Pesanan ditandai perlu review.",
+      );
+    } catch (err) {
+      setGalatVerif(pesanVerifikasi(err));
+      // Verifikasi paralel sudah menyelesaikan pesanan: segarkan supaya log
+      // dan dokumen terbaru tampil di halaman ini.
+      if (err instanceof ApiClientError && err.code === "ORDER_ALREADY_DONE") muatUlang();
+    } finally {
+      setSibukVerif(false);
+    }
+  }, [id, keputusanVerif, alasanVerif, nominalVerif, catatanVerif, muatUlang, tampilkan]);
+
   const timeline = useMemo(() => data?.timeline ?? [], [data?.timeline]);
 
   if (memuat && !data) {
@@ -701,6 +817,11 @@ export function PesananDetailAdminPage() {
       </>
     );
   }
+
+  // Selisih ditampilkan live dari angka yang diketik admin; server tetap
+  // menghitung ulang dari kolom generated (angka klien tidak dipercaya).
+  const nominalTerbaca = parseNominal(nominalVerif);
+  const selisihVerif = (nominalTerbaca ?? 0) - data.total;
 
   return (
     <>
@@ -901,6 +1022,30 @@ export function PesananDetailAdminPage() {
         </div>
 
         <div className={styles.stack}>
+          {data.status === "submitted" && bolehVerif ? (
+            <Card>
+              <CardHead title="Verifikasi pembayaran" />
+              <p className="muted small" style={{ marginBottom: 8 }}>
+                Setelah disetujui, pesanan menjadi Selesai dan invoice &amp; surat jalan dibuat lalu
+                dikirim otomatis.
+              </p>
+              <div className={styles.row} style={{ justifyContent: "space-between" }}>
+                <span className="muted small">Total pesanan</span>
+                <strong className="tabular">{rupiah.format(data.total)}</strong>
+              </div>
+              <Button
+                variant="primary"
+                icon="check-circle"
+                block
+                onClick={bukaVerifikasi}
+                disabled={sibukVerif}
+                data-uji="buka-verifikasi"
+              >
+                Verifikasi
+              </Button>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHead title="Catatan internal" />
             <p className="muted small" style={{ marginBottom: 8 }}>
@@ -1006,6 +1151,106 @@ export function PesananDetailAdminPage() {
             </p>
           )
         ) : null}
+      </Modal>
+
+      <Modal
+        open={verifBuka}
+        title="Verifikasi pembayaran"
+        onClose={() => {
+          if (!sibukVerif) setVerifBuka(false);
+        }}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setVerifBuka(false)} disabled={sibukVerif}>
+              Batal
+            </Button>
+            <Button
+              variant={keputusanVerif === "cocok" ? "primary" : "secondary"}
+              onClick={() => void kirimVerifikasi()}
+              disabled={sibukVerif}
+              data-uji="kirim-verifikasi"
+            >
+              {sibukVerif
+                ? "Mengirim…"
+                : keputusanVerif === "cocok"
+                  ? "Setujui & selesaikan"
+                  : "Tandai perlu review"}
+            </Button>
+          </>
+        }
+      >
+        <p className="muted small">
+          {data.nomor ? `Pesanan ${data.nomor} · ` : ""}
+          {data.branch_nama}
+        </p>
+        <div className={styles.row} style={{ justifyContent: "space-between", margin: "8px 0" }}>
+          <span className="muted small">Total pesanan</span>
+          <strong className="tabular" data-uji="total-verifikasi">
+            {rupiah.format(data.total)}
+          </strong>
+        </div>
+        <Field
+          label="Keputusan"
+          htmlFor="verif-keputusan"
+          hint="Setujui menyelesaikan pesanan dan mengirim invoice/surat jalan. Perlu review menandai sub-status; pesanan tetap Submitted."
+        >
+          <Select
+            id="verif-keputusan"
+            value={keputusanVerif}
+            onChange={(e) => setKeputusanVerif(e.target.value as KeputusanVerifikasi)}
+          >
+            <option value="cocok">Setujui (pesanan selesai)</option>
+            <option value="perlu_review">Tandai perlu review</option>
+          </Select>
+        </Field>
+        <Field
+          label="Nominal di bukti transfer"
+          htmlFor="verif-nominal"
+          hint="Kosongkan bila bukti tidak terbaca atau pembayaran tunai C&C. Selisih = nominal terbaca − total pesanan."
+        >
+          <Input
+            id="verif-nominal"
+            inputMode="numeric"
+            placeholder="Contoh: 200000"
+            value={nominalVerif}
+            onChange={(e) => setNominalVerif(e.target.value)}
+          />
+        </Field>
+        <div className={styles.row} style={{ justifyContent: "space-between", margin: "4px 0 12px" }}>
+          <span className="muted small">Selisih</span>
+          <span
+            className="tabular"
+            data-uji="selisih-verifikasi"
+            style={selisihVerif === 0 ? undefined : { color: "var(--danger-fg)" }}
+          >
+            {nominalTerbaca === null ? "—" : rupiah.format(selisihVerif)}
+          </span>
+        </div>
+        {keputusanVerif === "perlu_review" ? (
+          <Field label="Alasan review" htmlFor="verif-alasan">
+            <Select id="verif-alasan" value={alasanVerif} onChange={(e) => setAlasanVerif(e.target.value)}>
+              {PILIHAN_ALASAN.map((a) => (
+                <option key={a} value={a}>
+                  {LABEL_ALASAN[a]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        ) : null}
+        <Field
+          label="Catatan verifikasi"
+          htmlFor="verif-catatan"
+          hint="Opsional. Ikut tercatat di log verifikasi dan timeline pesanan."
+        >
+          <Textarea
+            id="verif-catatan"
+            maxLength={2000}
+            placeholder="Contoh: selisih ditutup transfer susulan"
+            value={catatanVerif}
+            onChange={(e) => setCatatanVerif(e.target.value)}
+          />
+        </Field>
+        {galatVerif ? <Notice tone="danger">{galatVerif}</Notice> : null}
       </Modal>
     </>
   );

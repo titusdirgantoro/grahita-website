@@ -39,8 +39,10 @@ type verifyRequest struct {
 // (Submitted → Done, lengkap dengan dokumen + email) atau menandainya perlu
 // review dengan alasan (pesanan TETAP Submitted).
 //
-// Otorisasi ada di layer service (CapAdminOrders: Manager maupun Superadmin);
-// akun cabang ditolak, dan id yang bukan UUID dijawab 404.
+// Otorisasi ditegakkan DUA lapis dengan kapabilitas yang sama: rute dijaga
+// requireCap(CapAdminVerify) dan layer service memeriksa `admin.verify`
+// (Manager maupun Superadmin, PRD §2.1); akun cabang ditolak, dan id yang
+// bukan UUID dijawab 404.
 func (a *API) adminOrderVerify(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Verify == nil {
 		return verifyUnavailable()

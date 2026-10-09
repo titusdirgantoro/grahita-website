@@ -96,11 +96,15 @@ interface StubUji {
   posts: { url: string; body: unknown }[];
 }
 
-/** stubPesanan memasang fetch semu untuk seluruh endpoint F1-15. */
+/** stubPesanan memasang fetch semu untuk seluruh endpoint F1-15/F1-18. */
 function stubPesanan(opsi?: {
   total?: number;
   detail?: PesananDetail;
   grup?: FilterPesanan["grup"];
+  /** Galat yang dikembalikan POST /verify (mis. 409 ORDER_ALREADY_DONE). */
+  verifyGagal?: { status: number; code: string; message: string };
+  /** Ditunggu sebelum POST /verify menjawab — untuk menguji keadaan sibuk. */
+  verifyTertahan?: Promise<unknown>;
 }): StubUji {
   const panggilan: string[] = [];
   const posts: { url: string; body: unknown }[] = [];
@@ -121,6 +125,36 @@ function stubPesanan(opsi?: {
         posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
         if (url.includes("/notes")) return json({ data: opsi?.detail ?? DETAIL_UJI });
         if (url.includes("/resend")) return json({ data: { id: "e2", jenis: "invoice_cabang", status: "queued" } });
+        if (url.endsWith(`/admin/orders/${DETAIL_ID}/verify`)) {
+          if (opsi?.verifyTertahan) await opsi.verifyTertahan;
+          if (opsi?.verifyGagal) {
+            return json({ error: { code: opsi.verifyGagal.code, message: opsi.verifyGagal.message } }, opsi.verifyGagal.status);
+          }
+          return json({
+            data: {
+              order: {
+                id: DETAIL_ID,
+                nomor: "2026-10-01",
+                versi: 0,
+                branch_id: "b1",
+                status: "done",
+                verif_status: "cocok",
+                total: 200000,
+              },
+              verifikasi: {
+                id: "v1",
+                order_id: DETAIL_ID,
+                metode: "manual",
+                total_pesanan: 200000,
+                total_terbaca: 200000,
+                selisih: 0,
+                hasil: "cocok",
+                admin_nama: "Budi",
+                created_at: "2026-10-01T05:00:00Z",
+              },
+            },
+          });
+        }
         return json({ data: {} }, 201);
       }
       if (url.includes("/admin/branches")) {
@@ -345,5 +379,141 @@ describe("Riwayat pemesanan admin (F1-15)", () => {
     await waitFor(() => {
       expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(1);
     });
+  });
+});
+
+describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () => {
+  const URL_VERIFY = `/api/v1/admin/orders/${DETAIL_ID}/verify`;
+
+  it("menyetujui lewat modal: total, nominal terbaca + selisih, lalu POST /verify dan menyegarkan detail", async () => {
+    const { posts, panggilan } = stubPesanan();
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    const dialog = await screen.findByRole("dialog");
+
+    // Total pesanan tampil di modal; selisih kosong sebelum nominal diisi.
+    // NBSP dari Intl dinormalkan agar perbandingan teks stabil.
+    const teksSelisih = () =>
+      (dialog.querySelector('[data-uji="selisih-verifikasi"]')?.textContent ?? "").replace(/\u00a0/g, " ");
+    expect(within(dialog).getByText("Rp 200.000")).toBeDefined();
+    expect(teksSelisih()).toContain("—");
+
+    // Nominal boleh memakai pemisah ribuan; yang dikirim tetap angka.
+    fireEvent.change(screen.getByLabelText("Nominal di bukti transfer"), { target: { value: "200.000" } });
+    expect(teksSelisih()).toContain("Rp 0");
+
+    const sebelum = panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length;
+    fireEvent.click(screen.getByRole("button", { name: "Setujui & selesaikan" }));
+
+    await waitFor(() => {
+      expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true);
+    });
+    const kirim = posts.find((p) => p.url === URL_VERIFY);
+    expect(kirim?.body).toEqual({ hasil: "cocok", total_terbaca: 200000 });
+
+    // Modal tertutup dan detail disegarkan supaya log verifikasi + dokumen baru terlihat.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => {
+      expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
+    });
+  });
+
+  it("menandai perlu review mengirim alasan tertutup + catatan (pesanan tidak diselesaikan)", async () => {
+    const { posts } = stubPesanan();
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    await screen.findByRole("dialog");
+
+    fireEvent.change(screen.getByLabelText("Keputusan"), { target: { value: "perlu_review" } });
+
+    const alasan = await screen.findByLabelText("Alasan review");
+    expect(Array.from(alasan.querySelectorAll("option")).map((o) => (o as HTMLOptionElement).value)).toEqual([
+      "kurang_bayar",
+      "lebih_bayar",
+      "tidak_terbaca",
+      "rekening_beda",
+      "lainnya",
+    ]);
+    fireEvent.change(alasan, { target: { value: "rekening_beda" } });
+    fireEvent.change(screen.getByLabelText("Catatan verifikasi"), {
+      target: { value: "transfer dari rekening lain" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Tandai perlu review" }));
+
+    await waitFor(() => {
+      expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true);
+    });
+    expect(posts.find((p) => p.url === URL_VERIFY)?.body).toEqual({
+      hasil: "perlu_review",
+      alasan: "rekening_beda",
+      catatan: "transfer dari rekening lain",
+    });
+  });
+
+  it("tanpa nominal terbaca hanya mengirim hasil (bukti non-OCR / tunai C&C)", async () => {
+    const { posts } = stubPesanan();
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Setujui & selesaikan" }));
+
+    await waitFor(() => {
+      expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true);
+    });
+    expect(posts.find((p) => p.url === URL_VERIFY)?.body).toEqual({ hasil: "cocok" });
+  });
+
+  it("tombol Verifikasi hanya muncul untuk pesanan Submitted", async () => {
+    stubPesanan({ detail: { ...DETAIL_UJI, status: "done" } });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    expect(screen.queryByRole("button", { name: "Verifikasi" })).toBeNull();
+  });
+
+  it("409 ORDER_ALREADY_DONE dijelaskan dan detail disegarkan (klik/verifikasi ganda)", async () => {
+    const { panggilan } = stubPesanan({
+      verifyGagal: { status: 409, code: "ORDER_ALREADY_DONE", message: "Pesanan ini sudah selesai diverifikasi." },
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    await screen.findByRole("dialog");
+    const sebelum = panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length;
+    fireEvent.click(screen.getByRole("button", { name: "Setujui & selesaikan" }));
+
+    expect(await screen.findByText(/sudah selesai diverifikasi\. Tampilan dimuat ulang\./)).toBeDefined();
+    await waitFor(() => {
+      expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
+    });
+  });
+
+  it("mencegah klik ganda: tombol terkunci selama permintaan berjalan", async () => {
+    let lepaskan: () => void = () => undefined;
+    const tertahan = new Promise<void>((resolve) => {
+      lepaskan = resolve;
+    });
+    const { posts } = stubPesanan({ verifyTertahan: tertahan });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Setujui & selesaikan" }));
+
+    const menunggu = await screen.findByRole("button", { name: "Mengirim…" });
+    expect(menunggu.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(menunggu);
+    expect(posts.filter((p) => p.url === URL_VERIFY).length).toBe(1);
+
+    lepaskan();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });
