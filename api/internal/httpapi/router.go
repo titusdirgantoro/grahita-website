@@ -187,6 +187,16 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/bank-accounts", a.adapt(a.adminBankAccountCreate))
 					r.Put("/bank-accounts/{id}", a.adapt(a.adminBankAccountUpdate))
 				})
+				// Reporting & ekspor Excel: khusus Superadmin (PRD §2.1, §4.7).
+				// Manager ditolak 403 di sini (dan lagi di layer service), bukan
+				// hanya disembunyikan menunya di UI.
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminReports))
+					r.Get("/reports/order-lines", a.adapt(a.adminReportOrderLines))
+					r.Post("/reports/export", a.adapt(a.adminReportExport))
+					r.Get("/reports/export/{id}", a.adapt(a.adminReportExportStatus))
+					r.Get("/reports/export/{id}/download", a.adapt(a.adminReportExportDownload))
+				})
 			})
 		})
 	})

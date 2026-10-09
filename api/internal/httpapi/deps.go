@@ -29,6 +29,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/registration"
+	"github.com/grahita/portal/api/internal/report"
 	"github.com/grahita/portal/api/internal/settings"
 	"github.com/grahita/portal/api/internal/users"
 )
@@ -81,6 +82,11 @@ type Deps struct {
 	// Documents melayani dokumen pesanan: render Invoice PDF + Surat Jalan
 	// XLSX/PDF, daftar, dan tautan unduh berumur pendek (F1-17).
 	Documents *document.Service
+
+	// Reports melayani laporan order line (paginasi) dan ekspor XLSX
+	// asinkron: permintaan job, status, dan tautan unduh hasilnya (F2-24,
+	// PRD §4.7). Khusus Superadmin.
+	Reports *report.Service
 
 	// Registration melayani pendaftaran akun cabang dua langkah lewat token
 	// registrasi sekali pakai (F1-07).

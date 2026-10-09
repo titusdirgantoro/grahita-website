@@ -21,6 +21,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/jobs"
+	"github.com/grahita/portal/api/internal/report"
 )
 
 // PingArgs adalah job contoh yang dipakai untuk memverifikasi rantai
@@ -113,6 +114,52 @@ type ServerSelesai interface {
 	PesananSelesai(ctx context.Context, orderID string) (fulfillment.Hasil, error)
 }
 
+// Laporan adalah pelaksana ekspor XLSX (report.Service, kartu F2-24).
+type Laporan interface {
+	Jalankan(ctx context.Context, jobID string) (report.Job, error)
+}
+
+// ReportXLSXWorker menjalankan job "report_xlsx": menulis satu laporan XLSX
+// bertahap (streaming) lalu menyimpannya ke object storage (PRD §4.7 AP-REP-04).
+//
+// Seluruh keadaan pekerjaan ada di tabel `report_jobs`, jadi job yang terlewat
+// atau tergandakan tidak pernah menghasilkan berkas ganda: pekerjaan yang sudah
+// selesai dilewati tanpa efek samping.
+type ReportXLSXWorker struct {
+	river.WorkerDefaults[jobs.ReportXLSXArgs]
+	laporan Laporan
+}
+
+// NewReportXLSXWorker membuat worker ekspor laporan.
+func NewReportXLSXWorker(l Laporan) *ReportXLSXWorker {
+	return &ReportXLSXWorker{laporan: l}
+}
+
+// Kind adalah Kind job di tabel River.
+func (ReportXLSXWorker) Kind() string { return jobs.KindReportXLSX }
+
+// Timeout memberi ekspor besar ruang lebih dari batas bawaan klien (2 menit):
+// 50.000 baris tetap harus selesai tanpa dipotong di tengah jalan.
+func (w *ReportXLSXWorker) Timeout(*river.Job[jobs.ReportXLSXArgs]) time.Duration {
+	return 30 * time.Minute
+}
+
+// Work menjalankan satu pekerjaan ekspor.
+func (w *ReportXLSXWorker) Work(ctx context.Context, job *river.Job[jobs.ReportXLSXArgs]) error {
+	if w.laporan == nil {
+		// Tanpa service, pekerjaan tidak bisa dikerjakan — jangan dilepas
+		// begitu saja (Superadmin akan menunggu berkas yang tak pernah ada).
+		return fmt.Errorf("job %s: layanan laporan belum terpasang", w.Kind())
+	}
+	hasil, err := w.laporan.Jalankan(ctx, job.Args.JobID)
+	if err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "ekspor laporan selesai",
+		"job_id", hasil.ID, "jenis", hasil.Jenis, "baris", hasil.JumlahBaris)
+	return nil
+}
+
 // RenderDokumenWorker menjalankan job "render_dokumen_pesanan": memastikan
 // Invoice/Surat Jalan pesanan ada, lalu mengantre email dokumennya
 // (SystemDesign.md §4.4). Job ini dititipkan transaksi verifikasi (F1-18),
@@ -165,7 +212,10 @@ type Client struct {
 // service cadangan (BACKUP_TARGET kosong) tidak ada job cadangan yang
 // dijadwalkan sama sekali. selesai boleh nil (mis. mode lokal tanpa dokumen);
 // bila diisi, worker menjalankan job render dokumen + antre email (F1-18).
-func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service, selesai ServerSelesai) (*Client, error) {
+// laporan boleh nil: tanpa service laporan, job ekspor XLSX tidak didaftarkan
+// (permintaan ekspor sudah ditolak lebih dulu di API — tidak ada pekerjaan
+// menggantung).
+func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk *backup.Service, selesai ServerSelesai, laporan Laporan) (*Client, error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &PingWorker{})
 	if notif != nil {
@@ -176,6 +226,9 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 	}
 	if selesai != nil {
 		river.AddWorker(workers, NewRenderDokumenWorker(selesai))
+	}
+	if laporan != nil {
+		river.AddWorker(workers, NewReportXLSXWorker(laporan))
 	}
 
 	queues := map[string]river.QueueConfig{}

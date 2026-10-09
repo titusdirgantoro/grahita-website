@@ -15,6 +15,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/registration"
+	"github.com/grahita/portal/api/internal/report"
 	"github.com/grahita/portal/api/internal/settings"
 	"github.com/grahita/portal/api/internal/users"
 )
@@ -212,8 +213,24 @@ func mapDomainErr(err error) error {
 			"Lampiran dokumen tidak dapat dibaca. Hubungi admin Pusat.")
 	case errors.Is(err, notification.ErrInvalidData):
 		return apierr.Validation("Data email tidak valid.", map[string]string{"email": err.Error()})
-	// Dokumen pesanan (F1-17). Dokumen hanya lahir untuk pesanan Done, dan
-	// ketiadaan dokumen cabang lain dijawab sama seperti pesanan yang tidak ada.
+	// Laporan & ekspor XLSX (F2-24). Otorisasi Superadmin ditegakkan router dan
+	// service; unduhan hasil hanya boleh dari pekerjaan yang sudah selesai.
+	case errors.Is(err, report.ErrForbidden):
+		return apierr.Forbidden("Anda tidak memiliki akses ke laporan ini.")
+	case errors.Is(err, report.ErrNotFound):
+		return apierr.NotFound("Laporan atau pekerjaan ekspor yang diminta tidak ditemukan.")
+	case errors.Is(err, report.ErrFilterInvalid):
+		return apierr.Validation("Filter laporan tidak valid.",
+			map[string]string{"filter": err.Error()})
+	case errors.Is(err, report.ErrJobNotReady):
+		return apierr.Conflict("REPORT_NOT_READY",
+			"Hasil ekspor belum selesai. Tunggu sampai pekerjaan berstatus selesai sebelum mengunduh.")
+	case errors.Is(err, report.ErrStorageUnavailable), errors.Is(err, report.ErrQueueUnavailable):
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
+			"Layanan ekspor laporan belum siap sehingga permintaan tidak dapat diproses.")
+	case errors.Is(err, report.ErrDataInvalid):
+		return apierr.New(http.StatusUnprocessableEntity, "REPORT_DATA_INVALID",
+			"Data laporan tidak konsisten sehingga ekspor tidak dapat dilanjutkan.")
 	case errors.Is(err, document.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke dokumen pesanan ini.")
 	case errors.Is(err, document.ErrNotFound):

@@ -15,6 +15,8 @@ import (
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/platform/storage"
+	"github.com/grahita/portal/api/internal/report"
 	"github.com/grahita/portal/api/internal/settings"
 )
 
@@ -127,6 +129,7 @@ func newTestServer(t *testing.T, health fakeHealth) (*httptest.Server, *auth.Mem
 		Auth:     svc,
 		Settings: settings.NewService(&fakeSettingsRepo{values: map[string]string{"biaya_packaging": "3000"}}),
 		Catalog:  catalog.NewService(fakeCatalogRepo{Memory: catalog.NewMemory()}),
+		Reports:  report.NewService(report.NewMemory(), storage.NewMemory("/files")),
 	})
 
 	srv := httptest.NewServer(router)

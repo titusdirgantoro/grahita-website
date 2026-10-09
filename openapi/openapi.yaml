@@ -2520,6 +2520,216 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 
+  /api/v1/admin/reports/order-lines:
+    get:
+      tags: [admin]
+      operationId: listReportOrderLines
+      summary: Data laporan order line (Superadmin)
+      description: |
+        Satu baris per order line dari seluruh cabang (PRD §4.7 AP-REP-01),
+        termasuk baris biaya packaging bila ada; pesanan berstatus draf
+        DIKECUALIKAN karena belum punya nomor/tanggal.
+
+        Filter (AP-REP-02): rentang tanggal bisnis WIB (`dari`/`sampai`),
+        cabang multi (`cabang` boleh diulang atau dipisah koma), `status`,
+        `jenis` baris, `cnc`, `special`, dan `pi`.
+
+        `special` dan `pi` murni ATRIBUT cabang (`b.is_special`, `b.pajak_in`):
+        hanya tampil sebagai kolom dan bisa difilter, TIDAK pernah mengubah
+        harga, subtotal, atau pajak.
+
+        Paginasi server: `halaman` (default 1) dan `per_halaman` (default 25,
+        maksimum 500). Otorisasi ada di server: Manager dan akun cabang ditolak
+        (PRD §2.1), bukan hanya menunya disembunyikan.
+      parameters:
+        - name: dari
+          in: query
+          required: false
+          description: Tanggal awal rentang (YYYY-MM-DD, WIB).
+          schema: { type: string, format: date }
+        - name: sampai
+          in: query
+          required: false
+          description: Tanggal akhir rentang (YYYY-MM-DD, WIB).
+          schema: { type: string, format: date }
+        - name: cabang
+          in: query
+          required: false
+          description: |
+            id cabang (UUID). Boleh diulang (`?cabang=a&cabang=b`) atau
+            dipisah koma (`?cabang=a,b`).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [submitted, done, semua] }
+        - name: jenis
+          in: query
+          required: false
+          description: Jenis baris pesanan (produk atau biaya packaging).
+          schema: { type: string, enum: [product, packaging, semua] }
+        - name: cnc
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: special
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: pi
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: halaman
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_halaman
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 25 }
+      responses:
+        "200":
+          description: Satu halaman laporan order line
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/ReportPage" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/admin/reports/export:
+    post:
+      tags: [admin]
+      operationId: requestReportExport
+      summary: Minta ekspor XLSX asinkron (Superadmin)
+      description: |
+        Membuat pekerjaan ekspor XLSX (PRD §4.7 AP-REP-04) untuk filter yang
+        sama dengan endpoint daftar order line. Berkasnya ditulis **streaming**
+        oleh worker (excelize streaming writer): header ter-freeze, kolom uang
+        berformat Rupiah, dan sheet kedua berisi rekap bulanan per cabang
+        (AP-REP-05). Ekspor besar (50.000 baris) dibaca bertahap sehingga tidak
+        menahan seluruh data di memori.
+
+        Jawaban `202 Accepted` memuat pekerjaan beserta filter tersimpan yang
+        BENAR-BENAR dipakai ekspor; jumlah baris hasilnya selalu sama dengan
+        jumlah baris daftar untuk filter itu (PRD §9 no.10). Pantau lewat
+        `GET /api/v1/admin/reports/export/{id}` lalu unduh lewat
+        `GET /api/v1/admin/reports/export/{id}/download`.
+
+        Manager dan akun cabang ditolak (PRD §2.1). `503 UNAVAILABLE` bila
+        object storage atau penjadwal pekerjaan belum siap — pekerjaan tidak
+        pernah dibuat menggantung tanpa bisa dijalankan.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportFilter" }
+      responses:
+        "202":
+          description: Pekerjaan ekspor dibuat (status `queued`)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/ReportExportJob" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/admin/reports/export/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: id pekerjaan ekspor (UUID).
+        schema: { type: string, format: uuid }
+    get:
+      tags: [admin]
+      operationId: getReportExport
+      summary: Status pekerjaan ekspor XLSX (Superadmin)
+      description: |
+        Status satu pekerjaan ekspor: `queued` (menunggu worker), `proses`
+        (sedang ditulis), `selesai` (berkas siap diunduh beserta `nama_file` dan
+        `jumlah_baris`), atau `gagal` (beserta `pesan`). Hanya Superadmin
+        (PRD §2.1).
+      responses:
+        "200":
+          description: Status pekerjaan ekspor
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/ReportExportJob" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/admin/reports/export/{id}/download:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: id pekerjaan ekspor (UUID).
+        schema: { type: string, format: uuid }
+    get:
+      tags: [admin]
+      operationId: downloadReportExport
+      summary: Tautan unduh hasil ekspor XLSX (Superadmin)
+      description: |
+        Presigned URL berumur pendek untuk berkas hasil ekspor yang sudah
+        selesai. Pekerjaan yang belum selesai dijawab `409 REPORT_NOT_READY`.
+        Akses selalu lewat tautan berumur pendek: kunci object storage tidak
+        pernah dikirim ke klien (SystemDesign.md §8). Laporan sengaja TIDAK
+        dicatat pada tabel `documents` supaya tidak bisa diunduh lewat endpoint
+        dokumen yang boleh dipakai Manager.
+      responses:
+        "200":
+          description: Tautan unduh berumur pendek
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/ReportDownload" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -3495,6 +3705,121 @@ components:
         last_error: { type: string }
         sent_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
+
+    ReportFilter:
+      type: object
+      description: |
+        Filter laporan (PRD §4.7 AP-REP-02). Semua bidang opsional; bidang yang
+        kosong berarti tanpa filter. Tanggal memakai tanggal bisnis WIB
+        (YYYY-MM-DD).
+      properties:
+        dari: { type: string, format: date }
+        sampai: { type: string, format: date }
+        cabang:
+          type: array
+          description: id cabang (UUID); boleh lebih dari satu.
+          items: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [submitted, done, semua]
+        jenis:
+          type: string
+          enum: [product, packaging, semua]
+        cnc:
+          type: boolean
+          description: Filter pesanan Cash & Carry (`orders.is_cnc`).
+        special:
+          type: boolean
+          description: |
+            Filter atribut cabang "Special" (`branches.is_special`). Murni
+            penanda/filter — tidak pernah mengubah harga, subtotal, atau pajak.
+        pi:
+          type: boolean
+          description: |
+            Filter atribut cabang "PI" (`branches.pajak_in`). Murni
+            penanda/filter — tidak pernah mengubah harga, subtotal, atau pajak.
+    ReportOrderLine:
+      type: object
+      required: [tanggal, nomor, versi, branch_id, cabang, kepala_cabang, is_cnc, is_special, pajak_in, line_no, produk, jenis, qty, harga_satuan, subtotal, status]
+      description: Satu baris laporan = SATU order line (PRD §4.7 AP-REP-01).
+      properties:
+        tanggal: { type: string, format: date }
+        nomor: { type: string, description: Nomor invoice pesanan. }
+        versi: { type: integer, minimum: 0 }
+        branch_id: { type: string, format: uuid }
+        cabang: { type: string }
+        kepala_cabang: { type: string }
+        is_cnc: { type: boolean }
+        is_special: { type: boolean, description: Atribut cabang; tidak mengubah harga atau pajak. }
+        pajak_in: { type: boolean, description: Atribut cabang "PI"; tidak mengubah harga atau pajak. }
+        line_no: { type: integer }
+        produk: { type: string, description: Nama produk saat transaksi (snapshot). }
+        jenis: { type: string, enum: [product, packaging] }
+        serial_number: { type: string, description: Kosong untuk baris packaging. }
+        qty: { type: integer }
+        harga_satuan: { type: integer, format: int64 }
+        subtotal: { type: integer, format: int64 }
+        status: { type: string, enum: [submitted, done] }
+        tanggal_verifikasi:
+          type: string
+          description: Waktu verifikasi (WIB, `YYYY-MM-DD HH:MM`); kosong bila belum selesai.
+        metode_verifikasi:
+          type: string
+          description: Metode verifikasi terakhir (manual/ai/virtual_account); kosong bila belum ada.
+    ReportPage:
+      type: object
+      required: [items, total, total_subtotal, halaman, per_halaman, filter]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ReportOrderLine" }
+        total:
+          type: integer
+          format: int64
+          description: Jumlah seluruh baris yang lolos filter (bukan hanya halaman ini).
+        total_subtotal: { type: integer, format: int64 }
+        halaman: { type: integer }
+        per_halaman: { type: integer }
+        filter: { $ref: "#/components/schemas/ReportFilter" }
+    ReportExportJob:
+      type: object
+      required: [id, jenis, status, jumlah_baris, created_at, filter]
+      properties:
+        id: { type: string, format: uuid }
+        jenis: { type: string, enum: [order_lines] }
+        status:
+          type: string
+          enum: [queued, proses, selesai, gagal]
+          description: |
+            `queued` menunggu worker; `proses` sedang ditulis; `selesai` berkas
+            siap diunduh; `gagal` beserta alasannya pada `pesan`.
+        diminta_nama: { type: string, description: Nama Superadmin peminta. }
+        filter:
+          allOf:
+            - $ref: "#/components/schemas/ReportFilter"
+          description: Filter TERSIMPAN yang benar-benar dipakai ekspor.
+        nama_file: { type: string }
+        jumlah_baris:
+          type: integer
+          format: int64
+          description: |
+            Jumlah baris yang BENAR-BENAR ditulis ke berkas — sama dengan jumlah
+            baris query terfilter (PRD §9 no.10).
+        pesan: { type: string, description: Alasan kegagalan bila status `gagal`. }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+    ReportDownload:
+      type: object
+      required: [url, expires_in, mime_type]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Presigned URL berumur pendek dengan Content-Disposition attachment.
+        expires_in: { type: integer, description: Masa berlaku tautan dalam detik (300). }
+        nama_file: { type: string }
+        mime_type: { type: string }
 
 security:
   - cookieAuth: []

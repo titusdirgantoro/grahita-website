@@ -401,6 +401,50 @@ func (ns NullProductKind) Value() (driver.Value, error) {
 	return string(ns.ProductKind), nil
 }
 
+type ReportJobStatus string
+
+const (
+	ReportJobStatusQueued  ReportJobStatus = "queued"
+	ReportJobStatusProses  ReportJobStatus = "proses"
+	ReportJobStatusSelesai ReportJobStatus = "selesai"
+	ReportJobStatusGagal   ReportJobStatus = "gagal"
+)
+
+func (e *ReportJobStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ReportJobStatus(s)
+	case string:
+		*e = ReportJobStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ReportJobStatus: %T", src)
+	}
+	return nil
+}
+
+type NullReportJobStatus struct {
+	ReportJobStatus ReportJobStatus `json:"report_job_status"`
+	Valid           bool            `json:"valid"` // Valid is true if ReportJobStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullReportJobStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.ReportJobStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ReportJobStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullReportJobStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ReportJobStatus), nil
+}
+
 type ReviewReason string
 
 const (
@@ -770,6 +814,23 @@ type RegistrationToken struct {
 	UsedBy      pgtype.UUID `json:"used_by"`
 	CreatedBy   pgtype.UUID `json:"created_by"`
 	CreatedAt   time.Time   `json:"created_at"`
+}
+
+type ReportJob struct {
+	ID          string          `json:"id"`
+	Jenis       string          `json:"jenis"`
+	DimintaOleh pgtype.UUID     `json:"diminta_oleh"`
+	DimintaNama string          `json:"diminta_nama"`
+	Filter      []byte          `json:"filter"`
+	Status      ReportJobStatus `json:"status"`
+	StorageKey  pgtype.Text     `json:"storage_key"`
+	NamaFile    pgtype.Text     `json:"nama_file"`
+	JumlahBaris pgtype.Int8     `json:"jumlah_baris"`
+	Pesan       pgtype.Text     `json:"pesan"`
+	CreatedAt   time.Time       `json:"created_at"`
+	StartedAt   *time.Time      `json:"started_at"`
+	FinishedAt  *time.Time      `json:"finished_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type Session struct {

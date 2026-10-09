@@ -56,6 +56,8 @@ import (
 	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/registration"
 	registrationpg "github.com/grahita/portal/api/internal/registration/postgres"
+	"github.com/grahita/portal/api/internal/report"
+	reportpg "github.com/grahita/portal/api/internal/report/postgres"
 	"github.com/grahita/portal/api/internal/seed"
 	"github.com/grahita/portal/api/internal/settings"
 	settingspg "github.com/grahita/portal/api/internal/settings/postgres"
@@ -201,6 +203,10 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 		documentSvc := document.NewService(documentpg.New(pool), store, renderer)
 		selesai := fulfillment.NewService(documentSvc, notif)
 
+		// Ekspor laporan XLSX (F2-24) dijalankan di worker: berkas ditulis
+		// streaming lalu disimpan ke object storage yang sama.
+		reportSvc := report.NewService(reportpg.New(pool), store)
+
 		// Service cadangan hanya dijalankan bila tujuan dikonfigurasi; tanpa
 		// itu tidak ada job jadwal cadangan yang didaftarkan sama sekali
 		// (bukan job yang selalu gagal).
@@ -212,7 +218,7 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 			logger.Info("jadwal cadangan aktif", "tujuan", bk.Target().Nama(), "jadwal", bk.Jadwal())
 		}
 
-		client, err := worker.New(pool, cfg, notif, bk, selesai)
+		client, err := worker.New(pool, cfg, notif, bk, selesai, reportSvc)
 		if err != nil {
 			return err
 		}
@@ -390,6 +396,11 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	documentRepo := documentpg.New(pool)
 	documentSvc := document.NewService(documentRepo, store, renderer)
 
+	// Laporan order line + ekspor XLSX asinkron (F2-24). Job River dititipkan
+	// di dalam transaksi pembuatan baris `report_jobs`, jadi tidak mungkin ada
+	// pekerjaan yang dijadwalkan tanpa barisnya.
+	reportSvc := report.NewService(reportpg.New(pool, reportpg.WithJobQueue(jobQueue)), store)
+
 	// Cadangan terenkripsi (F1-21). Service yang sama dengan worker; di mode
 	// API ia dipakai untuk MENAMPILKAN status di halaman Pengaturan
 	// (Architecture.md §7) dan tidak pernah menjalankan cadangan sendiri.
@@ -413,6 +424,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Payments:            paymentSvc,
 		Verify:              verifySvc,
 		Documents:           documentSvc,
+		Reports:             reportSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
 		Bank:                bankSvc,
