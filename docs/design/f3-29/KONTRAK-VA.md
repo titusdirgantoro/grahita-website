@@ -126,8 +126,12 @@ Aturan yang mengikat implementasi:
 1. **`TerimaCallback` murni.** Ia hanya memverifikasi tanda tangan + bentuk
    payload dan mengembalikan peristiwa; ia **tidak menulis** ke basis data,
    pesanan, dokumen, atau outbox. Efek samping (klaim idempotensi, pencocokan,
-   audit, transisi) adalah pekerjaan pemanggil. Diuji: "callback murni tidak
-   menulis ke luar".
+   audit, transisi) adalah pekerjaan pemanggil. Kemurnian dijamin oleh **bentuk
+   kontrak** (provider tidak memegang handle basis data/pesanan/outbox) dan
+   diperiksa saat review; sub-uji kontrak `callback_murni_tidak_menulis_ke_luar`
+   hanya membuktikan **idempotensi hasil** (callback identik dua kali → hasil
+   setara) — ia **tidak** dan tidak dapat membuktikan ketiadaan efek samping,
+   jadi klaim "tidak menulis" tidak boleh disandarkan pada sub-uji itu.
 2. **`DaftarVA` idempoten terhadap `ReffID`.** `ReffID` kita: `order:<order_id>:v<versi>`.
    Versi ikut karena revisi invoice mengubah total → VA lama tidak boleh
    dipakai untuk total baru (§6.4).
@@ -207,7 +211,10 @@ Rujukan ini **bukan** kontrak Grahita-BCA/BRI.
 
 1. **Perbandingan waktu-konstan** (`crypto/subtle` untuk HMAC; `rsa.Verify*`
    untuk RSA). Diuji termasuk kunci/rahasia kosong → **ditolak** (tidak ada
-   jalur "kosong = lolos").
+   jalur "kosong = lolos"): HMAC kunci-kosong tetap deterministik, jadi
+   `VerifikasiTandaTangan`/`VerifikasiKanonik` gagal-tertutup untuk
+   `rahasia` `nil`/kosong (`TestVerifikasiTandaTanganMenolakRahasiaKosong`),
+   sejalan dengan jalur RSA yang menolak kunci publik `nil`.
 2. **Jendela waktu replay** (bawaan prototipe 15 menit, toleransi masa depan 5
    menit untuk selisih jam). Di luar jendela → `ErrCallbackKedaluwarsa`;
    pemanggil membalas ack **tanpa** efek samping.

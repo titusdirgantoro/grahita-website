@@ -147,9 +147,9 @@ ok    github.com/grahita/portal/api/internal/payment/va      1.837s
 ok    github.com/grahita/portal/api/internal/payment/va/vatest 1.099s
 ```
 
-Uji fokus (hitungan nyata): **15 uji PASS tingkat atas** (14 unit di paket `va`
-+ 1 suite kontrak di `vatest`) dengan **12 sub-uji** di dalam suite kontrak ⇒
-**27 baris PASS, 0 FAIL**.
+Uji fokus (hitungan nyata, **putaran 2**): **16 uji PASS tingkat atas** (15 unit
+di paket `va` + 1 suite kontrak di `vatest`) dengan **12 sub-uji** di dalam suite
+kontrak ⇒ **28 baris PASS, 0 FAIL**.
 
 Sub-uji kontrak (`vatest.Uji`, berlaku untuk provider mana pun):
 
@@ -168,9 +168,12 @@ Sub-uji kontrak (`vatest.Uji`, berlaku untuk provider mana pun):
 | `adapter_provider_kosong_gagal_terang_terangan` | provider nil + toggle hidup → `ErrProviderBelumDipilih` + `KodeDitolak` |
 | `adapter_duplikat_dan_pencocokan_nominal` | pertama `KodeDiterima`; ulang `KodeDuplikat`; kurang/lebih → `KodePerluReview` + alasan yang benar + selisih; toleransi `tol_kurang` dihormati |
 
-Uji unit paket `va` (13): `TestKanonikBentukDanSidikBadan`,
-`TestVerifikasiTandaTanganMenolakYangTidakCocok` (termasuk rahasia `nil` →
-ditolak, jadi tidak ada jalur "kunci kosong = lolos"),
+Uji unit paket `va` (15): `TestKanonikBentukDanSidikBadan`,
+`TestVerifikasiTandaTanganMenolakYangTidakCocok`,
+`TestVerifikasiTandaTanganMenolakRahasiaKosong` (tanda tangan HMAC yang dihitung
+dengan kunci kosong → `ErrTandaTanganTidakSah` saat rahasia `nil`/kosong, di
+`VerifikasiTandaTangan` **dan** `VerifikasiKanonik`; jadi tidak ada jalur
+"kunci kosong = lolos" — perbaikan putaran 2 QA),
 `TestVerifikasiKanonikMemerlukanHeaderLengkap`, `TestPeriksaUmur` (8 kasus batas
 + jendela bawaan), `TestKunciPeristiwaStabilDanSensitif` (sensitif terhadap
 nominal/nomor VA/waktu, tidak sensitif terhadap offset zona waktu),
@@ -197,26 +200,53 @@ RSA diuji dengan kunci yang dibangkitkan di uji; angka biaya/tanda tangan di
 KONTRAK-VA.md §11 dikutip dari sumber publik dengan peringatan verifikasi ulang
 (K-01/K-02/K-08).
 
-**Verifikasi ulang pada arsip bersih commit terakhir** (`git archive
-fc05285`, tanpa perubahan yang belum ter-commit di pohon kerja, mis. F2-26):
+**Verifikasi pada arsip bersih commit kode putaran 2** (`git archive e200e35`,
+tanpa perubahan yang belum ter-commit di pohon kerja):
 
 ```
 $ cd <arsip>/api
 $ gofmt -l .                     # kosong
 $ go vet ./...                   # VET_OK
 $ go build ./...                 # BUILD_OK
-$ go test -race -count=1 ./internal/payment/va/...
-ok  github.com/grahita/portal/api/internal/payment/va        1.348s
-ok  github.com/grahita/portal/api/internal/payment/va/vatest 1.038s
-$ go test -v ./internal/payment/va/... | grep -cE '^    --- PASS|^--- PASS'
-27
+$ go test -race -count=1 -timeout 10m ./internal/payment/...
+ok  github.com/grahita/portal/api/internal/payment             2.100s
+ok  github.com/grahita/portal/api/internal/payment/va          1.325s
+ok  github.com/grahita/portal/api/internal/payment/va/vatest   1.048s
+$ go test -count=1 -v ./internal/payment/va/... | grep -cE '^    --- PASS|^--- PASS'
+28
+$ go test -count=1 -v ./internal/payment/va/... | grep -cE '^    --- FAIL|^--- FAIL'
+0
 $ grep -rn "payment/va" --include="*.go" . | grep -v "^./internal/payment/va/"
 (tidak ada impor di luar paket)
+$ ./scripts/check-secrets.sh      # exit 0 ("Tidak ada rahasia terdeteksi ...")
 ```
 
-Commit kode kartu ini: `fc05285` (`a66f8a6` → `deeb9ef` → `fc05285`).
-Perubahan setelahnya **hanya** halaman dokumentasi ini (tidak ada berkas kode
-yang berubah), sehingga verifikasi arsip di atas tetap berlaku untuk HEAD.
+### Putaran 2 (perbaikan temuan QA)
+
+Temuan QA putaran 1 dan penutupannya:
+
+1. **WAJIB — `VerifikasiTandaTangan` gagal-terbuka saat rahasia kosong.**
+   Terbukti: `VerifikasiTandaTangan(nil, Kanonik(...),
+   hex(HMAC-SHA256(nil, kanonik)))` dulu mengembalikan `err=<nil>` (LOLOS),
+   idem untuk `[]byte{}` — bertentangan dengan §4.3 butir 1 dan asimetris
+   dengan jalur RSA yang menolak kunci `nil`. Diperbaiki di
+   `api/internal/payment/va/signature.go`: `VerifikasiTandaTangan` **dan**
+   `VerifikasiKanonik` menolak `len(rahasia)==0` dengan
+   `ErrTandaTanganTidakSah`. Uji baru
+   `TestVerifikasiTandaTanganMenolakRahasiaKosong` membuktikan tanda tangan
+   yang dihitung dengan kunci kosong ditolak saat rahasia `nil`/kosong (bukan
+   hanya "ditandatangani dengan kunci lain", yang memang sudah diuji
+   sebelumnya). Probe QA yang sama dijalankan ulang pada arsip `e200e35`:
+   `rahasia nil`/`kosong` → `tanda tangan callback tidak sah` (DITOLAK).
+2. **SEKUNDER — klaim kemurnian `TerimaCallback` "diuji".** Diperbaiki di
+   KONTRAK-VA.md §3 butir 1: kemurnian dijamin oleh bentuk kontrak
+   (tanpa dependensi tulis) dan diperiksa saat review; sub-uji
+   `callback_murni_tidak_menulis_ke_luar` hanya membuktikan **idempotensi
+   hasil** — selaras dengan tabel sub-uji di halaman ini.
+
+Commit kode kartu ini: `e200e35` (di atas `fc05285`, yang di atas `a66f8a6` →
+`deeb9ef` → `fc05285`). Perubahan dokumentasi putaran 2 tidak mengubah kode,
+sehingga verifikasi arsip di atas tetap berlaku.
 
 ## Batas bukti & risiko tersisa (non-pemblokir)
 
