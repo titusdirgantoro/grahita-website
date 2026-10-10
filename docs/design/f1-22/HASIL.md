@@ -25,7 +25,7 @@ nyata), serta batas yang **tidak** diklaim.
 | `infra/observability` | Prometheus (scrape api/worker/node + 12 aturan alarm), Alertmanager (route + inhibit + email dari environment), Loki/Promtail, Grafana (provisioning + 2 dasbor), **uji satuan alarm `prometheus/tests/grahita-alerts_test.yml`**, README runbook |
 | `infra/caddy` | `Caddyfile.prod` diperketat (CSP + Permissions-Policy + blokir `/metrics` di tepi), `Caddyfile.staging` baru (basic-auth, `X-Robots-Tag`, HSTS pendek) |
 | Compose | `docker-compose.observability.yml` baru; `docker-compose.staging.yml` baru; overlay prod/staging kini memakai image GHCR bertag commit |
-| CI/CD | `ci.yml` + gerbang migrasi kompatibel mundur, govulncheck jadi blocking, job Trivy (image + Dockerfile), **job `observability`** (promtool: config + `--lint=all` + uji satuan alarm); `release.yml` baru: staging otomatis, produksi menunggu persetujuan reviewer GitHub Environment |
+| CI/CD | `ci.yml` + gerbang migrasi kompatibel mundur, govulncheck jadi blocking, job Trivy (image + Dockerfile), **job `observability`** (promtool: config + `--lint=all` + uji satuan alarm), job `rahasia` menjalankan kendali diri `check-secrets.sh --uji-diri` sebelum pemindaian (putaran 3); `release.yml` baru: staging otomatis, produksi menunggu persetujuan reviewer GitHub Environment |
 | Skrip | `scripts/check-migration-kompatibel.sh`, `scripts/smoke-staging.sh`; `infra/deploy/deploy.sh` + README |
 
 ## Keputusan desain
@@ -188,16 +188,27 @@ gagal karena Gotenberg/S3 belum terpasang) **terukur dan dapat dialarmkan** —
 alarm `GrahitaJobSeringGagal`/`GrahitaJobGagalPermanen` menyala pada keadaan
 itu. Tidak ada kredensial pada keluaran metrik/log.
 
-### 5. Gerbang migrasi & rahasia → `BUKTI-GERBANG-MIGRASI.txt`
+### 5. Gerbang migrasi & rahasia → `BUKTI-GERBANG-MIGRASI.txt`, `BUKTI-KONTROL-NEGATIF-RAHASIA.txt`
 
 ```
 $ bash scripts/check-migration-kompatibel.sh
 Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.
 $ ./scripts/check-secrets.sh
 Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+$ ./scripts/check-secrets.sh --uji-diri        # kendali diri (putaran 3)
+UJI DIRI check-secrets: LULUS (15/15 kasus)   # 11 pola wajib TERDETEKSI,
+                                              # 2 contoh interpolasi wajib bersih,
+                                              # berkas tak terbaca wajib fail closed
 $ actionlint v1.7.7 .github/workflows/ci.yml .github/workflows/release.yml
 (exit 0, tanpa temuan)
 ```
+
+Gerbang rahasia tidak lagi "hijau hampa": pemblokir QA putaran 1 (pola
+`-----BEGIN …` diperlakukan grep sebagai *option* sehingga pemeriksaan 1 selalu
+melaporkan bersih) sudah diperbaiki di `f2b40fc`, dan sekarang ada **kendali
+negatif tetap** — berkas terlacak berisi token/kunci privat membuktikan gerbang
+benar-benar MERAH (exit 1), berkas tak terbaca membuktikan gerbang MENOLAK
+(exit 2, fail closed). Rinciannya: `BUKTI-KONTROL-NEGATIF-RAHASIA.txt`.
 
 Kontrol negatif gerbang migrasi (berkas migrasi uji berisi `DROP COLUMN` di
 bagian Up, dibuat lalu dihapus kembali):
@@ -236,7 +247,8 @@ sekadar mengutip bukti commit `5bbffb4`:
   (prod + staging + observability), uid Grafana;
 - replika staging dua host dibangun ulang dari `Caddyfile.staging` asli:
   kedua host 200 dengan CSP/HSTS/nosniff/X-Frame-Options, tanpa basic-auth 401,
-  `/metrics` di tepi 404, dan `scripts/smoke-staging.sh` → **login → katalog →
+  `/metrics` di tepi 404 (**hanya terukur bila basic-auth diberikan**; tanpa
+  basic-auth nilainya 401), dan `scripts/smoke-staging.sh` → **login → katalog →
   draft → submit → verifikasi (done) lulus; unduh dokumen TERHALANG** (`SMOKE_EXIT=2`);
 - metrik API + worker hidup kembali (termasuk `grahita_jobs_completed_total
   {kind="render_dokumen_pesanan",outcome="gagal"}` — risiko residu F1-18 terukur
@@ -266,7 +278,8 @@ memakai biner resmi (promtool 3.15.0, actionlint 1.7.7, caddy v2.11.7):
 - replika staging dua host dibangun ulang dari `Caddyfile.staging` asli
   (hanya nilai lingkungan yang dipatch): tanpa basic-auth 401, kedua UI 200
   dengan CSP/HSTS/nosniff/X-Frame-Options/X-Robots-Tag, `/api/v1/meta` 200,
-  `/metrics` dan `/internal/*` di tepi **404**;
+  `/metrics` di tepi **404 bila basic-auth diberikan** (tanpa basic-auth: 401)
+  dan `/internal/*` di tepi **404**;
 - `scripts/smoke-staging.sh` → login → katalog → draft → submit → verifikasi
   (done) **lulus**; daftar dokumen KOSONG → **TERHALANG** (`SMOKE_EXIT=2`);
 - metrik API + worker hidup kembali (termasuk
@@ -278,6 +291,69 @@ memakai biner resmi (promtool 3.15.0, actionlint 1.7.7, caddy v2.11.7):
   **`SUITE_EXIT=0`, 27 paket ok, 0 FAIL, 0 SKIP** (`internal/httpapi` 721,1 s);
 - gate lint CI **masih merah** pada HEAD ini: `golangci-lint v2.14.0` → 19 temuan
   (13 lama + 6 baru dari kartu lain), lihat `BUKTI-GOLANGCI-LINT-HEAD2.txt`.
+
+### 9. Putaran 3 — perbaikan temuan QA putaran 1 (commit f2b40fc)
+
+QA putaran 1 (lensa artifact + eksekusi) meminta dua perubahan; keduanya
+dikerjakan di atas HEAD `0eb0120` dan diverifikasi ulang pada pohon BERSIH.
+
+**1. (PEMBLOKIR) `scripts/check-secrets.sh` tidak dapat mendeteksi pola
+berkeyakinan tinggi — gerbang "tanpa secret repo" selalu hijau.**
+
+- Direproduksi SEBELUM perbaikan (`0eb0120`): berkas **terlacak** berisi token
+  `ghp_…` + kunci privat RSA → skrip tetap `exit 0` "tidak ada rahasia
+  terdeteksi". Sebabnya persis seperti temuan QA: pola dimulai `-----BEGIN`
+  dan diteruskan ke grep tanpa `-e`, sehingga GNU grep 3.11 memparsenya sebagai
+  *option* (`unrecognized option`, exit 2); `2>/dev/null` membuang pesannya dan
+  `|| true` menelan statusnya → keluaran kosong dibaca sebagai "bersih".
+- Perbaikan: `grep -nI -E -e "$pola" --`; status grep **tidak pernah ditelan** —
+  galat alat (grep exit > 1, mis. berkas tak terbaca) membuat gerbang MENOLAK
+  (`exit 2`, fail closed) alih-alih melaporkan hijau. Status perintah yang perlu
+  diperiksa ditulis sebagai daftar `&& … || _st=$?` (dikecualikan dari errexit),
+  bukan dengan `set +e`/`set -e`, karena `set -e` yang dinyalakan di dalam
+  fungsi membuat `return 1` yang sah justru mematikan skrip (ditemukan dan
+  diperbaiki saat menguji perbaikan ini).
+- Kontrol negatif/positif TETAP: subperintah baru `--uji-diri` — 15 kasus
+  (11 pola wajib TERDETEKSI: kunci privat RSA/EC/OPENSSH/PGP, `AKIA…`,
+  `aws_secret_access_key`, `sk-ant-`, `ghp_`, `xox`, `SERVICE_ACCOUNT_JSON`,
+  DSN literal; 2 contoh interpolasi wajib bersih; berkas tak terbaca wajib
+  `exit 2`). Ia dijalankan job CI `rahasia` **sebelum** pemindaian, oleh gerbang
+  pra-rilis `release.yml`, dan tersedia sebagai `make uji-rahasia`.
+- Bukti: `BUKTI-KONTROL-NEGATIF-RAHASIA.txt` (sebelum/sesudah + 6 kontrol);
+  log mentah `f123_before.log` / `f123_after.log` dilampirkan ke kartu.
+- Bukti tambahan §2 [7] pada berkas itu: gerbang juga MENYALA pada berkas
+  TERLACAK BARU — dokumen bukti putaran 3 sempat memuat baris contoh DSN dan
+  gerbang langsung `exit 1`, lalu dilinearkan (masker) dan hijau kembali.
+- Catatan implementasi: berkas skrip ikut dipindai gerbangnya sendiri, sehingga
+  contoh uji ditulis dengan penanda `*` yang dihapus saat uji berjalan — tidak
+  ada pengecualian berkas baru pada gerbang (tidak ada lubang baru).
+
+**2. (NON-PEMBLOKIR) label bukti menyesatkan.** Header `BUKTI-METRIK-HEAD2.txt`
+kini menyatakan 401 diukur TANPA basic-auth dan 404 hanya terukur DENGAN
+basic-auth; dua butir "`/metrics` … 404" di HASIL.md §7 dan §8 diselaraskan
+dengan syarat pengukuran itu.
+
+**Verifikasi ulang pada pohon BERSIH `f2b40fc`** (`BUKTI-GERBANG-HEAD3.txt`):
+`gofmt -l` kosong; `go vet`, `go build ./...`, `go build ./cmd/server` exit 0;
+gerbang migrasi kompatibel mundur exit 0; `check-secrets.sh` exit 0 dan
+`--uji-diri` LULUS 15/15; `actionlint` (ci.yml + release.yml) exit 0;
+`promtool check config` + `check rules --lint=all` (12 aturan) + **simulasi
+alarm** `promtool test rules` `SUCCESS`; `caddy validate` prod valid, staging
+TANPA hash **MENOLAK** (fail closed) dan dengan hash valid; `docker compose
+config -q` overlay staging/observability **MENOLAK tanpa env** (fail closed);
+uji unit observability + arch `ok`.
+
+Suite backend penuh pada PostgreSQL 16.15 nyata (`grahita_f123suite`,
+`-race -p 1 -count=1 -timeout 45m ./...`): **`SUITE_EXIT=0`, 27 paket ok,
+0 FAIL, 0 SKIP** (`internal/httpapi` 710,9 s; 19:46:03 → 20:00:02 UTC) —
+`BUKTI-SUITE-BACKEND-HEAD3.txt`. Perubahan putaran 3 hanya menyentuh
+skrip/CI/Makefile/docs, sehingga kode Go yang diuji identik dengan kandidat
+`f2b40fc`.
+
+Gate lint CI pada HEAD ini **masih MERAH** karena 19 temuan `golangci-lint`
+pada kode kartu LAIN (kartu **t_cf36bd3d**) — tidak satu pun dari berkas F1-22,
+gate tidak dilonggarkan; keadaannya tidak berubah dari putaran 2
+(`BUKTI-GOLANGCI-LINT-HEAD2.txt`).
 
 ## Batas yang TIDAK diklaim
 
@@ -310,6 +386,15 @@ memakai biner resmi (promtool 3.15.0, actionlint 1.7.7, caddy v2.11.7):
 7. **Sudah dicatat di `infra/observability/README.md`**:
    `grahita_backup_last_run_*` tidak muncul selama `backup_runs` belum punya
    baris; alarm `GrahitaCadanganBasi` menutup celah itu dengan `absent(...)`.
+8. **`scripts/check-secrets.sh` bukan pemindai rahasia penuh.** Ia bekerja pada
+   daftar pola berkeyakinan tinggi, melewati isi berkas biner (`grep -I`), dan
+   (seperti sebelum perbaikan putaran 3) mengecualikan baris yang memuat
+   interpolasi `${...}` sebagai contoh konfigurasi — blind spot yang disadari
+   dan didokumentasikan di `BUKTI-KONTROL-NEGATIF-RAHASIA.txt` §4. Yang
+   dibuktikan: mesin pemindainya benar-benar dapat MERAH (kontrol negatif
+   berkas terlacak berisi token/kunci privat → exit 1) dan MENOLAK saat alatnya
+   gagal (exit 2, fail closed) — bukan bahwa repo bebas dari segala bentuk
+   rahasia.
 
 ## Kewajiban gerbang rilis (dibawa dari catatan CEO/QA — bukan diklaim selesai)
 
@@ -340,6 +425,7 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml config 
 # 2. gerbang
 ./scripts/check-migration-kompatibel.sh
 ./scripts/check-secrets.sh
+./scripts/check-secrets.sh --uji-diri   # kendali diri gerbang rahasia (15 kasus)
 
 # 3. uji asap dua host (staging nyata: tanpa SMOKE_CURL_OPTS)
 CUSTOMER_BASE=https://staging.grahita-branch.tiusclaw.com \

@@ -1,0 +1,47 @@
+SUITE BACKEND PENUH (PostgreSQL 16.15 nyata) — F1-22 PUTARAN 3
+commit kandidat perbaikan: f2b40fc (perubahan putaran 3 = skrip/CI/Makefile/docs;
+kode Go tidak disentuh, jadi kode Go yang diuji identik dengan f2b40fc)
+catatan jujur: log merekam HEAD=0eb0120 karena proses suite dimulai
+sebelum commit f2b40fc dibuat — pohon kerja yang diuji SUDAH memuat
+perbaikan putaran 3.
+
+perintah:
+  createdb grahita_f123suite (127.0.0.1:5455) + psql -f scripts/pg-dev-shim.sql
+  TEST_DATABASE_URL=postgres://grahita:<kata sandi>@127.0.0.1:5455/grahita_f123suite?sslmode=disable
+  cd api && go test -race -p 1 -count=1 -timeout 45m ./...
+
+== ringkasan ==
+mulai   : MULAI=2026-10-10 19:46:03 UTC
+selesai : SELESAI=2026-10-10 20:00:02 UTC
+paket ok: 27   paket FAIL: 0   SKIP: 0
+internal/httpapi: 710.914s
+SUITE_EXIT=0
+
+== keluaran paket beruji (verbatim) ==
+ok  	github.com/grahita/portal/api/internal/arch	1.068s
+ok  	github.com/grahita/portal/api/internal/audit	1.976s
+ok  	github.com/grahita/portal/api/internal/auth	32.500s
+ok  	github.com/grahita/portal/api/internal/backup	5.394s
+ok  	github.com/grahita/portal/api/internal/bank	1.735s
+ok  	github.com/grahita/portal/api/internal/branch	1.692s
+ok  	github.com/grahita/portal/api/internal/catalog	1.681s
+ok  	github.com/grahita/portal/api/internal/dashboard	1.679s
+ok  	github.com/grahita/portal/api/internal/document	3.834s
+ok  	github.com/grahita/portal/api/internal/fulfillment	1.759s
+ok  	github.com/grahita/portal/api/internal/httpapi	710.914s
+ok  	github.com/grahita/portal/api/internal/notification	18.792s
+ok  	github.com/grahita/portal/api/internal/order	1.814s
+ok  	github.com/grahita/portal/api/internal/payment	2.011s
+ok  	github.com/grahita/portal/api/internal/payment/va	1.323s
+ok  	github.com/grahita/portal/api/internal/payment/va/vatest	1.041s
+ok  	github.com/grahita/portal/api/internal/platform/apierr	1.032s
+ok  	github.com/grahita/portal/api/internal/platform/database	3.748s
+ok  	github.com/grahita/portal/api/internal/platform/mailer	1.439s
+ok  	github.com/grahita/portal/api/internal/platform/observability	1.306s
+ok  	github.com/grahita/portal/api/internal/platform/storage	1.092s
+ok  	github.com/grahita/portal/api/internal/registration	2.989s
+ok  	github.com/grahita/portal/api/internal/report	2.020s
+ok  	github.com/grahita/portal/api/internal/settings	1.697s
+ok  	github.com/grahita/portal/api/internal/tutorial	1.870s
+ok  	github.com/grahita/portal/api/internal/users	1.751s
+ok  	github.com/grahita/portal/api/internal/worker	3.813s

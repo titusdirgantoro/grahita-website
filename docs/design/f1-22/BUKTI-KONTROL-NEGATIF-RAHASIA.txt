@@ -1,0 +1,156 @@
+BUKTI GERBANG RAHASIA (scripts/check-secrets.sh) — F1-22 PUTARAN 3
+Perbaikan PEMBLOKIR temuan QA putaran 1 + kendali negatif yang diminta
+=====================================================================
+
+HEAD saat verifikasi : f2b40fc (perbaikan F1-22 putaran 3)
+Baseline dibandingkan : 0eb0120 (sebelum perbaikan)
+Gerbang dipakai oleh : job CI `rahasia` (.github/workflows/ci.yml) dan gerbang
+                       pra-rilis `.github/workflows/release.yml`; kriteria F1-22
+                       "tanpa secret repo" di HASIL.md §5.
+
+CATATAN MASKING: nilai rahasia pada berkas bukti ini sengaja ditulis bertanda
+(`<...>`, dan kepala kunci privat sebagai `-----BEGIN [RSA] PRIVATE KEY-----`)
+supaya berkas bukti ini sendiri tidak memicu gerbang yang sedang dibuktikan.
+Log mentah (tanpa masking) dilampirkan ke kartu:
+  f123_before.log, f123_after.log, f123_gates.log, f123_suite.log
+Berkas FIKSI yang dipakai kontrol negatif selalu dibuat lalu dihapus kembali
+dalam skrip yang sama (`trap`), sehingga pohon akhir tetap bersih.
+
+---------------------------------------------------------------------
+1. SEBELUM PERBAIKAN (0eb0120) — temuan QA direproduksi
+---------------------------------------------------------------------
+sha256 scripts/check-secrets.sh = 38c005cc4571478e...
+$ printf 'TOKEN=ghp_<36 karakter alfanumerik>\n'                     > uji-kn-ghp.txt
+$ printf -- '-----BEGIN [RSA] PRIVATE KEY-----\nMIIEow...\n'        >> uji-kn-ghp.txt
+$ git add -f uji-kn-ghp.txt        # berkas TERLACAK berisi token + kunci privat
+$ ./scripts/check-secrets.sh
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+EXIT=0                              <-- HIJAU PALSU (temuan QA TERBUKTI)
+
+Sebabnya (bukti langsung):
+$ grep --version | head -1
+grep (GNU grep) 3.11
+$ printf '%s\n' uji-kn-ghp.txt | xargs -r grep -nI -E '-----BEGIN (RSA|EC) PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}'
+grep: unrecognized option '-----BEGIN (RSA|EC) PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}'
+Usage: grep [OPTION]... PATTERNS [FILE]...
+grep_exit=123                       <-- grep MENOLAK pola (=option), exit != 1
+$ printf '%s\n' uji-kn-ghp.txt | xargs -r grep -nI -E -e '-----BEGIN (RSA|EC) PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}'
+1:<baris berisi token ghp_>
+2:-----BEGIN [RSA] PRIVATE KEY-----
+grep_exit=0                         <-- dengan `-e` polanya benar-benar cocok
+Jadi cacatnya: (a) pola tanpa `-e` => grep exit 2, (b) `2>/dev/null` membuang
+pesannya, (c) `|| true` menelan statusnya => hasil kosong dibaca sebagai "bersih".
+
+---------------------------------------------------------------------
+2. SESUDAH PERBAIKAN (f2b40fc) — kontrol negatif/positif nyata
+---------------------------------------------------------------------
+sha256 scripts/check-secrets.sh = 75286743e0f4fb52...
+$ git status --porcelain          -> kosong (pohon bersih) sebelum & sesudah
+
+[0] repo bersih (tidak ada alarm palsu)
+$ ./scripts/check-secrets.sh
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+EXIT=0
+
+[0b] kendali diri `--uji-diri` (dijalankan juga oleh CI & release.yml)
+$ ./scripts/check-secrets.sh --uji-diri
+LULUS  kunci-privat-rsa -> status 1 (diharapkan 1)
+LULUS  kunci-privat-ec -> status 1 (diharapkan 1)
+LULUS  kunci-privat-openssh -> status 1 (diharapkan 1)
+LULUS  kunci-privat-pgp -> status 1 (diharapkan 1)
+LULUS  aws-access-key-id -> status 1 (diharapkan 1)
+LULUS  aws-secret-access-key -> status 1 (diharapkan 1)
+LULUS  anthropic-api-key -> status 1 (diharapkan 1)
+LULUS  github-token -> status 1 (diharapkan 1)
+LULUS  slack-token -> status 1 (diharapkan 1)
+LULUS  gcp-service-account -> status 1 (diharapkan 1)
+LULUS  rajah-interpolasi -> status 0 (diharapkan 0)
+LULUS  konfigurasi-biasa -> status 0 (diharapkan 0)
+LULUS  dsn-kredensial-literal -> status 1 (diharapkan 1)
+LULUS  dsn-interpolasi -> status 0 (diharapkan 0)
+check-secrets: grep: <tmp>/uji-tak-terbaca.txt: Permission denied
+check-secrets: grep gagal pada '<tmp>/uji-tak-terbaca.txt' (status 2)
+LULUS  berkas-tak-terbaca -> status 2 (fail closed)
+UJI DIRI check-secrets: LULUS (15/15 kasus)
+EXIT=0
+
+[1] KONTROL NEGATIF yang diminta QA — berkas TERLACAK berisi token + kunci
+    privat (keadaan yang sama dengan cacat di atas)
+$ ./scripts/check-secrets.sh
+Rahasia (kunci privat/kredensial/token) terdeteksi pada berkas yang dilacak:
+1:TOKEN=ghp_<36 karakter alfanumerik>
+2:-----BEGIN [RSA] PRIVATE KEY-----
+EXIT=1                              <-- GERBANG MERAH (dulu EXIT=0)
+
+[2] KONTROL NEGATIF — DSN literal
+$ ./scripts/check-secrets.sh
+DSN dengan kredensial literal ditemukan:
+1:DATABASE_URL=postgres://grahita:<kata sandi>@db:5432/grahita
+EXIT=1
+
+[3] KONTROL NEGATIF — berkas rahasia (.pem) terlacak
+$ ./scripts/check-secrets.sh
+Berkas rahasia tidak boleh dilacak git:
+uji-kn-pem.pem
+EXIT=1
+
+[4] KONTROL POSITIF — nilai hanya interpolasi (tidak boleh alarm palsu)
+$ ./scripts/check-secrets.sh
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+EXIT=0
+
+[5] KONTROL GALAT ALAT (syarat QA "jangan telan status grep yang error"):
+    berkas terlacak yang tidak dapat dibaca grep
+$ chmod 000 uji-kn-ghp.txt ; ./scripts/check-secrets.sh
+check-secrets: grep: uji-kn-ghp.txt: Permission denied
+check-secrets: grep gagal pada 'uji-kn-ghp.txt' (status 2)
+GAGAL: pemindaian 'Rahasia (kunci privat/kredensial/token) terdeteksi pada
+berkas yang dilacak' tidak dapat diselesaikan — gerbang menolak (fail closed)
+EXIT=2                              <-- MENOLAK, bukan "bersih"
+
+[6] keadaan akhir (pohon bersih, pindai hijau)
+$ ./scripts/check-secrets.sh
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+EXIT=0
+$ git status --porcelain            -> kosong
+
+[7] BUKTI TAMBAHAN — gerbang menyala pada berkas TERLACAK BARU milik
+    implementer sendiri (bukan hanya berkas fiksi kontrol): dokumen bukti
+    putaran 3 (`BUKTI-SUITE-BACKEND-HEAD3.txt`) awalnya memuat baris contoh DSN
+    di bagian "perintah", dan gerbang langsung MERAH:
+$ ./scripts/check-secrets.sh
+DSN dengan kredensial literal ditemukan:
+10:  TEST_DATABASE_URL=postgres://grahita:<kata sandi>@127.0.0.1:5455/...
+EXIT=1                              <-- perbaikan ini efektif pada berkas nyata
+    (baris di atas ditampilkan dalam bentuk bertanda) Setelah nilainya dimasker
+    menjadi `<kata sandi>`, gerbang kembali hijau (exit 0). Tidak ada nilai
+    rahasia yang benar-benar ada — yang dibuktikan adalah gerbangnya MENYALA.
+
+---------------------------------------------------------------------
+3. PERUBAHAN BERKAS
+---------------------------------------------------------------------
+scripts/check-secrets.sh      : `grep -nI -E -e "$pola" --`, status grep tidak
+                               pernah ditelan (galat alat => exit 2 fail closed),
+                               subperintah `--uji-diri`, catatan blind spot ${...}
+.github/workflows/ci.yml      : job `rahasia` menjalankan `--uji-diri` sebelum
+                               pemindaian (gerbang harus terbukti bisa MERAH)
+.github/workflows/release.yml : gerbang pra-rilis menjalankan `--uji-diri`
+Makefile                      : target `uji-rahasia` (+ `secrets` tetap pindai)
+
+---------------------------------------------------------------------
+4. BATAS YANG TIDAK DIKLAIM
+---------------------------------------------------------------------
+- Pemindai ini adalah gerbang pola berkeyakinan tinggi, bukan pengganti
+  pemindai rahasia penuh: pola yang tidak ada di daftar (mis. token lain,
+  kredensial pada biner/blob) tidak tertangkap.
+- Blind spot yang disadari dan masih berlaku: baris yang MEMUAT `${...}`
+  dikecualikan dari temuan (supaya contoh konfigurasi tidak jadi alarm palsu).
+  Kunci nyata pada baris seperti itu tidak tertangkap pemeriksaan 1/2 (repo
+  saat ini tidak memuat pola semacam itu). Alternatif yang lebih presisi
+  (memfilter hanya nilai yang tepat berupa interpolasi) tidak dilakukan di
+  putaran ini agar perubahan tetap minimal dan dapat ditinjau.
+- `--uji-diri` membuktikan mesin pemindai (pola + opsi + penanganan status),
+  bukan bahwa tidak ada rahasia di alam liar; kontrol negatifnya memakai berkas
+  fiksi di direktori temporer.
+- Deteksi berdasarkan ISI BARIS: berkas biner (grep -I melewatinya) tidak
+  diperiksa isinya; nama berkas berbahaya tetap diperiksa pemeriksaan 3.

@@ -7,7 +7,9 @@ BUKTI METRIK + HEALTH + TEPI — F1-22 pada HEAD 2707967
 {"checks":{"database":"ok","gotenberg":"tidak dikonfigurasi","migrations":"ok (versi 7)","smtp":"ok","storage":"tidak dikonfigurasi"},"status":"ready","version":"dev"}
 
 
-== tepi: /metrics 404, tanpa basic-auth 401 ==
+== tepi: TANPA basic-auth -> 401 (terblokir di tepi).
+   404 pada /metrics hanya terukur DENGAN basic-auth, lihat
+   BUKTI-VERIFIKASI-ULANG-HEAD2.txt §3; di berkas ini TIDAK ada nilai 404. ==
 metrics_di_tepi=401
 tanpa_basic_auth=401
 

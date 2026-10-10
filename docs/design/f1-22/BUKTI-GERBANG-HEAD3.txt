@@ -1,0 +1,99 @@
+GERBANG STATIS + VALIDASI KONFIGURASI — F1-22 PUTARAN 3
+(dijalankan pada pohon BERSIH tepat setelah commit f2b40fc; dokumen bukti ini
+ dikomit setelahnya dan TIDAK mengubah kode/konfigurasi yang digerbangkan.
+ Gerbang rahasia DIVERIFIKASI ULANG pada commit dokumen (berkas docs ikut
+ dipindai): exit 0 — lihat BUKTI-KONTROL-NEGATIF-RAHASIA.txt §2 [7], di mana
+ gerbang memang MENYALA pada baris contoh DSN di dokumen bukti ini lalu
+ dilinearkan.)
+HEAD=f2b40fc5279ae9daec62975432527b373f4b914f
+gofmt/vet/build, gerbang migrasi, gerbang rahasia (+kendali diri),
+actionlint, promtool (config+rules+SIMULASI ALARM), caddy (prod+staging),
+docker compose config (fail closed tanpa env), uji unit observability+arch.
+
+HEAD=f2b40fc5279ae9daec62975432527b373f4b914f
+TREE_DIRTY_BEFORE=0 (berkas F1-22 yang sedang diubah: scripts + CI + Makefile)
+=== versi biner ===
+promtool, version 3.15.0 (branch: HEAD, revision: 5241a27fe3c6983549fccc32f6e65917408c63cd)
+1.7.7
+v2.11.7 h1:yj0Y4fYZGPkSvibBJ1sTWE33xC0fxztVyXEW5iIdUT4=
+golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+git version 2.43.0
+grep (GNU grep) 3.11
+go version go1.27.1 linux/amd64
+
+=== gofmt -l (api) ===
+gofmt_exit=0
+=== go vet ./... ===
+vet_exit=0
+=== go build ./... ===
+build_exit=0
+=== go build ./cmd/server ===
+server_exit=0
+
+=== check-migration-kompatibel.sh ===
+Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.
+migrasi_exit=0
+
+=== check-secrets.sh (pindai) ===
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+secrets_exit=0
+=== check-secrets.sh --uji-diri (kendali diri baru) ===
+LULUS  kunci-privat-rsa -> status 1 (diharapkan 1)
+LULUS  kunci-privat-ec -> status 1 (diharapkan 1)
+LULUS  kunci-privat-openssh -> status 1 (diharapkan 1)
+LULUS  kunci-privat-pgp -> status 1 (diharapkan 1)
+LULUS  aws-access-key-id -> status 1 (diharapkan 1)
+LULUS  aws-secret-access-key -> status 1 (diharapkan 1)
+LULUS  anthropic-api-key -> status 1 (diharapkan 1)
+LULUS  github-token -> status 1 (diharapkan 1)
+LULUS  slack-token -> status 1 (diharapkan 1)
+LULUS  gcp-service-account -> status 1 (diharapkan 1)
+LULUS  rajah-interpolasi -> status 0 (diharapkan 0)
+LULUS  konfigurasi-biasa -> status 0 (diharapkan 0)
+LULUS  dsn-kredensial-literal -> status 1 (diharapkan 1)
+LULUS  dsn-interpolasi -> status 0 (diharapkan 0)
+check-secrets: grep: /home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.l3UUTxCvoy/uji-tak-terbaca.txt: Permission denied
+check-secrets: grep gagal pada '/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/tmp.l3UUTxCvoy/uji-tak-terbaca.txt' (status 2)
+LULUS  berkas-tak-terbaca -> status 2 (fail closed)
+
+UJI DIRI check-secrets: LULUS (15/15 kasus)
+ujidiri_exit=0
+
+=== actionlint ci.yml + release.yml ===
+actionlint_exit=0
+
+=== promtool check config ===
+ SUCCESS: infra/observability/prometheus/prometheus.yml is valid prometheus config file syntax
+
+promconfig_exit=0
+=== promtool check rules --lint=all ===
+  SUCCESS: 12 rules found
+
+promrules_exit=0
+=== SIMULASI ALARM: promtool test rules ===
+  SUCCESS
+
+promtest_exit=0
+
+=== caddy validate Caddyfile.prod ===
+prod_exit=0
+1
+=== caddy validate Caddyfile.staging TANPA hash (harus MENOLAK / fail closed) ===
+staging_tanpa_hash_exit=1
+username and password cannot be empty or missing
+=== caddy validate Caddyfile.staging DENGAN hash bcrypt ===
+staging_dengan_hash_exit=0
+1
+
+=== docker compose config (fail closed tanpa env) ===
+compose_staging_exit=1
+error while interpolating services.postgres.environment.POSTGRES_PASSWORD: required variable POSTGRES_PASSWORD is missing a value: wajib diisi di environment staging
+compose_obs_exit=1
+error while interpolating services.grafana.environment.GF_SECURITY_ADMIN_PASSWORD: required variable GRAFANA_PASSWORD is missing a value: wajib diisi - kata sandi Grafana tidak boleh bawaan
+
+=== go test paket observability + arch (unit) ===
+ok  	github.com/grahita/portal/api/internal/platform/observability	0.064s
+ok  	github.com/grahita/portal/api/internal/arch	0.015s
+obsarch_exit=0
+
+TREE_DIRTY_AFTER=0
