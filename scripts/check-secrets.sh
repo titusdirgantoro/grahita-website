@@ -5,8 +5,20 @@
 # Sengaja memakai daftar pola berkeyakinan tinggi agar tidak menghasilkan
 # alarm palsu, dan hanya memeriksa berkas yang dilacak git.
 #
-# Gerbang ini FAIL CLOSED: bila grep sendiri gagal (mis. berkas tak terbaca),
-# skrip MENOLAK — tidak pernah melaporkan "bersih" karena alatnya tidak jalan.
+# Gerbang ini FAIL CLOSED pada SEMUA jalur: bila pendaftaran berkas
+# (`git ls-files`) gagal atau melaporkan daftar berkas kosong tak terduga,
+# atau bila grep sendiri gagal (mis. berkas tak terbaca), skrip MENOLAK (exit 2) —
+# tidak pernah melaporkan "bersih" karena alatnya tidak jalan.
+#
+# Perbaikan QA F1-22 putaran 2 (cacat NON-PEMBLOKIR "status ditelan" pada
+# perintah KEDUA): `daftar_berkas=$(git ls-files | grep -v ... || true)`
+# menelan status `git ls-files`, sehingga di direktori TANPA `.git` skrip
+# mencetak "Tidak ada rahasia terdeteksi" + exit 0 tanpa memindai apa pun.
+# Sekarang: status `git ls-files` diperiksa, daftar kosong (mentah maupun
+# sesudah penyaringan) DITOLAK dengan exit 2, `pindai_daftar` menolak daftar
+# kosong, dan `--uji-diri` memuat kendali tetap `registrasi-berkas-gagal` /
+# `registrasi-berkas-kosong` (wajib status 2) + `registrasi-berkas-bersih`
+# (wajib status 0, supaya kendalinya tidak hampa/"selalu menolak").
 #
 # Perbaikan QA F1-22 putaran 1 (PEMBLOKIR): pola yang dimulai dengan
 # `-----BEGIN` sebelumnya diteruskan ke grep tanpa `-e`, sehingga GNU grep
@@ -27,10 +39,17 @@
 #   scripts/check-secrets.sh              # pindai berkas yang dilacak git
 #   scripts/check-secrets.sh --uji-diri   # kendali diri (negatif + positif)
 #
-# Keluar: 0 bersih, 1 rahasia terdeteksi, 2 alat pemindai gagal (fail closed).
+# Keluar: 0 bersih, 1 rahasia terdeteksi, 2 alat pemindai/pendaftaran berkas
+# gagal (fail closed).
 set -eu
 
-cd "$(dirname "$0")/.."
+# Jalur absolut skrip ini dihitung SEBELUM `cd`: kendali `--uji-diri` menjalankan
+# SKRIP INI SENDIRI dengan `git` palsu di depan PATH, sehingga jalur itu harus
+# tetap benar setelah skrip berpindah ke akar repo.
+SKRIP_DIR=$(cd "$(dirname "$0")" && pwd)
+SKRIP_ABS="$SKRIP_DIR/$(basename "$0")"
+
+cd "$SKRIP_DIR/.."
 
 POLA_KUNCI='-----BEGIN (RSA|EC|OPENSSH|PGP) PRIVATE KEY-----|AKIA[0-9A-Z]{16}|aws_secret_access_key[[:space:]]*=[[:space:]]*[A-Za-z0-9/+=]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|SERVICE_ACCOUNT_JSON[[:space:]]*=[[:space:]]*\{'
 POLA_DSN='postgres(ql)?://[^:@/[:space:]]+:[^@/[:space:]]+@'
@@ -66,11 +85,13 @@ pindai_pola() {
 }
 
 # pindai_daftar <daftar-berkas-baris-baru> <pola> —
-# status: 0 = bersih, 1 = temuan, 2 = galat alat.
+# status: 0 = bersih, 1 = temuan, 2 = galat alat ATAU daftar berkas kosong.
+# Daftar kosong TIDAK boleh dibaca sebagai "bersih": itu jalur fail-open yang
+# membuat gerbang hijau tanpa memindai apa pun (temuan QA F1-22 putaran 2).
 pindai_daftar() {
     _daftar=$1
     _pola=$2
-    [ -n "$_daftar" ] || return 0
+    [ -n "$_daftar" ] || return 2
     printf '%s\n' "$_daftar" | pindai_pola "$_pola" >"$tmp/temuan" 2>"$tmp/galat" && _st=0 || _st=$?
     if [ -s "$tmp/galat" ]; then
         while IFS= read -r _baris; do
@@ -111,6 +132,80 @@ periksa() {
 }
 
 # --- kendali diri ------------------------------------------------------------
+
+# Kendali FAIL CLOSED jalur pendaftaran berkas (temuan QA F1-22 putaran 2).
+# Tiga kasus menjalankan SKRIP INI SENDIRI (jalur pemindaian normal, `$0` tanpa
+# argumen) dengan `git` palsu di depan PATH — jadi yang diuji adalah perilaku
+# gerbang yang sesungguhnya, bukan salinan logikanya di dalam uji:
+#   registrasi-berkas-gagal  : `git ls-files` gagal  -> WAJIB status 2
+#   registrasi-berkas-kosong : git sukses, daftar kosong -> WAJIB status 2
+#   registrasi-berkas-bersih : jalur normal tetap hijau -> WAJIB status 0
+# Kasus ketiga penting supaya kendalinya tidak hampa: implementasi yang "selalu
+# exit 2" akan lulus dua kasus pertama tetapi GAGAL di kasus ketiga.
+uji_registrasi_berkas() {
+    _dir_gagal="$tmp/git-palsu-gagal"
+    _dir_kosong="$tmp/git-palsu-kosong"
+    _dir_bersih="$tmp/git-palsu-bersih"
+    mkdir -p "$_dir_gagal" "$_dir_kosong" "$_dir_bersih"
+
+    # `git` palsu 1: meniru "not a git repository" (exit 128, seperti di
+    # direktori tanpa .git).
+    cat >"$_dir_gagal/git" <<'GIT_PALSU_GAGAL'
+#!/usr/bin/env sh
+printf '%s\n' 'fatal: not a git repository (or any of the parent directories): .git' >&2
+exit 128
+GIT_PALSU_GAGAL
+
+    # `git` palsu 2: sukses, tetapi tidak melaporkan berkas apa pun.
+    cat >"$_dir_kosong/git" <<'GIT_PALSU_KOSONG'
+#!/usr/bin/env sh
+exit 0
+GIT_PALSU_KOSONG
+
+    # `git` palsu 3 (kendali positif): satu berkas terlacak yang bersih.
+    _bersih="$tmp/uji-registrasi-bersih.txt"
+    printf '%s\n' 'konfigurasi tanpa rahasia' >"$_bersih"
+    cat >"$_dir_bersih/git" <<GIT_PALSU_BERSIH
+#!/usr/bin/env sh
+printf '%s\n' '$_bersih'
+exit 0
+GIT_PALSU_BERSIH
+
+    chmod +x "$_dir_gagal/git" "$_dir_kosong/git" "$_dir_bersih/git"
+
+    for _kasus in gagal kosong bersih; do
+        case $_kasus in
+            gagal)
+                _dir="$_dir_gagal"
+                _ingin=2
+                _ket='git ls-files gagal -> wajib 2 (fail closed)'
+                ;;
+            kosong)
+                _dir="$_dir_kosong"
+                _ingin=2
+                _ket='daftar berkas kosong -> wajib 2 (fail closed)'
+                ;;
+            *)
+                _dir="$_dir_bersih"
+                _ingin=0
+                _ket='jalur normal tetap hijau (bukan "selalu menolak")'
+                ;;
+        esac
+        _jml=$((_jml + 1))
+        _keluaran="$tmp/uji-registrasi-$_kasus.keluaran"
+        PATH="$_dir:$PATH" sh "$SKRIP_ABS" >"$_keluaran" 2>&1 && _st=0 || _st=$?
+        if [ "$_st" -eq "$_ingin" ]; then
+            _lulus=$((_lulus + 1))
+            echo "LULUS  registrasi-berkas-$_kasus -> status $_st (diharapkan $_ingin; $_ket)"
+        else
+            echo "GAGAL  registrasi-berkas-$_kasus -> status $_st, diharapkan $_ingin; $_ket" >&2
+            while IFS= read -r _baris; do
+                printf '       | %s\n' "$_baris" >&2
+            done <"$_keluaran"
+        fi
+    done
+}
+
 
 # Setiap pola berkeyakinan tinggi WAJIB terbukti terdeteksi, contoh interpolasi
 # WAJIB bersih, dan galat alat WAJIB menggagalkan pemindaian. Tanpa ini, salah
@@ -187,6 +282,8 @@ KASUS
         echo "LEWAT  berkas-tak-terbaca (dijalankan sebagai root: izin berkas tidak berlaku)"
     fi
 
+    uji_registrasi_berkas
+
     echo
     if [ "$_lulus" -eq "$_jml" ]; then
         echo "UJI DIRI check-secrets: LULUS ($_lulus/$_jml kasus)"
@@ -204,9 +301,32 @@ jalankan_pemindaian() {
         exit 2
     fi
 
+    # Status `git ls-files` TIDAK boleh ditelan. Cacat QA F1-22 putaran 2:
+    # `daftar_berkas=$(git ls-files | grep -v ... || true)` — bila git gagal
+    # (mis. dijalankan di luar pohon git), `|| true` menelan statusnya, daftar
+    # menjadi kosong, ketiga pemeriksaan dilewati, dan gerbang mencetak
+    # "Tidak ada rahasia terdeteksi" dengan exit 0 TANPA memindai apa pun.
+    _semua=$(git ls-files) && _st=0 || _st=$?
+    if [ "$_st" -ne 0 ]; then
+        echo "GAGAL: pendaftaran berkas (git ls-files) gagal (status $_st) — gerbang menolak (fail closed)" >&2
+        exit 2
+    fi
+    if [ -z "$_semua" ]; then
+        echo "GAGAL: git ls-files melaporkan daftar berkas kosong — gerbang menolak (fail closed)" >&2
+        exit 2
+    fi
+
     # Berkas contoh environment memang berisi kredensial pengembangan, bukan
     # rahasia; ia tetap diperiksa untuk pola kunci privat/token.
-    daftar_berkas=$(git ls-files | grep -v -E '(^|/)\.env\.example$' || true)
+    daftar_berkas=$(printf '%s\n' "$_semua" | grep -v -E '(^|/)\.env\.example$') && _st=0 || _st=$?
+    if [ "$_st" -gt 1 ]; then
+        echo "GAGAL: penyaringan daftar berkas gagal (grep status $_st) — gerbang menolak (fail closed)" >&2
+        exit 2
+    fi
+    if [ -z "$daftar_berkas" ]; then
+        echo "GAGAL: daftar berkas yang dipindai kosong setelah penyaringan — gerbang menolak (fail closed)" >&2
+        exit 2
+    fi
 
     periksa "Rahasia (kunci privat/kredensial/token) terdeteksi pada berkas yang dilacak" "$POLA_KUNCI"
     periksa "DSN dengan kredensial literal ditemukan" "$POLA_DSN"

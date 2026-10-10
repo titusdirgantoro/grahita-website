@@ -195,10 +195,13 @@ $ bash scripts/check-migration-kompatibel.sh
 Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.
 $ ./scripts/check-secrets.sh
 Tidak ada rahasia terdeteksi pada berkas yang dilacak.
-$ ./scripts/check-secrets.sh --uji-diri        # kendali diri (putaran 3)
-UJI DIRI check-secrets: LULUS (15/15 kasus)   # 11 pola wajib TERDETEKSI,
+$ ./scripts/check-secrets.sh --uji-diri        # kendali diri (putaran 3 + 4)
+UJI DIRI check-secrets: LULUS (18/18 kasus)   # 11 pola wajib TERDETEKSI,
                                               # 2 contoh interpolasi wajib bersih,
-                                              # berkas tak terbaca wajib fail closed
+                                              # berkas tak terbaca wajib fail closed,
+                                              # 3 kasus registrasi berkas: git-gagal
+                                              # & daftar-kosong wajib status 2,
+                                              # jalur normal wajib status 0
 $ actionlint v1.7.7 .github/workflows/ci.yml .github/workflows/release.yml
 (exit 0, tanpa temuan)
 ```
@@ -209,6 +212,13 @@ melaporkan bersih) sudah diperbaiki di `f2b40fc`, dan sekarang ada **kendali
 negatif tetap** — berkas terlacak berisi token/kunci privat membuktikan gerbang
 benar-benar MERAH (exit 1), berkas tak terbaca membuktikan gerbang MENOLAK
 (exit 2, fail closed). Rinciannya: `BUKTI-KONTROL-NEGATIF-RAHASIA.txt`.
+
+Residu QA putaran 2 (jalur `git ls-files`, NON-PEMBLOKIR) sudah ditutup di
+putaran 4 (`t_e2a76c3f`): kegagalan atau keluaran kosong `git ls-files` kini
+MENOLAK (`exit 2`) alih-alih melaporkan "bersih", dan ketiga kasus itu menjadi
+kendali tetap di `--uji-diri` yang dijalankan job CI `rahasia`. Ukuran nyata:
+di direktori TANPA `.git`, skrip versi `75286743…` `exit 0` (hijau palsu),
+skrip sekarang `exit 2`.
 
 Kontrol negatif gerbang migrasi (berkas migrasi uji berisi `DROP COLUMN` di
 bagian Up, dibuat lalu dihapus kembali):
@@ -318,7 +328,8 @@ berkeyakinan tinggi — gerbang "tanpa secret repo" selalu hijau.**
   `aws_secret_access_key`, `sk-ant-`, `ghp_`, `xox`, `SERVICE_ACCOUNT_JSON`,
   DSN literal; 2 contoh interpolasi wajib bersih; berkas tak terbaca wajib
   `exit 2`). Ia dijalankan job CI `rahasia` **sebelum** pemindaian, oleh gerbang
-  pra-rilis `release.yml`, dan tersedia sebagai `make uji-rahasia`.
+  pra-rilis `release.yml`, dan tersedia sebagai `make uji-rahasia`. Putaran 4
+  menambahkan 3 kasus registrasi berkas → **18/18** (§10).
 - Bukti: `BUKTI-KONTROL-NEGATIF-RAHASIA.txt` (sebelum/sesudah + 6 kontrol);
   log mentah `f123_before.log` / `f123_after.log` dilampirkan ke kartu.
 - Bukti tambahan §2 [7] pada berkas itu: gerbang juga MENYALA pada berkas
@@ -349,6 +360,38 @@ Suite backend penuh pada PostgreSQL 16.15 nyata (`grahita_f123suite`,
 `BUKTI-SUITE-BACKEND-HEAD3.txt`. Perubahan putaran 3 hanya menyentuh
 skrip/CI/Makefile/docs, sehingga kode Go yang diuji identik dengan kandidat
 `f2b40fc`.
+
+### 10. Putaran 4 — penutupan residu QA putaran 2: jalur `git ls-files` (kartu t_e2a76c3f)
+
+QA putaran 2 (`PENILAIAN-QA-F1-22-PUTARAN2.md` §D) mencatat satu jalur
+FAIL-OPEN NON-PEMBLOKIR pada `scripts/check-secrets.sh`: komentarnya
+mengklaim "fail closed", tetapi `daftar_berkas=$(git ls-files | grep -v … ||
+true)` **menelan status `git ls-files`** — pola "status ditelan" yang sama
+dengan temuan putaran 1, hanya pada perintah yang berbeda.
+
+- Direproduksi (versi `75286743e0f4fb52…`, HEAD kandidat saat itu) di direktori
+  TANPA `.git`: `fatal: not a git repository`, lalu
+  `Tidak ada rahasia terdeteksi pada berkas yang dilacak.` `EXIT=0` — hijau
+  tanpa memindai apa pun. Terukur juga pada dua varian `git` palsu (exit 128,
+  dan exit 0 tanpa keluaran): ketiganya `EXIT=0`.
+- Perbaikan: status `git ls-files` diperiksa (`_semua=$(git ls-files) && _st=0
+  || _st=$?`); `_st != 0` → pesan + `exit 2`. Daftar kosong mentah **dan**
+  daftar kosong sesudah penyaringan `.env.example` juga DITOLAK `exit 2`, dan
+  `pindai_daftar` menolak daftar kosong (bukan lagi `return 0`). Tidak ada
+  pemeriksaan yang dilonggarkan.
+- Kendali tetap (dijalankan job CI `rahasia` lewat `--uji-diri`, `release.yml`,
+  dan `make uji-rahasia`): tiga kasus yang menjalankan **skrip ini sendiri**
+  dengan `git` palsu di depan `PATH` —
+  `registrasi-berkas-gagal` → wajib 2, `registrasi-berkas-kosong` → wajib 2,
+  `registrasi-berkas-bersih` → wajib 0. Kasus ketiga mencegah kendali hampa
+  (implementasi "selalu exit 2" akan gugur di situ).
+- Angka terukur pada pohon kerja di atas HEAD `61a765c`
+  (sha256 skrip `147f887017c0050b…`): `bash`/`sh ./scripts/check-secrets.sh`
+  → exit 0; `--uji-diri` → **18/18 LULUS**, exit 0; `make uji-rahasia` → exit 0;
+  `make secrets` → exit 0; salinan skrip di direktori tanpa `.git` → **exit 2**
+  (versi lama → exit 0); `git` palsu gagal / daftar kosong pada repo nyata →
+  exit 2; kontrol negatif berkas terlacak berisi `ghp_…` → exit 1; pohon
+  kembali bersih → exit 0. Bukti mentah: `BUKTI-KONTROL-NEGATIF-RAHASIA.txt` §5.
 
 Gate lint CI pada HEAD ini **masih MERAH** karena 19 temuan `golangci-lint`
 pada kode kartu LAIN (kartu **t_cf36bd3d**) — tidak satu pun dari berkas F1-22,
@@ -393,8 +436,9 @@ gate tidak dilonggarkan; keadaannya tidak berubah dari putaran 2
    dan didokumentasikan di `BUKTI-KONTROL-NEGATIF-RAHASIA.txt` §4. Yang
    dibuktikan: mesin pemindainya benar-benar dapat MERAH (kontrol negatif
    berkas terlacak berisi token/kunci privat → exit 1) dan MENOLAK saat alatnya
-   gagal (exit 2, fail closed) — bukan bahwa repo bebas dari segala bentuk
-   rahasia.
+   gagal (exit 2, fail closed) — termasuk bila pendaftaran berkas gagal
+   (`git ls-files` error) atau melaporkan daftar kosong (putaran 4, kartu
+   `t_e2a76c3f`) — bukan bahwa repo bebas dari segala bentuk rahasia.
 
 ## Kewajiban gerbang rilis (dibawa dari catatan CEO/QA — bukan diklaim selesai)
 
@@ -425,7 +469,7 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml config 
 # 2. gerbang
 ./scripts/check-migration-kompatibel.sh
 ./scripts/check-secrets.sh
-./scripts/check-secrets.sh --uji-diri   # kendali diri gerbang rahasia (15 kasus)
+./scripts/check-secrets.sh --uji-diri   # kendali diri gerbang rahasia (18 kasus)
 
 # 3. uji asap dua host (staging nyata: tanpa SMOKE_CURL_OPTS)
 CUSTOMER_BASE=https://staging.grahita-branch.tiusclaw.com \

@@ -1,8 +1,10 @@
-BUKTI GERBANG RAHASIA (scripts/check-secrets.sh) — F1-22 PUTARAN 3
+BUKTI GERBANG RAHASIA (scripts/check-secrets.sh) — F1-22 PUTARAN 3 + PUTARAN 4
 Perbaikan PEMBLOKIR temuan QA putaran 1 + kendali negatif yang diminta
+(+ penutupan residu NON-PEMBLOKIR QA putaran 2, kartu t_e2a76c3f — lihat §5)
 =====================================================================
 
-HEAD saat verifikasi : f2b40fc (perbaikan F1-22 putaran 3)
+HEAD saat verifikasi : f2b40fc (perbaikan F1-22 putaran 3);
+                       putaran 4: pohon kerja di atas HEAD 61a765c (§5)
 Baseline dibandingkan : 0eb0120 (sebelum perbaikan)
 Gerbang dipakai oleh : job CI `rahasia` (.github/workflows/ci.yml) dan gerbang
                        pra-rilis `.github/workflows/release.yml`; kriteria F1-22
@@ -154,3 +156,70 @@ Makefile                      : target `uji-rahasia` (+ `secrets` tetap pindai)
   fiksi di direktori temporer.
 - Deteksi berdasarkan ISI BARIS: berkas biner (grep -I melewatinya) tidak
   diperiksa isinya; nama berkas berbahaya tetap diperiksa pemeriksaan 3.
+
+---------------------------------------------------------------------
+5. PUTARAN 4 (kartu t_e2a76c3f) — residu QA putaran 2: jalur `git ls-files`
+---------------------------------------------------------------------
+Cacat yang ditutup: `daftar_berkas=$(git ls-files | grep -v ... || true)`
+menelan status `git ls-files`. Bila git GAGAL (mis. skrip dijalankan di luar
+pohon git) daftar berkas menjadi kosong -> ketiga pemeriksaan dilewati ->
+gerbang mencetak "Tidak ada rahasia terdeteksi" dengan EXIT=0 TANPA memindai
+apa pun: fail-OPEN, bertentangan dengan klaim "fail closed" di komentarnya.
+
+sha256 skrip SEBELUM : 75286743e0f4fb52... (HEAD kandidat f2b40fc)
+sha256 skrip SESUDAH : 147f887017c0050b... (pohon kerja di atas HEAD 61a765c)
+Perubahan            : status `git ls-files` diperiksa; daftar kosong (mentah
+                       maupun sesudah penyaringan `.env.example`) DITOLAK
+                       exit 2; `pindai_daftar` menolak daftar kosong (dulu
+                       `return 0`); `--uji-diri` +3 kasus (kini 18/18).
+Tidak ada pemeriksaan yang dilonggarkan.
+
+[A] versi LAMA (75286743...) — hijau palsu pada tiga keadaan (TERBUKTI)
+$ cd <dir-tanpa-.git>/ && bash scripts/check-secrets.sh
+fatal: not a git repository (or any of the parent directories): .git
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+EXIT=0
+$ PATH=<git-palsu: exit 128> bash scripts/check-secrets.sh  -> EXIT=0
+$ PATH=<git-palsu: exit 0 tanpa keluaran> bash scripts/check-secrets.sh -> EXIT=0
+
+[B] versi BARU (147f8870...) pada tiga keadaan yang sama — MENOLAK
+$ cd <dir-tanpa-.git>/ && bash scripts/check-secrets.sh
+fatal: not a git repository (or any of the parent directories): .git
+GAGAL: pendaftaran berkas (git ls-files) gagal (status 128) — gerbang menolak (fail closed)
+EXIT=2
+$ sh scripts/check-secrets.sh                 (dash) -> EXIT=2, pesan sama
+$ PATH=<git-palsu: exit 128> ./scripts/check-secrets.sh  -> EXIT=2
+$ PATH=<git-palsu: exit 0 tanpa keluaran> ./scripts/check-secrets.sh
+GAGAL: git ls-files melaporkan daftar berkas kosong — gerbang menolak (fail closed)
+EXIT=2
+
+[C] kendali tetap di `--uji-diri` (dijalankan job CI `rahasia`, `release.yml`,
+    `make uji-rahasia`)
+$ ./scripts/check-secrets.sh --uji-diri
+... (15 kasus sebelumnya tetap LULUS) ...
+LULUS  registrasi-berkas-gagal -> status 2 (diharapkan 2; git ls-files gagal -> wajib 2 (fail closed))
+LULUS  registrasi-berkas-kosong -> status 2 (diharapkan 2; daftar berkas kosong -> wajib 2 (fail closed))
+LULUS  registrasi-berkas-bersih -> status 0 (diharapkan 0; jalur normal tetap hijau (bukan "selalu menolak"))
+UJI DIRI check-secrets: LULUS (18/18 kasus)
+EXIT=0
+Tiga kasus ini menjalankan SKRIP INI SENDIRI (jalur pemindaian normal) dengan
+`git` palsu di depan PATH, jadi yang diuji adalah perilaku gerbangnya, bukan
+salinan logika di dalam uji. Kasus `bersih` penting supaya kendalinya tidak
+hampa: implementasi "selalu exit 2" lulus dua kasus pertama tetapi gagal di
+kasus ketiga.
+
+[D] tanpa regresi pada pohon nyata
+$ bash ./scripts/check-secrets.sh   -> "Tidak ada rahasia terdeteksi", EXIT=0
+$ sh ./scripts/check-secrets.sh     -> EXIT=0
+$ make uji-rahasia                  -> 18/18 LULUS, EXIT=0
+$ make secrets                      -> EXIT=0
+$ kontrol negatif berkas TERLACAK berisi token ghp_<36 karakter>
+                                    -> EXIT=1 (berkas dihapus kembali)
+$ pohon kembali bersih              -> EXIT=0 ; git status --porcelain kosong
+$ bash -n / dash -n skrip           -> EXIT=0
+$ jalur absolut dari cwd lain       -> EXIT=0 ; `--uji-diri` 18/18
+
+Batas yang tidak berubah: bagian 4 di atas tetap berlaku (bukan pemindai
+rahasia penuh; blind spot `${...}`; isi berkas biner dilewati `grep -I`).
+Yang ditambahkan putaran ini hanya penutupan jalur fail-open pada pendaftaran
+berkas.
