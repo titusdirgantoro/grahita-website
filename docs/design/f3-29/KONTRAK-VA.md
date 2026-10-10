@@ -22,6 +22,16 @@ akses bank).
 Rekan dokumen: `docs/design/f3-29/HASIL.md` (keputusan desain + bukti
 verifikasi perintah/hasil nyata).
 
+**Pembaruan 10 Oktober 2026 (kartu t_c7a417e2 — F3-29b).** Jawaban pengguna
+terbaru atas K-01..K-10 sudah diturunkan menjadi kebijakan, state machine,
+tabel keputusan callback, batas antarmuka dua adapter bank, dan matriks uji di
+`docs/design/f3-29/KEPUTUSAN-VA-BCA-BRI.md`. Dokumen itu **menggantikan**
+usulan/rekomendasi di halaman ini bila keduanya bentrok — khususnya §2.4
+butir 2 (piloting lewat penyedia/aggregator **dibatalkan** oleh K-01) dan
+status "BELUM DIPUTUSKAN" di §9. Riwayat di halaman ini **tidak dihapus**:
+setiap butir yang bergeser diberi penanda pembaruan di tempatnya, dan §9 kini
+memuat status per keputusan (final vs menunggu).
+
 ---
 
 ## 1. Batas lingkup & prinsip
@@ -30,7 +40,7 @@ verifikasi perintah/hasil nyata).
 |---|---|
 | **Jangan hardcode provider** | Nama bank/penyedia tidak muncul di kode domain. Semua lewat `va.Provider` (registry: `Nama()`), konfigurasi `va.provider`, dan tabel referensi (F3-30). Prototipe hanya memuat provider tiruan deterministik. |
 | **Jangan mengklaim callback nyata tanpa akses bank** | Semua uji di kartu ini berjalan tanpa jaringan. Bentuk payload/tanda tangan bank dipisahkan tegas menjadi *usulan kontrak* (§3–§5) dan *keputusan tertunda* (§9) yang menunggu dokumen resmi bank. Tidak ada berkas bukti yang menyatakan "callback BCA/BRI berhasil". |
-| **Fitur mati secara bawaan** | Packaging `/api/v1/va/...` tidak pernah ditambahkan ke router di kartu ini; `va.Adapter.Terpasang` bawaan `false` dan diuji "provider tidak dipanggil sama sekali" saat mati. Setelan `va.aktif` (bawaan `false`) baru ditambahkan F3-30. |
+| **Fitur mati secara bawaan** | Packaging `/api/v1/va/...` tidak pernah ditambahkan ke router di kartu ini; `va.Adapter.Terpasang` bawaan `false` dan diuji "provider tidak dipanggil sama sekali" saat mati. Setelan `va.aktif` (bawaan `false`) baru ditambahkan F3-30. **Pembaruan F3-29b:** toggle master `va.aktif` diputuskan **tetap `false`** dan ditambah usulan toggle **per bank** — lihat `KEPUTUSAN-VA-BCA-BRI.md` §1 dan §2.1. |
 | **Satu pintu transisi Done tidak dilanggar** | VA hanya **mengusulkan** pembayaran; transisi Done tetap `payment.MarkVerified` (metode `virtual_account`, sudah ada di enum `verify_method`). Kartu ini tidak menyentuh `payment` domain. |
 | **Uang bulat, tanpa sen** | Nominal VA `int64` Rupiah bulat (BR-10); cocok/lebih/kurang memakai toleransi `ai.tol_kurang`/`ai.tol_lebih` yang sudah ada supaya VA dan OCR tidak menyimpang. |
 | **Idempotensi dan replay dijaga berlapis** | Kunci peristiwa provider + klaim atomik di basis data (F3-30) + jendela waktu (prototipe). Callback yang diulang provider **tidak pernah** menghasilkan dua pembayaran. |
@@ -83,7 +93,11 @@ PRD §1.1).
    bank (BCA)**, karena waktu integrasi & sandbox paling ringan, satu kontrak,
    settlement jelas, dan biaya per transaksi dapat dihitung pasti; gunakan
    `MockProvider` + kontrak ini agar peralihan ke host-to-host bank langsung
-   tidak mengubah domain.
+   tidak mengubah domain. **Pembaruan F3-29b: butir ini DIBATALKAN oleh K-01** —
+   aggregator/penyedia bukan target; arsitektur yang berlaku adalah dua adapter
+   host-to-host langsung (BCA dan BRI) sesuai
+   `KEPUTUSAN-VA-BCA-BRI.md` §1/§2. Riwayat usulan lama sengaja dibiarkan
+   terbaca.
 3. Evaluasi ulang host-to-host bank langsung (opsi A/B) bila salah satu
    kondisi terpenuhi: volume VA melewati ±2.000/bulan, biaya per transaksi
    menjadi material terhadap margin, atau bank menawarkan biaya signifikan
@@ -251,6 +265,15 @@ Bila fitur hidup tetapi penjaga idempotensi tidak dipasang, prototipe **menolak*
 (`KodeDitolak` + `ErrPenjagaIdempotensiTidakAda`) — gagal tertutup, karena
 callback duplikat yang dihitung dua kali adalah kerugian uang.
 
+**Pembaruan F3-29b (K-04/K-05/K-09).** Cabang "peristiwa sah, kunci baru" di
+atas tidak selalu berarti Done: hanya kasus **pasti** (VA aktif, versi terkini,
+`waktu_bayar ≤ terbit + 24 jam`, nominal **persis**, bukan duplikat) yang
+mengusulkan Done. Callback **terlambat, duplikat, untuk VA versi lama/
+kedaluwarsa/dibatalkan, atau saat pesanan sudah Done** berakhir di **audit +
+`perlu_review`** (tidak ada auto-Done pada kasus tidak pasti), dan verifikasi
+manual admin tetap tersedia sebagai pengecualian beralasan. Alur lengkap, diagram
+state VA, dan tabel keputusan 15 baris: `KEPUTUSAN-VA-BCA-BRI.md` §4–§6.
+
 ### 5.1 Yang tetap menjadi kewajiban F3-30
 
 1. Klaim kunci **dan** pencocokan pesanan dalam **satu transaksi** yang mengunci
@@ -302,8 +325,11 @@ lama:
 - bila VA versi lama dibayar **setelah** revisi → **perlu review**
   (`lebih_bayar`/`kurang_bayar` sesuai selisih terhadap total baru), bukan Done
   otomatis;
-- keputusan ini memerlukan persetujuan user (K-03) karena menentukan tampilan
-  instruksi pembayaran di portal cabang.
+- keputusan ini **sudah diambil (K-03, K-04 pada F3-29b)**: bentuk VA adalah
+  closed VA per pesanan/versi dengan nominal tetap, VA kedaluwarsa 24 jam, dan
+  VA lama yang dibayar setelah revisi **tidak pernah** Done otomatis — ia
+  `perlu_review` (tampilan instruksi pembayaran ke cabang tetap hanya VA aktif
+  versi terkini). Rincian: `KEPUTUSAN-VA-BCA-BRI.md` §1, §4 (V-09/V-10), §5.
 
 ---
 
@@ -367,16 +393,22 @@ pencocokan berdasarkan nama pembayar (nama bisa berbeda dari nama cabang).
 
 ### 7.4 Setelan baru (usulan)
 
-| Setelan | Bawaan | Alasan |
-|---|---|---|
-| `va.aktif` | `false` | saklar fitur; **wajib mati** sampai provisioning selesai |
-| `va.provider` | `""` | nama provider di registry; kosong = tidak ada provider |
-| `va.jendela_replay_menit` | `15` | jendela waktu callback |
-| `va.kedaluwarsa_jam` | `24` | masa berlaku nomor VA (K-04) |
-| `va.boleh_timpa_manual` | `true` | admin tetap bisa verifikasi manual (K-09) |
+| Setelan | Bawaan | Alasan | Status per F3-29b |
+|---|---|---|---|
+| `va.aktif` | `false` | saklar fitur; **wajib mati** sampai provisioning selesai | **final: tetap `false`** (K-06) |
+| `va.provider` | `""` | nama provider di registry; kosong = tidak ada provider | usulan (F3-30) |
+| `va.jendela_replay_menit` | `15` | jendela waktu callback | usulan (F3-30) |
+| `va.kedaluwarsa_jam` | `24` | masa berlaku nomor VA | **naik status: keputusan K-04** (kedaluwarsa tepat 24 jam) |
+| `va.boleh_timpa_manual` | `true` | admin tetap bisa verifikasi manual | **naik status: keputusan K-09** (manual sebagai pengecualian beralasan) |
+| `va.<bank>.aktif` · `va.<bank>.provider` | `false` · `""` | toggle & provider **per bank** (BCA/BRI terpisah) | usulan baru F3-29b §2.1 (belum ada di kode) |
 
-Toleransi nominal memakai `ai.tol_kurang`/`ai.tol_lebih` yang sudah ada agar
-tidak ada dua sumber kebijakan uang.
+Toleransi nominal: F3-29 memakai `ai.tol_kurang`/`ai.tol_lebih` agar tidak ada
+dua sumber kebijakan uang. **Pembaruan F3-29b:** karena VA berbentuk closed VA
+dengan **nominal tetap** (K-03), pencocokan VA yang berlaku adalah **eksak**
+(`selisih = 0`) dan setiap selisih ≠ 0 jatuh ke **perlu review** (K-05);
+`ai.tol_*` (bawaan `0/0`, sehingga praktis sama) tetap menjadi kebijakan jalur
+OCR/AI. Penyelarasan eksplisit menunggu saat F3-30 dikerjakan —
+`KEPUTUSAN-VA-BCA-BRI.md` §13 asumsi 2.
 
 ### 7.5 Rute (usulan, F3-30)
 
@@ -384,6 +416,11 @@ tidak ada dua sumber kebijakan uang.
 POST /api/v1/va/callback        -- publik, tanpa sesi/CSRF, tanda tangan WAJIB
 GET  /api/v1/admin/orders/{id}/va -- SA/Manager: VA aktif pesanan (bila ada)
 ```
+
+**Pembaruan F3-29b:** karena BCA dan BRI adalah dua integrasi terpisah
+(K-01), usulan rute callback dipisah per bank
+(`POST /api/v1/va/<bank>/callback`) — bentuk final menunggu kontrak bank
+(K-02); lihat `KEPUTUSAN-VA-BCA-BRI.md` §8.
 
 Rute callback wajib **dikecualikan dari CSRF** (bukan permintaan browser) tetapi
 **tidak** dikecualikan dari rate limit; ia juga harus berada di luar guard sesi.
@@ -430,10 +467,24 @@ Semua baris berstatus **BELUM** — tidak ada yang diminta maupun diterima.
 
 ---
 
-## 9. Keputusan tertunda yang memerlukan persetujuan user (human gate)
+## 9. Gerbang manusia K-01..K-10 (rumusan awal + status terkini)
 
-**Tidak ada implementasi hidup sebelum seluruh K-01..K-10 diputuskan.** Ini
-gerbang manusia, bukan gerbang teknis.
+**Tidak ada implementasi hidup sebelum gerbang manusia terpenuhi (K-01..K-10
+dan butir menunggu lain).** Ini gerbang manusia, bukan gerbang teknis.
+
+**Pembaruan F3-29b (10 Oktober 2026).** Jawaban pengguna terbaru membuat
+sebagian K-01..K-10 **final** (arsitektur dua adapter host-to-host tanpa
+aggregator, closed VA satu pesanan/versi, kedaluwarsa 24 jam, VA lama
+dibatalkan + VA baru diterbitkan, callback terlambat/duplikat/VA lama tidak
+auto-Done, kurang/lebih bayar perlu review, VA mati dan tetap mati, OCR/manual
+tetap berjalan, C&C tetap alur existing, minimisasi PII, manual sebagai
+pengecualian beralasan, Finance PIC rekonsiliasi harian) dan menyisakan
+sebagian **menunggu** (urutan aktivasi bank, retensi, biaya/PPN/settlement +
+plafon + penandatangan, Finance PIC pengganti + SLA, kebijakan VA untuk C&C,
+serta dua keputusan teknis M-01/M-02). Tabel di bawah adalah **rumusan
+pertanyaan awal** dan sengaja dibiarkan utuh sebagai riwayat; status terkininya
+ada di §9.1, rincian + matriks kewajiban bukti di
+`docs/design/f3-29/KEPUTUSAN-VA-BCA-BRI.md` §1 dan §11.
 
 | # | Keputusan | Dampak bila salah | Pemilik |
 |---|---|---|---|
@@ -448,7 +499,30 @@ gerbang manusia, bukan gerbang teknis.
 | K-09 | Apakah admin masih boleh melakukan verifikasi manual saat VA aktif | penanganan pengecualian | User |
 | K-10 | Pemilik proses rekonsiliasi harian (F3-31) & SLA penanganannya | selisih tidak terdeteksi | User |
 
-Ringkasan status saat ini: **K-01..K-10 = BELUM DIPUTUSKAN**.
+### 9.1 Status terkini per keputusan (F3-29b, 10 Oktober 2026)
+
+| # | Status | Isi yang berlaku |
+|---|---|---|
+| K-01 | FINAL (arsitektur) · MENUNGGU (urutan aktivasi bank) | host-to-host langsung, dua adapter terpisah; aggregator bukan target; BCA dulu / BRI dulu **belum** ditentukan |
+| K-02 | FINAL (aturan) · MENUNGGU (dokumen bank) | algoritme/header/tanda tangan hanya dari kontrak resmi tiap bank; tidak ditebak dari mock |
+| K-03 | FINAL | closed VA: satu pesanan/versi, satu nomor, nominal tetap |
+| K-04 | FINAL (kebijakan) · MENUNGGU (kemampuan cancel/generate bank) | kedaluwarsa tepat 24 jam; VA lama dibatalkan + VA baru diterbitkan; callback terlambat/duplikat/VA lama → audit + perlu review; opsi lama "auto-terima dalam masa toleransi" **tidak berlaku lagi** |
+| K-05 | FINAL | kurang/lebih bayar → perlu review manusia |
+| K-06 | FINAL (VA mati; OCR/manual tetap) · MENUNGGU (VA untuk C&C) | `va.aktif=false` dan tetap false; unggah bukti + OCR/AI tetap jalur berjalan (auto-Done hanya bila cocok + ambang F2-26); C&C tidak auto-aktif |
+| K-07 | FINAL (prinsip) · MENUNGGU (angka retensi) | minimisasi/sanitasi data pembayar + pembatasan akses; retensi menunggu persetujuan sebelum go-live |
+| K-08 | FINAL (gerbang) · MENUNGGU (isi) | biaya/PPN/settlement + plafon + penandatangan menunggu penawaran resmi; bukan persetujuan kontrak |
+| K-09 | FINAL | verifikasi manual admin tetap ada sebagai **pengecualian** dengan alasan, hak akses, audit, dan penjagaan pembayaran ganda |
+| K-10 | FINAL (proses) · MENUNGGU (nama pengganti + SLA) | Finance PIC rekonsiliasi harian; pengganti & SLA ditetapkan sebelum VA aktif |
+
+Butir menunggu tambahan yang muncul dari penurunan ini (rincian
+`KEPUTUSAN-VA-BCA-BRI.md` §11.2): **M-01** bentuk `ReffID` untuk penerbitan VA
+ulang pada versi sama; **M-02** jalur transisi Done V-01 (perluas otorisasi
+aktor sistem `virtual_account` **atau** V-01 hanya mengusulkan lalu admin
+menyetujui); **M-08** apakah alasan review khusus VA ditambahkan ke enum/UI
+(catatan: enum `review_reason` yang ada tertutup lima nilai, jadi keputusan
+pesanan untuk kasus VA memakai `lainnya` + kode mesin di `va_callbacks`); **M-09**
+hak akses aksi admin VA (terbitkan/batalkan). Kewajiban bukti per bank
+(B-1..B-9) ada di §11.3 dokumen yang sama.
 
 ---
 
@@ -456,7 +530,7 @@ Ringkasan status saat ini: **K-01..K-10 = BELUM DIPUTUSKAN**.
 
 | Kartu | Kewajiban yang diturunkan dari kontrak ini |
 |---|---|
-| **F3-30 (t_fc796fba)** — adapter bank & callback | mengimplementasikan `va.Provider` untuk provider yang **akhirnya dipilih**; menambahkan migrasi `va_accounts`/`va_callbacks` (§7), repository, rute `POST /api/v1/va/callback` (tanpa CSRF, dengan tanda tangan wajib), saklar `va.aktif` bawaan mati, transisi Done lewat `payment.MarkVerified` metode `virtual_account`, audit `va_payment`; menjalankan `vatest.Uji` terhadap adapter baru; **memblokir** kartu bila kredensial/sandbox/dokumen callback belum ada (jangan mengarang). |
+| **F3-30 (t_fc796fba)** — adapter bank & callback | mengimplementasikan `va.Provider` untuk provider yang **akhirnya dipilih**; menambahkan migrasi `va_accounts`/`va_callbacks` (§7), repository, rute `POST /api/v1/va/callback` (tanpa CSRF, dengan tanda tangan wajib), saklar `va.aktif` bawaan mati, transisi Done lewat `payment.MarkVerified` metode `virtual_account`, audit `va_payment`; menjalankan `vatest.Uji` terhadap adapter baru; **memblokir** kartu bila kredensial/sandbox/dokumen callback belum ada (jangan mengarang). **Tambahan F3-29b:** satu adapter **per bank** + toggle/konfigurasi per bank (§2.1 dok. F3-29b), kedaluwarsa 24 jam + job penanda `kedaluwarsa`, pembatalan VA lama (kemampuan `BatalVA` opsional — bank tanpa API cancel tetap sah), penanganan **callback terlambat/duplikat/VA lama/versi lama/pesanan sudah Done = perlu review + audit** (tidak auto-Done), partial unique "satu VA aktif per (order, versi)", dan matriks uji T-VA-01..T-VA-30 sebagai acuan. Butir M-01/M-02 (bentuk `ReffID` penerbitan ulang, jalur transisi Done) **wajib diputuskan lebih dulu**. |
 | **T8 (t_06195c87)** — uji VA, rekonsiliasi, laporan | menjalankan `vatest.Uji` pada sandbox nyata dan membandingkan hasilnya dengan `va.MockProvider` (kriteria "bandingkan hasil sandbox nyata dengan mock"); menguji replay/duplikasi/nominal mismatch/race manual+VA; memverifikasi laporan tidak menggandakan dan hanya Superadmin. |
 | **F3-31** — rekonsiliasi & laporan pembayaran | memakai `va_callbacks`/`va_accounts` sebagai sumber, tidak menghitung ulang dari `payment_proofs`; memisahkan biaya transaksi penyedia dari total pesanan. |
 | **Rilis (T4/T5)** | variabel kredensial VA masuk daftar rahasia operator; IP statis & URL callback masuk checklist produksi. |
