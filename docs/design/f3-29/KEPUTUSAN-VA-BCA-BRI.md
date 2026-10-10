@@ -257,6 +257,24 @@ Aturan lintas-baris:
   `aktif` sebagai alasan menganggap pembayaran on-time atau mengusulkan Done —
   syarat on-time adalah `waktu_bayar ≤ kedaluwarsa_pada` (V-01), bukan status
   baris.
+- **Presedensi lapis: jendela waktu dievaluasi lebih dahulu.** Baris tabel di
+  atas dibaca **berlapis**, mengikuti urutan F3-29 §5: (1) toggle + provider
+  (V-14/V-15), (2) tanda tangan (V-05), (3) **jendela replay** (V-06),
+  (4) kunci peristiwa (V-04), (5) pesanan + nominal (V-01..V-03, V-07..V-13).
+  Konsekuensi tegas: **V-06 menang atas V-10/V-11.** Callback yang tiba di luar
+  `va.jendela_replay_menit` dinilai **kedatangan telat** — tolak **tanpa efek ke
+  pesanan**, kunci **tidak** diklaim, audit + daftar kerja rekonsiliasi harian —
+  **meskipun** `waktu_bayar > kedaluwarsa_pada`. **V-10/V-11 hanya berlaku untuk
+  callback yang tiba di dalam jendela replay.** Alasan: callback basi tidak
+  boleh diproses sebagai peristiwa baru hanya karena isinya sudah lewat
+  kedaluwarsa, dan uang yang mungkin nyata tetap terlihat manusia lewat daftar
+  rekonsiliasi (K-09/K-10) — tidak ada yang hilang diam-diam. Uji kombinasi:
+  §10 **T-VA-32**.
+  *Kasus batas yang tetap terbuka sampai K-02:* bila dokumen bank menetapkan
+  stempel waktu bertanda tangan **= waktu bayar** (sehingga lapis (3) dan
+  penilaian `waktu_bayar` berimpit dan tidak terpisah), hasilnya tetap
+  **`perlu review`, tidak pernah Done** — perlakuan paling konservatif, uang
+  masuk tidak diabaikan (§13 butir 6).
 - **Verifikasi tanda tangan lebih dahulu, klaim kunci paling akhir** (urutan
   F3-29 §5) — supaya callback palsu tidak dapat "membakar" kunci yang sah.
 - **Klaim kunci + pencocokan pesanan dalam satu transaksi yang mengunci baris
@@ -299,7 +317,11 @@ dan UI/prototype memakai daftar itu. Karena itu:
    bukan dihitung di UI. **Hasil review tidak bergantung pada kapan job itu
    berjalan**: job sudah jalan → V-10, belum jalan (status masih `aktif`) →
    V-11; keduanya `perlu review`, jadi tidak ada celah antara "lewatnya jam"
-   dan "jalannya job". **Angka 24 jam adalah keputusan user (K-04); bila
+   dan "jalannya job". **Presedensi:** butir ini hanya berlaku untuk callback
+   yang **tiba di dalam jendela replay** — callback basi (kedatangan telat,
+   V-06) dievaluasi lebih dahulu dan menang, walau `waktu_bayar` sudah lewat
+   kedaluwarsa (§4.2 presedensi; uji §10 T-VA-32). **Angka 24 jam adalah
+   keputusan user (K-04); bila
    kontrak bank mensyaratkan batas lain, angka dari kontrak yang berlaku
    (K-02).**
 3. **Cancel VA lama** terjadi pada: (a) revisi invoice (versi+1, F2-25),
@@ -357,6 +379,10 @@ VA menambahkan tiga kewajiban:
 ### 6.2 Replay & race
 
 - Jendela waktu (F3-29 §4.3) menangani replay; klaim kunci mencegah efek ganda.
+  **Jendela dievaluasi lebih dahulu daripada penilaian `waktu_bayar`** (§4.2
+  presedensi): callback yang tiba di luar jendela = kedatangan telat (V-06,
+  tolak tanpa efek) walaupun `waktu_bayar` sudah melewati kedaluwarsa; V-10/V-11
+  hanya berlaku untuk callback yang tiba di dalam jendela.
 - Dua callback bersamaan untuk kunci berbeda (mis. VA lama + VA baru) →
   diserialkan oleh penguncian baris pesanan; pemenang ditentukan transaksi,
   yang kalah menjadi review (V-09/V-13).
@@ -485,7 +511,7 @@ manual (API hidup di lokal), **X** = uji sandbox bank (**butuh akses eksternal
 | T-VA-04 | toggle bank A hidup, bank B mati | hanya BCA yang menerbitkan | S/I | K-01 |
 | T-VA-05 | Terbitkan VA kedua untuk (order, versi) yang sudah punya VA aktif | ditolak (partial unique) | I | K-03 |
 | T-VA-06 | `waktu_bayar` **tepat** `kedaluwarsa_pada` | on-time (batas inklusif) | S | K-04 |
-| T-VA-07 | `waktu_bayar` = batas + 1 detik (job penanda sudah jalan) | perlu review (V-10), **tanpa** Done | S/I | K-04 |
+| T-VA-07 | `waktu_bayar` = batas + 1 detik (job penanda sudah jalan), **callback tiba di dalam jendela replay** (asumsi §4.2 presedensi) | perlu review (V-10), **tanpa** Done | S/I | K-04 |
 | T-VA-08 | Job penanda expiry (`Clock` maju 24 jam) | status `kedaluwarsa`, tidak mengubah pesanan | I | K-04 |
 | T-VA-09 | Revisi invoice versi+1 saat VA aktif | VA lama `dibatalkan` + VA baru terbit | I | K-04 |
 | T-VA-10 | Bank mendukung `BatalVA` (mock) | `dibatalkan_di_bank=true`, jejak audit ada | K/S | §3.2 |
@@ -509,7 +535,8 @@ manual (API hidup di lokal), **X** = uji sandbox bank (**butuh akses eksternal
 | T-VA-28 | Audit tiap callback | satu baris `va_callbacks` + entri audit `va_payment`, dengan aktor/kode | I | K-07/K-09 |
 | T-VA-29 | (X) Callback sandbox nyata bank | bentuk/header/tanda tangan cocok dengan dokumen resmi | X | K-02 — **butuh akses, belum ada** |
 | T-VA-30 | (X) Cancel/generate di sandbox bank | perilaku cancel/generate bank sesuai asumsi §5 | X | K-04 — **butuh akses, belum ada** |
-| T-VA-31 | **Bayar setelah kedaluwarsa** sementara baris `va_accounts` **masih `aktif`** (job penanda `Clock` belum jalan): `waktu_bayar = kedaluwarsa_pada + 1 detik`, status `aktif` | `perlu_review` + kode mesin `va_bayar_setelah_kedaluwarsa` (V-11); **bukan** Done, status VA tidak boleh dianggap on-time | S/I | K-04, §5 butir 2 |
+| T-VA-31 | **Bayar setelah kedaluwarsa** sementara baris `va_accounts` **masih `aktif`** (job penanda `Clock` belum jalan), **callback tiba di dalam jendela replay** (asumsi §4.2 presedensi): `waktu_bayar = kedaluwarsa_pada + 1 detik`, status `aktif` | `perlu_review` + kode mesin `va_bayar_setelah_kedaluwarsa` (V-11); **bukan** Done, status VA tidak boleh dianggap on-time | S/I | K-04, §5 butir 2 |
+| T-VA-32 | **Kombinasi**: callback **kedatangan telat** **dan** **bayar setelah kedaluwarsa** — tiba di luar `va.jendela_replay_menit` sementara `waktu_bayar > kedaluwarsa_pada` | **V-06 menang** (§4.2 presedensi lapis): tolak **tanpa efek ke pesanan** — `perlu_review` **tidak** diset, tidak pernah Done; kunci peristiwa **tidak** diklaim; audit + daftar kerja rekonsiliasi harian | K | §4.2 presedensi |
 
 (Urutan baris tidak signifikan; `X` = uji sandbox bank yang **tidak dapat
 dijalankan sekarang** karena belum ada akses.)
@@ -590,6 +617,8 @@ bank itu (bukan mengarang adapter).
 | F3-29 `KONTRAK-VA.md` §6.4 (VA versi lama dibayar setelah revisi) | **Diselaraskan:** penanda pembaruan F3-29b ditambahkan **di tempatnya** (pola §2.4); alasan review yang berlaku = **`lainnya`** + kode mesin `va_versi_lama` (§4.2 V-09, §4.3) — rumusan lama `lebih_bayar`/`kurang_bayar` ditandai **tidak berlaku lagi**, dan pemeriksaan ini masuk tabel §12 (baris ini) |
 | Definisi tunggal istilah waktu (§4.2) | **Selaras/tertutup:** "kedatangan telat" (V-06) dan "bayar setelah kedaluwarsa" (V-10/V-11) didefinisikan terpisah; tidak ada lagi dua baris dengan trigger sama dan efek berbeda; nasib kunci idempotensi dinyatakan eksplisit (V-06 **tidak** mengklaim kunci, V-05 juga tidak) |
 | Celah "lewatnya 24 jam" vs "jalannya job penanda" | **Tertutup:** V-11 menangani `waktu_bayar > kedaluwarsa_pada` selagi status masih `aktif` → `perlu review` (bukan Done); §5 butir 2 kini berbasis **waktu**, bukan status |
+| Presedensi baris tabel keputusan (§4.2) | **Tertutup:** aturan lintas-baris "jendela waktu dievaluasi lebih dahulu" ditambahkan — **V-06 menang atas V-10/V-11**; V-10/V-11 hanya berlaku untuk callback yang tiba di dalam jendela; T-VA-07/T-VA-31 menyatakan asumsi jendela, dan **T-VA-32** menguji kombinasi kedatangan telat + bayar setelah kedaluwarsa |
+| `KONTRAK-VA.md` §5 (alur balasan + paragraf Pembaruan F3-29b) | **Diselaraskan:** efek disebut **terpisah per kasus** — kedatangan telat (V-06) = tolak tanpa efek + daftar rekonsiliasi; bayar-setelah-kedaluwarsa/VA lama/pesanan sudah Done = `perlu_review`; duplikat (V-04) = ack tanpa efek; tidak ada lagi satu ember "audit + `perlu_review`" |
 | F3-29 §2.4 rekomendasi piloting aggregator | **Digantikan K-01**; ditandai di `KONTRAK-VA.md` (histori dijaga) |
 | F3-29 §7.4 `va.kedaluwarsa_jam=24` | Naik status menjadi keputusan (K-04); tabel §2.1 menambah toggle per bank (usulan) |
 | OCR/manual tetap berjalan (K-06) | Tidak ada perubahan yang menyentuh `payment`, `ocr`, `verify`, `worker`, atau route yang ada; `va` tetap tidak diimpor di luar pohonnya |
@@ -632,6 +661,13 @@ bank itu (bukan mengarang adapter).
 5. **Satu pesanan satu VA aktif satu bank** adalah turunan K-03; bila user ingin
    memperbolehkan VA di dua bank sekaligus untuk satu pesanan, itu keputusan
    baru dan berisiko pembayaran ganda.
+6. **Semantik stempel waktu bertanda tangan bank** (K-02) menentukan apakah lapis
+   jendela replay dan `waktu_bayar` benar-benar dua hal terpisah. Presedensi §4.2
+   mengasumsikan keduanya **dapat** berbeda (stempel waktu = waktu kirim/tanda
+   tangan; `waktu_bayar` = waktu uang dibayar). Bila dokumen bank menetapkan
+   keduanya sama sehingga berimpit, hasilnya tetap **`perlu review`, tidak pernah
+   Done** — bukan auto-Done dan bukan "tanpa efek" yang menyembunyikan uang
+   masuk; kode mesin yang dipakai ditentukan saat pemetaan dokumen bank (F3-30).
 
 ---
 

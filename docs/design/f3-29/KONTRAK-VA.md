@@ -32,6 +32,15 @@ status "BELUM DIPUTUSKAN" di §9. Riwayat di halaman ini **tidak dihapus**:
 setiap butir yang bergeser diberi penanda pembaruan di tempatnya, dan §9 kini
 memuat status per keputusan (final vs menunggu).
 
+**Putaran perbaikan 10 Oktober 2026 (hasil tinjauan QA atas F3-29b).** §5 (tabel
+lapis, alur balasan, dan §5.1) diberi **presedensi lapis** dan penulisan **efek
+per kasus**: jendela replay dinilai **lebih dahulu** daripada `waktu_bayar`,
+kedatangan telat (V-06) = tolak tanpa efek + daftar rekonsiliasi, bayar setelah
+kedaluwarsa / VA lama / pesanan sudah Done = `perlu_review`, duplikat = ack tanpa
+efek — tidak ada lagi satu ember "audit + `perlu_review`". §6.4 sudah diberi
+penanda pembaruan. Matriks uji acuan di `KEPUTUSAN-VA-BCA-BRI.md` §10 kini
+**T-VA-01..T-VA-32**.
+
 ---
 
 ## 1. Batas lingkup & prinsip
@@ -244,7 +253,7 @@ Rujukan ini **bukan** kontrak Grahita-BCA/BRI.
 
 | Lapis | Isi | Status |
 |---|---|---|
-| 1. **Jendela waktu** | stempel waktu ikut ditandatangani, umur ≤ jendela — ini **kedatangan telat** (V-06), bukan "bayar setelah kedaluwarsa" | ada di prototipe (`PeriksaUmur`) |
+| 1. **Jendela waktu** | stempel waktu ikut ditandatangani, umur ≤ jendela — ini **kedatangan telat** (V-06), bukan "bayar setelah kedaluwarsa"; lapis ini dievaluasi **lebih dahulu** daripada penilaian `waktu_bayar` (§4.2 presedensi lapis, dok. F3-29b) | ada di prototipe (`PeriksaUmur`) |
 | 2. **Kunci peristiwa** | `PeristiwaBayar.Kunci()` = `va:<id peristiwa provider>`; bila provider tidak memberi id peristiwa, kunci diturunkan dari (bank, nomor VA, waktu bayar, nominal) | ada di prototipe, diuji stabil & sensitif |
 | 3. **Klaim atomik di basis data** | tabel callback dengan **kunci unik**; `INSERT ... ON CONFLICT DO NOTHING` di dalam transaksi → hanya pemanggil pertama yang boleh berefek | **wajib F3-30** (prototipe memakai peta memori `MemoriIdempotensi`) |
 
@@ -268,11 +277,26 @@ callback duplikat yang dihitung dua kali adalah kerugian uang.
 **Pembaruan F3-29b (K-04/K-05/K-09).** Cabang "peristiwa sah, kunci baru" di
 atas tidak selalu berarti Done: hanya kasus **pasti** (VA aktif, versi terkini,
 `waktu_bayar ≤ terbit + 24 jam`, nominal **persis**, bukan duplikat) yang
-mengusulkan Done. Callback **bayar setelah kedaluwarsa** (`waktu_bayar >
-kedaluwarsa_pada`; disebut "terlambat" pada rumusan awal), **kedatangan telat**,
-**duplikat**, **untuk VA versi lama/kedaluwarsa/dibatalkan**, atau **saat
-pesanan sudah Done** berakhir di **audit + `perlu_review`** (tidak ada auto-Done
-pada kasus tidak pasti), dan verifikasi manual admin tetap tersedia sebagai
+mengusulkan Done. Efek tiap kasus **berbeda dan tidak boleh disatukan**:
+
+- **kedatangan telat** (callback tiba di luar `va.jendela_replay_menit`, apa pun
+  `waktu_bayar`-nya — V-06) → **tolak tanpa efek ke pesanan**; kunci peristiwa
+  **tidak** diklaim; audit + masuk **daftar kerja rekonsiliasi harian**;
+- **bayar setelah kedaluwarsa** (`waktu_bayar > kedaluwarsa_pada`; disebut
+  "terlambat" pada rumusan awal — V-10/V-11), **VA versi lama / kedaluwarsa /
+  dibatalkan** (V-09/V-10), atau **pesanan sudah Done** (V-12/V-13)
+  → **`perlu_review`** + audit (tidak ada auto-Done pada kasus tidak pasti);
+- **duplikat** (kunci sudah diklaim — V-04) → balas **ack "sudah diproses",
+  tanpa efek**.
+
+**Presedensi lapis (§4.2 aturan lintas-baris dok. F3-29b).** Jendela replay
+dievaluasi **lebih dahulu** daripada penilaian `waktu_bayar`, jadi callback yang
+tiba telat **dan** sudah lewat kedaluwarsa berakhir sebagai **kedatangan telat
+(V-06)** — bukan `perlu_review` — dan V-10/V-11 hanya berlaku untuk callback
+yang tiba di dalam jendela. Pengecualian sempit (bila dokumen bank memakai
+stempel waktu = waktu bayar sehingga kedua lapis berimpit): hasilnya
+`perlu_review`, tetap bukan Done (§13 butir 6 dok. F3-29b). Verifikasi manual
+admin tetap tersedia sebagai
 pengecualian beralasan. Alur lengkap, definisi istilah waktu, diagram state VA,
 dan tabel keputusan 15 baris: `KEPUTUSAN-VA-BCA-BRI.md` §4–§6.
 
@@ -286,6 +310,15 @@ dan tabel keputusan 15 baris: `KEPUTUSAN-VA-BCA-BRI.md` §4–§6.
    (K-03 memutuskan bentuk VA; §6.4 aturan versinya).
 4. Balasan HTTP ke bank harus **idempoten dan cepat**: ack tanpa efek untuk
    duplikat, dan pekerjaan berat (dokumen/email) tetap lewat job River.
+5. **Urutan evaluasi lapis (presedensi).** Toggle/provider → tanda tangan →
+   **jendela replay** → kunci peristiwa → pesanan + nominal (§4.2 aturan
+   lintas-baris dok. F3-29b). Jendela replay dinilai **sebelum** penilaian
+   `waktu_bayar`: callback basi (kedatangan telat, V-06) selalu berakhir **tanpa
+   efek ke pesanan** + daftar rekonsiliasi, **tidak** menjadi `perlu_review` VA,
+   dan kuncinya tidak diklaim — walau `waktu_bayar > kedaluwarsa_pada`. Satu
+   pengecualian sempit: bila dokumen bank menetapkan stempel waktu bertanda
+   tangan **= waktu bayar** sehingga kedua lapis berimpit, hasilnya
+   `perlu_review` (kasus batas §13 butir 6 dok. F3-29b) — tetap **bukan** Done.
 
 ---
 
@@ -545,7 +578,7 @@ hak akses aksi admin VA (terbitkan/batalkan). Kewajiban bukti per bank
 
 | Kartu | Kewajiban yang diturunkan dari kontrak ini |
 |---|---|
-| **F3-30 (t_fc796fba)** — adapter bank & callback | mengimplementasikan `va.Provider` untuk provider yang **akhirnya dipilih**; menambahkan migrasi `va_accounts`/`va_callbacks` (§7), repository, rute `POST /api/v1/va/callback` (tanpa CSRF, dengan tanda tangan wajib), saklar `va.aktif` bawaan mati, transisi Done lewat `payment.MarkVerified` metode `virtual_account`, audit `va_payment`; menjalankan `vatest.Uji` terhadap adapter baru; **memblokir** kartu bila kredensial/sandbox/dokumen callback belum ada (jangan mengarang). **Tambahan F3-29b:** satu adapter **per bank** + toggle/konfigurasi per bank (§2.1 dok. F3-29b), kedaluwarsa 24 jam + job penanda `kedaluwarsa`, pembatalan VA lama (kemampuan `BatalVA` opsional — bank tanpa API cancel tetap sah), penanganan **callback bayar-setelah-kedaluwarsa (V-10/V-11)/duplikat/VA lama/versi lama/pesanan sudah Done = perlu review + audit** dan **kedatangan telat (V-06) = tolak tanpa efek** (tidak auto-Done), partial unique "satu VA aktif per (order, versi)", dan matriks uji T-VA-01..T-VA-31 sebagai acuan. Butir M-01/M-02 (bentuk `ReffID` penerbitan ulang, jalur transisi Done) **wajib diputuskan lebih dulu**. |
+| **F3-30 (t_fc796fba)** — adapter bank & callback | mengimplementasikan `va.Provider` untuk provider yang **akhirnya dipilih**; menambahkan migrasi `va_accounts`/`va_callbacks` (§7), repository, rute `POST /api/v1/va/callback` (tanpa CSRF, dengan tanda tangan wajib), saklar `va.aktif` bawaan mati, transisi Done lewat `payment.MarkVerified` metode `virtual_account`, audit `va_payment`; menjalankan `vatest.Uji` terhadap adapter baru; **memblokir** kartu bila kredensial/sandbox/dokumen callback belum ada (jangan mengarang). **Tambahan F3-29b:** satu adapter **per bank** + toggle/konfigurasi per bank (§2.1 dok. F3-29b), kedaluwarsa 24 jam + job penanda `kedaluwarsa`, pembatalan VA lama (kemampuan `BatalVA` opsional — bank tanpa API cancel tetap sah), penanganan **callback bayar-setelah-kedaluwarsa (V-10/V-11)/duplikat/VA lama/versi lama/pesanan sudah Done = perlu review + audit** dan **kedatangan telat (V-06) = tolak tanpa efek** (tidak auto-Done), partial unique "satu VA aktif per (order, versi)", **presedensi lapis** (jendela replay dievaluasi lebih dahulu daripada penilaian `waktu_bayar` — §4.2 aturan lintas-baris/§5.1 dok. F3-29b), dan matriks uji T-VA-01..T-VA-32 sebagai acuan. Butir M-01/M-02 (bentuk `ReffID` penerbitan ulang, jalur transisi Done) **wajib diputuskan lebih dulu**. |
 | **T8 (t_06195c87)** — uji VA, rekonsiliasi, laporan | menjalankan `vatest.Uji` pada sandbox nyata dan membandingkan hasilnya dengan `va.MockProvider` (kriteria "bandingkan hasil sandbox nyata dengan mock"); menguji replay/duplikasi/nominal mismatch/race manual+VA; memverifikasi laporan tidak menggandakan dan hanya Superadmin. |
 | **F3-31** — rekonsiliasi & laporan pembayaran | memakai `va_callbacks`/`va_accounts` sebagai sumber, tidak menghitung ulang dari `payment_proofs`; memisahkan biaya transaksi penyedia dari total pesanan. |
 | **Rilis (T4/T5)** | variabel kredensial VA masuk daftar rahasia operator; IP statis & URL callback masuk checklist produksi. |
