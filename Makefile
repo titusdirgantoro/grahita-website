@@ -93,6 +93,9 @@ openapi: ## Lint skema OpenAPI
 secrets: ## Memindai pola rahasia di repo
 	./scripts/check-secrets.sh
 
+uji-rahasia: ## Kendali diri pemeriksa rahasia (kontrol negatif + positif)
+	./scripts/check-secrets.sh --uji-diri
+
 migrasi-cek: ## Gerbang migrasi kompatibel mundur (Architecture.md §9)
 	./scripts/check-migration-kompatibel.sh
 

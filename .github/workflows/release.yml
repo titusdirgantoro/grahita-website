@@ -35,6 +35,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Kendali diri pemeriksa rahasia (pola harus benar-benar terdeteksi)
+        run: ./scripts/check-secrets.sh --uji-diri
+
       - name: Tidak ada rahasia di repo
         run: ./scripts/check-secrets.sh
 

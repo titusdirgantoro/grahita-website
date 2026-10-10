@@ -163,6 +163,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Kendali diri pemeriksa rahasia (pola harus benar-benar terdeteksi)
+        # Gerbang rahasia terbukti mampu MERAH sebelum hasil hijaunya dipercaya
+        # (temuan QA F1-22 putaran 1: pola `-----BEGIN` diperlakukan grep
+        # sebagai option sehingga pemeriksaan 1 selalu hijau).
+        run: ./scripts/check-secrets.sh --uji-diri
+
       - name: Pindai pola rahasia
         run: ./scripts/check-secrets.sh
 
