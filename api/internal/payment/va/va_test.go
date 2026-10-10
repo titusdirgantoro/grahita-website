@@ -171,10 +171,11 @@ func TestPeriksaUmur(t *testing.T) {
 func TestKunciPeristiwaStabilDanSensitif(t *testing.T) {
 	waktu := time.Date(2026, 10, 9, 3, 30, 0, 0, time.UTC)
 	dasar := PeristiwaBayar{IDProvider: "EV-1", Bank: BankBCA, NomorVA: "8808000000000001", Nominal: 150000, WaktuBayar: waktu}
-	if dasar.Kunci() != "va:EV-1" {
-		t.Fatalf("kunci memakai id provider: %q", dasar.Kunci())
+	kunciDasar := dasar.Kunci()
+	if kunciDasar != "va:EV-1" {
+		t.Fatalf("kunci memakai id provider: %q", kunciDasar)
 	}
-	if dasar.Kunci() != dasar.Kunci() {
+	if dasar.Kunci() != kunciDasar {
 		t.Fatal("kunci tidak stabil")
 	}
 	// Tanpa id provider, kunci diturunkan dari isi pembayaran.

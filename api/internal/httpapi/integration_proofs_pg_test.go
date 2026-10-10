@@ -300,7 +300,7 @@ func TestPGUnggahBuktiMenyimpanMetadataDanTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("baca objek dari storage: %v", err)
 	}
-	defer baca.Close()
+	defer func() { _ = baca.Close() }()
 	buf := make([]byte, 16)
 	n, _ := baca.Read(buf)
 	if n == 0 {

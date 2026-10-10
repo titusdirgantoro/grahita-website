@@ -185,7 +185,7 @@ func isiObjek(t *testing.T, f *pgFixture, key string) string {
 	if err != nil {
 		t.Fatalf("baca objek %s: %v", key, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	b, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("baca isi objek %s: %v", key, err)

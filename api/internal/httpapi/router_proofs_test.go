@@ -142,10 +142,7 @@ func loginUji(t *testing.T, srv *httptest.Server, email string) ([]*http.Cookie,
 		t.Fatalf("login %s: %d", email, resp.StatusCode)
 	}
 	// Cookie csrf tersedia dari respons login (double-submit).
-	var cookies []*http.Cookie
-	for _, c := range resp.Cookies() {
-		cookies = append(cookies, c)
-	}
+	cookies := resp.Cookies()
 	return cookies, csrfFromCookies(cookies)
 }
 
@@ -231,11 +228,11 @@ func TestProofsIsolasiCabangDanStatus(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unggah lintas cabang harus 404, dapat %d (%v)", resp.StatusCode, body)
 	}
-	resp, body = doJSON(t, http.MethodGet, s.srv.URL+"/api/v1/orders/"+proofOrderA+"/proofs", "", cookiesB, "")
+	resp, _ = doJSON(t, http.MethodGet, s.srv.URL+"/api/v1/orders/"+proofOrderA+"/proofs", "", cookiesB, "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("daftar lintas cabang harus 404, dapat %d", resp.StatusCode)
 	}
-	resp, body = doJSON(t, http.MethodGet,
+	resp, _ = doJSON(t, http.MethodGet,
 		s.srv.URL+"/api/v1/orders/"+proofOrderA+"/proofs/aaaaaaaa-1111-4111-8111-111111111111/download", "", cookiesB, "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unduh lintas cabang harus 404, dapat %d", resp.StatusCode)
@@ -401,7 +398,7 @@ func TestProofsAdminUnggahAtasNamaCabang(t *testing.T) {
 	}
 
 	// admin melihat bukti pesanan cabang mana pun.
-	resp, body = doJSON(t, http.MethodGet, s.srv.URL+"/api/v1/admin/orders/"+proofOrderB+"/proofs", "", cookies, "")
+	resp, _ = doJSON(t, http.MethodGet, s.srv.URL+"/api/v1/admin/orders/"+proofOrderB+"/proofs", "", cookies, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("admin daftar bukti cabang lain harus 200, dapat %d", resp.StatusCode)
 	}

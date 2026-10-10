@@ -159,7 +159,7 @@ func (m *MockProvider) nomorVAUntuk(reffID string) string {
 	var angka strings.Builder
 	for i := 0; i < 6 && angka.Len() < 12; i++ {
 		v := binary.BigEndian.Uint32(ringkas[i*4 : i*4+4])
-		angka.WriteString(fmt.Sprintf("%010d", v%1_000_000_000))
+		fmt.Fprintf(&angka, "%010d", v%1_000_000_000)
 	}
 	s := angka.String()
 	if len(s) > 12 {

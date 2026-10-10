@@ -56,7 +56,7 @@ func dashboardGet(t *testing.T, srv *httptest.Server, path string, cookies []*ht
 	if err != nil {
 		t.Fatalf("memanggil %s: %v", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("membaca respons %s: %v", path, err)

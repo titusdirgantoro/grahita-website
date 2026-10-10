@@ -452,7 +452,7 @@ func buangTag(s string) (string, bool) {
 			return s, false
 		}
 		c := s[i+1]
-		if c != '/' && c != '!' && c != '?' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') {
+		if c != '/' && c != '!' && c != '?' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
 			// Bukan awal tag (mis. "biaya < 5000"): dibiarkan sebagai teks.
 			continue
 		}
@@ -509,7 +509,7 @@ func uuidSah(s string) bool {
 			}
 		default:
 			c := s[i]
-			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 				return false
 			}
 		}

@@ -165,7 +165,7 @@ func TestUploadMenyimpanKunciAcakDanSha256(t *testing.T) {
 	if err != nil {
 		t.Fatalf("baca kembali objek: %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	tersimpan, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("baca objek: %v", err)

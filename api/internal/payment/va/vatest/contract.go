@@ -127,11 +127,12 @@ func Uji(t *testing.T, pabrik func(t *testing.T) Harness) {
 		if !peristiwa.WaktuBayar.Equal(waktu) {
 			t.Fatalf("waktu bayar %v, ingin %v", peristiwa.WaktuBayar, waktu)
 		}
-		if peristiwa.Kunci() == "" {
+		kunciPeristiwa := peristiwa.Kunci()
+		if kunciPeristiwa == "" {
 			t.Fatal("kunci idempotensi kosong")
 		}
 		// Kunci harus stabil untuk peristiwa yang sama (dipakai penjaga replay).
-		if peristiwa.Kunci() != peristiwa.Kunci() {
+		if peristiwa.Kunci() != kunciPeristiwa {
 			t.Fatal("kunci idempotensi tidak stabil")
 		}
 		if len(peristiwa.Raw) == 0 || !json.Valid(peristiwa.Raw) {

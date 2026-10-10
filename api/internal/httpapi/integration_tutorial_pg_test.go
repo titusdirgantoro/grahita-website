@@ -375,7 +375,7 @@ func TestPGTutorialSanitasiDanHakAkses(t *testing.T) {
 		if status != http.StatusForbidden {
 			t.Errorf("%s ubah tutorial harus 403, dapat %d (%v)", aktor.nama, status, body)
 		}
-		status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/admin/tutorial", "", aktor.cookies, "")
+		status, _, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/admin/tutorial", "", aktor.cookies, "")
 		if status != http.StatusForbidden {
 			t.Errorf("%s baca /admin/tutorial harus 403, dapat %d", aktor.nama, status)
 		}

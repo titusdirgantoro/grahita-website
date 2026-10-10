@@ -1,0 +1,162 @@
+BUKTI GATE LINT HIJAU — kartu t_cf36bd3d (perbaikan 19 temuan golangci-lint)
+==========================================================================
+
+Konteks
+-------
+Gate lint CI `.github/workflows/ci.yml` (job "backend", langkah "golangci-lint")
+MERAH di main. Kartu ini memperbaiki seluruh temuan sehingga gate hijau tanpa
+melonggarkan konfigurasi linter (`.golangci.yml` TIDAK diubah).
+
+HEAD saat perbaikan dimulai : c622fc1898613b8165a000e1fda4e4e8f7d84af1
+Biner                      : golangci-lint v2.14.0 (resmi, rilis GitHub
+                             golangci-lint-2.14.0-linux-amd64.tar.gz,
+                             "built with go1.27.0 from 114493f9 on 2026-09-24")
+Perintah (sama seperti CI)  : cd api && golangci-lint run ./...
+                              (defaults.working-directory: api pada job backend)
+
+SEBELUM (direproduksi, LINT_EXIT=1, 19 issues)
+----------------------------------------------
+errcheck (5)
+    internal/httpapi/integration_dashboard_pg_test.go:59   resp.Body.Close
+    internal/httpapi/integration_proofs_pg_test.go:303     baca.Close
+    internal/httpapi/integration_revise_pg_test.go:188     rc.Close
+    internal/payment/payment_test.go:168                   rc.Close
+    internal/platform/storage/s3_test.go:171               rc.Close
+ineffassign (4)
+    internal/httpapi/integration_tutorial_pg_test.go:378
+    internal/httpapi/router_proofs_test.go:234, 238, 404
+staticcheck (9)
+    internal/document/render.go:152                        S1016
+    internal/httpapi/integration_documents_pdf_test.go:61  SA4004
+    internal/httpapi/router_proofs_test.go:146             S1011
+    internal/order/order.go:91                             ST1005
+    internal/payment/va/mock.go:162                        QF1012
+    internal/payment/va/va_test.go:177                     SA4000
+    internal/payment/va/vatest/contract.go:134             SA4000
+    internal/tutorial/tutorial.go:455, 512                 QF1001
+unused (1)
+    internal/notification/notification_test.go:332         (*fakeMailer).terakhir
+
+Perbaikan per temuan (berkas, sebab, tindakan)
+---------------------------------------------
+1  internal/httpapi/integration_dashboard_pg_test.go:59  errcheck
+   `defer resp.Body.Close()` -> `defer func() { _ = resp.Body.Close() }()`.
+2  internal/httpapi/integration_proofs_pg_test.go:303    errcheck
+   `defer baca.Close()` -> `defer func() { _ = baca.Close() }()`.
+3  internal/httpapi/integration_revise_pg_test.go:188    errcheck
+   `defer rc.Close()` -> `defer func() { _ = rc.Close() }()`.
+4  internal/payment/payment_test.go:168                  errcheck
+   `defer rc.Close()` -> `defer func() { _ = rc.Close() }()`.
+5  internal/platform/storage/s3_test.go:171              errcheck
+   `defer rc.Close()` -> `defer func() { _ = rc.Close() }()`.
+6  internal/httpapi/integration_tutorial_pg_test.go:378  ineffassign
+   Hasil `body` dari apiReq GET /admin/tutorial tidak pernah dibaca (yang
+   dipakai hanya `status`) -> `status, _, _ = apiReq(...)`.
+7  internal/httpapi/router_proofs_test.go:234            ineffassign
+   `resp, body = doJSON(GET .../proofs)` — body tidak dibaca ->
+   `resp, _ = doJSON(...)`.
+8  internal/httpapi/router_proofs_test.go:238            ineffassign
+   Idem untuk GET .../download -> `resp, _ = doJSON(...)`.
+9  internal/httpapi/router_proofs_test.go:404            ineffassign
+   Idem untuk GET /admin/orders/<B>/proofs -> `resp, _ = doJSON(...)`.
+10 internal/document/render.go:152                       staticcheck S1016
+   `rekeningView{Bank: r.Bank, Nomor: r.Nomor, AtasNama: r.AtasNama}` ->
+   konversi tipe `rekeningView(r)` (kedua struct berfield sama: Bank, Nomor,
+   AtasNama string).
+11 internal/httpapi/integration_documents_pdf_test.go:61 staticcheck SA4004
+   Loop `for _, fh := range r.MultipartForm.File["files"] { ...; break }` yang
+   selalu berhenti di iterasi pertama diganti pengambilan berkas pertama
+   (`if berkas := ...; len(berkas) > 0 { f, err := berkas[0].Open(); ... }`),
+   perilaku sama: hanya index.html pertama yang dibaca, 400 bila kosong.
+12 internal/httpapi/router_proofs_test.go:146            staticcheck S1011
+   Loop append satu per satu diganti `cookies := resp.Cookies()`.
+13 internal/order/order.go:91                            staticcheck ST1005
+   `errors.New("Cash & Carry tidak diizinkan untuk cabang ini")` -> awalan
+   huruf kecil: `"pesanan Cash & Carry tidak diizinkan untuk cabang ini"`.
+   Nama fitur "Cash & Carry" DIPERTAHANKAN; hanya huruf pertama diubah.
+   Diperiksa lebih dulu: tidak ada uji/kode yang membandingkan teks ini
+   (grep "tidak diizinkan untuk cabang" hanya menemukan definisi + berkas
+   bukti; uji memakai errors.Is(err, ErrCNCNotAllowed), mis.
+   internal/order/order_rules_test.go:246, submit_test.go:325-337).
+   Pesan yang tampil ke pengguna tetap dari lapis HTTP
+   (internal/httpapi/errors.go:127 "Cash & Carry tidak tersedia untuk cabang
+   ini.") dan tidak diubah. Tidak perlu //nolint.
+14 internal/payment/va/mock.go:162                       staticcheck QF1012
+   `angka.WriteString(fmt.Sprintf("%010d", ...))` ->
+   `fmt.Fprintf(&angka, "%010d", ...)`.
+15 internal/payment/va/va_test.go:177                    staticcheck SA4000
+   `if dasar.Kunci() != dasar.Kunci()` (dua ekspresi identik) diganti: kunci
+   dihitung sekali (`kunciDasar := dasar.Kunci()`) lalu
+   `if dasar.Kunci() != kunciDasar` — maksud uji (kunci stabil) tetap terjaga.
+16 internal/payment/va/vatest/contract.go:134            staticcheck SA4000
+   Idem: `kunciPeristiwa := peristiwa.Kunci()` lalu
+   `if peristiwa.Kunci() != kunciPeristiwa`.
+17 internal/tutorial/tutorial.go:455                     staticcheck QF1001
+   `!(c >= 'a' && c <= 'z')` -> `(c < 'a' || c > 'z')` (dan varian 'A'-'Z'),
+   hukum De Morgan; semantik sama.
+18 internal/tutorial/tutorial.go:512                     staticcheck QF1001
+   `!(c >= '0' && c <= '9' || ...)` ->
+   `(c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F')`.
+19 internal/notification/notification_test.go:332        unused
+   Metode `(*fakeMailer).terakhir` dihapus — tidak dipakai di mana pun
+   (grep "terakhir(" hanya menemukan definisinya). `jumlah()` tetap ada.
+
+SESUDAH (berkas api/ yang sama, tanpa mengubah .golangci.yml)
+------------------------------------------------------------
+$ cd api
+$ gofmt -l .
+(keluaran kosong)
+$ golangci-lint run ./...
+0 issues.
+$ go vet ./...
+$ go build ./...
+(keduanya exit 0)
+
+Ringkas keluaran gerbang (disalin apa adanya, GOOS/GOARCH host):
+
+  golangci-lint: golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+  == gofmt -l . ==
+  GOFMT_EXIT=0
+  == golangci-lint run ./... ==
+  0 issues.
+  LINT_EXIT=0
+  == go vet ./... ==
+  VET_EXIT=0
+  == go build ./... ==
+  BUILD_EXIT=0
+
+Uji
+---
+1) Uji fokus paket tersentuh tanpa DB
+   $ go test -count=1 ./internal/document/... ./internal/order/...
+     ./internal/payment/... ./internal/tutorial/... ./internal/notification/...
+     ./internal/platform/storage/... ./internal/httpapi/...
+   -> TEST_EXIT=0 (httpapi 34s tanpa DB: uji PG dilewati)
+
+2) Uji integrasi PostgreSQL paket httpapi pada database SEGAR
+   (createdb t_cf36bd3d_lint + scripts/pg-dev-shim.sql; TEST_DATABASE_URL diisi
+    DSN lokal shim pengembangan pada 127.0.0.1:5455 — kredensial dev, tanpa
+    rahasia nyata)
+   $ go test -count=1 -timeout 30m ./internal/httpapi/...
+   -> ok  github.com/grahita/portal/api/internal/httpapi  342.494s
+      HTTPAPI_TEST_EXIT=0
+   (mencakup seluruh berkas uji integrasi yang disentuh: dashboard, proofs,
+    revise, documents_pdf, tutorial)
+
+3) Suite backend penuh (-p 1) pada database SEGAR
+   $ go test -p 1 -count=1 -timeout 40m ./...
+   -> 27 paket "ok", FULL_SUITE_EXIT=0
+
+4) Suite backend penuh dengan -race (sama seperti langkah CI "go test -race")
+   pada database SEGAR
+   $ go test -race -p 1 -count=1 -timeout 40m ./...
+   -> 27 paket "ok", RACE_SUITE_EXIT=0, tanpa "WARNING: DATA RACE"
+      (httpapi 668.976s)
+
+Batas bukti
+-----------
+- Yang diverifikasi lokal: berkas api/ pada pohon kerja di atas HEAD c622fc1
+  plus perubahan kartu ini (dikomit bersama dokumen ini). Biner lint, versi,
+  dan perintah identik dengan langkah CI; eksekusi CI sendiri tetap tugas CI.
+- `go test -race ./...` di CI berjalan tanpa TEST_DATABASE_URL (uji PG
+  dilewati); di sini dijalankan DENGAN PG, sehingga cakupannya lebih luas.

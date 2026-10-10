@@ -88,7 +88,7 @@ var (
 	ErrNoBranch = errors.New("akun tidak terhubung ke cabang")
 	// ErrCNCNotAllowed dikembalikan bila pesanan meminta Cash & Carry padahal
 	// cabangnya tidak berflag cash_and_carry (PRD CP-CNC-01).
-	ErrCNCNotAllowed = errors.New("Cash & Carry tidak diizinkan untuk cabang ini")
+	ErrCNCNotAllowed = errors.New("pesanan Cash & Carry tidak diizinkan untuk cabang ini")
 )
 
 // Status pesanan (Database.md §3, enum order_status).

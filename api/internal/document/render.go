@@ -149,7 +149,7 @@ func viewLines(o Order) []lineView {
 func viewRekening(o Order) []rekeningView {
 	out := make([]rekeningView, 0, len(o.Rekening))
 	for _, r := range o.Rekening {
-		out = append(out, rekeningView{Bank: r.Bank, Nomor: r.Nomor, AtasNama: r.AtasNama})
+		out = append(out, rekeningView(r))
 	}
 	return out
 }

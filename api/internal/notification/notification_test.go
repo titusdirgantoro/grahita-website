@@ -329,16 +329,6 @@ func (m *fakeMailer) jumlah() int {
 	return len(m.sent)
 }
 
-func (m *fakeMailer) terakhir(t *testing.T) mailer.Message {
-	t.Helper()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.sent) == 0 {
-		t.Fatal("belum ada email yang dikirim")
-	}
-	return m.sent[len(m.sent)-1]
-}
-
 // fakeObjects adalah object storage in-memory untuk lampiran.
 type fakeObjects struct {
 	isi map[string][]byte

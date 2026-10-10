@@ -45,9 +45,10 @@ func serverGotenbergChromium(t *testing.T) *httptest.Server {
 			http.Error(w, "multipart tidak valid: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Gotenberg hanya memakai satu berkas (index.html); ambil yang pertama.
 		var html []byte
-		for _, fh := range r.MultipartForm.File["files"] {
-			f, err := fh.Open()
+		if berkas := r.MultipartForm.File["files"]; len(berkas) > 0 {
+			f, err := berkas[0].Open()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -58,7 +59,6 @@ func serverGotenbergChromium(t *testing.T) *httptest.Server {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			break
 		}
 		if len(html) == 0 {
 			http.Error(w, "berkas index.html tidak dikirim", http.StatusBadRequest)
