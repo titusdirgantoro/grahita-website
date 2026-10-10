@@ -58,8 +58,8 @@ berubah terhadap `KONTRAK-VA.md`.
 | K-01 | Arsitektur untuk BCA dan BRI: **host-to-host langsung dengan dua adapter terpisah**. **Aggregator/penyedia bukan target.** Urutan aktivasi bank **belum** ditentukan. | FINAL (arsitektur) · MENUNGGU (urutan aktivasi) | Menggantikan rekomendasi §2.4 F3-29 (piloting lewat penyedia opsi C) |
 | K-02 | Algoritme/header/tanda tangan final **hanya** dari kontrak resmi masing-masing bank; **tidak ditebak** dari mock. | FINAL | Menegaskan K-02; dua adapter berarti dua pemetaan tanda tangan yang dapat berbeda |
 | K-03 | **Closed VA**: satu pesanan/versi, satu nomor VA, **nominal tetap**. | FINAL | K-03 tidak lagi "pending"; `ReffID = order:<order_id>:v<versi>` (§7) |
-| K-04 | VA **kedaluwarsa tepat 24 jam** setelah terbit. VA lama **dibatalkan** dan VA **baru** diterbitkan. Callback **terlambat/duplikat/VA lama tidak auto-Done** — perlu audit/review. Kenyataan cancel/generate **diselaraskan dengan kontrak bank kelak**. | FINAL (kebijakan) · MENUNGGU (kemampuan cancel/generate di sisi bank) | Menghapus pilihan lama "auto-terima dalam masa toleransi" |
-| K-05 | Kurang/lebih bayar **perlu review manusia**; tidak pernah auto-Done. | FINAL | K-05 alasan review: enak-tertutup, lihat §4 |
+| K-04 | VA **kedaluwarsa tepat 24 jam** setelah terbit. VA lama **dibatalkan** dan VA **baru** diterbitkan. Callback tidak pernah auto-Done; **efeknya per kasus** (§4.2): bayar setelah kedaluwarsa ("terlambat")/**VA lama = perlu review + audit**, **duplikat = ack "sudah diproses" tanpa efek**, **kedatangan telat = tolak tanpa efek + daftar rekonsiliasi**. Kenyataan cancel/generate **diselaraskan dengan kontrak bank kelak**. | FINAL (kebijakan) · MENUNGGU (kemampuan cancel/generate di sisi bank) | Menghapus pilihan lama "auto-terima dalam masa toleransi"; membedakan "terlambat" (bayar setelah kedaluwarsa) dari kedatangan telat |
+| K-05 | Kurang/lebih bayar **perlu review manusia**; tidak pernah auto-Done. | FINAL | K-05 alasan review: daftar `review_reason` tertutup **lima nilai**, lihat §4.3 |
 | K-06 | VA untuk masa depan **dan wajib mati sekarang**. Unggah bukti + OCR/AI tetap **jalur berjalan**; boleh auto-Done hanya bila cocok **dan** ambang keyakinan terpenuhi sesuai kebijakan F2-26; admin menangani pengecualian. Jangan mengklaim OCR eksternal aktif bila tidak ada konfigurasi/akses. **C&C tetap alur existing** sampai kebijakan VA C&C diputuskan — tidak auto-aktif. | FINAL (VA mati + OCR/manual tetap) · MENUNGGU (kebijakan VA untuk C&C) | K-06b (C&C) tetap menunggu; jalur AI tidak disentuh |
 | K-07 | **Minimisasi/sanitasi** data pembayar + **pembatasan akses**; masa **retensi spesifik menunggu persetujuan** sebelum go-live. | FINAL (prinsip) · MENUNGGU (angka retensi) | §7.6 F3-29 (usulan 5 tahun) berstatus **usulan**, bukan keputusan |
 | K-08 | Biaya/PPN/settlement, **plafon**, dan **penandatangan** menunggu **penawaran resmi** dan persetujuan pemilik. Ini **bukan** persetujuan kontrak. | FINAL (gerbang) · MENUNGGU (isi) | Plafon menjadi hook desain (§9, T-VA-21) |
@@ -536,7 +536,7 @@ manual (API hidup di lokal), **X** = uji sandbox bank (**butuh akses eksternal
 | T-VA-29 | (X) Callback sandbox nyata bank | bentuk/header/tanda tangan cocok dengan dokumen resmi | X | K-02 — **butuh akses, belum ada** |
 | T-VA-30 | (X) Cancel/generate di sandbox bank | perilaku cancel/generate bank sesuai asumsi §5 | X | K-04 — **butuh akses, belum ada** |
 | T-VA-31 | **Bayar setelah kedaluwarsa** sementara baris `va_accounts` **masih `aktif`** (job penanda `Clock` belum jalan), **callback tiba di dalam jendela replay** (asumsi §4.2 presedensi): `waktu_bayar = kedaluwarsa_pada + 1 detik`, status `aktif` | `perlu_review` + kode mesin `va_bayar_setelah_kedaluwarsa` (V-11); **bukan** Done, status VA tidak boleh dianggap on-time | S/I | K-04, §5 butir 2 |
-| T-VA-32 | **Kombinasi**: callback **kedatangan telat** **dan** **bayar setelah kedaluwarsa** — tiba di luar `va.jendela_replay_menit` sementara `waktu_bayar > kedaluwarsa_pada` | **V-06 menang** (§4.2 presedensi lapis): tolak **tanpa efek ke pesanan** — `perlu_review` **tidak** diset, tidak pernah Done; kunci peristiwa **tidak** diklaim; audit + daftar kerja rekonsiliasi harian | K | §4.2 presedensi |
+| T-VA-32 | **Kombinasi**: callback **kedatangan telat** **dan** **bayar setelah kedaluwarsa** — tiba di luar `va.jendela_replay_menit` sementara `waktu_bayar > kedaluwarsa_pada`. **Asumsi yang diuji berpasangan (§13 butir 6): stempel waktu bertanda tangan ≠ `waktu_bayar`** sehingga lapis (3) dan penilaian `waktu_bayar` benar-benar dua hal berbeda; bila dokumen bank menetapkan keduanya **sama** (berimpit), harapan baris ini **batal** dan hasilnya mengikuti §13 butir 6 (review manusia, bukan Done) | **V-06 menang** (§4.2 presedensi lapis): tolak **tanpa efek ke pesanan** — `perlu_review` **tidak** diset, tidak pernah Done; kunci peristiwa **tidak** diklaim; audit + daftar kerja rekonsiliasi harian | K | §4.2 presedensi, §13 butir 6 |
 
 (Urutan baris tidak signifikan; `X` = uji sandbox bank yang **tidak dapat
 dijalankan sekarang** karena belum ada akses.)
@@ -551,8 +551,10 @@ Tabel §1 baris ber-status FINAL: arsitektur dua adapter host-to-host tanpa
 aggregator; tanda tangan hanya dari kontrak resmi; closed VA satu
 pesanan/versi nominal tetap; **kedaluwarsa tepat 24 jam**; VA lama dibatalkan +
 VA baru diterbitkan; callback **bayar setelah kedaluwarsa** (V-10/V-11; istilah
-lama "terlambat" = definisi ini, bukan kedatangan telat V-06)/duplikat/VA lama
-**tidak** auto-Done;
+lama "terlambat" = definisi ini, bukan kedatangan telat
+V-06) dan **VA lama** (V-09) → **review manusia** + audit; **duplikat** (V-04) =
+ack "sudah diproses" **tanpa efek**; **kedatangan telat** (V-06) = **tolak tanpa
+efek** + daftar rekonsiliasi — tidak ada auto-Done untuk kasus mana pun di sini;
 kurang/lebih bayar **perlu review manusia**; VA mati (`va.aktif=false`) dan
 wajib tetap mati; OCR/manual tetap jalur berjalan dengan ambang F2-26; C&C
 tetap alur existing; minimisasi/sanitasi PII + pembatasan akses; verifikasi
@@ -617,7 +619,8 @@ bank itu (bukan mengarang adapter).
 | F3-29 `KONTRAK-VA.md` §6.4 (VA versi lama dibayar setelah revisi) | **Diselaraskan:** penanda pembaruan F3-29b ditambahkan **di tempatnya** (pola §2.4); alasan review yang berlaku = **`lainnya`** + kode mesin `va_versi_lama` (§4.2 V-09, §4.3) — rumusan lama `lebih_bayar`/`kurang_bayar` ditandai **tidak berlaku lagi**, dan pemeriksaan ini masuk tabel §12 (baris ini) |
 | Definisi tunggal istilah waktu (§4.2) | **Selaras/tertutup:** "kedatangan telat" (V-06) dan "bayar setelah kedaluwarsa" (V-10/V-11) didefinisikan terpisah; tidak ada lagi dua baris dengan trigger sama dan efek berbeda; nasib kunci idempotensi dinyatakan eksplisit (V-06 **tidak** mengklaim kunci, V-05 juga tidak) |
 | Celah "lewatnya 24 jam" vs "jalannya job penanda" | **Tertutup:** V-11 menangani `waktu_bayar > kedaluwarsa_pada` selagi status masih `aktif` → `perlu review` (bukan Done); §5 butir 2 kini berbasis **waktu**, bukan status |
-| Presedensi baris tabel keputusan (§4.2) | **Tertutup:** aturan lintas-baris "jendela waktu dievaluasi lebih dahulu" ditambahkan — **V-06 menang atas V-10/V-11**; V-10/V-11 hanya berlaku untuk callback yang tiba di dalam jendela; T-VA-07/T-VA-31 menyatakan asumsi jendela, dan **T-VA-32** menguji kombinasi kedatangan telat + bayar setelah kedaluwarsa |
+| Presedensi baris tabel keputusan (§4.2) | **Tertutup:** aturan lintas-baris "jendela waktu dievaluasi lebih dahulu" ditambahkan — **V-06 menang atas V-10/V-11**; V-10/V-11 hanya berlaku untuk callback yang tiba di dalam jendela; T-VA-07/T-VA-31 menyatakan asumsi jendela, dan **T-VA-32** menguji kombinasi kedatangan telat + bayar setelah kedaluwarsa — **T-VA-32 kini juga menyatakan asumsinya** (stempel waktu bertanda tangan ≠ `waktu_bayar`; bila berimpit → mengikuti §13 butir 6, review bukan Done) |
+| Atribusi efek `duplikat` (V-04) di `KONTRAK-VA.md` §1 K-04 / §9.1 (baris K-04) / §10 (baris F3-30) | **Diselaraskan:** ketiga tempat menyebut efek **per kasus** dan **tidak** lagi menaruh `duplikat` di ember `perlu_review` — duplikat = ack "sudah diproses", **tanpa efek**; `perlu_review` hanya bayar setelah kedaluwarsa (V-10/V-11), VA lama/versi lama (V-09/V-10), pesanan sudah Done (V-12/V-13); kedatangan telat (V-06) = tolak tanpa efek + daftar rekonsiliasi. Konsisten dengan V-04, `KONTRAK-VA` §5/§5.1 butir 4/§6.2 |
 | `KONTRAK-VA.md` §5 (alur balasan + paragraf Pembaruan F3-29b) | **Diselaraskan:** efek disebut **terpisah per kasus** — kedatangan telat (V-06) = tolak tanpa efek + daftar rekonsiliasi; bayar-setelah-kedaluwarsa/VA lama/pesanan sudah Done = `perlu_review`; duplikat (V-04) = ack tanpa efek; tidak ada lagi satu ember "audit + `perlu_review`" |
 | F3-29 §2.4 rekomendasi piloting aggregator | **Digantikan K-01**; ditandai di `KONTRAK-VA.md` (histori dijaga) |
 | F3-29 §7.4 `va.kedaluwarsa_jam=24` | Naik status menjadi keputusan (K-04); tabel §2.1 menambah toggle per bank (usulan) |
@@ -668,6 +671,10 @@ bank itu (bukan mengarang adapter).
    keduanya sama sehingga berimpit, hasilnya tetap **`perlu review`, tidak pernah
    Done** — bukan auto-Done dan bukan "tanpa efek" yang menyembunyikan uang
    masuk; kode mesin yang dipakai ditentukan saat pemetaan dokumen bank (F3-30).
+   Asumsi ini dinyatakan **berpasangan** di matriks uji: **T-VA-32** (kombinasi
+   kedatangan telat + bayar setelah kedaluwarsa) hanya berlaku bila stempel waktu
+   bertanda tangan **≠** `waktu_bayar`; bila sama, harapan T-VA-32 batal dan
+   berlakulah butir ini (`perlu review`).
 
 ---
 
