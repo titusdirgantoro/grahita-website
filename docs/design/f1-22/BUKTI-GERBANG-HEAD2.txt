@@ -1,0 +1,16 @@
+HEAD=27079675001296e52889e586c8a35f29c9c6380c
+TREE_CLEAN_BEFORE=0
+=== gofmt -l (api) ===
+gofmt_exit=0
+=== go vet ./... ===
+=== go build ./... ===
+build_exit=0
+=== go build ./cmd/server ===
+server_exit=0
+=== check-migration-kompatibel.sh ===
+Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.
+migrasi_exit=0
+=== check-secrets.sh ===
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+secrets_exit=0
+TREE_CLEAN_AFTER=0

@@ -1,0 +1,46 @@
+HEAD=2707967
+=== versi biner ===
+promtool, version 3.15.0 (branch: HEAD, revision: 5241a27fe3c6983549fccc32f6e65917408c63cd)
+1.7.7
+installed by downloading from release page
+built with go1.23.4 compiler for linux/amd64
+v2.11.7 h1:yj0Y4fYZGPkSvibBJ1sTWE33xC0fxztVyXEW5iIdUT4=
+=== actionlint ci.yml + release.yml ===
+actionlint_exit=0
+=== promtool check config ===
+Checking infra/observability/prometheus/prometheus.yml
+time=2026-10-10T19:12:54.044Z level=WARN source=config.go:103 msg="Empty environment variable" name=APP_ENV
+ SUCCESS: infra/observability/prometheus/prometheus.yml is valid prometheus config file syntax
+
+promconfig_exit=0
+=== promtool check rules --lint=all ===
+Checking infra/observability/prometheus/rules/grahita-alerts.yml
+  SUCCESS: 12 rules found
+
+promrules_exit=0
+=== SIMULASI ALARM: promtool test rules ===
+  SUCCESS
+
+promtest_exit=0
+=== caddy validate Caddyfile.prod ===
+{"level":"info","ts":1791659574.9098608,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x25d361d79b00"}
+{"level":"info","ts":1791659574.9109333,"logger":"http","msg":"servers shutting down with eternal grace period"}
+{"level":"info","ts":1791659574.9111655,"logger":"tls.cache.maintenance","msg":"stopped background certificate maintenance","cache":"0x25d361d79b00"}
+Valid configuration
+prod_exit=0
+=== caddy validate Caddyfile.staging TANPA STAGING_BASIC_AUTH_HASH (harus MENOLAK) ===
+{"level":"info","ts":1791659574.9851928,"msg":"using config from file","file":"infra/caddy/Caddyfile.staging"}
+{"level":"error","ts":1791659574.986471,"msg":"adapting config using caddyfile: parsing caddyfile tokens for 'basic_auth': username and password cannot be empty or missing, at infra/caddy/Caddyfile.staging:37 import chain ['infra/caddy/Caddyfile.staging:50 (import gerbang_staging)']"}
+staging_tanpa_hash_exit=0
+=== caddy validate Caddyfile.staging dengan hash bcrypt sah ===
+hash_dibuat_ok=$2a$14$
+{"level":"info","ts":1791659576.349895,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x4c4f9a35d00"}
+{"level":"info","ts":1791659576.350658,"logger":"tls.cache.maintenance","msg":"stopped background certificate maintenance","cache":"0x4c4f9a35d00"}
+{"level":"info","ts":1791659576.3507051,"logger":"http","msg":"servers shutting down with eternal grace period"}
+Valid configuration
+staging_dengan_hash_exit=0
+=== go test paket observability + arch (HEAD) ===
+ok  	github.com/grahita/portal/api/internal/platform/observability	0.073s
+ok  	github.com/grahita/portal/api/internal/arch	0.056s
+=== tree tetap bersih? ===
+0

@@ -1,0 +1,203 @@
+VERIFIKASI ULANG F1-22 PADA HEAD TERINTEGRASI (putaran ke-2)
+=====================================================================
+HEAD saat verifikasi : 2707967 ("fix(t7-fix): kunci baris revisi wajib unik +
+                         tolak qty/harga negatif-desimal")
+Kandidat F1-22       : 65d7cc1 (tetap ada di main; tidak diubah)
+Rentang sejak verifikasi sebelumnya (91ca217): 17 commit kartu lain
+Mesin                : sama — tanpa VPS/DNS, tanpa kredensial; Docker daemon
+                       tidak dapat diakses (permission denied).
+
+Kenapa diulang: berkas milik F1-22 TIDAK berubah sejak commit kandidat
+(git log 65d7cc1..HEAD -- infra/observability .github/workflows infra/caddy
+docker-compose.observability.yml docker-compose.staging.yml scripts
+api/internal/platform/observability ... = KOSONG), tetapi berkas bersama
+(api/cmd/server/main.go, api/internal/worker/worker.go, .github/workflows/ci.yml)
+ikut berubah oleh kartu lain. Karena itu gerbang, replika staging dua host,
+metrik, simulasi alarm, dan suite backend dijalankan ULANG pada HEAD ini —
+bukan mengutip bukti lama.
+
+Biner verifikasi yang dipakai (semua dari rilis resmi, diunduh di sesi ini):
+  promtool 3.15.0 (prometheus-3.15.0.linux-amd64)
+  actionlint 1.7.7
+  caddy v2.11.7 h1:yj0Y4fYZGPkSvibBJ1sTWE33xC0fxztVyXEW5iIdUT4=
+  golangci-lint 2.14.0 (untuk memeriksa keadaan gate lint CI)
+
+=====================================================================
+1. GERBANG STATIS (log: BUKTI-GERBANG-HEAD2.txt)
+=====================================================================
+$ git status --porcelain                     -> 0 berkas (tree bersih)
+$ (cd api && gofmt -l .)                     -> kosong, exit 0
+$ (cd api && go vet ./...)                   -> exit 0 (tanpa keluaran)
+$ (cd api && go build ./...)                 -> exit 0
+$ (cd api && go build -o /dev/null ./cmd/server)  -> exit 0
+$ bash scripts/check-migration-kompatibel.sh
+    "Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up."  exit 0
+$ bash scripts/check-secrets.sh
+    "Tidak ada rahasia terdeteksi pada berkas yang dilacak."                    exit 0
+
+=====================================================================
+2. VALIDASI KONFIGURASI + SIMULASI ALARM (log: BUKTI-VERIFIKASI-KONFIG-HEAD2.txt)
+=====================================================================
+$ actionlint .github/workflows/ci.yml .github/workflows/release.yml      exit 0
+$ promtool check config infra/observability/prometheus/prometheus.yml
+    SUCCESS: valid prometheus config file syntax                          exit 0
+$ promtool check rules --lint=all infra/observability/prometheus/rules/grahita-alerts.yml
+    SUCCESS: 12 rules found                                               exit 0
+$ cd infra/observability/prometheus/tests && promtool test rules grahita-alerts_test.yml
+    SUCCESS                                                               exit 0
+    (11 kasus: tiap alarm MENYALA pada keadaan buruk dan TIDAK menyala pada
+     keadaan sehat, termasuk kontrol negatif 1 kegagalan job, disk 85%,
+     dan `for: 10m` pada GrahitaJobGagalPermanen)
+$ caddy validate --config infra/caddy/Caddyfile.prod --adapter caddyfile
+    "Valid configuration"                                                 exit 0
+$ caddy validate --config infra/caddy/Caddyfile.staging --adapter caddyfile   (TANPA hash)
+    error: "username and password cannot be empty or missing"
+    -> MENOLAK (fail closed), bukan valid configuration
+$ STAGING_BASIC_AUTH_HASH=<bcrypt dari `caddy hash-password`> ... caddy validate staging
+    "Valid configuration"                                                 exit 0
+$ (cd api && go test -count=1 ./internal/platform/observability/ ./internal/arch/)
+    ok  .../internal/platform/observability   ok  .../internal/arch
+
+=====================================================================
+3. REPLIKA STAGING DUA HOST (dari Caddyfile.staging ASLI)
+=====================================================================
+Biner API dibangun dari HEAD 2707967; DB grahita_f122live dibuat, dimigrasi
+(goose versi 7 + 8 migrasi River) dan di-seed (SEED_PASSWORD lokal, bukan
+rahasia produksi). Replika Caddy dibuat dengan:
+
+    caddy adapt --config infra/caddy/Caddyfile.staging --adapter caddyfile
+
+lalu HANYA nilai bergantung-lingkungan diganti pada JSON hasil adapt:
+  - listen :443            -> :8443
+  - automatic_https.disable_redirects = true  (listener :80 tidak dapat
+    di-bind pengguna non-root di mesin ini; otomasi sertifikat tetap aktif)
+  - upstream api:8080      -> 127.0.0.1:8088
+  - root /srv/customer     -> web/apps/customer/dist
+  - root /srv/admin        -> web/apps/admin/dist
+  - issuer ACME            -> CA internal Caddy (sesuai komentar di
+    Caddyfile.staging: "Untuk uji lokal tanpa DNS publik, aktifkan CA internal")
+Struktur rute, blok header keamanan, basic-auth, dan blokir internal TIDAK
+disentuh.
+
+Hasil tepi (curl --resolve <host>:8443:127.0.0.1 --cacert <root CA internal>):
+  cabang tanpa basic-auth                       -> 401
+  cabang UI (dengan basic-auth)                 -> 200
+  admin  UI (dengan basic-auth)                 -> 200
+  cabang /api/v1/meta                           -> 200
+  cabang /metrics (dengan basic-auth)           -> 404   (diblokir di tepi)
+  cabang /internal/x                            -> 404
+  header pada UI: content-security-policy, strict-transport-security,
+  x-content-type-options, x-frame-options, x-robots-tag (staging) — semua ada.
+Sertifikat: "certificate obtained successfully ... issuer":"local" untuk kedua host.
+
+=====================================================================
+4. UJI ASAP DUA HOST (log mentah: BUKTI-SMOKE-STAGING-HEAD2.txt)
+=====================================================================
+$ CUSTOMER_BASE=https://staging.grahita-branch.tiusclaw.com:8443 \
+  ADMIN_BASE=https://staging.grahita-admin.tiusclaw.com:8443 \
+  SMOKE_EMAIL/SMOKE_PASSWORD/SMOKE_ADMIN_EMAIL/SMOKE_ADMIN_PASSWORD (akun seed) \
+  SMOKE_BASIC_AUTH=... SMOKE_CURL_OPTS="--resolve ... --cacert ..." \
+  sh scripts/smoke-staging.sh
+
+1. Kedua host menyajikan UI dan API same-origin          LULUS (keduanya 200,
+   header CSP/HSTS/nosniff/X-Frame-Options ada; /api/v1/meta 200 env staging)
+2. Login cabang + cookie sesi                            LULUS (HttpOnly,
+   SameSite=Lax, Secure, host-only tanpa Domain)
+3. Katalog cabang 200                                    LULUS
+4. Draft 201 (total 700000) -> submit 200 (status submitted, nomor 2026-10-01)  LULUS
+5. Isolasi sesi antar host: sesi cabang -> host admin    LULUS 401
+6. Login admin 200 (peran superadmin) -> verifikasi 200  LULUS (status done, hasil cocok)
+7. Daftar dokumen                                        TERHALANG (daftar KOSONG:
+   Invoice/Surat Jalan butuh Gotenberg + object storage; belum ada di mesin ini)
+HASIL: TERHALANG — alur login->submit->verify lulus; unduh dokumen TIDAK diakui lulus
+SMOKE_EXIT=2
+
+=====================================================================
+5. METRIK HIDUP (API dan worker) — log: BUKTI-METRIK-HEAD2.txt
+=====================================================================
+API (:8088/metrics, kutipan nyata setelah alur di atas):
+  grahita_http_requests_total{method="POST",route="/api/v1/orders",status="201"} 1
+  grahita_http_requests_total{method="POST",route="/api/v1/orders/{id}/submit",status="200"} 1
+  grahita_http_requests_total{method="POST",route="/api/v1/admin/orders/{id}/verify",status="200"} 1
+  grahita_http_requests_total{method="GET",route="/api/v1/auth/me",status="401"} 1
+  grahita_http_requests_total{method="GET",route="/api/v1/orders/{id}/documents",status="200"} 1
+  grahita_http_requests_total{method="GET",route="/healthz",status="200"} 2
+  grahita_http_requests_total{method="GET",route="/readyz",status="200"} 1
+  grahita_disk_used_ratio{mount="/"} 0.744...
+  grahita_build_info{env="staging",version="dev"} 1
+Label route = POLA chi ("/api/v1/orders/{id}/submit"), bukan id pesanan mentah.
+
+Worker (WORKER_METRICS_ADDR=:9091, /healthz 200):
+  grahita_jobs_completed_total{kind="email_outbox_pindai",outcome="sukses"} 3
+  grahita_jobs_completed_total{kind="reminder_cnc",outcome="sukses"} 1
+  grahita_jobs_completed_total{kind="render_dokumen_pesanan",outcome="gagal"} 5
+  grahita_jobs_current{state="available"} 1
+  grahita_jobs_current{state="completed"} 4
+  grahita_jobs_current{state="retryable"} 1
+Baris "render_dokumen_pesanan outcome=gagal" membuktikan risiko residu F1-18
+(job render gagal karena Gotenberg/S3 belum terpasang) TERUKUR dan dapat
+dialarmkan (GrahitaJobSeringGagal / GrahitaJobGagalPermanen menyala pada
+keadaan itu, terbukti pada simulasi promtool bagian 2).
+
+/healthz -> {"status":"ok","version":"dev"}
+/readyz  -> {"checks":{"database":"ok","gotenberg":"tidak dikonfigurasi",
+            "migrations":"ok (versi 7)","smtp":"ok",
+            "storage":"tidak dikonfigurasi"},"status":"ready","version":"dev"}
+
+=====================================================================
+6. SUITE BACKEND PENUH (PostgreSQL nyata) — log: BUKTI-SUITE-BACKEND-HEAD2.txt
+=====================================================================
+$ TEST_DATABASE_URL=postgres://...@127.0.0.1:5455/grahita_f122r4 \
+  (+ scripts/pg-dev-shim.sql) ; cd api && go test -race -p 1 -count=1 -timeout 45m ./...
+mulai 18:55:44 — selesai 19:10:06 (UTC) ; SUITE_EXIT=0
+27 paket "ok", 0 FAIL, 0 SKIP (internal/httpapi 721,1 s)
+
+=====================================================================
+7. GATE LINT CI: MASIH MERAH PADA HEAD (19 temuan di kode KARTU LAIN)
+=====================================================================
+$ (cd api && golangci-lint v2.14.0 run ./...)  ->  19 issues, LINT_EXIT=1
+   errcheck 5, ineffassign 4, staticcheck 9, unused 1
+
+Daftar lengkap (tidak satu pun milik F1-22; F1-22 tidak mengubah berkas ini):
+  internal/httpapi/integration_dashboard_pg_test.go:59   errcheck resp.Body.Close
+  internal/httpapi/integration_proofs_pg_test.go:303     errcheck baca.Close
+  internal/httpapi/integration_revise_pg_test.go:188     errcheck rc.Close
+  internal/payment/payment_test.go:168                   errcheck rc.Close
+  internal/platform/storage/s3_test.go:171               errcheck rc.Close
+  internal/httpapi/integration_tutorial_pg_test.go:378   ineffassign (BARU sejak 65d7cc1)
+  internal/httpapi/router_proofs_test.go:234             ineffassign
+  internal/httpapi/router_proofs_test.go:238             ineffassign
+  internal/httpapi/router_proofs_test.go:404             ineffassign
+  internal/document/render.go:152                        S1016
+  internal/httpapi/integration_documents_pdf_test.go:61  SA4004
+  internal/httpapi/router_proofs_test.go:146             S1011
+  internal/order/order.go:91                             ST1005 (pesan "Cash & Carry ...")
+  internal/payment/va/mock.go:162                        QF1012  (BARU sejak 65d7cc1)
+  internal/payment/va/va_test.go:177                     SA4000  (BARU sejak 65d7cc1)
+  internal/payment/va/vatest/contract.go:134             SA4000  (BARU sejak 65d7cc1)
+  internal/tutorial/tutorial.go:455                      QF1001  (BARU sejak 65d7cc1)
+  internal/tutorial/tutorial.go:512                      QF1001  (BARU sejak 65d7cc1)
+  internal/notification/notification_test.go:332         unused
+  6 temuan BARU berasal dari kartu lain yang mendarat setelah 65d7cc1
+  (payment/va, tutorial, uji tutorial).
+
+Tindakan: gate TIDAK dilonggarkan. Kartu tindak lanjut t_cf36bd3d ("Perbaiki 13
+temuan golangci-lint") diberi komentar pembaruan: pada HEAD ini jumlahnya 19
+(13 lama + 6 baru). Selama lint merah, rilis F1 belum boleh disebut siap.
+
+=====================================================================
+BATAS YANG TETAP TIDAK DIKLAIM (tidak berubah dari putaran sebelumnya)
+=====================================================================
+- TIDAK ADA deployment nyata: tanpa DNS/VPS/kredensial dan Docker daemon
+  ditolak, sehingga `docker compose up`, Caddy produksi, Prometheus, Grafana,
+  Alertmanager, Loki TIDAK pernah dijalankan sebagai container. Yang dibuktikan
+  hanya validitas konfigurasi (biner resmi) + perilaku tepi/API/DB pada replika
+  lokal.
+- Unduh dokumen belum terbukti: smoke exit 2 (butuh Gotenberg + object storage).
+- Alarm belum dikirim ke email end-to-end (butuh Prometheus + Alertmanager +
+  SMTP nyata = gerbang T5); yang terbukti: alarm MENYALA pada simulasi promtool
+  dan metrik sumbernya hidup.
+- PG18 asli tidak tersedia (PG 16.15 + scripts/pg-dev-shim.sql).
+- Replika memakai CA internal Caddy dan port :8443 (tanpa DNS/TLS publik).
+- Persetujuan rilis: BELUM ADA. Verifikasi ini bukti implementer; QA independen
+  (qa-tiusapp) yang memutuskan.

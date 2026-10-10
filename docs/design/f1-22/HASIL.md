@@ -249,6 +249,36 @@ sekadar mengutip bukti commit `5bbffb4`:
   nyata) di HEAD: **`SUITE_EXIT=0`, 23 paket ok, 0 FAIL, 0 SKIP**
   (`internal/httpapi` 706,7 s; log: `BUKTI-SUITE-BACKEND-HEAD.txt`).
 
+### 8. Verifikasi ulang pada HEAD terintegrasi (2707967) → `BUKTI-VERIFIKASI-ULANG-HEAD2.txt`
+
+HEAD bergerak 17 commit sejak 91ca217 (berkas F1-22 sendiri **tidak** berubah:
+`git log 65d7cc1..HEAD -- infra/observability .github/workflows infra/caddy
+scripts api/internal/platform/observability ...` kosong, tetapi
+`api/cmd/server/main.go`, `api/internal/worker/worker.go`, dan `ci.yml` tersentuh
+kartu lain). Karena itu seluruh bukti dijalankan ulang pada HEAD terintegrasi,
+memakai biner resmi (promtool 3.15.0, actionlint 1.7.7, caddy v2.11.7):
+
+- gerbang statis (`gofmt -l`, `go vet`, `go build`, gerbang migrasi,
+  `check-secrets.sh`) dan `actionlint` atas `ci.yml` + `release.yml`: exit 0;
+- `promtool check config` + `check rules --lint=all` (12 aturan) + **simulasi
+  alarm** `promtool test rules` → `SUCCESS`; `caddy validate` prod → valid,
+  staging tanpa hash → **menolak** (fail closed), staging dengan hash → valid;
+- replika staging dua host dibangun ulang dari `Caddyfile.staging` asli
+  (hanya nilai lingkungan yang dipatch): tanpa basic-auth 401, kedua UI 200
+  dengan CSP/HSTS/nosniff/X-Frame-Options/X-Robots-Tag, `/api/v1/meta` 200,
+  `/metrics` dan `/internal/*` di tepi **404**;
+- `scripts/smoke-staging.sh` → login → katalog → draft → submit → verifikasi
+  (done) **lulus**; daftar dokumen KOSONG → **TERHALANG** (`SMOKE_EXIT=2`);
+- metrik API + worker hidup kembali (termasuk
+  `grahita_jobs_completed_total{kind="render_dokumen_pesanan",outcome="gagal"} 5`
+  dan `grahita_jobs_current{state="retryable"}`) — risiko residu F1-18 terukur;
+- `/healthz` ok, `/readyz` jujur (`gotenberg`/`storage` = "tidak dikonfigurasi",
+  migrasi versi 7);
+- suite backend penuh `-race -p 1` pada `grahita_f122r4` (PostgreSQL nyata):
+  **`SUITE_EXIT=0`, 27 paket ok, 0 FAIL, 0 SKIP** (`internal/httpapi` 721,1 s);
+- gate lint CI **masih merah** pada HEAD ini: `golangci-lint v2.14.0` → 19 temuan
+  (13 lama + 6 baru dari kartu lain), lihat `BUKTI-GOLANGCI-LINT-HEAD2.txt`.
+
 ## Batas yang TIDAK diklaim
 
 1. **Tidak ada deployment nyata.** Tidak ada VPS/DNS/kredensial di sesi ini, dan
@@ -296,7 +326,7 @@ harus ditutup sebelum go-live. F1-22 hanya menyediakan alat pantau/gerbangnya:
 | 6 | Aset logo final kedua portal (bukan placeholder/CDN/cache) | swe/T5 | belum diverifikasi |
 | 7 | Cadangan Drive/MinIO nyata, WAL `.age` tidak disalin polos, drill korupsi, PITR/RPO/RTO | T5 | alarm cadangan & runbook sudah ada |
 | 8 | Golangci-lint & PostgreSQL 18 dijalankan nyata | CI/T5 | gerbang CI sudah memuat keduanya |
-| 9 | **Gate lint CI sedang MERAH di main**: `golangci-lint v2.14.0 run ./...` menemukan 13 temuan pada kode/uji kartu lain (5 errcheck `defer x.Close()` di berkas `_pg_test.go`/`s3_test.go`, 3 ineffassign di `router_proofs_test.go`, 4 staticcheck di `render.go`/`order.go`/`integration_documents_pdf_test.go`, 1 unused di `notification_test.go`). Tidak satu pun berasal dari kode F1-22 | swe | dilaporkan + dibuatkan kartu tindak lanjut **t_cf36bd3d**; gate lint tidak dilonggarkan |
+| 9 | **Gate lint CI sedang MERAH di main**: `golangci-lint v2.14.0 run ./...` menemukan 13 temuan pada kode/uji kartu lain (pada HEAD terintegrasi **2707967** jumlahnya menjadi **19** — 13 lama + 6 baru dari `internal/payment/va/*` dan `internal/tutorial/tutorial.go`; bukti `BUKTI-GOLANGCI-LINT-HEAD2.txt`) (5 errcheck `defer x.Close()` di berkas `_pg_test.go`/`s3_test.go`, 3 ineffassign di `router_proofs_test.go`, 4 staticcheck di `render.go`/`order.go`/`integration_documents_pdf_test.go`, 1 unused di `notification_test.go`). Tidak satu pun berasal dari kode F1-22 | swe | dilaporkan + dibuatkan kartu tindak lanjut **t_cf36bd3d** (diberi komentar pembaruan daftar 19 temuan); gate lint tidak dilonggarkan |
 
 ## Cara menjalankan ulang bukti
 

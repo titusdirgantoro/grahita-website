@@ -1,0 +1,45 @@
+Uji asap staging Grahita
+  cabang: https://staging.grahita-branch.tiusclaw.com:8443
+  admin : https://staging.grahita-admin.tiusclaw.com:8443
+
+1. Kedua host menyajikan UI dan API same-origin
+  [32mLULUS[0m cabang: halaman SPA tersaji (200)
+  [32mLULUS[0m cabang: header content-security-policy ada
+  [32mLULUS[0m cabang: header strict-transport-security ada
+  [32mLULUS[0m cabang: header x-content-type-options ada
+  [32mLULUS[0m cabang: header x-frame-options ada
+  [32mLULUS[0m cabang: API same-origin /api/v1/meta 200 (env staging)
+  [32mLULUS[0m admin: halaman SPA tersaji (200)
+  [32mLULUS[0m admin: header content-security-policy ada
+  [32mLULUS[0m admin: header strict-transport-security ada
+  [32mLULUS[0m admin: header x-content-type-options ada
+  [32mLULUS[0m admin: header x-frame-options ada
+  [32mLULUS[0m admin: API same-origin /api/v1/meta 200 (env staging)
+
+2. Login cabang + atribut cookie sesi
+  [32mLULUS[0m login cabang 200
+  [32mLULUS[0m cookie sesi memuat HttpOnly
+  [32mLULUS[0m cookie sesi memuat SameSite=Lax
+  [32mLULUS[0m cookie sesi memuat Secure
+  [32mLULUS[0m cookie sesi host-only (tanpa Domain)
+
+3. Katalog cabang (harga dari server)
+  [32mLULUS[0m katalog 200; produk uji 01a1272c-ee87-85b7-0ee8-0d02c9dcfca9
+
+4. Buat draft lalu submit (C&C tanpa bukti)
+  [32mLULUS[0m draft dibuat 01a12730-efae-2007-7a78-464cee606c80 (total 700000, status 201)
+  [32mLULUS[0m submit 200; status submitted, nomor 2026-10-02
+
+5. Isolasi sesi antar host (cookie host-only)
+  [32mLULUS[0m sesi cabang TIDAK berlaku di host admin (401)
+
+6. Login admin lalu verifikasi (cocok → Done)
+  [32mLULUS[0m login admin 200 (peran superadmin)
+  [32mLULUS[0m verifikasi 200; status pesanan done, hasil cocok
+
+7. Daftar dokumen lalu unduh
+  [33mTERHALANG[0m daftar dokumen kosong: render Invoice/Surat Jalan butuh Gotenberg + object storage (belum tersedia di lingkungan ini)
+
+HASIL: TERHALANG — alur login→submit→verify lulus, unduh dokumen belum bisa
+        dibuktikan karena ketergantungan eksternal (Gotenberg/S3) belum ada.
+SMOKE_EXIT=2

@@ -1,0 +1,44 @@
+BUKTI METRIK + HEALTH + TEPI — F1-22 pada HEAD 2707967
+(API :8088, worker :9091, tepi Caddy replika staging :8443)
+
+== API /healthz + /readyz ==
+{"status":"ok","version":"dev"}
+
+{"checks":{"database":"ok","gotenberg":"tidak dikonfigurasi","migrations":"ok (versi 7)","smtp":"ok","storage":"tidak dikonfigurasi"},"status":"ready","version":"dev"}
+
+
+== tepi: /metrics 404, tanpa basic-auth 401 ==
+metrics_di_tepi=401
+tanpa_basic_auth=401
+
+== metrik API (kutipan) ==
+grahita_build_info{env="staging",version="dev"} 1
+grahita_disk_used_ratio{mount="/"} 0.7440815644010116
+grahita_http_in_flight_requests 1
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="0.005"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="0.01"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="0.025"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="0.05"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="0.1"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="0.25"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="0.5"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="1"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="2.5"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="5"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="10"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/auth/me",le="+Inf"} 2
+grahita_http_request_duration_seconds_sum{method="GET",route="/api/v1/auth/me"} 0.001084532
+grahita_http_request_duration_seconds_count{method="GET",route="/api/v1/auth/me"} 2
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/catalog",le="0.005"} 0
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/catalog",le="0.01"} 0
+grahita_http_request_duration_seconds_bucket{method="GET",route="/api/v1/catalog",le="0.025"} 2
+== metrik worker (kutipan) ==
+grahita_job_duration_seconds_count{kind="email_outbox_pindai"} 3
+grahita_job_duration_seconds_count{kind="reminder_cnc"} 1
+grahita_job_duration_seconds_count{kind="render_dokumen_pesanan"} 5
+grahita_jobs_completed_total{kind="email_outbox_pindai",outcome="sukses"} 3
+grahita_jobs_completed_total{kind="reminder_cnc",outcome="sukses"} 1
+grahita_jobs_completed_total{kind="render_dokumen_pesanan",outcome="gagal"} 5
+grahita_jobs_current{state="available"} 1
+grahita_jobs_current{state="completed"} 4
+grahita_jobs_current{state="retryable"} 1
