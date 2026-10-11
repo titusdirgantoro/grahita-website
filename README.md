@@ -57,8 +57,14 @@ cd api && golangci-lint run ./...  # setara: make lint
 ```
 
 `make lint-diri` menjalankan kendali positif+negatif pemilih toolchain
-(kandidat versi salah harus ditolak). Bila runner benar-benar belum punya Go
+(kandidat versi salah harus ditolak, dan target Makefile harus **gagal** bila
+toolchain tidak teresolusi). Bila runner benar-benar belum punya Go
 1.27.x, setel `GRAHITA_GO=/jalur/ke/go` atau pasang di `$HOME/toolchain/go`.
+
+Target Go bersifat **fail-closed**: bila `GO`/`GOLANGCI_LINT` tidak teresolusi
+(mis. `GRAHITA_GO` salah, atau tidak ada kandidat), `make test`/`vet`/`build`/
+`lint`/`toolchain-cek` berhenti dengan pesan `GALAT toolchain: …` dan exit != 0
+— tidak pernah "hijau tanpa menjalankan satu tes pun".
 
 ## Menjalankan (lokal)
 
