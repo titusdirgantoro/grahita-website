@@ -222,15 +222,17 @@ Seluruh blok di atas direkam mentah di `BUKTI-T5-RUNNER.txt` bagian **[8]**
 5. **Tidak ada perubahan pada aturan lint, kode aplikasi, atau port tenant lain.**
    Diff commit `7a45c7e` terhadap `34b0e94` = 6 berkas: `Makefile`, `README.md`,
    `scripts/go-env.sh`, `scripts/runner-provision.sh`, `docs/design/t5-runner/*`;
-   diff putaran 3 (`f336231` terhadap `7a45c7e`) = 2 berkas saja: `Makefile` dan
-   `scripts/go-env.sh`. `.golangci.yml`, `api/`, dan `web/` tidak tersentuh
+   diff commit implementasi putaran 3 (`f336231` terhadap induknya `25e7b8a`) =
+   2 berkas saja: `Makefile` dan `scripts/go-env.sh`;
+   `git diff --name-only 34b0e94..HEAD -- api web` = **0 berkas**, dan
+   `.golangci.yml`, `api/`, serta `web/` tidak tersentuh
    (sha256 `api/.golangci.yml` identik: `759dd775…`). Pada saat blok bukti
    [6]/[7] maupun [8]/[9] direkam, `git status --porcelain` **KOSONG sebelum dan
    sesudah** eksekusi — artefak `bin/` hasil `make build` dibersihkan di dalam
    skrip, jadi tidak ada sisa di pohon. Suntingan dokumentasi yang memuat blok
-   bukti dilakukan SETELAH perekaman, hanya menyentuh `docs/design/t5-runner/`,
-   dan di-commit terpisah dari commit yang diuji (hash commit dokumentasi dicatat
-   pada komentar kartu `t_ac58a28e`).
+   bukti dilakukan SETELAH perekaman, hanya menyentuh `docs/design/t5-runner/` +
+   `README.md`, dan di-commit terpisah dari commit yang diuji (hash commit
+   dokumentasi dicatat pada komentar kartu `t_ac58a28e`).
 6. **Fail-closed ≠ selalu gagal.** Penjaga `_wajib_go`/`_wajib_lint` hanya
    berhenti bila nilai toolchain kosong; kendali positif (stub Go 1.27.1,
    [8] butir 8 baris “tidak menghalangi konfigurasi sah”) membuktikan jalan sah
