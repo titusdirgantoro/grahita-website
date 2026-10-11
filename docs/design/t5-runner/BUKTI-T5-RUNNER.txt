@@ -1033,3 +1033,201 @@ f336231af0a51f5a5d423bad1a838b82d9d10e47 dengan `git status --porcelain` KOSONG
 sebelum DAN sesudah eksekusi; `git rev-parse HEAD` diverifikasi lagi di akhir
 (EXIT_REV). Tidak ada `bin/` yang tertinggal (`make build` artefaknya dihapus di
 dalam skrip sebelum bagian 13 diukur). Tidak ada rahasia pada bukti ini.
+
+[9] PUTARAN 3 — SELURUH BLOK [8] DIULANG PADA COMMIT DOKUMENTASI (pohon bersih)
+-------------------------------------------------------------------------------
+Tujuan   : membuktikan blok [8] tidak bergantung pada satu commit/pohon tertentu dan
+           bahwa suntingan dokumentasi (bagian [8] + HASIL.md + README.md) tidak
+           mengubah hasil gerbang sedikit pun.
+Skrip    : cache/scratch/t5runner-qa3/bukti-putaran3.sh (skrip yang SAMA, di luar repo)
+Perintah : bash bukti-putaran3.sh > bukti-839cb0d.log 2>&1   -> exit 0
+Commit   : 839cb0dc83fd4fa9a6a3a1fa27867e8dcda9a4fb (dokumentasi bagian [8]).
+Hasil    : identik dengan [8] — 27 paket ok / 0 FAIL pada PATH minimal maupun default,
+           `0 issues.` pada `make lint` dan lint polos, `--uji-diri` 20/20 lulus,
+           empat kendali fail-closed 2/2/2/2 dengan 0 paket diuji, kendali negatif
+           historis Makefile 34b0e94 tetap 2 (sh 127), resolver 1x, pohon bersih
+           sebelum dan sesudah.
+Mentah    : keluaran di bawah tidak disunting; penanda EXIT_*/STATUS_PORCELAIN_BARIS=*
+           dicetak skrip itu sendiri.
+===== 0. HEAD & pohon bersih (PRA eksekusi) =====
+Waktu (UTC)  : 2026-10-11 15:51:45
+839cb0dc83fd4fa9a6a3a1fa27867e8dcda9a4fb
+--- git status --porcelain (harus KOSONG) ---
+STATUS_PORCELAIN_BARIS=0
+
+===== 1. toolchain Go yang dipakai (tanpa rahasia / tanpa menyentuh API lain) =====
+go version go1.27.1 linux/amd64
+Toolchain grahita-website (Go >= 1.27; Architecture.md §1, CI GO_VERSION=1.27)
+  go            : /home/hermes/toolchain/go/bin/go
+  versi         : go version go1.27.1 linux/amd64
+  golangci-lint : /home/hermes/bin/golangci-lint
+  versi lint    : golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+  pakai di sesi : eval "$(./scripts/go-env.sh --export)"
+  lewat make    : make toolchain-cek / make test / make lint
+EXIT_LAPORAN=0
+--- tautan provisioning host ---
+lrwxrwxrwx 1 hermes hermes 32 Oct 11 15:28 /home/hermes/bin/go -> /home/hermes/toolchain/go/bin/go
+PATH=/home/hermes/.local/bin:/home/hermes/bin:/home/hermes/.local/bin:/home/hermes/bin:/opt/hermes-agent/.hermes/bin:/home/hermes/hermes-dev-data/installs/ffad2f5543956651/environments/db833a7fec9840a2b2482fbdb3ecf172/venv/bin:/opt/hermes-agent/node_modules/.bin:/home/hermes/hermes-dev-data/tools/node-26.7.0-linux-x64/bin:/home/hermes/hermes-dev-data/tools/npm-12.0.2-linux-x64/bin:/home/hermes/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/snap/bin
+
+===== 2. make toolchain-cek =====
+go            : /home/hermes/toolchain/go/bin/go
+golangci-lint : /home/hermes/bin/golangci-lint
+PATH toolchain: /home/hermes/toolchain/go/bin:/home/hermes/bin:
+go version go1.27.1 linux/amd64
+golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+Go            : /home/hermes/toolchain/go/bin/go (go version go1.27.1 linux/amd64)
+golangci-lint : /home/hermes/bin/golangci-lint
+EXIT_TOOLCHAIN_CEK=0
+
+===== 3. PATH minimal (TANPA toolchain di PATH) -> make test =====
+EXIT_MAKE_TEST_PATH_MINIMAL=0
+BARIS_OK=27 BARIS_FAIL=0
+cd api && /home/hermes/toolchain/go/bin/go test ./...
+
+===== 4. lingkungan default runner -> make test =====
+EXIT_MAKE_TEST=0
+BARIS_OK=27 BARIS_FAIL=0
+
+===== 5. lingkungan default runner -> make lint =====
+EXIT_MAKE_LINT=0
+0 issues.
+
+===== 6. perintah POLOS ala tester: cd api && golangci-lint run ./... =====
+EXIT_LINT_POLOS=0
+0 issues.
+
+===== 7. gerbang repo lain: vet / build / secrets / uji-rahasia / migrasi-cek / fmt =====
+EXIT_VET=0
+EXIT_BUILD=0
+-rwxrwxr-x 1 hermes hermes 43980827 Oct 11 15:51 bin/server
+BIN_DIBERSIHKAN=ya
+EXIT_SECRETS=0
+EXIT_UJI_RAHASIA=0
+UJI DIRI check-secrets: LULUS (18/18 kasus)
+EXIT_MIGRASI_CEK=0
+EXIT_FMT=0 (no-op: pohon tetap bersih)
+
+===== 8. kendali diri pemilih toolchain (termasuk fail-closed Makefile) =====
+LULUS  kandidat go1.27.1 dipilih
+LULUS  kandidat go1.28.0 diterima
+LULUS  go1.26.5 ditolak
+LULUS  tanpa kandidat: exit != 0 + pesan jelas
+LULUS  GRAHITA_GO versi salah ditolak (otoritatif)
+LULUS  GRAHITA_GO berupa direktori toolchain dinormalkan
+LULUS  direktori tanpa biner go ditolak dengan pesan jelas
+LULUS  --go mencetak jalur biner terpilih
+LULUS  --export menambahkan go & golangci-lint ke PATH
+LULUS  --golangci-lint memakai override GRAHITA_GOLANGCI_LINT
+LULUS  --cek exit != 0 saat golangci-lint hilang
+LULUS  --cek hijau saat toolchain lengkap
+LULUS  Makefile: resep 'test' memakai Go hasil pemilih (tanpa PATH interaktif)
+LULUS  Makefile: target lint ada dan memanggil golangci-lint run ./...
+LULUS  Makefile: toolchain-cek melaporkan jalur toolchain resep
+LULUS  Makefile fail-closed: tanpa toolchain -> make test exit != 0 + pesan jelas
+LULUS  Makefile fail-closed: GRAHITA_GO salah -> make test exit != 0 + pesan jelas
+LULUS  Makefile fail-closed: GO= kosong dari command line -> make test exit != 0
+LULUS  Makefile fail-closed tidak menghalangi konfigurasi sah (stub go1.27.1 -> exit 0)
+LULUS  Makefile fail-closed: GOLANGCI_LINT kosong -> make lint exit != 0 + pesan jelas
+
+Ringkasan kendali diri scripts/go-env.sh: 20 lulus, 0 gagal
+EXIT_UJI_DIRI=0
+
+===== 9. NEGATIF — cacat fail-open QA putaran 2 harus tetap tertutup =====
+--- 9a. toolchain tidak ada sama sekali (env bersih, PATH minimal) ---
+EXIT_TANPA_TOOLCHAIN=2
+BARIS_OK=0
+Tidak menemukan biner Go >= 1.27. Kandidat dinilai: (tidak ada)
+Pasang Go 1.27+ di $HOME/toolchain/go, atau setel GRAHITA_GO=/jalur/ke/go.
+GALAT toolchain: biner Go tidak teresolusi (GO kosong).
+Jalankan ./scripts/runner-provision.sh, atau set GRAHITA_GO=/jalur/ke/go (lihat scripts/go-env.sh --help).
+make: *** [Makefile:89: test] Error 2
+--- 9b. GRAHITA_GO=/salah/jalur/go (jalur override yang didokumentasikan) ---
+EXIT_GRAHITA_GO_SALAH=2
+BARIS_OK=0
+GRAHITA_GO=/salah/jalur/go bukan berkas yang dapat dieksekusi.
+GALAT toolchain: biner Go tidak teresolusi (GO kosong).
+Jalankan ./scripts/runner-provision.sh, atau set GRAHITA_GO=/jalur/ke/go (lihat scripts/go-env.sh --help).
+make: *** [Makefile:89: test] Error 2
+--- 9c. GO= kosong dari COMMAND LINE ---
+EXIT_GO_KOSONG_CMDLINE=2
+BARIS_OK=0
+GALAT toolchain: biner Go tidak teresolusi (GO kosong).
+Jalankan ./scripts/runner-provision.sh, atau set GRAHITA_GO=/jalur/ke/go (lihat scripts/go-env.sh --help).
+make: *** [Makefile:89: test] Error 2
+--- 9d. GOLANGCI_LINT= kosong dari COMMAND LINE -> make lint ---
+EXIT_LINT_KOSONG_CMDLINE=2
+GALAT toolchain: golangci-lint tidak teresolusi (GOLANGCI_LINT kosong).
+Set GRAHITA_GOLANGCI_LINT=/jalur/ke/golangci-lint (lihat scripts/go-env.sh --help).
+make: *** [Makefile:105: lint] Error 2
+--- 9e. pesan resolver tidak lagi tercetak berulang per panggilan make ---
+JUMLAH_PESAN_RESOLVER=1
+
+===== 10. NEGATIF historis: Makefile 34b0e94 pada PATH minimal -> exit 2 / sh 127 =====
+EXIT_NEGATIF_MAKEFILE_34B0E94=2
+cd api && go test ./...
+/bin/sh: 1: go: not found
+make: *** [/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/t5runner-qa3/Makefile-34b0e94:54: test] Error 127
+
+===== 11. tidak ada regresi berkas/aturan (api/, web/, .golangci.yml) =====
+ Makefile                                  |   73 +-
+ README.md                                 |   29 +-
+ docs/design/t5-runner/BUKTI-T5-RUNNER.txt | 1035 +++++++++++++++++++++++++++++
+ docs/design/t5-runner/HASIL.md            |  237 +++++++
+ scripts/go-env.sh                         |  453 +++++++++++++
+ scripts/runner-provision.sh               |  123 ++++
+ 6 files changed, 1941 insertions(+), 9 deletions(-)
+--- diff pada api/ dan web/ (harus kosong) ---
+SHA256_GOLANGCI_34B0E94=759dd77502fefd264189d8b7fb38ad4a45e8f61f7e6c4d6be8bd42a66bc58832
+SHA256_GOLANGCI_HEAD=759dd77502fefd264189d8b7fb38ad4a45e8f61f7e6c4d6be8bd42a66bc58832
+
+===== 12. HTTPS DUA HOST TANPA -k (bukti tidak ada regresi) =====
+HEAD=839cb0dc83fd4fa9a6a3a1fa27867e8dcda9a4fb  STATUS_PORCELAIN=0 baris
+===== grahita-branch.tiusclaw.com =====
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 1 -> 200 http/2 (exit 0)
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 2 -> 200 http/2 (exit 0)
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 3 -> 200 http/2 (exit 0)
+--- sertifikat (verifikasi rantai, tanpa -k) ---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Verify return code: 0 (ok)
+subject=CN = grahita-branch.tiusclaw.com
+issuer=C = US, O = Let's Encrypt, CN = YE1
+notBefore=Oct 11 14:01:07 2026 GMT
+notAfter=Jan  9 14:01:06 2027 GMT
+X509v3 Subject Alternative Name: 
+    DNS:grahita-admin.tiusclaw.com, DNS:grahita-branch.tiusclaw.com
+--- jalur negatif (harus 404) ---
+GET https://grahita-branch.tiusclaw.com/api/v1/tidak-ada -> 404
+GET https://grahita-branch.tiusclaw.com/metrics -> 404
+GET https://grahita-branch.tiusclaw.com/internal/apa-pun -> 404
+GET https://grahita-branch.tiusclaw.com/debug/pprof/ -> 404
+===== grahita-admin.tiusclaw.com =====
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 1 -> 200 http/2 (exit 0)
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 2 -> 200 http/2 (exit 0)
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 3 -> 200 http/2 (exit 0)
+--- sertifikat (verifikasi rantai, tanpa -k) ---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Verify return code: 0 (ok)
+subject=CN = grahita-branch.tiusclaw.com
+issuer=C = US, O = Let's Encrypt, CN = YE1
+notBefore=Oct 11 14:01:07 2026 GMT
+notAfter=Jan  9 14:01:06 2027 GMT
+X509v3 Subject Alternative Name: 
+    DNS:grahita-admin.tiusclaw.com, DNS:grahita-branch.tiusclaw.com
+--- jalur negatif (harus 404) ---
+GET https://grahita-admin.tiusclaw.com/api/v1/tidak-ada -> 404
+GET https://grahita-admin.tiusclaw.com/metrics -> 404
+GET https://grahita-admin.tiusclaw.com/internal/apa-pun -> 404
+GET https://grahita-admin.tiusclaw.com/debug/pprof/ -> 404
+
+===== 13. pohon tetap bersih (PASCA eksekusi) =====
+Waktu (UTC)  : 2026-10-11 15:52:07
+STATUS_PORCELAIN_BARIS_PASCA=0
+EXIT_REV=839cb0dc83fd4fa9a6a3a1fa27867e8dcda9a4fb
+
+CATATAN PENUTUP BAGIAN [9]: bagian ini direkam pada commit
+839cb0dc83fd4fa9a6a3a1fa27867e8dcda9a4fb dengan pohon BERSIH sebelum dan sesudah
+(STATUS_PORCELAIN_BARIS=0, STATUS_PORCELAIN_BARIS_PASCA=0, EXIT_REV = commit itu).
+Suntingan yang memuat bagian [9] ini di-commit SETELAH perekaman dan hanya
+menyentuh `docs/design/t5-runner/`; hash commit penutupnya dicatat pada komentar
+kartu t_ac58a28e, bukan di berkas ini, agar bukti tidak merujuk dirinya sendiri.
+Tidak ada rahasia pada bukti ini, dan tidak ada berkas di luar docs/ yang berubah.
