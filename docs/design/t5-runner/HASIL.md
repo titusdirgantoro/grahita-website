@@ -76,6 +76,12 @@ kartu ini.
 
 ## 4. Bukti verifikasi pada commit ini
 
+Commit bukti: **`7a45c7ea1deecbd255072ddfd88c770e334b1b26`**. Tabel di bawah merangkum
+keluaran; seluruh keluaran mentah ada di `BUKTI-T5-RUNNER.txt` — bagian [1]–[5]
+direkam pada pohon kerja sebelum commit, dan bagian **[6] (gerbang dijalankan ulang
+pasca-commit, pohon bersih) + [7] (HTTPS dua host, commit yang sama)** adalah blok
+bukti yang tertaut ke commit tersebut.
+
 Ringkasan (detail + keluaran mentah di `BUKTI-T5-RUNNER.txt`):
 
 | # | Perintah | Hasil |
@@ -93,10 +99,16 @@ Ringkasan (detail + keluaran mentah di `BUKTI-T5-RUNNER.txt`):
 | 11 | Kendali negatif: `make -f <Makefile HEAD> test` pada PATH tanpa toolchain; `golangci-lint` tanpa `go` di PATH | exit 2 (di dalam `sh`: 127) dan exit 3 — **kegagalan lama dapat direproduksi persis**, jadi perbaikan bukan efek mesin lain |
 | 12 | HTTPS dua host tanpa `-k`: 3× `curl --head` per host | 6/6 `200` HTTP/2; `verify return code: 0 (ok)`, TLSv1.3, SAN dua host, issuer Let's Encrypt YE1 (berlaku 11 Okt 2026 – 9 Jan 2027) |
 | 13 | Jalur negatif publik (`/api/v1/tidak-ada`, `/metrics`, `/internal/*`, `/debug/pprof/`) pada kedua host | 404 semua |
+| 14 | **[6] PASCA-COMMIT** pada `7a45c7e` dengan pohon bersih: `git rev-parse HEAD`, `git status --porcelain` | `7a45c7e…`, **KOSONG** (0 baris) sebelum dan sesudah eksekusi |
+| 15 | **[6] PASCA-COMMIT**: `PATH=/usr/bin:/bin make test`, `make test`, `make lint`, `( cd api && golangci-lint run ./... )`, `make toolchain-cek` | exit 0 semua; 27 paket `ok` per `make test`; `0 issues.` pada kedua jalur lint; `go1.27.1` + `golangci-lint v2.14.0` |
+| 16 | **[6] PASCA-COMMIT** kendali negatif: `make -f <Makefile 34b0e94> test` pada PATH minimal | exit 2 (`/bin/sh: 1: go: not found`, di dalam `sh` 127) — kegagalan lama tetap dapat direproduksi dari commit yang sama |
+| 17 | **[7] PASCA-COMMIT** HTTPS dua host tanpa `-k` (3× `curl --head` + rantai sertifikat + 4 jalur negatif per host) | 6/6 `200` HTTP/2 exit 0; `Verify return code: 0 (ok)`, TLSv1.3; 8/8 jalur negatif 404 |
 
 Perintah dasar yang dicatat tester pada `t_e36576b6` (`make test`,
 `cd api && golangci-lint run ./...`) kini keduanya exit 0 **pada commit yang
-sama** dan tanpa perubahan aturan linter.
+sama** (`7a45c7e`, pohon bersih, bukti [6] baris 3–6) dan tanpa perubahan aturan
+linter. Kendali negatif pada commit yang sama ([6] butir 7) tetap keluar 2/127
+dengan Makefile pra-perbaikan, sehingga hasil hijau bukan akibat mesin lain.
 
 ## 5. Invocation stabil untuk tester
 
@@ -109,6 +121,21 @@ make lint                               # exit 0, 0 issues
 ( cd api && eval "$(../scripts/go-env.sh --export)" && golangci-lint run ./... )  # perintah polos
 ./scripts/go-env.sh --uji-diri          # kendali positif+negatif pemilih
 ./scripts/runner-provision.sh --cek     # keadaan tautan ~/bin (provisioning host)
+```
+
+**Reproduksi blok bukti [6]/[7] (pasca-commit) — urutan yang dipakai kartu ini.**
+Jalankan dari root repo pada pohon **bersih** (`git status --porcelain` kosong);
+jangan menaruh skrip bukti di dalam repo supaya worktree tetap bersih:
+
+```bash
+git rev-parse HEAD ; git status --porcelain        # harus kosong (0 baris)
+PATH=/usr/bin:/bin make test                       # gerbang dengan PATH TANPA toolchain
+make toolchain-cek ; make test ; make lint          # gerbang normal
+( cd api && golangci-lint run ./... )               # perintah polos ala tester
+# kendali negatif: Makefile pra-perbaikan (34b0e94) pada PATH tanpa toolchain
+git show 34b0e94efcfa85eb4f8ac7546fb649f58768e653:Makefile > /tmp/Makefile-HEAD
+PATH=/usr/bin:/bin make -f /tmp/Makefile-HEAD test  # harus exit 2 ("go: not found", sh 127)
+git status --porcelain                              # harus tetap kosong sesudah eksekusi
 ```
 
 Bila `go` tidak ada di PATH sama sekali: `eval "$(./scripts/go-env.sh --export)"`
@@ -133,5 +160,11 @@ belum diprovisikan: `./scripts/runner-provision.sh` (tanpa sudo).
    CI GitHub memakai `actions/setup-go` (`GO_VERSION: "1.27"`) dan memasang
    `golangci-lint v2.14.0` sendiri — pemilih toolchain tidak mengubah perilaku CI.
 5. **Tidak ada perubahan pada aturan lint, kode aplikasi, atau port tenant lain.**
-   `git status` bersih dari artefak (`bin/` hasil `make build` dihapus setelah bukti);
-   diff terlacak hanya `Makefile` dan `README.md`.
+   Diff commit `7a45c7e` terhadap `34b0e94` = 6 berkas: `Makefile`, `README.md`,
+   `scripts/go-env.sh`, `scripts/runner-provision.sh`, `docs/design/t5-runner/*`;
+   `.golangci.yml`, `api/`, dan `web/` tidak tersentuh. Pada saat blok bukti [6]/[7]
+   direkam, `git status --porcelain` **KOSONG sebelum dan sesudah** eksekusi —
+   artefak `bin/` hasil `make build` dibersihkan, jadi tidak ada sisa di pohon.
+   Suntingan dokumentasi yang memuat blok [6]/[7] dilakukan SETELAH perekaman,
+   hanya menyentuh `docs/design/t5-runner/`, dan di-commit terpisah dari `7a45c7e`
+   (hash commit dokumentasi dicatat pada komentar kartu `t_ac58a28e`).

@@ -1,7 +1,26 @@
 BUKTI T5-RUNNER — akses toolchain Go untuk gerbang test/lint (kartu t_ac58a28e)
 ===============================================================================
-Commit diuji   : 34b0e94efcfa85eb4f8ac7546fb649f58768e653 (branch main)
-Waktu perekaman: 2026-10-11 15:29:37 UTC
+Commit diuji   : 7a45c7ea1deecbd255072ddfd88c770e334b1b26 (branch main)
+                 - Verifikasi ULANG pasca-commit pada pohon bersih: bagian [6]
+                   (`git rev-parse HEAD` = 7a45c7e…, `git status --porcelain` KOSONG).
+                 - Kegagalan lama direproduksi pada 34b0e94efcfa85eb4f8ac7546fb649f58768e653.
+Bagian [1]-[5] direkam pada POHON KERJA di atas 34b0e94 (perbaikan belum di-commit);
+                 keadaannya dicatat apa adanya di [2] butir 0 (` M Makefile`,
+                 `?? scripts/go-env.sh`). Himpunan berkas yang disentuh pohon kerja itu
+                 sama dengan isi commit 7a45c7e (6 berkas: Makefile, README.md,
+                 scripts/go-env.sh, scripts/runner-provision.sh, docs/design/t5-runner/*).
+                 Kesetaraan byte-per-byte TIDAK diklaim (pohon kerja itu sudah tidak ada);
+                 yang diklaim adalah (a) resep yang tercetak pada [1] C / [2] butir 1
+                 (`cd api && /home/hermes/toolchain/go/bin/go test ./...`) sama dengan
+                 resep yang dihasilkan Makefile commit 7a45c7e (lihat [6] butir 3-4),
+                 dan (b) bagian [6] menjalankan ulang seluruh gerbang pada commit
+                 7a45c7e dengan pohon bersih, sehingga bukti tertaut ke satu commit
+                 tanpa bergantung pada pohon kerja. Suntingan dokumentasi setelah [6]
+                 hanya menyentuh docs/ dan tidak mengubah Makefile/skrip/kode
+                 (lihat "CATATAN PENUTUP BAGIAN [6]/[7]" di akhir berkas ini).
+Waktu perekaman: 2026-10-11 15:29:37 UTC (bagian [1]-[5])
+                 2026-10-11 15:38:42-15:38:50 UTC (bagian [6] pasca-commit 7a45c7e)
+                 2026-10-11 15:38:50 UTC (bagian [7] HTTPS, commit yang sama)
 Host           : Linux 6.8.0-136-generic x86_64 — runner bersama profile swe-tiusapp
 Rahasia        : TIDAK ADA. Semua bukti memakai perintah tanpa kredensial/token;
                  tidak ada sandi, cookie, atau token pada berkas ini.
@@ -20,6 +39,10 @@ G. make vet / make build                                 0 / 0
 H. scripts/go-env.sh --uji-diri (kendali positif+negatif) 0 (15/15 lulus)
 I. make secrets / make migrasi-cek                       0 / 0
 J. provision runner (idempotent) -> go version polos / lint polos 0 / 0
+K. [6] PASCA-COMMIT 7a45c7e, pohon bersih:
+   make test (PATH minimal) / make test / make lint / lint polos   0 / 0 / 0 / 0
+   make toolchain-cek / kendali negatif Makefile HEAD              0 / 2 (sh 127)
+L. [7] HTTPS dua host tanpa -k pasca-commit (6/6 200 + 8/8 404)   0
 
 [1] KEADAAN LAMA vs SESUDAH PERBAIKAN (reproduksi kegagalan T5-ulang)
 -------------------------------------------------------------------------------
@@ -560,7 +583,234 @@ $ ls -l scripts/go-env.sh scripts/runner-provision.sh
 -rwxrwxr-x 1 hermes hermes 14271 Oct 11 15:26 scripts/go-env.sh
 -rwxrwxr-x 1 hermes hermes  4009 Oct 11 15:27 scripts/runner-provision.sh
 
+[6] PASCA-COMMIT — SELURUH GERBANG DIJALANKAN ULANG PADA COMMIT 7a45c7e
+-------------------------------------------------------------------------------
+Skrip    : cache/scratch/t5runner/bukti-pasca-commit.sh (dijalankan di root repo pada
+           pohon BERSIH — tanpa berkas belum ter-commit; skrip disimpan di luar repo
+           supaya tidak ada berkas yang menyentuh worktree selama pengujian).
+Perintah : bash bukti-pasca-commit.sh > bukti-pasca-commit.log 2>&1   -> exit 0
+Mentah    : keluaran di bawah tidak disunting. Penanda STATUS_PORCELAIN_BARIS=0 dan
+           EXIT_* dicetak oleh skrip itu sendiri, bukan ditambahkan tangan.
+
+===== 0. HEAD & pohon bersih (PRA eksekusi) =====
+Waktu (UTC)  : 2026-10-11 15:38:42
+7a45c7ea1deecbd255072ddfd88c770e334b1b26
+--- git status --porcelain (harus KOSONG) ---
+STATUS_PORCELAIN_BARIS=0
+
+===== 1. go version / toolchain yang dipakai (tanpa rahasia) =====
+/home/hermes/bin/go
+go version go1.27.1 linux/amd64
+--- jalur toolchain dari pemilih repo ---
+Toolchain grahita-website (Go >= 1.27; Architecture.md §1, CI GO_VERSION=1.27)
+  go            : /home/hermes/toolchain/go/bin/go
+  versi         : go version go1.27.1 linux/amd64
+  golangci-lint : /home/hermes/bin/golangci-lint
+  versi lint    : golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+  pakai di sesi : eval "$(./scripts/go-env.sh --export)"
+  lewat make    : make toolchain-cek / make test / make lint
+EXIT_LAPORAN=0
+
+===== 2. make toolchain-cek =====
+go            : /home/hermes/toolchain/go/bin/go
+golangci-lint : /home/hermes/bin/golangci-lint
+PATH toolchain: /home/hermes/toolchain/go/bin:/home/hermes/bin:
+go version go1.27.1 linux/amd64
+golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+Go            : /home/hermes/toolchain/go/bin/go (go version go1.27.1 linux/amd64)
+golangci-lint : /home/hermes/bin/golangci-lint
+EXIT_TOOLCHAIN_CEK=0
+
+===== 3. PATH minimal (tanpa toolchain) -> make test =====
+cd api && /home/hermes/toolchain/go/bin/go test ./...
+?   	github.com/grahita/portal/api/cmd/server	[no test files]
+?   	github.com/grahita/portal/api/db/migrations	[no test files]
+ok  	github.com/grahita/portal/api/internal/arch	(cached)
+ok  	github.com/grahita/portal/api/internal/audit	(cached)
+?   	github.com/grahita/portal/api/internal/audit/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/auth	(cached)
+?   	github.com/grahita/portal/api/internal/auth/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/backup	(cached)
+?   	github.com/grahita/portal/api/internal/backup/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/bank	(cached)
+?   	github.com/grahita/portal/api/internal/bank/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/branch	(cached)
+?   	github.com/grahita/portal/api/internal/branch/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/catalog	(cached)
+?   	github.com/grahita/portal/api/internal/catalog/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/dashboard	(cached)
+?   	github.com/grahita/portal/api/internal/dashboard/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/db/sqlc	[no test files]
+ok  	github.com/grahita/portal/api/internal/document	(cached)
+?   	github.com/grahita/portal/api/internal/document/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/fulfillment	(cached)
+ok  	github.com/grahita/portal/api/internal/httpapi	(cached)
+ok  	github.com/grahita/portal/api/internal/notification	(cached)
+?   	github.com/grahita/portal/api/internal/notification/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/order	(cached)
+?   	github.com/grahita/portal/api/internal/order/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment	(cached)
+?   	github.com/grahita/portal/api/internal/payment/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment/va	(cached)
+ok  	github.com/grahita/portal/api/internal/payment/va/vatest	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/apierr	(cached)
+?   	github.com/grahita/portal/api/internal/platform/clock	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/config	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/database	(cached)
+?   	github.com/grahita/portal/api/internal/platform/httpx	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/jobs	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/mailer	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/observability	(cached)
+?   	github.com/grahita/portal/api/internal/platform/pdf	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/pgtypes	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/storage	(cached)
+ok  	github.com/grahita/portal/api/internal/registration	(cached)
+?   	github.com/grahita/portal/api/internal/registration/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/report	(cached)
+?   	github.com/grahita/portal/api/internal/report/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/seed	[no test files]
+ok  	github.com/grahita/portal/api/internal/settings	(cached)
+?   	github.com/grahita/portal/api/internal/settings/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/tutorial	(cached)
+?   	github.com/grahita/portal/api/internal/tutorial/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/users	(cached)
+?   	github.com/grahita/portal/api/internal/users/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/worker	(cached)
+EXIT_MAKE_TEST_PATH_MINIMAL=0
+
+===== 4. PATH default runner -> make test =====
+cd api && /home/hermes/toolchain/go/bin/go test ./...
+?   	github.com/grahita/portal/api/cmd/server	[no test files]
+?   	github.com/grahita/portal/api/db/migrations	[no test files]
+ok  	github.com/grahita/portal/api/internal/arch	(cached)
+ok  	github.com/grahita/portal/api/internal/audit	(cached)
+?   	github.com/grahita/portal/api/internal/audit/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/auth	(cached)
+?   	github.com/grahita/portal/api/internal/auth/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/backup	(cached)
+?   	github.com/grahita/portal/api/internal/backup/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/bank	(cached)
+?   	github.com/grahita/portal/api/internal/bank/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/branch	(cached)
+?   	github.com/grahita/portal/api/internal/branch/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/catalog	(cached)
+?   	github.com/grahita/portal/api/internal/catalog/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/dashboard	(cached)
+?   	github.com/grahita/portal/api/internal/dashboard/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/db/sqlc	[no test files]
+ok  	github.com/grahita/portal/api/internal/document	(cached)
+?   	github.com/grahita/portal/api/internal/document/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/fulfillment	(cached)
+ok  	github.com/grahita/portal/api/internal/httpapi	(cached)
+ok  	github.com/grahita/portal/api/internal/notification	(cached)
+?   	github.com/grahita/portal/api/internal/notification/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/order	(cached)
+?   	github.com/grahita/portal/api/internal/order/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment	(cached)
+?   	github.com/grahita/portal/api/internal/payment/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment/va	(cached)
+ok  	github.com/grahita/portal/api/internal/payment/va/vatest	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/apierr	(cached)
+?   	github.com/grahita/portal/api/internal/platform/clock	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/config	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/database	(cached)
+?   	github.com/grahita/portal/api/internal/platform/httpx	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/jobs	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/mailer	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/observability	(cached)
+?   	github.com/grahita/portal/api/internal/platform/pdf	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/pgtypes	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/storage	(cached)
+ok  	github.com/grahita/portal/api/internal/registration	(cached)
+?   	github.com/grahita/portal/api/internal/registration/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/report	(cached)
+?   	github.com/grahita/portal/api/internal/report/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/seed	[no test files]
+ok  	github.com/grahita/portal/api/internal/settings	(cached)
+?   	github.com/grahita/portal/api/internal/settings/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/tutorial	(cached)
+?   	github.com/grahita/portal/api/internal/tutorial/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/users	(cached)
+?   	github.com/grahita/portal/api/internal/users/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/worker	(cached)
+EXIT_MAKE_TEST=0
+
+===== 5. PATH default runner -> make lint =====
+cd api && /home/hermes/bin/golangci-lint run ./...
+0 issues.
+EXIT_MAKE_LINT=0
+
+===== 6. perintah POLOS ala tester: cd api && golangci-lint run ./... =====
+0 issues.
+EXIT_LINT_POLOS=0
+
+===== 7. make -f <Makefile HEAD pra-perbaikan> test pada PATH minimal (kendali negatif) =====
+cd api && go test ./...
+/bin/sh: 1: go: not found
+make: *** [/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/t5runner/Makefile-HEAD:54: test] Error 127
+EXIT_NEGATIF_MAKEFILE_HEAD_TEST=2
+
+===== 8. pohon tetap bersih (PASCA eksekusi) =====
+Waktu (UTC)  : 2026-10-11 15:38:50
+STATUS_PORCELAIN_BARIS_PASCA=0
+EXIT_REV=7a45c7ea1deecbd255072ddfd88c770e334b1b26
+
+[7] PASCA-COMMIT — HTTPS DUA HOST TANPA -k (bukti tidak ada regresi)
+-------------------------------------------------------------------------------
+Skrip    : cache/scratch/t5runner/bukti-https.sh (pohon bersih, commit yang sama)
+Perintah : bash bukti-https.sh > bukti-https.log 2>&1   -> exit 0
+
+HEAD=7a45c7ea1deecbd255072ddfd88c770e334b1b26
+WAKTU_UTC=2026-10-11 15:38:50
+STATUS_PORCELAIN=0 baris
+===== grahita-branch.tiusclaw.com =====
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 1 -> 200 http/2 (exit 0)
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 2 -> 200 http/2 (exit 0)
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 3 -> 200 http/2 (exit 0)
+--- sertifikat (verifikasi rantai, tanpa -k) ---
+subject=CN = grahita-branch.tiusclaw.com
+issuer=C = US, O = Let's Encrypt, CN = YE1
+notBefore=Oct 11 14:01:07 2026 GMT
+notAfter=Jan  9 14:01:06 2027 GMT
+X509v3 Subject Alternative Name: 
+    DNS:grahita-admin.tiusclaw.com, DNS:grahita-branch.tiusclaw.com
+--- jalur negatif (harus 404) ---
+GET https://grahita-branch.tiusclaw.com/api/v1/tidak-ada -> 404
+GET https://grahita-branch.tiusclaw.com/metrics -> 404
+GET https://grahita-branch.tiusclaw.com/internal/apa-pun -> 404
+GET https://grahita-branch.tiusclaw.com/debug/pprof/ -> 404
+--- protokol + verify code ---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Verify return code: 0 (ok)
+===== grahita-admin.tiusclaw.com =====
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 1 -> 200 http/2 (exit 0)
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 2 -> 200 http/2 (exit 0)
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 3 -> 200 http/2 (exit 0)
+--- sertifikat (verifikasi rantai, tanpa -k) ---
+subject=CN = grahita-branch.tiusclaw.com
+issuer=C = US, O = Let's Encrypt, CN = YE1
+notBefore=Oct 11 14:01:07 2026 GMT
+notAfter=Jan  9 14:01:06 2027 GMT
+X509v3 Subject Alternative Name: 
+    DNS:grahita-admin.tiusclaw.com, DNS:grahita-branch.tiusclaw.com
+--- jalur negatif (harus 404) ---
+GET https://grahita-admin.tiusclaw.com/api/v1/tidak-ada -> 404
+GET https://grahita-admin.tiusclaw.com/metrics -> 404
+GET https://grahita-admin.tiusclaw.com/internal/apa-pun -> 404
+GET https://grahita-admin.tiusclaw.com/debug/pprof/ -> 404
+--- protokol + verify code ---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Verify return code: 0 (ok)
 CATATAN CAKUPAN: bukti ini hanya menutup gerbang toolchain/test/lint dan TLS dua
 host. Verdict GAGAL historis kartu T5-ulang t_e36576b6 TIDAK diubah; backup/restore
 Drive+S3, WAL/PITR, SMTP/alert, dan smoke berakun tetap TERHALANG (tanpa kredensial
 dan tanpa infratruktur uji yang sah).
+
+CATATAN PENUTUP BAGIAN [6]/[7]: seluruh keluaran [6] dan [7] direkam pada commit
+7a45c7e dengan `git status --porcelain` KOSONG sebelum DAN sesudah eksekusi, dan
+`git rev-parse HEAD` diverifikasi lagi di akhir (EXIT_REV). Suntingan dokumentasi
+yang memuat bagian [6]/[7] ini dilakukan SETELAH perekaman; suntingan itu hanya
+menyentuh `docs/design/t5-runner/` sehingga tidak mengubah berkas yang dieksekusi
+oleh gerbang (Makefile, scripts/go-env.sh) maupun kode aplikasi — hash commit
+dokumentasi dicatat pada komentar kartu t_ac58a28e, bukan di berkas ini, agar bukti
+tidak merujuk dirinya sendiri.
