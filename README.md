@@ -41,6 +41,25 @@ masing-masing, browser tidak pernah melakukan request lintas-origin.
 - (untuk pengembangan tanpa container) Go 1.27+, Node 22+
 - Port host yang dipakai: `8080`, `8081`, `8088`, `8025`, `9000`, `9001`, `5433`
 
+### Toolchain Go pada runner/pengembang
+
+Target Makefile backend **tidak mengandalkan `go` sudah ada di PATH**.
+`scripts/go-env.sh` memilih biner Go >= 1.27 secara deterministik
+(`GRAHITA_GO` → `$GOROOT/bin` → `$HOME/toolchain/go/bin` → PATH), dan Makefile
+memakai jalur itu untuk `test`/`vet`/`test-integrasi`/`build`/`lint` sekaligus
+menambahkannya ke PATH resep. Pada runner yang `go`-nya belum ada di PATH:
+
+```bash
+make toolchain-cek                 # laporkan jalur + versi toolchain yang dipakai resep
+make test                          # gerbang unit backend (tanpa set PATH manual)
+eval "$(./scripts/go-env.sh --export)"   # hanya bila memanggil perkakas Go langsung:
+cd api && golangci-lint run ./...  # setara: make lint
+```
+
+`make lint-diri` menjalankan kendali positif+negatif pemilih toolchain
+(kandidat versi salah harus ditolak). Bila runner benar-benar belum punya Go
+1.27.x, setel `GRAHITA_GO=/jalur/ke/go` atau pasang di `$HOME/toolchain/go`.
+
 ## Menjalankan (lokal)
 
 ```bash
@@ -103,7 +122,7 @@ membaca import graph kode sumber. Melanggarnya = CI merah.
 ├─ docs/design/f1-03/           # snapshot visual + perbandingan vs prototype
 ├─ infra/caddy/                 # Caddyfile.dev & Caddyfile.prod
 ├─ openapi/openapi.yaml         # kontrak API
-├─ scripts/                     # smoke.sh, check-secrets.sh, pg-dev-shim.sql
+├─ scripts/                     # smoke.sh, check-secrets.sh, go-env.sh, pg-dev-shim.sql
 ├─ web/                         # monorepo SPA (npm workspaces)
 │  ├─ packages/api-client/      # klien /api/v1 (amplop data/error, CSRF)
 │  ├─ packages/ui/              # sistem desain: token, komponen, shell (F1-03)
@@ -143,6 +162,8 @@ membaca import graph kode sumber. Melanggarnya = CI merah.
 
 ```bash
 make vet test                 # backend
+make lint                     # golangci-lint (API)
+make toolchain-cek            # jalur+versi toolchain Go/lint yang dipakai resep
 make test-integrasi           # butuh TEST_DATABASE_URL (PostgreSQL 18 bersih)
 make web-typecheck web-test   # frontend
 make web-build                # build dua SPA

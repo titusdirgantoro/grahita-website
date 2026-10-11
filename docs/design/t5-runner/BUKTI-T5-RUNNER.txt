@@ -1,0 +1,566 @@
+BUKTI T5-RUNNER — akses toolchain Go untuk gerbang test/lint (kartu t_ac58a28e)
+===============================================================================
+Commit diuji   : 34b0e94efcfa85eb4f8ac7546fb649f58768e653 (branch main)
+Waktu perekaman: 2026-10-11 15:29:37 UTC
+Host           : Linux 6.8.0-136-generic x86_64 — runner bersama profile swe-tiusapp
+Rahasia        : TIDAK ADA. Semua bukti memakai perintah tanpa kredensial/token;
+                 tidak ada sandi, cookie, atau token pada berkas ini.
+Gerbang yang diperbaiki: 'make test' (exit 127, /bin/sh: 1: go: not found) dan
+                 'cd api && golangci-lint run ./...' (exit 3, go command required).
+
+[0] RINGKASAN EXIT CODE
+-------------------------------------------------------------------------------
+A. Makefile HEAD + PATH tanpa toolchain -> make test     2 (di dalam: sh 127)
+B. golangci-lint ada, go tidak -> golangci-lint run ./... 3
+C. Makefile baru + PATH tanpa toolchain -> make test     0
+D. eval "$(./scripts/go-env.sh --export)" -> golangci-lint run ./... (0 issues) 0
+E. make toolchain-cek                                    0
+F. make lint (0 issues)                                  0
+G. make vet / make build                                 0 / 0
+H. scripts/go-env.sh --uji-diri (kendali positif+negatif) 0 (15/15 lulus)
+I. make secrets / make migrasi-cek                       0 / 0
+J. provision runner (idempotent) -> go version polos / lint polos 0 / 0
+
+[1] KEADAAN LAMA vs SESUDAH PERBAIKAN (reproduksi kegagalan T5-ulang)
+-------------------------------------------------------------------------------
+$ git rev-parse HEAD
+34b0e94efcfa85eb4f8ac7546fb649f58768e653
+
+A. $ PATH=/usr/bin:/bin:/usr/sbin:/sbin make -f <Makefile HEAD> test
+cd api && go test ./...
+/bin/sh: 1: go: not found
+make: *** [/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/Makefile-HEAD:54: test] Error 127
+EXIT_A_MAKEFILE_HEAD_TEST=2
+
+B. $ cd api && PATH=/usr/bin:/bin:/usr/sbin:/sbin:/home/hermes/hermes-dev-data/profiles/swe-tiusapp/cache/scratch/lint-tanpa-go golangci-lint run ./...   (golangci-lint ada, go tidak)
+level=error msg="[formatter] gci: command \"go env -json GOMOD\": exec: \"go\": executable file not found in $PATH: "
+level=warning msg="[gomod_salt] Failed to calculate go.mod salt: failed to get goenv: command \"go env -json GOMOD\": exec: \"go\": executable file not found in $PATH: "
+level=warning msg="Failed to discover go env: command \"go env -json GOCACHE GOROOT\": exec: \"go\": executable file not found in $PATH: "
+level=error msg="Running error: context loading failed: failed to load packages: failed to load packages: failed to load with go/packages: err: go command required, not found: exec: \"go\": executable file not found in $PATH: stderr: "
+EXIT_B_LINT_TANPA_GO=3
+
+C. $ PATH=/usr/bin:/bin:/usr/sbin:/sbin make test    (Makefile sesudah perbaikan)
+cd api && /home/hermes/toolchain/go/bin/go test ./...
+?   	github.com/grahita/portal/api/cmd/server	[no test files]
+?   	github.com/grahita/portal/api/db/migrations	[no test files]
+ok  	github.com/grahita/portal/api/internal/arch	(cached)
+ok  	github.com/grahita/portal/api/internal/audit	(cached)
+?   	github.com/grahita/portal/api/internal/audit/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/auth	(cached)
+?   	github.com/grahita/portal/api/internal/auth/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/backup	(cached)
+?   	github.com/grahita/portal/api/internal/backup/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/bank	(cached)
+?   	github.com/grahita/portal/api/internal/bank/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/branch	(cached)
+?   	github.com/grahita/portal/api/internal/branch/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/catalog	(cached)
+?   	github.com/grahita/portal/api/internal/catalog/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/dashboard	(cached)
+?   	github.com/grahita/portal/api/internal/dashboard/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/db/sqlc	[no test files]
+ok  	github.com/grahita/portal/api/internal/document	(cached)
+?   	github.com/grahita/portal/api/internal/document/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/fulfillment	(cached)
+ok  	github.com/grahita/portal/api/internal/httpapi	(cached)
+ok  	github.com/grahita/portal/api/internal/notification	(cached)
+?   	github.com/grahita/portal/api/internal/notification/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/order	(cached)
+?   	github.com/grahita/portal/api/internal/order/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment	(cached)
+?   	github.com/grahita/portal/api/internal/payment/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment/va	(cached)
+ok  	github.com/grahita/portal/api/internal/payment/va/vatest	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/apierr	(cached)
+?   	github.com/grahita/portal/api/internal/platform/clock	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/config	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/database	(cached)
+?   	github.com/grahita/portal/api/internal/platform/httpx	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/jobs	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/mailer	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/observability	(cached)
+?   	github.com/grahita/portal/api/internal/platform/pdf	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/pgtypes	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/storage	(cached)
+ok  	github.com/grahita/portal/api/internal/registration	(cached)
+?   	github.com/grahita/portal/api/internal/registration/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/report	(cached)
+?   	github.com/grahita/portal/api/internal/report/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/seed	[no test files]
+ok  	github.com/grahita/portal/api/internal/settings	(cached)
+?   	github.com/grahita/portal/api/internal/settings/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/tutorial	(cached)
+?   	github.com/grahita/portal/api/internal/tutorial/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/users	(cached)
+?   	github.com/grahita/portal/api/internal/users/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/worker	(cached)
+EXIT_C_MAKEFILE_BARU_TEST=0
+
+D. $ cd api && eval "$(../scripts/go-env.sh --export)" && golangci-lint run ./...
+0 issues.
+EXIT_D_LINT_DENGAN_PEMILIH=0
+
+E. $ command -v go (sesudah provisioning runner: tautan ~/bin/go)
+/home/hermes/bin/go
+$ go version
+go version go1.27.1 linux/amd64
+EXIT_E_GO_VERSION=0
+
+[2] GERBANG BACKEND LEWAT MAKEFILE & LINT STANDALONE
+-------------------------------------------------------------------------------
+
+===== 0. HEAD & status awal =====
+34b0e94efcfa85eb4f8ac7546fb649f58768e653
+ M Makefile
+?? scripts/go-env.sh
+
+===== 1. PATH minimal (tanpa toolchain) -> make test =====
+cd api && /home/hermes/toolchain/go/bin/go test ./...
+?   	github.com/grahita/portal/api/cmd/server	[no test files]
+?   	github.com/grahita/portal/api/db/migrations	[no test files]
+ok  	github.com/grahita/portal/api/internal/arch	(cached)
+ok  	github.com/grahita/portal/api/internal/audit	(cached)
+?   	github.com/grahita/portal/api/internal/audit/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/auth	(cached)
+?   	github.com/grahita/portal/api/internal/auth/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/backup	0.373s
+?   	github.com/grahita/portal/api/internal/backup/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/bank	(cached)
+?   	github.com/grahita/portal/api/internal/bank/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/branch	(cached)
+?   	github.com/grahita/portal/api/internal/branch/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/catalog	(cached)
+?   	github.com/grahita/portal/api/internal/catalog/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/dashboard	(cached)
+?   	github.com/grahita/portal/api/internal/dashboard/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/db/sqlc	[no test files]
+ok  	github.com/grahita/portal/api/internal/document	(cached)
+?   	github.com/grahita/portal/api/internal/document/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/fulfillment	(cached)
+ok  	github.com/grahita/portal/api/internal/httpapi	34.386s
+ok  	github.com/grahita/portal/api/internal/notification	(cached)
+?   	github.com/grahita/portal/api/internal/notification/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/order	(cached)
+?   	github.com/grahita/portal/api/internal/order/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment	(cached)
+?   	github.com/grahita/portal/api/internal/payment/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment/va	(cached)
+ok  	github.com/grahita/portal/api/internal/payment/va/vatest	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/apierr	(cached)
+?   	github.com/grahita/portal/api/internal/platform/clock	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/config	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/database	(cached)
+?   	github.com/grahita/portal/api/internal/platform/httpx	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/jobs	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/mailer	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/observability	(cached)
+?   	github.com/grahita/portal/api/internal/platform/pdf	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/pgtypes	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/storage	(cached)
+ok  	github.com/grahita/portal/api/internal/registration	(cached)
+?   	github.com/grahita/portal/api/internal/registration/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/report	0.337s
+?   	github.com/grahita/portal/api/internal/report/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/seed	[no test files]
+ok  	github.com/grahita/portal/api/internal/settings	(cached)
+?   	github.com/grahita/portal/api/internal/settings/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/tutorial	(cached)
+?   	github.com/grahita/portal/api/internal/tutorial/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/users	(cached)
+?   	github.com/grahita/portal/api/internal/users/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/worker	(cached)
+EXIT_MAKE_TEST_PATH_MINIMAL=0
+
+===== 2. Lingkungan default runner -> make toolchain-cek =====
+go            : /home/hermes/toolchain/go/bin/go
+golangci-lint : /home/hermes/bin/golangci-lint
+PATH toolchain: /home/hermes/toolchain/go/bin:/home/hermes/bin:
+go version go1.27.1 linux/amd64
+golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+Go            : /home/hermes/toolchain/go/bin/go (go version go1.27.1 linux/amd64)
+golangci-lint : /home/hermes/bin/golangci-lint
+EXIT_TOOLCHAIN_CEK=0
+
+===== 3. Lingkungan default runner -> make test =====
+cd api && /home/hermes/toolchain/go/bin/go test ./...
+?   	github.com/grahita/portal/api/cmd/server	[no test files]
+?   	github.com/grahita/portal/api/db/migrations	[no test files]
+ok  	github.com/grahita/portal/api/internal/arch	(cached)
+ok  	github.com/grahita/portal/api/internal/audit	(cached)
+?   	github.com/grahita/portal/api/internal/audit/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/auth	(cached)
+?   	github.com/grahita/portal/api/internal/auth/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/backup	(cached)
+?   	github.com/grahita/portal/api/internal/backup/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/bank	(cached)
+?   	github.com/grahita/portal/api/internal/bank/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/branch	(cached)
+?   	github.com/grahita/portal/api/internal/branch/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/catalog	(cached)
+?   	github.com/grahita/portal/api/internal/catalog/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/dashboard	(cached)
+?   	github.com/grahita/portal/api/internal/dashboard/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/db/sqlc	[no test files]
+ok  	github.com/grahita/portal/api/internal/document	(cached)
+?   	github.com/grahita/portal/api/internal/document/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/fulfillment	(cached)
+ok  	github.com/grahita/portal/api/internal/httpapi	30.780s
+ok  	github.com/grahita/portal/api/internal/notification	(cached)
+?   	github.com/grahita/portal/api/internal/notification/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/order	(cached)
+?   	github.com/grahita/portal/api/internal/order/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment	(cached)
+?   	github.com/grahita/portal/api/internal/payment/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment/va	(cached)
+ok  	github.com/grahita/portal/api/internal/payment/va/vatest	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/apierr	(cached)
+?   	github.com/grahita/portal/api/internal/platform/clock	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/config	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/database	(cached)
+?   	github.com/grahita/portal/api/internal/platform/httpx	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/jobs	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/mailer	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/observability	(cached)
+?   	github.com/grahita/portal/api/internal/platform/pdf	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/pgtypes	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/storage	(cached)
+ok  	github.com/grahita/portal/api/internal/registration	(cached)
+?   	github.com/grahita/portal/api/internal/registration/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/report	(cached)
+?   	github.com/grahita/portal/api/internal/report/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/seed	[no test files]
+ok  	github.com/grahita/portal/api/internal/settings	(cached)
+?   	github.com/grahita/portal/api/internal/settings/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/tutorial	(cached)
+?   	github.com/grahita/portal/api/internal/tutorial/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/users	(cached)
+?   	github.com/grahita/portal/api/internal/users/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/worker	(cached)
+EXIT_MAKE_TEST=0
+
+===== 4. Lingkungan default runner -> make lint =====
+cd api && /home/hermes/bin/golangci-lint run ./...
+0 issues.
+EXIT_MAKE_LINT=0
+
+===== 5. Lingkungan default runner -> make vet =====
+cd api && /home/hermes/toolchain/go/bin/go vet ./...
+EXIT_MAKE_VET=0
+
+===== 6. Lingkungan default runner -> make build =====
+cd api && /home/hermes/toolchain/go/bin/go build -o ../bin/server ./cmd/server
+EXIT_MAKE_BUILD=0
+
+===== 7. Lint standalone ala tester SESUDAH eval (../scripts/go-env.sh) =====
+0 issues.
+EXIT_LINT_EVAL=0
+
+===== 8. KENDALI NEGATIF: lint standalone tanpa toolchain (PATH polos) -> harus exit 3 =====
+level=error msg="[formatter] gci: command \"go env -json GOMOD\": exec: \"go\": executable file not found in $PATH: "
+level=warning msg="[gomod_salt] Failed to calculate go.mod salt: failed to get goenv: command \"go env -json GOMOD\": exec: \"go\": executable file not found in $PATH: "
+level=warning msg="Failed to discover go env: command \"go env -json GOCACHE GOROOT\": exec: \"go\": executable file not found in $PATH: "
+level=error msg="Running error: context loading failed: failed to load packages: failed to load packages: failed to load with go/packages: err: go command required, not found: exec: \"go\": executable file not found in $PATH: stderr: "
+EXIT_LINT_TANPA_TOOLCHAIN=3
+
+===== 9. Kendali diri skrip toolchain =====
+LULUS  kandidat go1.27.1 dipilih
+LULUS  kandidat go1.28.0 diterima
+LULUS  go1.26.5 ditolak
+LULUS  tanpa kandidat: exit != 0 + pesan jelas
+LULUS  GRAHITA_GO versi salah ditolak (otoritatif)
+LULUS  GRAHITA_GO berupa direktori toolchain dinormalkan
+LULUS  direktori tanpa biner go ditolak dengan pesan jelas
+LULUS  --go mencetak jalur biner terpilih
+LULUS  --export menambahkan go & golangci-lint ke PATH
+LULUS  --golangci-lint memakai override GRAHITA_GOLANGCI_LINT
+LULUS  --cek exit != 0 saat golangci-lint hilang
+LULUS  --cek hijau saat toolchain lengkap
+LULUS  Makefile: resep 'test' memakai Go hasil pemilih (tanpa PATH interaktif)
+LULUS  Makefile: target lint ada dan memanggil golangci-lint run ./...
+LULUS  Makefile: toolchain-cek melaporkan jalur toolchain resep
+
+Ringkasan kendali diri scripts/go-env.sh: 15 lulus, 0 gagal
+EXIT_UJI_DIRI=0
+
+===== 10. Status repo sesudah gerbang =====
+ M Makefile
+ M README.md
+?? bin/
+?? scripts/go-env.sh
+?? scripts/runner-provision.sh
+
+===== 11. Gerbang repo lain: secrets + migrasi-cek =====
+./scripts/check-secrets.sh
+Tidak ada rahasia terdeteksi pada berkas yang dilacak.
+EXIT_SECRETS=0
+./scripts/check-migration-kompatibel.sh
+Migrasi kompatibel mundur: tidak ada pernyataan destruktif di bagian Up.
+EXIT_MIGRASI_CEK=0
+
+[3] PROVIDERSI RUNNER (tanpa sudo, idempotent) + PERINTAH POLOS TESTER
+-------------------------------------------------------------------------------
+===== 0. keadaan SEBELUM provisioning =====
+BIN_DIR        : /home/hermes/bin
+PATH memuatnya  : ya
+go             : TIDAK ADA di PATH
+gofmt          : TIDAK ADA di PATH
+golangci-lint  : /home/hermes/bin/golangci-lint (bukan tautan)
+command -v go  -> TIDAK ADA
+
+===== 1. pasang =====
+Provisioning runner di /home/hermes/bin
+  go             dipasang -> /home/hermes/toolchain/go/bin/go
+  gofmt          dipasang -> /home/hermes/toolchain/go/bin/gofmt
+  golangci-lint  DILEWATI: /home/hermes/bin/golangci-lint sudah ada (bukan tautan ke /home/hermes/bin/golangci-lint)
+
+Keadaan setelah provisioning:
+BIN_DIR        : /home/hermes/bin
+PATH memuatnya  : ya
+go             : /home/hermes/bin/go (/home/hermes/toolchain/go/bin/go)
+gofmt          : /home/hermes/bin/gofmt (/home/hermes/toolchain/go/bin/gofmt)
+golangci-lint  : /home/hermes/bin/golangci-lint (bukan tautan)
+
+Langkah berikutnya (dari root repo): make toolchain-cek && make test
+EXIT_PROVISION=0
+
+===== 2. state SESUDAH provisioning =====
+BIN_DIR        : /home/hermes/bin
+PATH memuatnya  : ya
+go             : /home/hermes/bin/go (/home/hermes/toolchain/go/bin/go)
+gofmt          : /home/hermes/bin/gofmt (/home/hermes/toolchain/go/bin/gofmt)
+golangci-lint  : /home/hermes/bin/golangci-lint (bukan tautan)
+
+===== 3. perintah polos ala tester =====
+$ go version
+go version go1.27.1 linux/amd64
+EXIT_GO_VERSION=0
+$ cd api && golangci-lint run ./...
+0 issues.
+EXIT_LINT_POLOS=0
+$ cd api && go vet ./... && go build ./...
+EXIT_VET_BUILD_POLOS=0
+
+===== 4. idempotensi (pasang ulang) =====
+Provisioning runner di /home/hermes/bin
+  go             sudah benar -> /home/hermes/toolchain/go/bin/go
+  gofmt          sudah benar -> /home/hermes/toolchain/go/bin/gofmt
+  golangci-lint  DILEWATI: /home/hermes/bin/golangci-lint sudah ada (bukan tautan ke /home/hermes/bin/golangci-lint)
+
+Keadaan setelah provisioning:
+BIN_DIR        : /home/hermes/bin
+PATH memuatnya  : ya
+go             : /home/hermes/bin/go (/home/hermes/toolchain/go/bin/go)
+gofmt          : /home/hermes/bin/gofmt (/home/hermes/toolchain/go/bin/gofmt)
+golangci-lint  : /home/hermes/bin/golangci-lint (bukan tautan)
+
+Langkah berikutnya (dari root repo): make toolchain-cek && make test
+EXIT_PROVISION_ULANG=0
+
+===== 5. git status =====
+ M Makefile
+ M README.md
+?? scripts/go-env.sh
+?? scripts/runner-provision.sh
+
+[4] HTTPS DUA HOST TANPA -k (tidak ada regresi)
+-------------------------------------------------------------------------------
+
+===== grahita-branch.tiusclaw.com =====
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 1 -> 200 2 (exit 0)
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 2 -> 200 2 (exit 0)
+HEAD https://grahita-branch.tiusclaw.com/ percobaan 3 -> 200 2 (exit 0)
+--- sertifikat (verifikasi rantai, tanpa -k) ---
+subject=CN = grahita-branch.tiusclaw.com
+issuer=C = US, O = Let's Encrypt, CN = YE1
+notBefore=Oct 11 14:01:07 2026 GMT
+notAfter=Jan  9 14:01:06 2027 GMT
+X509v3 Subject Alternative Name: 
+    DNS:grahita-admin.tiusclaw.com, DNS:grahita-branch.tiusclaw.com
+--- API same-origin + jalur internal (harus 404) ---
+GET https://grahita-branch.tiusclaw.com/api/v1/tidak-ada -> 404
+GET https://grahita-branch.tiusclaw.com/metrics -> 404
+GET https://grahita-branch.tiusclaw.com/internal/apa-pun -> 404
+GET https://grahita-branch.tiusclaw.com/debug/pprof/ -> 404
+
+===== grahita-admin.tiusclaw.com =====
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 1 -> 200 2 (exit 0)
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 2 -> 200 2 (exit 0)
+HEAD https://grahita-admin.tiusclaw.com/ percobaan 3 -> 200 2 (exit 0)
+--- sertifikat (verifikasi rantai, tanpa -k) ---
+subject=CN = grahita-branch.tiusclaw.com
+issuer=C = US, O = Let's Encrypt, CN = YE1
+notBefore=Oct 11 14:01:07 2026 GMT
+notAfter=Jan  9 14:01:06 2027 GMT
+X509v3 Subject Alternative Name: 
+    DNS:grahita-admin.tiusclaw.com, DNS:grahita-branch.tiusclaw.com
+--- API same-origin + jalur internal (harus 404) ---
+GET https://grahita-admin.tiusclaw.com/api/v1/tidak-ada -> 404
+GET https://grahita-admin.tiusclaw.com/metrics -> 404
+GET https://grahita-admin.tiusclaw.com/internal/apa-pun -> 404
+GET https://grahita-admin.tiusclaw.com/debug/pprof/ -> 404
+
+===== grahita-branch.tiusclaw.com =====
+verify return:1
+verify return:1
+verify return:1
+verify return:1
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Verify return code: 0 (ok)
+===== grahita-admin.tiusclaw.com =====
+verify return:1
+verify return:1
+verify return:1
+verify return:1
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Verify return code: 0 (ok)
+
+[5] KEADAAN REPO (git status, diff terlacak, statistik)
+-------------------------------------------------------------------------------
+$ git status --porcelain
+ M Makefile
+ M README.md
+?? docs/design/t5-runner/
+?? scripts/go-env.sh
+?? scripts/runner-provision.sh
+
+$ git diff --stat
+ Makefile  | 44 ++++++++++++++++++++++++++++++++++++--------
+ README.md | 23 ++++++++++++++++++++++-
+ 2 files changed, 58 insertions(+), 9 deletions(-)
+
+$ git diff -- Makefile README.md
+diff --git a/Makefile b/Makefile
+index eefa5e5..eb782e5 100644
+--- a/Makefile
++++ b/Makefile
+@@ -3,6 +3,19 @@ COMPOSE := docker compose
+ API_DIR := api
+ WEB_DIR := web
+ 
++## ---------- toolchain (eksplisit & repeatable; lihat scripts/go-env.sh) ----------
++## Runner uji tidak selalu punya `go` di PATH (kartu t_ac58a28e: `make test`
++## berhenti dengan `/bin/sh: 1: go: not found`). Pemilih toolchain memilih Go
++## >= 1.27 secara deterministik tanpa mengandalkan PATH interaktif, lalu
++## direktorinya ditambahkan ke PATH seluruh resep supaya golangci-lint/gofmt
++## yang memanggil `go` juga menemukannya. Override: make test GO=/path/ke/go
++SKRIP_TOOLCHAIN := $(dir $(lastword $(MAKEFILE_LIST)))scripts/go-env.sh
++GO ?= $(shell $(SKRIP_TOOLCHAIN) --go)
++GOLANGCI_LINT ?= $(shell $(SKRIP_TOOLCHAIN) --golangci-lint)
++TOOLCHAIN_PATH := $(if $(filter /%,$(GO)),$(patsubst %/,%,$(dir $(GO))):,)
++TOOLCHAIN_PATH := $(TOOLCHAIN_PATH)$(if $(filter /%,$(GOLANGCI_LINT)),$(patsubst %/,%,$(dir $(GOLANGCI_LINT))):,)
++export PATH := $(TOOLCHAIN_PATH)$(PATH)
++
+ help: ## Menampilkan daftar perintah
+ 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+ 
+@@ -48,20 +61,34 @@ fmt: ## gofmt seluruh kode Go
+ 	cd $(API_DIR) && gofmt -l -w .
+ 
+ vet: ## go vet
+-	cd $(API_DIR) && go vet ./...
++	cd $(API_DIR) && $(GO) vet ./...
+ 
+ test: ## Uji unit backend
+-	cd $(API_DIR) && go test ./...
++	cd $(API_DIR) && $(GO) test ./...
+ 
+ test-integrasi: ## Uji integrasi (butuh TEST_DATABASE_URL menunjuk PG bersih)
+-	cd $(API_DIR) && go test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
++	cd $(API_DIR) && $(GO) test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
+ 
+ build: ## Build binary server
+-	cd $(API_DIR) && go build -o ../bin/server ./cmd/server
++	cd $(API_DIR) && $(GO) build -o ../bin/server ./cmd/server
+ 
+ sqlc: ## Membangkitkan query sqlc
+ 	cd $(API_DIR) && sqlc generate
+ 
++lint: ## golangci-lint (jalur biner eksplisit, lihat scripts/go-env.sh)
++	cd $(API_DIR) && $(GOLANGCI_LINT) run ./...
++
++toolchain-cek: ## Laporkan toolchain Go/lint yang dipakai resep Makefile
++	@echo "go            : $(GO)"
++	@echo "golangci-lint : $(GOLANGCI_LINT)"
++	@echo "PATH toolchain: $(TOOLCHAIN_PATH)"
++	@$(GO) version
++	@$(GOLANGCI_LINT) version
++	@$(SKRIP_TOOLCHAIN) --cek
++
++lint-diri: ## Kendali positif+negatif pemilih toolchain (scripts/go-env.sh --uji-diri)
++	$(SKRIP_TOOLCHAIN) --uji-diri
++
+ shim-pg: ## Terapkan shim uuidv7 untuk PostgreSQL < 18 (khusus lokal)
+ 	psql "$$TEST_DATABASE_URL" -f scripts/pg-dev-shim.sql
+ 
+@@ -119,9 +146,10 @@ observability-prom-cek: ## Validasi konfigurasi & aturan Prometheus (butuh promt
+ observability-grafana-cek: ## Validasi uid sumber data dasbor Grafana vs provisioning
+ 	python3 scripts/cek-uid-grafana.py .
+ 
+-ci-lokal: fmt vet test web-typecheck web-test web-build openapi secrets migrasi-cek ## Menjalankan gerbang CI secara lokal
++ci-lokal: fmt vet lint test web-typecheck web-test web-build openapi secrets migrasi-cek ## Menjalankan gerbang CI secara lokal
+ 
+ .PHONY: help up down reset logs ps migrate seed psql smoke fmt vet test test-integrasi \
+-        build sqlc shim-pg web-install web-dev-customer web-dev-admin web-typecheck \
+-        web-test web-build openapi secrets migrasi-cek smoke-staging observability-up \
+-        observability-caddy-cek observability-prom-cek observability-grafana-cek ci-lokal
++        build sqlc lint toolchain-cek lint-diri shim-pg web-install web-dev-customer \
++        web-dev-admin web-typecheck web-test web-build openapi secrets migrasi-cek \
++        smoke-staging observability-up observability-caddy-cek observability-prom-cek \
++        observability-grafana-cek ci-lokal
+diff --git a/README.md b/README.md
+index b6b1994..5af4943 100644
+--- a/README.md
++++ b/README.md
+@@ -41,6 +41,25 @@ masing-masing, browser tidak pernah melakukan request lintas-origin.
+ - (untuk pengembangan tanpa container) Go 1.27+, Node 22+
+ - Port host yang dipakai: `8080`, `8081`, `8088`, `8025`, `9000`, `9001`, `5433`
+ 
++### Toolchain Go pada runner/pengembang
++
++Target Makefile backend **tidak mengandalkan `go` sudah ada di PATH**.
++`scripts/go-env.sh` memilih biner Go >= 1.27 secara deterministik
++(`GRAHITA_GO` → `$GOROOT/bin` → `$HOME/toolchain/go/bin` → PATH), dan Makefile
++memakai jalur itu untuk `test`/`vet`/`test-integrasi`/`build`/`lint` sekaligus
++menambahkannya ke PATH resep. Pada runner yang `go`-nya belum ada di PATH:
++
++```bash
++make toolchain-cek                 # laporkan jalur + versi toolchain yang dipakai resep
++make test                          # gerbang unit backend (tanpa set PATH manual)
++eval "$(./scripts/go-env.sh --export)"   # hanya bila memanggil perkakas Go langsung:
++cd api && golangci-lint run ./...  # setara: make lint
++```
++
++`make lint-diri` menjalankan kendali positif+negatif pemilih toolchain
++(kandidat versi salah harus ditolak). Bila runner benar-benar belum punya Go
++1.27.x, setel `GRAHITA_GO=/jalur/ke/go` atau pasang di `$HOME/toolchain/go`.
++
+ ## Menjalankan (lokal)
+ 
+ ```bash
+@@ -103,7 +122,7 @@ membaca import graph kode sumber. Melanggarnya = CI merah.
+ ├─ docs/design/f1-03/           # snapshot visual + perbandingan vs prototype
+ ├─ infra/caddy/                 # Caddyfile.dev & Caddyfile.prod
+ ├─ openapi/openapi.yaml         # kontrak API
+-├─ scripts/                     # smoke.sh, check-secrets.sh, pg-dev-shim.sql
++├─ scripts/                     # smoke.sh, check-secrets.sh, go-env.sh, pg-dev-shim.sql
+ ├─ web/                         # monorepo SPA (npm workspaces)
+ │  ├─ packages/api-client/      # klien /api/v1 (amplop data/error, CSRF)
+ │  ├─ packages/ui/              # sistem desain: token, komponen, shell (F1-03)
+@@ -143,6 +162,8 @@ membaca import graph kode sumber. Melanggarnya = CI merah.
+ 
+ ```bash
+ make vet test                 # backend
++make lint                     # golangci-lint (API)
++make toolchain-cek            # jalur+versi toolchain Go/lint yang dipakai resep
+ make test-integrasi           # butuh TEST_DATABASE_URL (PostgreSQL 18 bersih)
+ make web-typecheck web-test   # frontend
+ make web-build                # build dua SPA
+
+$ ls -l scripts/go-env.sh scripts/runner-provision.sh
+-rwxrwxr-x 1 hermes hermes 14271 Oct 11 15:26 scripts/go-env.sh
+-rwxrwxr-x 1 hermes hermes  4009 Oct 11 15:27 scripts/runner-provision.sh
+
+CATATAN CAKUPAN: bukti ini hanya menutup gerbang toolchain/test/lint dan TLS dua
+host. Verdict GAGAL historis kartu T5-ulang t_e36576b6 TIDAK diubah; backup/restore
+Drive+S3, WAL/PITR, SMTP/alert, dan smoke berakun tetap TERHALANG (tanpa kredensial
+dan tanpa infratruktur uji yang sah).

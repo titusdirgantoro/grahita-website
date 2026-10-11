@@ -3,6 +3,19 @@ COMPOSE := docker compose
 API_DIR := api
 WEB_DIR := web
 
+## ---------- toolchain (eksplisit & repeatable; lihat scripts/go-env.sh) ----------
+## Runner uji tidak selalu punya `go` di PATH (kartu t_ac58a28e: `make test`
+## berhenti dengan `/bin/sh: 1: go: not found`). Pemilih toolchain memilih Go
+## >= 1.27 secara deterministik tanpa mengandalkan PATH interaktif, lalu
+## direktorinya ditambahkan ke PATH seluruh resep supaya golangci-lint/gofmt
+## yang memanggil `go` juga menemukannya. Override: make test GO=/path/ke/go
+SKRIP_TOOLCHAIN := $(dir $(lastword $(MAKEFILE_LIST)))scripts/go-env.sh
+GO ?= $(shell $(SKRIP_TOOLCHAIN) --go)
+GOLANGCI_LINT ?= $(shell $(SKRIP_TOOLCHAIN) --golangci-lint)
+TOOLCHAIN_PATH := $(if $(filter /%,$(GO)),$(patsubst %/,%,$(dir $(GO))):,)
+TOOLCHAIN_PATH := $(TOOLCHAIN_PATH)$(if $(filter /%,$(GOLANGCI_LINT)),$(patsubst %/,%,$(dir $(GOLANGCI_LINT))):,)
+export PATH := $(TOOLCHAIN_PATH)$(PATH)
+
 help: ## Menampilkan daftar perintah
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
@@ -48,19 +61,33 @@ fmt: ## gofmt seluruh kode Go
 	cd $(API_DIR) && gofmt -l -w .
 
 vet: ## go vet
-	cd $(API_DIR) && go vet ./...
+	cd $(API_DIR) && $(GO) vet ./...
 
 test: ## Uji unit backend
-	cd $(API_DIR) && go test ./...
+	cd $(API_DIR) && $(GO) test ./...
 
 test-integrasi: ## Uji integrasi (butuh TEST_DATABASE_URL menunjuk PG bersih)
-	cd $(API_DIR) && go test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
+	cd $(API_DIR) && $(GO) test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
 
 build: ## Build binary server
-	cd $(API_DIR) && go build -o ../bin/server ./cmd/server
+	cd $(API_DIR) && $(GO) build -o ../bin/server ./cmd/server
 
 sqlc: ## Membangkitkan query sqlc
 	cd $(API_DIR) && sqlc generate
+
+lint: ## golangci-lint (jalur biner eksplisit, lihat scripts/go-env.sh)
+	cd $(API_DIR) && $(GOLANGCI_LINT) run ./...
+
+toolchain-cek: ## Laporkan toolchain Go/lint yang dipakai resep Makefile
+	@echo "go            : $(GO)"
+	@echo "golangci-lint : $(GOLANGCI_LINT)"
+	@echo "PATH toolchain: $(TOOLCHAIN_PATH)"
+	@$(GO) version
+	@$(GOLANGCI_LINT) version
+	@$(SKRIP_TOOLCHAIN) --cek
+
+lint-diri: ## Kendali positif+negatif pemilih toolchain (scripts/go-env.sh --uji-diri)
+	$(SKRIP_TOOLCHAIN) --uji-diri
 
 shim-pg: ## Terapkan shim uuidv7 untuk PostgreSQL < 18 (khusus lokal)
 	psql "$$TEST_DATABASE_URL" -f scripts/pg-dev-shim.sql
@@ -119,9 +146,10 @@ observability-prom-cek: ## Validasi konfigurasi & aturan Prometheus (butuh promt
 observability-grafana-cek: ## Validasi uid sumber data dasbor Grafana vs provisioning
 	python3 scripts/cek-uid-grafana.py .
 
-ci-lokal: fmt vet test web-typecheck web-test web-build openapi secrets migrasi-cek ## Menjalankan gerbang CI secara lokal
+ci-lokal: fmt vet lint test web-typecheck web-test web-build openapi secrets migrasi-cek ## Menjalankan gerbang CI secara lokal
 
 .PHONY: help up down reset logs ps migrate seed psql smoke fmt vet test test-integrasi \
-        build sqlc shim-pg web-install web-dev-customer web-dev-admin web-typecheck \
-        web-test web-build openapi secrets migrasi-cek smoke-staging observability-up \
-        observability-caddy-cek observability-prom-cek observability-grafana-cek ci-lokal
+        build sqlc lint toolchain-cek lint-diri shim-pg web-install web-dev-customer \
+        web-dev-admin web-typecheck web-test web-build openapi secrets migrasi-cek \
+        smoke-staging observability-up observability-caddy-cek observability-prom-cek \
+        observability-grafana-cek ci-lokal
