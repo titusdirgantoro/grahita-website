@@ -361,6 +361,67 @@ $_tmp/lint/golangci-lint" ]; then
     else
       _gagalkan "Makefile: toolchain-cek melaporkan jalur toolchain resep (keluaran: $_kel)"
     fi
+
+    # (12) FAIL-CLOSED target Makefile — regresi untuk cacat fail-open yang
+    #      dilaporkan QA putaran 2: `$(shell ...)` membuang exit != 0 pemilih
+    #      sehingga `$(GO)` kosong dan `cd api && $(GO) test ./...` merosot
+    #      menjadi builtin `test ./...` yang selalu true -> `make test` HIJAU
+    #      tanpa menjalankan satu tes pun. Kendali di bawah menuntut exit != 0
+    #      + pesan "GALAT toolchain" (bukan sekadar 0 paket diuji) pada tiga
+    #      jalur yang bisa memicu cacat itu, ditambah satu kendali positif agar
+    #      penjaga terbukti tidak "selalu gagal".
+    _rumah="$_tmp/rumah-kosong"
+    _tanpa_kandidat="$_tmp/kandidat-tidak-ada"
+    mkdir -p "$_rumah"
+
+    # (12a) toolchain tidak ada sama sekali (lingkungan bersih, tanpa PATH toolchain)
+    _kel=$(cd "$_repo" && env -i HOME="$_rumah" PATH=/usr/bin:/bin \
+      GRAHITA_GO_KANDIDAT="$_tanpa_kandidat" \
+      make --no-print-directory test 2>&1) && _sts=0 || _sts=$?
+    if [ "$_sts" -ne 0 ] && printf '%s' "$_kel" | grep -q "GALAT toolchain"; then
+      _luluskan "Makefile fail-closed: tanpa toolchain -> make test exit != 0 + pesan jelas"
+    else
+      _gagalkan "Makefile fail-closed: tanpa toolchain -> make test exit != 0 + pesan jelas (exit=$_sts; keluaran=$_kel)"
+    fi
+
+    # (12b) GRAHITA_GO menunjuk berkas yang tidak ada (jalur override yang didokumentasikan)
+    _kel=$(cd "$_repo" && env -i HOME="$_rumah" PATH=/usr/bin:/bin \
+      GRAHITA_GO="$_tmp/bukan-go" \
+      make --no-print-directory test 2>&1) && _sts=0 || _sts=$?
+    if [ "$_sts" -ne 0 ] && printf '%s' "$_kel" | grep -q "GALAT toolchain"; then
+      _luluskan "Makefile fail-closed: GRAHITA_GO salah -> make test exit != 0 + pesan jelas"
+    else
+      _gagalkan "Makefile fail-closed: GRAHITA_GO salah -> make test exit != 0 + pesan jelas (exit=$_sts; keluaran=$_kel)"
+    fi
+
+    # (12c) GO= kosong dari COMMAND LINE (tidak mungkin "diretas" dari luar)
+    _kel=$(cd "$_repo" && env -i HOME="$_rumah" PATH=/usr/bin:/bin \
+      make --no-print-directory test GO= 2>&1) && _sts=0 || _sts=$?
+    if [ "$_sts" -ne 0 ] && printf '%s' "$_kel" | grep -q "GALAT toolchain"; then
+      _luluskan "Makefile fail-closed: GO= kosong dari command line -> make test exit != 0"
+    else
+      _gagalkan "Makefile fail-closed: GO= kosong dari command line -> make test exit != 0 (exit=$_sts; keluaran=$_kel)"
+    fi
+
+    # (12d) kendali positif: penjaga TIDAK memblokir konfigurasi sah (stub Go 1.27.1)
+    _kel=$(cd "$_repo" && env -i HOME="$_rumah" PATH=/usr/bin:/bin \
+      GRAHITA_GO_KANDIDAT="$_tmp/go1271" GRAHITA_GOLANGCI_LINT="$_tmp/lint/golangci-lint" \
+      make --no-print-directory test 2>&1) && _sts=0 || _sts=$?
+    if [ "$_sts" -eq 0 ] && printf '%s' "$_kel" | grep -q "$_tmp/go1271/go test ./..."; then
+      _luluskan "Makefile fail-closed tidak menghalangi konfigurasi sah (stub go1.27.1 -> exit 0)"
+    else
+      _gagalkan "Makefile fail-closed tidak menghalangi konfigurasi sah (exit=$_sts; keluaran=$_kel)"
+    fi
+
+    # (13) GOLANGCI_LINT kosong dari command line -> make lint harus gagal jelas
+    _kel=$(cd "$_repo" && env -i HOME="$_rumah" PATH=/usr/bin:/bin \
+      GRAHITA_GO_KANDIDAT="$_tmp/go1271" \
+      make --no-print-directory lint GOLANGCI_LINT= 2>&1) && _sts=0 || _sts=$?
+    if [ "$_sts" -ne 0 ] && printf '%s' "$_kel" | grep -q "golangci-lint tidak teresolusi"; then
+      _luluskan "Makefile fail-closed: GOLANGCI_LINT kosong -> make lint exit != 0 + pesan jelas"
+    else
+      _gagalkan "Makefile fail-closed: GOLANGCI_LINT kosong -> make lint exit != 0 + pesan jelas (exit=$_sts; keluaran=$_kel)"
+    fi
   else
     _gagalkan "integrasi Makefile tidak diuji: make tidak tersedia"
   fi

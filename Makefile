@@ -9,12 +9,33 @@ WEB_DIR := web
 ## >= 1.27 secara deterministik tanpa mengandalkan PATH interaktif, lalu
 ## direktorinya ditambahkan ke PATH seluruh resep supaya golangci-lint/gofmt
 ## yang memanggil `go` juga menemukannya. Override: make test GO=/path/ke/go
+##
+## FAIL-CLOSED (cacat fail-open QA putaran 2): nilai pemilih diambil SEKALI
+## (`:=` di bawah `ifndef`, bukan `$(shell)` rekursif yang di-expand berulang),
+## dan setiap resep yang memakai toolchain melewati penjaga `_wajib_go` /
+## `_wajib_lint` lebih dulu. Tanpa penjaga, `$(GO)` yang kosong membuat
+## `cd api && $(GO) test ./...` merosot menjadi perintah shell builtin
+## `test ./...` yang SELALU true -> `make test` hijau tanpa satu tes pun.
 SKRIP_TOOLCHAIN := $(dir $(lastword $(MAKEFILE_LIST)))scripts/go-env.sh
-GO ?= $(shell $(SKRIP_TOOLCHAIN) --go)
-GOLANGCI_LINT ?= $(shell $(SKRIP_TOOLCHAIN) --golangci-lint)
+ifndef GO
+GO := $(shell $(SKRIP_TOOLCHAIN) --go)
+endif
+ifndef GOLANGCI_LINT
+GOLANGCI_LINT := $(shell $(SKRIP_TOOLCHAIN) --golangci-lint)
+endif
 TOOLCHAIN_PATH := $(if $(filter /%,$(GO)),$(patsubst %/,%,$(dir $(GO))):,)
 TOOLCHAIN_PATH := $(TOOLCHAIN_PATH)$(if $(filter /%,$(GOLANGCI_LINT)),$(patsubst %/,%,$(dir $(GOLANGCI_LINT))):,)
 export PATH := $(TOOLCHAIN_PATH)$(PATH)
+
+# Penjaga fail-closed. Dijalankan sebagai baris PERTAMA resep yang butuh
+# toolchain sehingga `GO=` / `GOLANGCI_LINT=` kosong — dari lingkungan maupun
+# command line — tetap tertangkap: berhenti dengan pesan jelas + exit 2.
+define _wajib_go
+@test -n "$(GO)" || { printf '%s\n' "GALAT toolchain: biner Go tidak teresolusi (GO kosong)." "Jalankan ./scripts/runner-provision.sh, atau set GRAHITA_GO=/jalur/ke/go (lihat scripts/go-env.sh --help)." >&2; exit 2; }
+endef
+define _wajib_lint
+@test -n "$(GOLANGCI_LINT)" || { printf '%s\n' "GALAT toolchain: golangci-lint tidak teresolusi (GOLANGCI_LINT kosong)." "Set GRAHITA_GOLANGCI_LINT=/jalur/ke/golangci-lint (lihat scripts/go-env.sh --help)." >&2; exit 2; }
+endef
 
 help: ## Menampilkan daftar perintah
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -61,24 +82,32 @@ fmt: ## gofmt seluruh kode Go
 	cd $(API_DIR) && gofmt -l -w .
 
 vet: ## go vet
+	$(_wajib_go)
 	cd $(API_DIR) && $(GO) vet ./...
 
 test: ## Uji unit backend
+	$(_wajib_go)
 	cd $(API_DIR) && $(GO) test ./...
 
 test-integrasi: ## Uji integrasi (butuh TEST_DATABASE_URL menunjuk PG bersih)
+	$(_wajib_go)
 	cd $(API_DIR) && $(GO) test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
 
 build: ## Build binary server
+	$(_wajib_go)
 	cd $(API_DIR) && $(GO) build -o ../bin/server ./cmd/server
 
 sqlc: ## Membangkitkan query sqlc
 	cd $(API_DIR) && sqlc generate
 
 lint: ## golangci-lint (jalur biner eksplisit, lihat scripts/go-env.sh)
+	$(_wajib_go)
+	$(_wajib_lint)
 	cd $(API_DIR) && $(GOLANGCI_LINT) run ./...
 
 toolchain-cek: ## Laporkan toolchain Go/lint yang dipakai resep Makefile
+	$(_wajib_go)
+	$(_wajib_lint)
 	@echo "go            : $(GO)"
 	@echo "golangci-lint : $(GOLANGCI_LINT)"
 	@echo "PATH toolchain: $(TOOLCHAIN_PATH)"
