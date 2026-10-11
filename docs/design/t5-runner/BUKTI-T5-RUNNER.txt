@@ -35,6 +35,7 @@ Gerbang yang diperbaiki: 'make test' (exit 127, /bin/sh: 1: go: not found) dan
 
 [0] RINGKASAN EXIT CODE
 -------------------------------------------------------------------------------
+A-J: bagian [1]-[5] (putaran 1-2, pohon kerja di atas 34b0e94 + commit 7a45c7e).
 A. Makefile HEAD + PATH tanpa toolchain -> make test     2 (di dalam: sh 127)
 B. golangci-lint ada, go tidak -> golangci-lint run ./... 3
 C. Makefile baru + PATH tanpa toolchain -> make test     0
@@ -42,7 +43,9 @@ D. eval "$(./scripts/go-env.sh --export)" -> golangci-lint run ./... (0 issues) 
 E. make toolchain-cek                                    0
 F. make lint (0 issues)                                  0
 G. make vet / make build                                 0 / 0
-H. scripts/go-env.sh --uji-diri (kendali positif+negatif) 0 (15/15 lulus)
+H. scripts/go-env.sh --uji-diri (kendali positif+negatif) 0 (15/15 lulus pada
+   putaran 1; hitungannya kini 20/20 karena 5 kendali fail-closed putaran 3 —
+   lihat baris M / bagian [8] butir 8 / [9])
 I. make secrets / make migrasi-cek                       0 / 0
 J. provision runner (idempotent) -> go version polos / lint polos 0 / 0
 K. [6] PASCA-COMMIT 7a45c7e, pohon bersih:

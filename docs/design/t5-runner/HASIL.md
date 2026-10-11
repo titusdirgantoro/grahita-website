@@ -195,7 +195,7 @@ make test GO=                                        # harus exit 2 (penjaga tid
 make lint GOLANGCI_LINT=                             # harus exit 2 + "… golangci-lint …"
 make vet GO= ; make build GO= ; make toolchain-cek GO=   # semua harus exit 2
 # kendali POSITIF (penjaga tidak memblokir konfigurasi sah): gunakan pemilih normal
-make test ; make lint ; ./scripts/go-env.sh --uji-diri    # exit 0 / 0 issues. / 20-20 lulus
+make test ; make lint ; ./scripts/go-env.sh --uji-diri    # exit 0 / 0 issues. / 20 dari 20 lulus
 git status --porcelain                                # harus tetap kosong sesudah eksekusi
 ```
 
