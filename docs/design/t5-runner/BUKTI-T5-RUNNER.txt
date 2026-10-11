@@ -1414,3 +1414,24 @@ bukti ini) dikomit SETELAH perekaman; hash commit penutupnya dicatat pada koment
 kartu t_14e91b3c, bukan di berkas ini, agar bukti tidak merujuk dirinya sendiri.
 Tidak ada rahasia pada bukti ini, dan tidak ada berkas di luar docs/ + README.md
 yang berubah oleh kartu t_14e91b3c.
+
+===== 12. GERBANG DIULANG PADA COMMIT DOKUMENTASI (setelah bagian [10] di-commit) =====
+Tujuan   : kriteria penerimaan kartu (3) — gerbang tetap hijau pada commit KERJA,
+           bukan hanya pada commit sebelum suntingan dokumentasi.
+Commit   : b008243f18c1f411c69c8ac5c101c691990283ef (commit dokumentasi bagian [10]).
+Skrip    : cache/scratch/t14e91b3c_verifikasi.sh (di luar repo), dijalankan pada
+           pohon BERSIH; keluaran mentah: cache/scratch/t14e91b3c_verifikasi.txt
+PORCELAIN_SEBELUM_BARIS=0 ; PORCELAIN_SESUDAH_BARIS=0 ; HEAD_SESUDAH tidak berpindah
+make test                                  EXIT_MAKE_TEST=0 (27 paket `ok`, 0 FAIL)
+make lint                                  EXIT_MAKE_LINT=0 (0 issues.)
+cd api && golangci-lint run ./...          EXIT_LINT_POLOS=0 (0 issues.)
+make toolchain-cek                         EXIT_TOOLCHAIN_CEK=0
+./scripts/go-env.sh --uji-diri             EXIT_UJI_DIRI=0 (20 lulus, 0 gagal)
+git diff --name-only 34b0e94..HEAD -- api web = 0 berkas
+sha256 api/.golangci.yml                   = 759dd77502fefd264189d8b7fb38ad4a45e8f61f7e6c4d6be8bd42a66bc58832
+                                             (identik dengan 34b0e94 — tidak disentuh)
+git diff --name-only c1184f8..HEAD         = README.md, docs/design/t5-runner/HASIL.md,
+                                             docs/design/t5-runner/BUKTI-T5-RUNNER.txt
+CATATAN PENUTUP BAGIAN [10]/12: blok 12 ini sendiri dikomit SETELAH pengukuran
+b008243; hash commit penutupnya dicatat pada komentar kartu t_14e91b3c, bukan di
+berkas ini. Tidak ada rahasia, dan tidak ada berkas lain yang berubah.
