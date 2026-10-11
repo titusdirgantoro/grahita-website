@@ -9,6 +9,10 @@ Commit diuji   : f336231af0a51f5a5d423bad1a838b82d9d10e47 (branch main) — PUTA
                  - Putaran 1-2 (akses toolchain, kartu yang sama) diuji pada
                    7a45c7ea1deecbd255072ddfd88c770e334b1b26: bukti [1]-[5] + verifikasi
                    ulang pasca-commit [6]-[7].
+                 - Kartu dokumentasi t_14e91b3c (perbaikan sisa dokumen T5-RUNNER:
+                   hitungan kendali 15 -> 20 dan batas override `GO=` command line)
+                   mengukur ulang pada c1184f83639bb8b0b24ddcdb761a66aebb773e1f ->
+                   bagian [10] (pohon bersih sebelum & sesudah).
                  - Kegagalan lama direproduksi pada 34b0e94efcfa85eb4f8ac7546fb649f58768e653.
 Bagian [1]-[5] direkam pada POHON KERJA di atas 34b0e94 (perbaikan belum di-commit);
                  keadaannya dicatat apa adanya di [2] butir 0 (` M Makefile`,
@@ -27,6 +31,8 @@ Bagian [1]-[5] direkam pada POHON KERJA di atas 34b0e94 (perbaikan belum di-comm
 Waktu perekaman: 2026-10-11 15:29:37 UTC (bagian [1]-[5])
                  2026-10-11 15:38:42-15:38:50 UTC (bagian [6] pasca-commit 7a45c7e)
                  2026-10-11 15:38:50 UTC (bagian [7] HTTPS, commit yang sama)
+                 2026-10-11 15:49-15:52 UTC (bagian [8], commit f336231; [9] pada 839cb0d)
+                 2026-10-11 16:05:09-16:05:16 UTC (bagian [10], commit c1184f8)
 Host           : Linux 6.8.0-136-generic x86_64 — runner bersama profile swe-tiusapp
 Rahasia        : TIDAK ADA. Semua bukti memakai perintah tanpa kredensial/token;
                  tidak ada sandi, cookie, atau token pada berkas ini.
@@ -45,7 +51,7 @@ F. make lint (0 issues)                                  0
 G. make vet / make build                                 0 / 0
 H. scripts/go-env.sh --uji-diri (kendali positif+negatif) 0 (15/15 lulus pada
    putaran 1; hitungannya kini 20/20 karena 5 kendali fail-closed putaran 3 —
-   lihat baris M / bagian [8] butir 8 / [9])
+   lihat baris M / bagian [8] butir 8 / [9] / [10])
 I. make secrets / make migrasi-cek                       0 / 0
 J. provision runner (idempotent) -> go version polos / lint polos 0 / 0
 K. [6] PASCA-COMMIT 7a45c7e, pohon bersih:
@@ -61,6 +67,13 @@ M. [8] PUTARAN 3 pasca-commit f336231, pohon bersih:
    kendali negatif historis Makefile 34b0e94                        2 (di dalam: sh 127)
    pesan resolver per satu panggilan make                           1 (sebelumnya berulang)
 N. [9] ulangan seluruh blok [8] pada commit dokumentasi (pohon bersih) 0
+O. [10] kartu dokumentasi t_14e91b3c, commit c1184f8, pohon bersih:
+   --uji-diri kendali positif+negatif (20 lulus / 0 gagal)           0
+   make test GO=/usr/bin/true (override cmd line; 0 baris `ok`)      0
+   GRAHITA_GO=/usr/bin/true make test (lewat pemilih)                2
+   make test GO= (kosong dari command line)                          2
+   make lint GOLANGCI_LINT=/usr/bin/true (override cmd line)         0 (tanpa lint)
+   make test / make lint / lint polos / toolchain-cek       0 / 0 / 0 / 0
 
 [1] KEADAAN LAMA vs SESUDAH PERBAIKAN (reproduksi kegagalan T5-ulang)
 -------------------------------------------------------------------------------
@@ -1234,3 +1247,170 @@ Suntingan yang memuat bagian [9] ini di-commit SETELAH perekaman dan hanya
 menyentuh `docs/design/t5-runner/`; hash commit penutupnya dicatat pada komentar
 kartu t_ac58a28e, bukan di berkas ini, agar bukti tidak merujuk dirinya sendiri.
 Tidak ada rahasia pada bukti ini, dan tidak ada berkas di luar docs/ yang berubah.
+
+[10] PUTARAN DOKUMENTASI (kartu t_14e91b3c) — HITUNGAN KENDALI 20/20 + BATAS OVERRIDE `GO=` DARI COMMAND LINE
+-------------------------------------------------------------------------------
+Latar    : QA putaran 3 (lensa kontrak) menemukan dua sisa ketidaksesuaian pada
+           artefak T5-RUNNER, keduanya dokumentasi saja:
+           (1) HASIL.md §3 butir 6 masih menulis "15 kendali positif+negatif",
+           padahal `--uji-diri` kini menjalankan 20 (15 kendali putaran 1-2 +
+           5 kendali fail-closed putaran 3) — §2 dan §4 baris 20 sudah menulis 20;
+           (2) klaim absolut "tidak ada target yang bisa hijau tanpa tes"
+           (HASIL.md §3 butir 8) dan "tidak pernah hijau tanpa menjalankan satu
+           tes pun" (README.md) belum dibatasi untuk override command line
+           `make test GO=…` / `make lint GOLANGCI_LINT=…`, yang TIDAK melewati
+           pemilih toolchain sehingga versinya tidak divalidasi.
+Tindakan : bagian ini mengukur ULANG kedua hal di atas (hitungan kendali + jalur
+           override vs jalur tervalidasi) beserta gerbang normal. TIDAK ada
+           perubahan pada Makefile, scripts/go-env.sh, .golangci.yml, api/,
+           maupun web/; suntingan hanya pada dokumen (docs/ + README.md).
+Skrip    : cache/scratch/t14e91b3c_ukur.sh — disimpan DI LUAR repo dan dijalankan
+           pada pohon BERSIH, supaya worktree tidak pernah kotor karena bukti.
+Perintah : bash t14e91b3c_ukur.sh   (log: cache/scratch/t14e91b3c_ukur.txt)
+Mentah    : seluruh baris di antara penanda LOG MENTAH di bawah disalin apa
+           adanya dari log skrip. Penanda WAKTU_*, HEAD*, PORCELAIN_*, EXIT_*
+           dicetak oleh skrip itu sendiri, bukan ditambahkan tangan.
+
+===== LOG MENTAH (tidak disunting) =====
+WAKTU_MULAI_UTC=2026-10-11 16:05:09
+HEAD=c1184f83639bb8b0b24ddcdb761a66aebb773e1f
+PORCELAIN_SEBELUM_BARIS=0
+===== A. ./scripts/go-env.sh --uji-diri =====
+LULUS  kandidat go1.27.1 dipilih
+LULUS  kandidat go1.28.0 diterima
+LULUS  go1.26.5 ditolak
+LULUS  tanpa kandidat: exit != 0 + pesan jelas
+LULUS  GRAHITA_GO versi salah ditolak (otoritatif)
+LULUS  GRAHITA_GO berupa direktori toolchain dinormalkan
+LULUS  direktori tanpa biner go ditolak dengan pesan jelas
+LULUS  --go mencetak jalur biner terpilih
+LULUS  --export menambahkan go & golangci-lint ke PATH
+LULUS  --golangci-lint memakai override GRAHITA_GOLANGCI_LINT
+LULUS  --cek exit != 0 saat golangci-lint hilang
+LULUS  --cek hijau saat toolchain lengkap
+LULUS  Makefile: resep 'test' memakai Go hasil pemilih (tanpa PATH interaktif)
+LULUS  Makefile: target lint ada dan memanggil golangci-lint run ./...
+LULUS  Makefile: toolchain-cek melaporkan jalur toolchain resep
+LULUS  Makefile fail-closed: tanpa toolchain -> make test exit != 0 + pesan jelas
+LULUS  Makefile fail-closed: GRAHITA_GO salah -> make test exit != 0 + pesan jelas
+LULUS  Makefile fail-closed: GO= kosong dari command line -> make test exit != 0
+LULUS  Makefile fail-closed tidak menghalangi konfigurasi sah (stub go1.27.1 -> exit 0)
+LULUS  Makefile fail-closed: GOLANGCI_LINT kosong -> make lint exit != 0 + pesan jelas
+
+Ringkasan kendali diri scripts/go-env.sh: 20 lulus, 0 gagal
+EXIT_UJI_DIRI=0
+===== B. make test GO=/usr/bin/true (override command line TANPA validasi versi) =====
+cd api && /usr/bin/true test ./...
+EXIT_GO_TRUE=0
+===== C. GRAHITA_GO=/usr/bin/true make test (pembanding: lewat pemilih -> divalidasi) =====
+GRAHITA_GO=/usr/bin/true bukan Go >= 1.27 (terbaca: tidak dikenali).
+GALAT toolchain: biner Go tidak teresolusi (GO kosong).
+Jalankan ./scripts/runner-provision.sh, atau set GRAHITA_GO=/jalur/ke/go (lihat scripts/go-env.sh --help).
+make: *** [Makefile:89: test] Error 2
+EXIT_GRAHITA_TRUE=2
+===== D. make test GO= (kosong dari command line) =====
+GALAT toolchain: biner Go tidak teresolusi (GO kosong).
+Jalankan ./scripts/runner-provision.sh, atau set GRAHITA_GO=/jalur/ke/go (lihat scripts/go-env.sh --help).
+make: *** [Makefile:89: test] Error 2
+EXIT_GO_KOSONG=2
+===== E. make lint GOLANGCI_LINT=/usr/bin/true (override command line lint) =====
+cd api && /usr/bin/true run ./...
+EXIT_LINT_TRUE=0
+===== F. make test (pemilih normal) =====
+cd api && /home/hermes/toolchain/go/bin/go test ./...
+?   	github.com/grahita/portal/api/cmd/server	[no test files]
+?   	github.com/grahita/portal/api/db/migrations	[no test files]
+ok  	github.com/grahita/portal/api/internal/arch	(cached)
+ok  	github.com/grahita/portal/api/internal/audit	(cached)
+?   	github.com/grahita/portal/api/internal/audit/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/auth	(cached)
+?   	github.com/grahita/portal/api/internal/auth/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/backup	0.420s
+?   	github.com/grahita/portal/api/internal/backup/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/bank	(cached)
+?   	github.com/grahita/portal/api/internal/bank/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/branch	(cached)
+?   	github.com/grahita/portal/api/internal/branch/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/catalog	(cached)
+?   	github.com/grahita/portal/api/internal/catalog/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/dashboard	(cached)
+?   	github.com/grahita/portal/api/internal/dashboard/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/db/sqlc	[no test files]
+ok  	github.com/grahita/portal/api/internal/document	(cached)
+?   	github.com/grahita/portal/api/internal/document/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/fulfillment	(cached)
+ok  	github.com/grahita/portal/api/internal/httpapi	(cached)
+ok  	github.com/grahita/portal/api/internal/notification	(cached)
+?   	github.com/grahita/portal/api/internal/notification/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/order	(cached)
+?   	github.com/grahita/portal/api/internal/order/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment	(cached)
+?   	github.com/grahita/portal/api/internal/payment/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/payment/va	(cached)
+ok  	github.com/grahita/portal/api/internal/payment/va/vatest	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/apierr	(cached)
+?   	github.com/grahita/portal/api/internal/platform/clock	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/config	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/database	(cached)
+?   	github.com/grahita/portal/api/internal/platform/httpx	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/jobs	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/mailer	(cached)
+ok  	github.com/grahita/portal/api/internal/platform/observability	(cached)
+?   	github.com/grahita/portal/api/internal/platform/pdf	[no test files]
+?   	github.com/grahita/portal/api/internal/platform/pgtypes	[no test files]
+ok  	github.com/grahita/portal/api/internal/platform/storage	(cached)
+ok  	github.com/grahita/portal/api/internal/registration	(cached)
+?   	github.com/grahita/portal/api/internal/registration/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/report	(cached)
+?   	github.com/grahita/portal/api/internal/report/postgres	[no test files]
+?   	github.com/grahita/portal/api/internal/seed	[no test files]
+ok  	github.com/grahita/portal/api/internal/settings	(cached)
+?   	github.com/grahita/portal/api/internal/settings/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/tutorial	(cached)
+?   	github.com/grahita/portal/api/internal/tutorial/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/users	(cached)
+?   	github.com/grahita/portal/api/internal/users/postgres	[no test files]
+ok  	github.com/grahita/portal/api/internal/worker	(cached)
+EXIT_MAKE_TEST=0
+===== G. make lint (pemilih normal) =====
+cd api && /home/hermes/bin/golangci-lint run ./...
+0 issues.
+EXIT_MAKE_LINT=0
+===== H. cd api && golangci-lint run ./... (perintah polos ala tester) =====
+0 issues.
+EXIT_LINT_POLOS=0
+===== I. make toolchain-cek =====
+go            : /home/hermes/toolchain/go/bin/go
+golangci-lint : /home/hermes/bin/golangci-lint
+PATH toolchain: /home/hermes/toolchain/go/bin:/home/hermes/bin:
+go version go1.27.1 linux/amd64
+golangci-lint has version 2.14.0 built with go1.27.0 from 114493f9 on 2026-09-24T11:07:15Z
+Go            : /home/hermes/toolchain/go/bin/go (go version go1.27.1 linux/amd64)
+golangci-lint : /home/hermes/bin/golangci-lint
+EXIT_TOOLCHAIN_CEK=0
+PORCELAIN_SESUDAH_BARIS=0
+HEAD_SESUDAH=c1184f83639bb8b0b24ddcdb761a66aebb773e1f
+WAKTU_SELESAI_UTC=2026-10-11 16:05:16
+===== AKHIR LOG MENTAH =====
+
+Pembacaan hasil [10] (semua sesuai temuan QA putaran 3):
+  - hitungan kendali: 20 LULUS / 0 gagal, exit 0 -> HASIL.md §3 butir 6 kini
+    menulis 20 kendali dan sebut 5 kendali fail-closed putaran 3.
+  - `make test GO=/usr/bin/true` exit 0 dengan 0 baris `ok` (biner override
+    tidak divalidasi versinya) -> klaim absolut diberi batas eksplisit pada
+    HASIL.md §3 butir 8, HASIL.md §6 butir 7, dan README.md.
+  - pembanding jalur tervalidasi tetap fail-closed: `GRAHITA_GO=/usr/bin/true
+    make test` exit 2 ("bukan Go >= 1.27"), `make test GO=` exit 2.
+  - gerbang normal pada commit c1184f8: `make test` exit 0 (27 paket `ok`),
+    `make lint` + `( cd api && golangci-lint run ./... )` exit 0 dengan
+    `0 issues.`, `make toolchain-cek` exit 0.
+  - pohon BERSIH (0 baris `git status --porcelain`) sebelum DAN sesudah, dengan
+    HEAD tidak berpindah (c1184f83639bb8b0b24ddcdb761a66aebb773e1f).
+CATATAN PENUTUP BAGIAN [10]: bagian ini direkam pada commit
+c1184f83639bb8b0b24ddcdb761a66aebb773e1f dengan pohon BERSIH sebelum dan sesudah
+(PORCELAIN_SEBELUM_BARIS=0, PORCELAIN_SESUDAH_BARIS=0, HEAD_SESUDAH = commit itu).
+Suntingan dokumentasi yang memuat bagian [10] ini (HASIL.md, README.md, berkas
+bukti ini) dikomit SETELAH perekaman; hash commit penutupnya dicatat pada komentar
+kartu t_14e91b3c, bukan di berkas ini, agar bukti tidak merujuk dirinya sendiri.
+Tidak ada rahasia pada bukti ini, dan tidak ada berkas di luar docs/ + README.md
+yang berubah oleh kartu t_14e91b3c.

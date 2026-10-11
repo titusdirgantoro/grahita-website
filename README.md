@@ -64,7 +64,12 @@ toolchain tidak teresolusi). Bila runner benar-benar belum punya Go
 Target Go bersifat **fail-closed**: bila `GO`/`GOLANGCI_LINT` tidak teresolusi
 (mis. `GRAHITA_GO` salah, atau tidak ada kandidat), `make test`/`vet`/`build`/
 `lint`/`toolchain-cek` berhenti dengan pesan `GALAT toolchain: …` dan exit != 0
-— tidak pernah "hijau tanpa menjalankan satu tes pun".
+— jadi pada jalur yang melewati pemilih toolchain target tidak pernah "hijau
+tanpa menjalankan satu tes pun". Batasnya: override eksplisit dari command line
+(`make test GO=/jalur/ke/go`, `make lint GOLANGCI_LINT=/jalur/ke/golangci-lint`)
+sengaja **tidak** melewati pemilih sehingga versinya tidak divalidasi; bila
+menunjuk biner lain yang selalu exit 0 (mis. `/usr/bin/true`), hasilnya memang
+exit 0 tanpa menjalankan tes/lint.
 
 ## Menjalankan (lokal)
 

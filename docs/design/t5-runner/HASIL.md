@@ -79,12 +79,20 @@ kebetulan gagal keras 127. Ditutup pada putaran 3 — lihat §3 butir 8 dan bukt
    sudo, idempotent, dapat dihapus (`--hapus`). Skrip ini **tidak** dipanggil
    otomatis oleh Makefile/CI.
 6. **Kendali diri, bukan klaim.** `./scripts/go-env.sh --uji-diri` menjalankan
-   15 kendali positif+negatif: kandidat 1.27.1/1.28.0 diterima, 1.26.5 ditolak,
+   **20 kendali positif+negatif** (15 kendali putaran 1–2 + 5 kendali putaran 3):
+   kandidat 1.27.1/1.28.0 diterima, 1.26.5 ditolak,
    direktori tanpa biner ditolak, `GRAHITA_GO` salah versi ditolak, `--export`
    benar-benar menambahkan `go`+`golangci-lint` ke PATH, `--cek` gagal saat
    `golangci-lint` hilang, dan integrasi Makefile (`make -n test`, `make -n lint`,
-   `make toolchain-cek`) memakai jalur absolut hasil pemilih tanpa PATH. Mode ini
-   mengikuti pola `./scripts/check-secrets.sh --uji-diri`.
+   `make toolchain-cek`) memakai jalur absolut hasil pemilih tanpa PATH.
+   Lima kendali putaran 3 adalah yang fail-closed beserta satu kendali positifnya:
+   tanpa toolchain → `make test` exit != 0; `GRAHITA_GO` salah → `make test`
+   exit != 0; `GO=` dari **command line** → `make test` exit != 0; `GOLANGCI_LINT=`
+   dari command line → `make lint` exit != 0; dan kendali **positif** (stub Go
+   1.27.1 → exit 0, penjaga tidak memblokir konfigurasi sah). Hasil akhirnya
+   “20 lulus, 0 gagal” — direkam di `BUKTI-T5-RUNNER.txt` bagian [8] butir 8 dan
+   diulang di [9], lalu diukur ulang pada commit dokumentasi ini di bagian [10].
+   Mode ini mengikuti pola `./scripts/check-secrets.sh --uji-diri`.
 7. **Tanpa rahasia.** Skrip hanya membaca jalur biner dan versinya; tidak ada
    kredensial, token, atau DSN pada kode, dokumentasi, maupun bukti.
 8. **Gerbang `make test` fail-closed (perbaikan putaran 3 atas temuan QA).**
@@ -98,7 +106,16 @@ kebetulan gagal keras 127. Ditutup pada putaran 3 — lihat §3 butir 8 dan bukt
    `build`/`lint`/`toolchain-cek` melewati penjaga `_wajib_go`/`_wajib_lint`
    sebagai baris pertama — bila `$(GO)`/`$(GOLANGCI_LINT)` kosong, make berhenti
    dengan pesan jelas + exit 2, termasuk bila kosong dari **command line**
-   (`make test GO=`). Tidak ada target yang bisa “hijau tanpa tes”.
+   (`make test GO=`).
+   **Batas eksplisit (jangan dibaca sebagai jaminan mutlak):** penjaga ini
+   menjamin kasus nilai toolchain **tidak teresolusi/kosong**, *bukan* override
+   eksplisit dari command line. `make test GO=/jalur/ke/go` dan
+   `make lint GOLANGCI_LINT=/jalur/ke/golangci-lint` melewati pemilih toolchain
+   (`ifndef` membuat Makefile tidak memanggil `scripts/go-env.sh`), sehingga
+   versinya **tidak divalidasi**: bila `$(GO)` menunjuk biner lain yang selalu
+   exit 0 (mis. `/usr/bin/true`), `make test` memang HIJAU dengan 0 tes
+   (diukur ulang pada `BUKTI-T5-RUNNER.txt` bagian [10]). Jadi yang dijamin
+   adalah “gagal bila tidak teresolusi”, bukan “selalu ada tes yang dijalankan”.
 
 ## 4. Bukti verifikasi pada commit ini
 
@@ -107,7 +124,10 @@ fail-closed) dan **`7a45c7ea1deecbd255072ddfd88c770e334b1b26`** (putaran 1–2 �
 toolchain). Tabel di bawah merangkum keluaran; seluruh keluaran mentah ada di
 `BUKTI-T5-RUNNER.txt` — bagian [1]–[5] direkam pada pohon kerja sebelum commit, dan
 bagian **[6] (gerbang) + [7] (HTTPS)** serta **[8] (putaran 3, seluruh blok diulang
-pada commit dokumentasi di bagian [9])** adalah blok bukti yang tertaut ke commit.
+pada commit dokumentasi di bagian [9])** adalah blok bukti yang tertaut ke commit;
+**[10]** merekam pengukuran ulang pada kartu dokumentasi `t_14e91b3c` — hitungan
+kendali `--uji-diri` **20/20** dan batas override `GO=`/`GOLANGCI_LINT=` dari
+command line (pohon bersih sebelum & sesudah).
 
 Ringkasan (detail + keluaran mentah di `BUKTI-T5-RUNNER.txt`):
 
@@ -120,7 +140,7 @@ Ringkasan (detail + keluaran mentah di `BUKTI-T5-RUNNER.txt`):
 | 5 | `make vet`, `make build` | exit 0, exit 0 |
 | 6 | `cd api && eval "$(../scripts/go-env.sh --export)" && golangci-lint run ./...` | exit 0, `0 issues.` |
 | 7 | `cd api && golangci-lint run ./...` setelah provisioning runner | exit 0, `0 issues.` (perintah polos ala tester) |
-| 8 | `./scripts/go-env.sh --uji-diri` | exit 0, 15/15 lulus |
+| 8 | `./scripts/go-env.sh --uji-diri` (putaran 1–2) | exit 0, 15/15 lulus; **kini 20/20** karena 5 kendali fail-closed putaran 3 — lihat baris 20 dan bagian [8]/[9]/[10] |
 | 9 | `./scripts/runner-provision.sh` (dua kali, uji idempotensi) | exit 0/0, tidak menimpa berkas yang sudah ada |
 | 10 | `make secrets`, `make migrasi-cek` | exit 0, exit 0 (skrip/gate repo tetap hijau) |
 | 11 | Kendali negatif: `make -f <Makefile HEAD> test` pada PATH tanpa toolchain; `golangci-lint` tanpa `go` di PATH | exit 2 (di dalam `sh`: 127) dan exit 3 — **kegagalan lama dapat direproduksi persis**, jadi perbaikan bukan efek mesin lain |
@@ -136,6 +156,7 @@ Ringkasan (detail + keluaran mentah di `BUKTI-T5-RUNNER.txt`):
 | 21 | **[8]** kendali negatif **fail-closed** (cacat QA putaran 2): `env -i … make test` tanpa toolchain; `GRAHITA_GO=/salah/jalur/go make test`; `make test GO=`; `make lint GOLANGCI_LINT=` | **exit 2 masing-masing** dengan pesan `GALAT toolchain: …`, dan **0 baris `ok`** (0 tes dijalankan) — tidak lagi hijau tanpa tes; ditambah kendali positif bahwa penjaga tidak memblokir konfigurasi sah |
 | 22 | **[8]** kendali negatif historis: `make -f <Makefile 34b0e94> test` pada PATH minimal; jumlah pesan resolver per satu panggilan `make` | exit 2 (`/bin/sh: 1: go: not found`, di dalam `sh` 127); resolver **1×** (sebelumnya berulang) |
 | 23 | **[9]** seluruh blok [8] diulang pada commit dokumentasi yang memuat bagian [8] | exit 0, hasil identik (pohon bersih sebelum & sesudah)
+| 24 | **[10]** pengukuran ulang pada kartu dokumentasi ini (`c1184f8`, pohon bersih): `git rev-parse HEAD` + `git status --porcelain`; `./scripts/go-env.sh --uji-diri`; `make test GO=/usr/bin/true`; `GRAHITA_GO=/usr/bin/true make test`; `make test GO=`; `make lint GOLANGCI_LINT=/usr/bin/true`; `make test`; `make lint`; `( cd api && golangci-lint run ./... )`; `make toolchain-cek` | pohon **KOSONG** (0 baris) sebelum & sesudah; `--uji-diri` exit 0 **20 lulus, 0 gagal**; `make test GO=/usr/bin/true` → resep `cd api && /usr/bin/true test ./...`, **exit 0 dengan 0 baris `ok`** (override command line tidak divalidasi versinya); `GRAHITA_GO=/usr/bin/true make test` → **exit 2** `bukan Go >= 1.27`; `make test GO=` → **exit 2**; `make lint GOLANGCI_LINT=/usr/bin/true` → resep `cd api && /usr/bin/true run ./...`, **exit 0 tanpa lint dijalankan**; gerbang normal `make test` exit 0 (27 paket `ok`), `make lint` dan lint polos `0 issues.`, `make toolchain-cek` exit 0 |
 
 Perintah dasar yang dicatat tester pada `t_e36576b6` (`make test`,
 `cd api && golangci-lint run ./...`) kini keduanya exit 0 **pada commit yang
@@ -237,3 +258,18 @@ Seluruh blok di atas direkam mentah di `BUKTI-T5-RUNNER.txt` bagian **[8]**
    berhenti bila nilai toolchain kosong; kendali positif (stub Go 1.27.1,
    [8] butir 8 baris “tidak menghalangi konfigurasi sah”) membuktikan jalan sah
    tetap exit 0, dan seluruh gerbang di [8]/[9] dijalankan dengan pemilih normal.
+7. **Override command line bukan jalur tervalidasi (batas putaran dokumentasi
+   `t_14e91b3c`).** `make test GO=/jalur/ke/go` dan
+   `make lint GOLANGCI_LINT=/jalur/ke/golangci-lint` adalah override eksplisit
+   yang didokumentasikan pada komentar `Makefile` baris 11; karena Makefile
+   memakai `ifndef`, pemilih `scripts/go-env.sh` **tidak dipanggil** pada jalur
+   ini sehingga **versi toolchain tidak divalidasi**. Konsekuensinya, klaim
+   “tidak pernah hijau tanpa menjalankan satu tes pun” hanya berlaku pada jalur
+   yang melewati pemilih toolchain: bila `$(GO)` menunjuk biner lain yang selalu
+   exit 0 (mis. `/usr/bin/true`), `make test` memang exit 0 dengan 0 tes
+   dijalankan — diukur ulang dan direkam di `BUKTI-T5-RUNNER.txt` [10]
+   (`make test GO=/usr/bin/true` → exit 0, 0 baris `ok`; pembanding
+   `GRAHITA_GO=/usr/bin/true make test` → exit 2, dan `make test GO=` → exit 2).
+   Penjaga fail-closed hanya menjamin kasus “tidak teresolusi/kosong”. Perilaku
+   guard **tidak diubah** oleh kartu dokumentasi ini (tanpa perubahan `Makefile`
+   maupun `scripts/go-env.sh`).
