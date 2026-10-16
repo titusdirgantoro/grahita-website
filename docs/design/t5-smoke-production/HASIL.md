@@ -30,12 +30,13 @@ Token mentah hanya berada di memori proses provisioning dan tidak disimpan.
 Semua master data diberi penanda `UJI-` dan hanya digunakan untuk pengujian:
 
 - cabang: `UJI-Smoke Production 20261016`
-- email cabang uji: `uji-smoke-20261016@grahita.test`
+- akun cabang uji: alias `UJI-Cabang Smoke 20261016` (alamat hanya di secret env)
 - produk: `UJI-Produk Smoke 20261016` (`UJI-SMOKE-20261016`)
 - rekening: `UJI-Rekening Smoke 20261016`
 - harga khusus cabang: Rp161.000
 - assignment rekening: rekening UJI di atas ke cabang UJI
-- pesanan smoke pertama: nomor `2026-10-01`, total Rp322.000, status akhir `done`
+- pesanan smoke: nomor `2026-10-01`, `2026-10-02`, dan `2026-10-03`,
+  masing-masing total Rp322.000 dengan status akhir `done`
 
 Nomor rekening, kata sandi, token registrasi, cookie, dan UUID tidak dicatat di
 dokumen ini.
@@ -73,16 +74,40 @@ Provisioning selesai dengan seluruh mutasi wajib HTTP 200/201: cabang, produk,
 harga, rekening, assignment, token registrasi, registrasi akun, serta verifikasi
 login cabang.
 
-`scripts/smoke-staging.sh` dijalankan terhadap kedua hostname production dan
-menghasilkan exit `2`:
+`scripts/smoke-staging.sh` versi awal dijalankan terhadap kedua hostname
+production dua kali dan masing-masing menghasilkan exit `2`:
 
 - LULUS: UI dan API same-origin kedua host, HTTPS tervalidasi tanpa bypass,
   header keamanan, login cabang, atribut cookie, katalog/harga server, draft,
   submit C&C, isolasi cookie lintas host, login Superadmin, dan verifikasi sampai
   status `done`.
-- TERHALANG: daftar dokumen tetap kosong, sehingga unduh dokumen belum dapat
-  dibuktikan. Runner mengidentifikasi ketergantungan render/object storage
-  (Gotenberg/S3) belum tersedia pada layanan nyata.
+- TERHALANG pada pemeriksaan langsung runner: daftar dokumen masih kosong segera
+  setelah verifikasi. Pesan runner lama yang menyatakan Gotenberg/S3 tidak ada
+  bukan diagnosis dan tidak dipakai sebagai bukti penyebab.
+
+Pemeriksaan lanjutan pada pesanan kedua memberi waktu 60 detik untuk pekerjaan
+asinkron. Hasilnya:
+
+- proses production untuk API dan worker terlihat aktif; proses renderer dan
+  object storage juga terlihat aktif, tanpa membaca konfigurasi atau rahasia;
+- setelah waktu tunggu tambahan, endpoint daftar dokumen mengembalikan satu
+  dokumen invoice;
+- endpoint unduh dokumen berhasil menerbitkan tautan bertanda tangan, tetapi
+  host pada tautan itu tidak dapat di-resolve dari klien production. Nilai URL,
+  kunci objek, query signature, dan hostname internal tidak dicatat.
+
+Dengan demikian, job render/worker bukan lagi penyebab yang dapat dinyatakan
+terhalang: dokumen terbentuk. Gerbang tersisa berada pada keterjangkauan tautan
+unduh object storage dari klien. Operator perlu menyediakan endpoint S3 yang
+dapat di-resolve dan dijangkau pengguna untuk presign, sambil tetap dapat
+dijangkau proses API/worker, lalu mengulang unduh tanpa membocorkan URL mentah.
+
+Runner juga dikoreksi agar menunggu dokumen asinkron sampai batas waktu,
+mengambil URL dari respons JSON endpoint unduh, lalu mengunduh object URL itu.
+Sebelumnya runner keliru mengukur ukuran respons JSON endpoint sebagai berkas.
+Pengulangan ketiga dengan runner terkoreksi membentuk dokumen dalam 5 detik,
+kemudian menghasilkan exit `1` saat object URL tidak dapat di-resolve. Tidak ada
+URL mentah, hostname internal, signature, UUID, atau rahasia yang dicatat.
 
 Probe live terpisah untuk batas role dan CSRF menghasilkan exit `0`:
 
@@ -92,9 +117,10 @@ Probe live terpisah untuk batas role dan CSRF menghasilkan exit `0`:
 - POST Superadmin tanpa token CSRF → HTTP 403 `CSRF_INVALID`.
 
 Kesimpulan: blocker akun uji sah dan master data telah ditutup. Alur
-login→submit→verifikasi terbukti live, tetapi gerbang login→submit→verifikasi→unduh
-belum LULUS penuh karena dokumen tidak terbentuk. Hasil historis T5-ulang2 tidak
-diubah dan rilis tidak dinyatakan siap hanya berdasarkan hasil ini.
+login→submit→verifikasi dan pembentukan dokumen terbukti live, tetapi gerbang
+login→submit→verifikasi→unduh belum LULUS penuh karena tautan object storage
+belum dapat dijangkau klien. Hasil historis T5-ulang2 tidak diubah dan rilis
+tidak dinyatakan siap hanya berdasarkan hasil ini.
 
 ## Cleanup setelah pengujian independen
 

@@ -33,6 +33,8 @@ SMOKE_PASSWORD=${SMOKE_PASSWORD:?SMOKE_PASSWORD wajib diisi}
 SMOKE_ADMIN_EMAIL=${SMOKE_ADMIN_EMAIL:?SMOKE_ADMIN_EMAIL wajib diisi}
 SMOKE_ADMIN_PASSWORD=${SMOKE_ADMIN_PASSWORD:?SMOKE_ADMIN_PASSWORD wajib diisi}
 SMOKE_BASIC_AUTH=${SMOKE_BASIC_AUTH:-}
+SMOKE_DOCUMENT_WAIT_SECONDS=${SMOKE_DOCUMENT_WAIT_SECONDS:-90}
+SMOKE_DOCUMENT_POLL_SECONDS=${SMOKE_DOCUMENT_POLL_SECONDS:-5}
 
 KERJA=$(mktemp -d)
 trap 'rm -rf "$KERJA"' EXIT
@@ -241,22 +243,44 @@ echo
 # ---------- 7. dokumen + unduh ----------
 echo "7. Daftar dokumen lalu unduh"
 if [ -n "$idPesanan" ]; then
-    dok=$(curlx -o "$TMP1" -w '\n%{http_code}' -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/orders/$idPesanan/documents")
-    if [ "$(kode "$dok")" != "200" ]; then
-        gagal "daftar dokumen -> $(kode "$dok")"
-    else
+    tunggu=0
+    jumlah=0
+    while [ "$tunggu" -le "$SMOKE_DOCUMENT_WAIT_SECONDS" ]; do
+        dok=$(curlx -o "$TMP1" -w '\n%{http_code}' -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/orders/$idPesanan/documents")
+        if [ "$(kode "$dok")" != "200" ]; then
+            gagal "daftar dokumen -> $(kode "$dok")"
+            break
+        fi
         jumlah=$(json "$TMP1" "len(d['data'])")
-        if [ "$jumlah" = "0" ]; then
-            blokir "daftar dokumen kosong: render Invoice/Surat Jalan butuh Gotenberg + object storage (belum tersedia di lingkungan ini)"
+        if [ "$jumlah" -gt 0 ]; then
+            break
+        fi
+        if [ "$tunggu" -ge "$SMOKE_DOCUMENT_WAIT_SECONDS" ]; then
+            break
+        fi
+        sleep "$SMOKE_DOCUMENT_POLL_SECONDS"
+        tunggu=$((tunggu + SMOKE_DOCUMENT_POLL_SECONDS))
+    done
+
+    if [ "$jumlah" = "0" ] && [ "$ADA_GAGAL" -eq 0 ]; then
+        blokir "daftar dokumen tetap kosong setelah menunggu ${tunggu}s; periksa status job render dan dependensi worker"
+    elif [ "$jumlah" -gt 0 ]; then
+        info "dokumen tersedia setelah menunggu ${tunggu}s"
+        docID=$(json "$TMP1" "d['data'][0]['id']")
+        jenis=$(json "$TMP1" "d['data'][0]['jenis']")
+        tautan=$(curlx -o "$TMP2" -w '\n%{http_code}' \
+            -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/documents/$docID/download")
+        if [ "$(kode "$tautan")" != "200" ]; then
+            gagal "buat tautan unduh dokumen -> $(kode "$tautan")"
         else
-            docID=$(json "$TMP1" "d['data'][0]['id']")
-            unduh=$(curlx -o "$KERJA/dokumen.bin" -w '\n%{http_code}' \
-                -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/documents/$docID/download")
+            urlUnduh=$(json "$TMP2" "d['data']['url']")
+            : > "$KERJA/dokumen.bin"
+            unduh=$(curl -sS -L --max-time 30 -o "$KERJA/dokumen.bin" -w '\n%{http_code}' "$urlUnduh" || true)
             ukuran=$(wc -c < "$KERJA/dokumen.bin" | tr -d ' ')
             if [ "$(kode "$unduh")" = "200" ] && [ "$ukuran" -gt 1000 ]; then
-                ok "unduh dokumen 200 ($ukuran byte, $(json "$TMP1" "d['data'][0]['jenis']"))"
+                ok "unduh dokumen 200 ($ukuran byte, $jenis)"
             else
-                gagal "unduh dokumen -> $(kode "$unduh") ($ukuran byte)"
+                gagal "unduh object dari tautan bertanda tangan -> $(kode "$unduh") ($ukuran byte)"
             fi
         fi
     fi
@@ -269,7 +293,7 @@ if [ "$ADA_GAGAL" -ne 0 ]; then
 fi
 if [ "$ADA_TERHALANG" -ne 0 ]; then
     echo "HASIL: TERHALANG — alur login→submit→verify lulus, unduh dokumen belum bisa"
-    echo "        dibuktikan karena ketergantungan eksternal (Gotenberg/S3) belum ada."
+    echo "        dibuktikan; status job render/dependensi worker perlu diperiksa."
     exit 2
 fi
 echo "HASIL: LULUS — login → submit → verify → unduh dokumen berhasil di kedua host."
