@@ -45,13 +45,13 @@ INSERT INTO payment_proofs (
     sqlc.arg(uploaded_by_kind)::actor_kind, sqlc.narg(uploaded_by_id)::uuid,
     sqlc.narg(uploaded_by_nama)
 )
-RETURNING id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+RETURNING id, order_id::text AS order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
           uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
           created_at;
 
 -- name: ListPaymentProofs :many
 -- Seluruh bukti satu pesanan, terlama dulu (urutan unggah).
-SELECT id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+SELECT id, order_id::text AS order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
        uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
        created_at, ocr_nominal, ocr_tanggal, ocr_bank, ocr_rek_akhir,
        COALESCE(ocr_confidence, 0)::float8 AS ocr_confidence, ocr_at
@@ -61,7 +61,7 @@ SELECT id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
 
 -- name: GetPaymentProof :one
 -- Satu bukti MILIK pesanan tersebut; bukti pesanan lain tidak ditemukan.
-SELECT id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+SELECT id, order_id::text AS order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
        uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
        created_at
   FROM payment_proofs
@@ -109,7 +109,7 @@ SELECT o.id,
 -- Seluruh bukti satu pesanan beserta hasil baca yang SUDAH ADA, terlama dulu.
 -- `ocr_at` NULL menandai bukti yang belum pernah dibaca sehingga pengulangan
 -- pekerjaan tidak memanggil provider lagi untuk bukti yang sudah dibaca.
-SELECT id, order_id, storage_key, mime_type, nama_file,
+SELECT id, order_id::text AS order_id, storage_key, mime_type, nama_file,
        ocr_nominal, ocr_tanggal, ocr_bank, ocr_rek_akhir,
        COALESCE(ocr_confidence, 0)::float8 AS ocr_confidence,
        ocr_at

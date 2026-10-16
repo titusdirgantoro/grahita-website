@@ -70,7 +70,7 @@ func (q *Queries) GetOrderForProof(ctx context.Context, id string) (GetOrderForP
 }
 
 const getPaymentProof = `-- name: GetPaymentProof :one
-SELECT id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+SELECT id, order_id::text AS order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
        uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
        created_at
   FROM payment_proofs
@@ -127,7 +127,7 @@ INSERT INTO payment_proofs (
     $7::actor_kind, $8::uuid,
     $9
 )
-RETURNING id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+RETURNING id, order_id::text AS order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
           uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
           created_at
 `
@@ -217,7 +217,7 @@ func (q *Queries) InsertProofOrderEvent(ctx context.Context, arg InsertProofOrde
 }
 
 const listPaymentProofs = `-- name: ListPaymentProofs :many
-SELECT id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+SELECT id, order_id::text AS order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
        uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
        created_at, ocr_nominal, ocr_tanggal, ocr_bank, ocr_rek_akhir,
        COALESCE(ocr_confidence, 0)::float8 AS ocr_confidence, ocr_at
@@ -286,7 +286,7 @@ func (q *Queries) ListPaymentProofs(ctx context.Context, orderID string) ([]List
 }
 
 const listProofsForOCR = `-- name: ListProofsForOCR :many
-SELECT id, order_id, storage_key, mime_type, nama_file,
+SELECT id, order_id::text AS order_id, storage_key, mime_type, nama_file,
        ocr_nominal, ocr_tanggal, ocr_bank, ocr_rek_akhir,
        COALESCE(ocr_confidence, 0)::float8 AS ocr_confidence,
        ocr_at

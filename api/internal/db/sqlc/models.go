@@ -140,6 +140,52 @@ func (ns NullBankCode) Value() (driver.Value, error) {
 	return string(ns.BankCode), nil
 }
 
+type BranchDepositTransactionKind string
+
+const (
+	BranchDepositTransactionKindTopupCredit              BranchDepositTransactionKind = "topup_credit"
+	BranchDepositTransactionKindOrderAllocationDebit     BranchDepositTransactionKind = "order_allocation_debit"
+	BranchDepositTransactionKindOverpayCredit            BranchDepositTransactionKind = "overpay_credit"
+	BranchDepositTransactionKindAllocationReversalCredit BranchDepositTransactionKind = "allocation_reversal_credit"
+	BranchDepositTransactionKindTopupReversalDebit       BranchDepositTransactionKind = "topup_reversal_debit"
+	BranchDepositTransactionKindOverpayReversalDebit     BranchDepositTransactionKind = "overpay_reversal_debit"
+)
+
+func (e *BranchDepositTransactionKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = BranchDepositTransactionKind(s)
+	case string:
+		*e = BranchDepositTransactionKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for BranchDepositTransactionKind: %T", src)
+	}
+	return nil
+}
+
+type NullBranchDepositTransactionKind struct {
+	BranchDepositTransactionKind BranchDepositTransactionKind `json:"branch_deposit_transaction_kind"`
+	Valid                        bool                         `json:"valid"` // Valid is true if BranchDepositTransactionKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullBranchDepositTransactionKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.BranchDepositTransactionKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.BranchDepositTransactionKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullBranchDepositTransactionKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.BranchDepositTransactionKind), nil
+}
+
 type BranchIdentityStatus string
 
 const (
@@ -181,6 +227,51 @@ func (ns NullBranchIdentityStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.BranchIdentityStatus), nil
+}
+
+type DepositTopupStatus string
+
+const (
+	DepositTopupStatusPendingReview DepositTopupStatus = "pending_review"
+	DepositTopupStatusNeedsReview   DepositTopupStatus = "needs_review"
+	DepositTopupStatusVerified      DepositTopupStatus = "verified"
+	DepositTopupStatusRejected      DepositTopupStatus = "rejected"
+	DepositTopupStatusReversed      DepositTopupStatus = "reversed"
+)
+
+func (e *DepositTopupStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = DepositTopupStatus(s)
+	case string:
+		*e = DepositTopupStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for DepositTopupStatus: %T", src)
+	}
+	return nil
+}
+
+type NullDepositTopupStatus struct {
+	DepositTopupStatus DepositTopupStatus `json:"deposit_topup_status"`
+	Valid              bool               `json:"valid"` // Valid is true if DepositTopupStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullDepositTopupStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.DepositTopupStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.DepositTopupStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullDepositTopupStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.DepositTopupStatus), nil
 }
 
 type DocKind string
@@ -402,6 +493,48 @@ func (ns NullOrderStatus) Value() (driver.Value, error) {
 	return string(ns.OrderStatus), nil
 }
 
+type PaymentProofPurpose string
+
+const (
+	PaymentProofPurposeOrderPayment PaymentProofPurpose = "order_payment"
+	PaymentProofPurposeDepositTopup PaymentProofPurpose = "deposit_topup"
+)
+
+func (e *PaymentProofPurpose) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PaymentProofPurpose(s)
+	case string:
+		*e = PaymentProofPurpose(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PaymentProofPurpose: %T", src)
+	}
+	return nil
+}
+
+type NullPaymentProofPurpose struct {
+	PaymentProofPurpose PaymentProofPurpose `json:"payment_proof_purpose"`
+	Valid               bool                `json:"valid"` // Valid is true if PaymentProofPurpose is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPaymentProofPurpose) Scan(value interface{}) error {
+	if value == nil {
+		ns.PaymentProofPurpose, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PaymentProofPurpose.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPaymentProofPurpose) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PaymentProofPurpose), nil
+}
+
 type ProductKind string
 
 const (
@@ -531,6 +664,91 @@ func (ns NullReviewReason) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.ReviewReason), nil
+}
+
+type RevisionPaymentState string
+
+const (
+	RevisionPaymentStateRevisionUnderpayment       RevisionPaymentState = "revision_underpayment"
+	RevisionPaymentStateRevisionOverpaymentPending RevisionPaymentState = "revision_overpayment_pending"
+)
+
+func (e *RevisionPaymentState) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = RevisionPaymentState(s)
+	case string:
+		*e = RevisionPaymentState(s)
+	default:
+		return fmt.Errorf("unsupported scan type for RevisionPaymentState: %T", src)
+	}
+	return nil
+}
+
+type NullRevisionPaymentState struct {
+	RevisionPaymentState RevisionPaymentState `json:"revision_payment_state"`
+	Valid                bool                 `json:"valid"` // Valid is true if RevisionPaymentState is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullRevisionPaymentState) Scan(value interface{}) error {
+	if value == nil {
+		ns.RevisionPaymentState, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.RevisionPaymentState.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullRevisionPaymentState) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.RevisionPaymentState), nil
+}
+
+type RevisionPaymentTransition string
+
+const (
+	RevisionPaymentTransitionTotalUnchanged RevisionPaymentTransition = "total_unchanged"
+	RevisionPaymentTransitionUnderpayment   RevisionPaymentTransition = "underpayment"
+	RevisionPaymentTransitionOverpayment    RevisionPaymentTransition = "overpayment"
+)
+
+func (e *RevisionPaymentTransition) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = RevisionPaymentTransition(s)
+	case string:
+		*e = RevisionPaymentTransition(s)
+	default:
+		return fmt.Errorf("unsupported scan type for RevisionPaymentTransition: %T", src)
+	}
+	return nil
+}
+
+type NullRevisionPaymentTransition struct {
+	RevisionPaymentTransition RevisionPaymentTransition `json:"revision_payment_transition"`
+	Valid                     bool                      `json:"valid"` // Valid is true if RevisionPaymentTransition is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullRevisionPaymentTransition) Scan(value interface{}) error {
+	if value == nil {
+		ns.RevisionPaymentTransition, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.RevisionPaymentTransition.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullRevisionPaymentTransition) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.RevisionPaymentTransition), nil
 }
 
 type VerifStatus string
@@ -698,6 +916,33 @@ type BranchBankAccount struct {
 	UpdatedAt     time.Time   `json:"updated_at"`
 }
 
+type BranchDepositAccount struct {
+	BranchID       string    `json:"branch_id"`
+	Balance        int64     `json:"balance"`
+	JournalVersion int64     `json:"journal_version"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type BranchDepositTransaction struct {
+	ID                       string                       `json:"id"`
+	BranchID                 string                       `json:"branch_id"`
+	Kind                     BranchDepositTransactionKind `json:"kind"`
+	Amount                   int64                        `json:"amount"`
+	SourceProofID            pgtype.UUID                  `json:"source_proof_id"`
+	DepositVerificationLogID pgtype.UUID                  `json:"deposit_verification_log_id"`
+	OrderVerificationLogID   pgtype.UUID                  `json:"order_verification_log_id"`
+	OrderID                  pgtype.UUID                  `json:"order_id"`
+	OrderVersion             pgtype.Int4                  `json:"order_version"`
+	ReversesTransactionID    pgtype.UUID                  `json:"reverses_transaction_id"`
+	IdempotencyKeyHash       []byte                       `json:"idempotency_key_hash"`
+	RequestFingerprint       []byte                       `json:"request_fingerprint"`
+	ActorKind                ActorKind                    `json:"actor_kind"`
+	ActorID                  pgtype.UUID                  `json:"actor_id"`
+	Reason                   pgtype.Text                  `json:"reason"`
+	CreatedAt                time.Time                    `json:"created_at"`
+}
+
 type BranchPrice struct {
 	BranchID  string      `json:"branch_id"`
 	ProductID string      `json:"product_id"`
@@ -743,6 +988,52 @@ type CncReminder struct {
 	SentAt time.Time `json:"sent_at"`
 }
 
+type DepositAllocation struct {
+	ID                 string      `json:"id"`
+	BranchID           string      `json:"branch_id"`
+	OrderID            string      `json:"order_id"`
+	OrderVersion       int32       `json:"order_version"`
+	DebitTransactionID string      `json:"debit_transaction_id"`
+	Amount             int64       `json:"amount"`
+	ReversedAmount     int64       `json:"reversed_amount"`
+	CreatedByKind      ActorKind   `json:"created_by_kind"`
+	CreatedByID        pgtype.UUID `json:"created_by_id"`
+	CreatedAt          time.Time   `json:"created_at"`
+}
+
+type DepositTopup struct {
+	ID              string             `json:"id"`
+	BranchID        string             `json:"branch_id"`
+	BankAccountID   string             `json:"bank_account_id"`
+	Status          DepositTopupStatus `json:"status"`
+	DeclaredAmount  int64              `json:"declared_amount"`
+	VerifiedAmount  pgtype.Int8        `json:"verified_amount"`
+	PaymentProofID  string             `json:"payment_proof_id"`
+	VerifiedBy      pgtype.UUID        `json:"verified_by"`
+	VerifiedAt      *time.Time         `json:"verified_at"`
+	RejectionReason pgtype.Text        `json:"rejection_reason"`
+	CreatedByKind   ActorKind          `json:"created_by_kind"`
+	CreatedByID     pgtype.UUID        `json:"created_by_id"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+}
+
+type DepositVerificationLog struct {
+	ID                     string       `json:"id"`
+	TopupID                string       `json:"topup_id"`
+	Method                 VerifyMethod `json:"method"`
+	Result                 string       `json:"result"`
+	DeclaredAmount         int64        `json:"declared_amount"`
+	ObservedAmount         pgtype.Int8  `json:"observed_amount"`
+	ApprovedAmount         pgtype.Int8  `json:"approved_amount"`
+	BankAccountID          pgtype.UUID  `json:"bank_account_id"`
+	BranchAllowlistVersion int64        `json:"branch_allowlist_version"`
+	DestinationResult      []byte       `json:"destination_result"`
+	AdminID                pgtype.UUID  `json:"admin_id"`
+	Reason                 pgtype.Text  `json:"reason"`
+	CreatedAt              time.Time    `json:"created_at"`
+}
+
 type Document struct {
 	ID         string      `json:"id"`
 	OrderID    pgtype.UUID `json:"order_id"`
@@ -770,15 +1061,23 @@ type EmailOutbox struct {
 }
 
 type InvoiceRevision struct {
-	ID         string    `json:"id"`
-	OrderID    string    `json:"order_id"`
-	VersiLama  int32     `json:"versi_lama"`
-	VersiBaru  int32     `json:"versi_baru"`
-	Alasan     string    `json:"alasan"`
-	Snapshot   []byte    `json:"snapshot"`
-	DeltaTotal int64     `json:"delta_total"`
-	AdminID    string    `json:"admin_id"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID                            string                        `json:"id"`
+	OrderID                       string                        `json:"order_id"`
+	VersiLama                     int32                         `json:"versi_lama"`
+	VersiBaru                     int32                         `json:"versi_baru"`
+	Alasan                        string                        `json:"alasan"`
+	Snapshot                      []byte                        `json:"snapshot"`
+	DeltaTotal                    int64                         `json:"delta_total"`
+	AdminID                       string                        `json:"admin_id"`
+	CreatedAt                     time.Time                     `json:"created_at"`
+	PreviousDoneVerificationLogID pgtype.UUID                   `json:"previous_done_verification_log_id"`
+	PreviousDoneOrderVersion      pgtype.Int4                   `json:"previous_done_order_version"`
+	PreviousDoneTotal             pgtype.Int8                   `json:"previous_done_total"`
+	PreviousDoneDepositAmount     pgtype.Int8                   `json:"previous_done_deposit_amount"`
+	PreviousDoneTransferAmount    pgtype.Int8                   `json:"previous_done_transfer_amount"`
+	PreviousDoneAt                *time.Time                    `json:"previous_done_at"`
+	PaymentTransition             NullRevisionPaymentTransition `json:"payment_transition"`
+	SettlementContractVersion     int16                         `json:"settlement_contract_version"`
 }
 
 type MasterImportApplyChange struct {
@@ -862,26 +1161,31 @@ type NumberingCounter struct {
 }
 
 type Order struct {
-	ID                    string           `json:"id"`
-	BranchID              string           `json:"branch_id"`
-	Nomor                 pgtype.Text      `json:"nomor"`
-	Versi                 int32            `json:"versi"`
-	Status                OrderStatus      `json:"status"`
-	VerifStatus           VerifStatus      `json:"verif_status"`
-	AlasanReview          NullReviewReason `json:"alasan_review"`
-	IsCnc                 bool             `json:"is_cnc"`
-	IsSertifikat          bool             `json:"is_sertifikat"`
-	Tanggal               *time.Time       `json:"tanggal"`
-	JatuhTempo            *time.Time       `json:"jatuh_tempo"`
-	Catatan               pgtype.Text      `json:"catatan"`
-	NoteAdmin             pgtype.Text      `json:"note_admin"`
-	Total                 int64            `json:"total"`
-	SubmittedAt           *time.Time       `json:"submitted_at"`
-	DoneAt                *time.Time       `json:"done_at"`
-	CreatedBy             pgtype.UUID      `json:"created_by"`
-	CreatedAt             time.Time        `json:"created_at"`
-	UpdatedAt             time.Time        `json:"updated_at"`
-	DoneVerificationLogID pgtype.UUID      `json:"done_verification_log_id"`
+	ID                       string                   `json:"id"`
+	BranchID                 string                   `json:"branch_id"`
+	Nomor                    pgtype.Text              `json:"nomor"`
+	Versi                    int32                    `json:"versi"`
+	Status                   OrderStatus              `json:"status"`
+	VerifStatus              VerifStatus              `json:"verif_status"`
+	AlasanReview             NullReviewReason         `json:"alasan_review"`
+	IsCnc                    bool                     `json:"is_cnc"`
+	IsSertifikat             bool                     `json:"is_sertifikat"`
+	Tanggal                  *time.Time               `json:"tanggal"`
+	JatuhTempo               *time.Time               `json:"jatuh_tempo"`
+	Catatan                  pgtype.Text              `json:"catatan"`
+	NoteAdmin                pgtype.Text              `json:"note_admin"`
+	Total                    int64                    `json:"total"`
+	SubmittedAt              *time.Time               `json:"submitted_at"`
+	DoneAt                   *time.Time               `json:"done_at"`
+	CreatedBy                pgtype.UUID              `json:"created_by"`
+	CreatedAt                time.Time                `json:"created_at"`
+	UpdatedAt                time.Time                `json:"updated_at"`
+	DoneVerificationLogID    pgtype.UUID              `json:"done_verification_log_id"`
+	RevisionPaymentState     NullRevisionPaymentState `json:"revision_payment_state"`
+	RevisionPaymentStartedAt *time.Time               `json:"revision_payment_started_at"`
+	DoneOrderVersion         pgtype.Int4              `json:"done_order_version"`
+	DoneDepositAmount        pgtype.Int8              `json:"done_deposit_amount"`
+	DoneTransferAmount       pgtype.Int8              `json:"done_transfer_amount"`
 }
 
 type OrderEvent struct {
@@ -922,24 +1226,35 @@ type PasswordResetToken struct {
 }
 
 type PaymentProof struct {
-	ID             string         `json:"id"`
-	OrderID        string         `json:"order_id"`
-	StorageKey     string         `json:"storage_key"`
-	NamaFile       string         `json:"nama_file"`
-	MimeType       string         `json:"mime_type"`
-	UkuranByte     int64          `json:"ukuran_byte"`
-	Sha256         []byte         `json:"sha256"`
-	UploadedByKind ActorKind      `json:"uploaded_by_kind"`
-	UploadedByID   pgtype.UUID    `json:"uploaded_by_id"`
-	UploadedByNama pgtype.Text    `json:"uploaded_by_nama"`
-	OcrNominal     pgtype.Int8    `json:"ocr_nominal"`
-	OcrTanggal     *time.Time     `json:"ocr_tanggal"`
-	OcrBank        pgtype.Text    `json:"ocr_bank"`
-	OcrRekAkhir    pgtype.Text    `json:"ocr_rek_akhir"`
-	OcrConfidence  pgtype.Numeric `json:"ocr_confidence"`
-	OcrRaw         []byte         `json:"ocr_raw"`
-	OcrAt          *time.Time     `json:"ocr_at"`
-	CreatedAt      time.Time      `json:"created_at"`
+	ID             string              `json:"id"`
+	OrderID        pgtype.UUID         `json:"order_id"`
+	StorageKey     string              `json:"storage_key"`
+	NamaFile       string              `json:"nama_file"`
+	MimeType       string              `json:"mime_type"`
+	UkuranByte     int64               `json:"ukuran_byte"`
+	Sha256         []byte              `json:"sha256"`
+	UploadedByKind ActorKind           `json:"uploaded_by_kind"`
+	UploadedByID   pgtype.UUID         `json:"uploaded_by_id"`
+	UploadedByNama pgtype.Text         `json:"uploaded_by_nama"`
+	OcrNominal     pgtype.Int8         `json:"ocr_nominal"`
+	OcrTanggal     *time.Time          `json:"ocr_tanggal"`
+	OcrBank        pgtype.Text         `json:"ocr_bank"`
+	OcrRekAkhir    pgtype.Text         `json:"ocr_rek_akhir"`
+	OcrConfidence  pgtype.Numeric      `json:"ocr_confidence"`
+	OcrRaw         []byte              `json:"ocr_raw"`
+	OcrAt          *time.Time          `json:"ocr_at"`
+	CreatedAt      time.Time           `json:"created_at"`
+	Purpose        PaymentProofPurpose `json:"purpose"`
+	BranchID       pgtype.UUID         `json:"branch_id"`
+}
+
+type PaymentProofEconomicDecision struct {
+	PaymentProofID  string    `json:"payment_proof_id"`
+	OrderID         string    `json:"order_id"`
+	BranchID        string    `json:"branch_id"`
+	ApprovedNominal int64     `json:"approved_nominal"`
+	DecidedBy       string    `json:"decided_by"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type Product struct {
@@ -1030,6 +1345,18 @@ type TutorialTopic struct {
 	UpdatedAt time.Time   `json:"updated_at"`
 }
 
+type VerificationDepositSource struct {
+	VerificationLogID      string    `json:"verification_log_id"`
+	OrderID                string    `json:"order_id"`
+	SettlementOrderVersion int32     `json:"settlement_order_version"`
+	SettlementTotal        int64     `json:"settlement_total"`
+	AllocationID           string    `json:"allocation_id"`
+	BranchID               string    `json:"branch_id"`
+	AllocationOrderVersion int32     `json:"allocation_order_version"`
+	AmountSnapshot         int64     `json:"amount_snapshot"`
+	CreatedAt              time.Time `json:"created_at"`
+}
+
 type VerificationLog struct {
 	ID                     string           `json:"id"`
 	OrderID                string           `json:"order_id"`
@@ -1045,4 +1372,24 @@ type VerificationLog struct {
 	BranchAllowlistVersion pgtype.Int8      `json:"branch_allowlist_version"`
 	ProofSetFingerprint    []byte           `json:"proof_set_fingerprint"`
 	DestinationResults     []byte           `json:"destination_results"`
+	OrderVersion           pgtype.Int4      `json:"order_version"`
+	DepositAmount          pgtype.Int8      `json:"deposit_amount"`
+	TransferAmount         pgtype.Int8      `json:"transfer_amount"`
+}
+
+type VerificationProofSplit struct {
+	VerificationLogID        string      `json:"verification_log_id"`
+	OrderID                  string      `json:"order_id"`
+	OrderVersion             int32       `json:"order_version"`
+	SettlementTotal          int64       `json:"settlement_total"`
+	SettlementDepositAmount  int64       `json:"settlement_deposit_amount"`
+	SettlementTransferAmount int64       `json:"settlement_transfer_amount"`
+	PaymentProofID           string      `json:"payment_proof_id"`
+	BranchID                 string      `json:"branch_id"`
+	ApprovedNominal          int64       `json:"approved_nominal"`
+	AppliedToOrder           int64       `json:"applied_to_order"`
+	CreditedToDepositTotal   int64       `json:"credited_to_deposit_total"`
+	NewCreditToDeposit       int64       `json:"new_credit_to_deposit"`
+	NewCreditTransactionID   pgtype.UUID `json:"new_credit_transaction_id"`
+	CreatedAt                time.Time   `json:"created_at"`
 }

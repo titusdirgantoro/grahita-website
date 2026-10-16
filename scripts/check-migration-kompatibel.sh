@@ -45,9 +45,19 @@ for berkas in $(ls "$migrasi"/*.sql | sort); do
     # Potong bagian Down (rollback) — di sana DROP memang disengaja.
     up=$(sed -n '1,/^--[[:space:]]*+goose[[:space:]]\+Down/p' "$berkas")
 
-    if printf '%s' "$up" | grep -qEi "$pola_drop"; then
-        lapor "$nama" "$(printf '%s' "$up" | grep -nEi "$pola_drop" | head -1 | cut -d: -f1)" \
-            "pernyataan DROP di bagian Up: $(printf '%s' "$up" | grep -Ei "$pola_drop" | head -1 | sed 's/^[[:space:]]*//')"
+    pola_drop_berkas="$pola_drop"
+    if printf '%s' "$up" | grep -qF 'migration-check: allow-constraint-replacement'; then
+        # Pengecualian sempit untuk migrasi yang membuktikan signature CHECK lama
+        # lalu menggantinya atomik. DROP table/column/type/index tetap ditolak.
+        if ! printf '%s' "$up" | grep -qF 'pg_get_expr(conbin' ||
+           ! printf '%s' "$up" | grep -qF '__c1_expected_'; then
+            lapor "$nama" "?" "marker replacement constraint tanpa pembanding parse-tree C1"
+        fi
+        pola_drop_berkas='(^|[^a-z_])drop[[:space:]]+(table|column|type|index)'
+    fi
+    if printf '%s' "$up" | grep -qEi "$pola_drop_berkas"; then
+        lapor "$nama" "$(printf '%s' "$up" | grep -nEi "$pola_drop_berkas" | head -1 | cut -d: -f1)" \
+            "pernyataan DROP di bagian Up: $(printf '%s' "$up" | grep -Ei "$pola_drop_berkas" | head -1 | sed 's/^[[:space:]]*//')"
     fi
 
     if printf '%s' "$up" | grep -qEi "$pola_rename"; then
