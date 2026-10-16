@@ -106,7 +106,7 @@ Ringkasan untuk cabang: jumlah pesanan periode berjalan, pesanan menunggu verifi
 |---|---|---|
 | CP-KAT-01 | Menampilkan hanya produk **aktif** yang punya harga untuk cabang tersebut. | Must |
 | CP-KAT-02 | Harga yang tampil = harga khusus cabang. Produk tanpa harga cabang **tidak ditampilkan** dan tidak bisa dipesan. | Must |
-| CP-KAT-03 | Tiap produk menampilkan nama, satuan, harga, deskripsi singkat. | Must |
+| CP-KAT-03 | Tiap produk menampilkan nama, harga, deskripsi singkat. Produk tidak memiliki field satuan; `qty` tetap menyatakan jumlah item. | Must |
 | CP-KAT-04 | Produk Sertifikat ditandai khusus beserta catatan biaya packaging. | Must |
 
 ### 3.5 Pesanan
@@ -211,7 +211,7 @@ Field: Nama Cabang, Nama Kepala Cabang, Email Cabang, Telepon, **Cash & Carry** 
 
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
-| AP-KAT-01 | CRUD produk: nama, jenis (reguler / sertifikat), satuan, harga default, urutan tampil, aktif. | Must |
+| AP-KAT-01 | CRUD produk: nama, jenis (reguler / sertifikat), harga default, urutan tampil, aktif. Produk tidak memiliki field satuan. | Must |
 | AP-KAT-02 | Tab **Matriks harga**: grid Produk × Cabang, edit harga inline, pencarian cabang. | Must |
 | AP-KAT-03 | Sel kosong = produk tidak dijual ke cabang itu (tidak tampil di portal cabang). | Must |
 | AP-KAT-04 | Aksi "salin harga" dari satu cabang ke cabang lain / ke semua cabang. | Should |

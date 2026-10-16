@@ -56,12 +56,12 @@ func cfgUji() *fakeConfig {
 func katalogUji() fakeCatalog {
 	return fakeCatalog{perBranch: map[string][]catalog.BranchProduct{
 		"br-a": {
-			{ID: "p1", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Satuan: "pcs", Harga: 100000, Urutan: 1},
-			{ID: "p3", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, Satuan: "pcs", Harga: 0, Urutan: 2},
-			{ID: "p4", Nama: "Kertas HVS", Jenis: catalog.JenisReguler, Satuan: "rim", Harga: 5000, Urutan: 3},
+			{ID: "p1", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Harga: 100000, Urutan: 1},
+			{ID: "p3", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, Harga: 0, Urutan: 2},
+			{ID: "p4", Nama: "Kertas HVS", Jenis: catalog.JenisReguler, Harga: 5000, Urutan: 3},
 		},
 		"br-b": {
-			{ID: "p1", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Satuan: "pcs", Harga: 200000, Urutan: 1},
+			{ID: "p1", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Harga: 200000, Urutan: 1},
 		},
 	}}
 }
@@ -215,7 +215,7 @@ func TestPesananSubmittedTidakBisaDiubahAtauDihapus(t *testing.T) {
 
 	kirim := repo.Put(Order{
 		BranchID: "br-a", Status: StatusSubmitted, Nomor: "2026-10-01", Tanggal: "2026-10-08",
-		Total: 100000, Lines: []Line{{LineNo: 1, Jenis: JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Satuan: "pcs", Qty: 1, HargaSatuan: 100000}},
+		Total: 100000, Lines: []Line{{LineNo: 1, Jenis: JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Qty: 1, HargaSatuan: 100000}},
 	})
 	selesai := repo.Put(Order{BranchID: "br-a", Status: StatusDone, Nomor: "2026-10-02", Tanggal: "2026-10-08"})
 

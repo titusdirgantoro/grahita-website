@@ -94,8 +94,8 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- name: InsertOrderLineProduct :exec
 -- subtotal TIDAK diisi: kolomnya GENERATED ALWAYS (qty * harga_satuan).
 -- harga_satuan sudah diambil server dari branch_prices cabang sesi.
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
+VALUES ($1, $2, 'product', $3, $4, $5, $6);
 
 -- name: InsertOrderLinePackaging :exec
 -- Baris biaya packaging pesanan sertifikat (PRD CP-SER-02): tanpa product_id,
@@ -103,11 +103,11 @@ VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
 -- Harga packaging adalah snapshot `biaya_packaging` yang dibaca server dari
 -- domain pengaturan — tidak pernah datang dari klien. Indeks unik parsial
 -- order_lines_satu_packaging menjaga agar baris ini tetap tunggal per pesanan.
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-VALUES ($1, $2, 'packaging', NULL, $3, $4, 1, $5);
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
+VALUES ($1, $2, 'packaging', NULL, $3, 1, $4);
 
 -- name: ListOrderLines :many
-SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, satuan_snapshot,
+SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot,
        qty, harga_satuan, subtotal, serial_number
   FROM order_lines
  WHERE order_id = $1
@@ -140,17 +140,17 @@ SELECT o.status::text AS status
 -- Baris draft beserta keadaan master DAN harga cabang saat submit: produk
 -- aktif, harga dari branch_prices cabang sesi (bukan harga_default, bukan
 -- angka klien). Dipakai memvalidasi ulang dan menyegarkan snapshot
--- nama/satuan/harga (BR-05) DI DALAM transaksi submit, sehingga perubahan
+-- nama/harga (BR-05) DI DALAM transaksi submit, sehingga perubahan
 -- master sesudah draft disimpan ikut terpakai.
 SELECT l.line_no,
        l.jenis::text          AS jenis,
        l.nama_snapshot,
-       l.satuan_snapshot,
+
        l.qty,
        (p.id IS NOT NULL)::bool     AS produk_ada,
        COALESCE(p.is_active, false) AS produk_aktif,
        COALESCE(p.nama, '')         AS produk_nama,
-       COALESCE(p.satuan, '')       AS produk_satuan,
+
        COALESCE(p.jenis::text, '')::text AS produk_jenis,
        COALESCE(bp.harga, 0)::bigint AS harga_cabang,
        (bp.product_id IS NOT NULL)::bool AS ada_harga_cabang
@@ -167,9 +167,8 @@ SELECT l.line_no,
 -- kolomnya GENERATED ALWAYS (qty * harga_satuan), dan trigger
 -- order_lines_recalc menyinkronkan orders.total.
 UPDATE order_lines
-   SET nama_snapshot   = sqlc.arg(nama_snapshot),
-       satuan_snapshot = sqlc.arg(satuan_snapshot),
-       harga_satuan    = sqlc.arg(harga_satuan)
+   SET nama_snapshot = sqlc.arg(nama_snapshot),
+       harga_satuan  = sqlc.arg(harga_satuan)
  WHERE order_id = sqlc.arg(order_id)::uuid
    AND line_no = sqlc.arg(line_no)::int;
 

@@ -24,7 +24,7 @@
 //     semuanya lahir saat submit (F1-14).
 //
 // Submit (kartu F1-14) ada di submit.go: satu transaksi Draft -> Submitted
-// yang mengunci baris pesanan, menyegarkan snapshot harga/nama/satuan dari
+// yang mengunci baris pesanan, menyegarkan snapshot harga/nama dari
 // master (BR-05), memastikan bukti transfer non-C&C, menerbitkan nomor invoice
 // dan serial number dari tabel counter (BR-02/BR-03/BR-09), menetapkan tanggal
 // bisnis WIB + tenggat C&C, dan mencatat timeline.
@@ -107,12 +107,8 @@ const (
 	JenisPackaging = "packaging"
 )
 
-// Baris biaya packaging pesanan Sertifikat (PRD CP-SER-02). Nama dan satuannya
-// adalah snapshot: begitu tersimpan, teksnya tidak berubah lagi.
-const (
-	NamaBiayaPackaging   = "Biaya packaging"
-	SatuanBiayaPackaging = "paket"
-)
+// Nama baris biaya packaging pesanan Sertifikat (PRD CP-SER-02).
+const NamaBiayaPackaging = "Biaya packaging"
 
 // Batas satu permintaan editor supaya transaksinya tetap pendek dan
 // perkalian qty × harga tidak meluap.
@@ -134,11 +130,11 @@ const TanggalLayout = "2006-01-02"
 // Jenis "packaging" dipakai untuk baris biaya packaging pesanan Sertifikat:
 // qty 1, tanpa product_id, dan tanpa serial number (PRD CP-SER-02).
 type Line struct {
-	LineNo       int    `json:"line_no"`
-	Jenis        string `json:"jenis"`
-	ProductID    string `json:"product_id,omitempty"`
-	Nama         string `json:"nama"`
-	Satuan       string `json:"satuan"`
+	LineNo    int    `json:"line_no"`
+	Jenis     string `json:"jenis"`
+	ProductID string `json:"product_id,omitempty"`
+	Nama      string `json:"nama"`
+
 	Qty          int    `json:"qty"`
 	HargaSatuan  int64  `json:"harga_satuan"`
 	Subtotal     int64  `json:"subtotal"`
@@ -240,6 +236,7 @@ type Service struct {
 	cat   Catalog
 	cfg   Config
 	flags BranchFlags
+	banks PaymentAccountSource
 	clk   clock.Clock
 	// ai membaca setelan AI (PRD §4.9). Boleh nil: tanpa sumber setelan,
 	// submit tidak pernah menitipkan pekerjaan pembacaan bukti (F2-26).
@@ -434,11 +431,11 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 		}
 		dipakai[pid] = true
 		lines = append(lines, Line{
-			LineNo:      i + 1,
-			Jenis:       JenisProduct,
-			ProductID:   pid,
-			Nama:        p.Nama,
-			Satuan:      p.Satuan,
+			LineNo:    i + 1,
+			Jenis:     JenisProduct,
+			ProductID: pid,
+			Nama:      p.Nama,
+
 			Qty:         baris.Qty,
 			HargaSatuan: harga,
 			Subtotal:    int64(baris.Qty) * harga,
@@ -473,10 +470,10 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 // setelan server saat baris itu dibuat.
 func packagingLine(lineNo int, biaya int64) Line {
 	return Line{
-		LineNo:      lineNo,
-		Jenis:       JenisPackaging,
-		Nama:        NamaBiayaPackaging,
-		Satuan:      SatuanBiayaPackaging,
+		LineNo: lineNo,
+		Jenis:  JenisPackaging,
+		Nama:   NamaBiayaPackaging,
+
 		Qty:         1,
 		HargaSatuan: biaya,
 		Subtotal:    biaya,

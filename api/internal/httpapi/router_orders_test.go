@@ -52,9 +52,9 @@ func newOrdersServer(t *testing.T) *ordersServer {
 	})
 
 	catRepo := catalog.NewMemory()
-	catRepo.PutProduct(catalog.Product{ID: "p1", Kode: "P-01", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Satuan: "pcs", HargaDefault: 350000, Urutan: 1, IsActive: true})
-	catRepo.PutProduct(catalog.Product{ID: "p2", Kode: "P-02", Nama: "Tanpa Harga Cabang", Jenis: catalog.JenisReguler, Satuan: "pcs", HargaDefault: 999000, Urutan: 2, IsActive: true})
-	catRepo.PutProduct(catalog.Product{ID: "p3", Kode: "P-03", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, Satuan: "pcs", HargaDefault: 0, Urutan: 3, IsActive: true})
+	catRepo.PutProduct(catalog.Product{ID: "p1", Kode: "P-01", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, HargaDefault: 350000, Urutan: 1, IsActive: true})
+	catRepo.PutProduct(catalog.Product{ID: "p2", Kode: "P-02", Nama: "Tanpa Harga Cabang", Jenis: catalog.JenisReguler, HargaDefault: 999000, Urutan: 2, IsActive: true})
+	catRepo.PutProduct(catalog.Product{ID: "p3", Kode: "P-03", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, HargaDefault: 0, Urutan: 3, IsActive: true})
 	// Harga berbeda per cabang; p2 sengaja tanpa baris harga di cabang mana pun.
 	catRepo.PutPrice("br-a", "p1", 100000)
 	catRepo.PutPrice("br-b", "p1", 200000)
@@ -65,11 +65,11 @@ func newOrdersServer(t *testing.T) *ordersServer {
 	ordRepo.Put(order.Order{
 		ID: orderSubmittedID, BranchID: "br-a", Status: order.StatusSubmitted,
 		Nomor: "2026-10-01", Tanggal: "2026-10-08", VerifStatus: "belum",
-		Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Satuan: "pcs", Qty: 2, HargaSatuan: 100000}},
+		Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Qty: 2, HargaSatuan: 100000}},
 	})
 	ordRepo.Put(order.Order{
 		ID: orderCabangBID, BranchID: "br-b", Status: order.StatusDraft,
-		Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Satuan: "pcs", Qty: 1, HargaSatuan: 200000}},
+		Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Qty: 1, HargaSatuan: 200000}},
 	})
 
 	svc := auth.NewService(store, store, store, clock.System(), 8*time.Hour, 30*24*time.Hour)

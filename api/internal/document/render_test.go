@@ -121,7 +121,7 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	o := fixtureOrder("o1")
 	// Tambah baris packaging supaya kolom serial kosong ikut teruji.
 	o.Lines = append(o.Lines, Line{LineNo: 3, Jenis: "packaging", Nama: "Biaya packaging",
-		Satuan: "paket", Qty: 1, HargaSatuan: 3000, Subtotal: 3000})
+		Qty: 1, HargaSatuan: 3000, Subtotal: 3000})
 
 	b, err := suratJalanXLSX(o)
 	if err != nil {
@@ -152,8 +152,8 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	if v, _ := f.GetCellValue(sheet, "B3"); v != "2026-10-0001" {
 		t.Errorf("B3 nomor = %q", v)
 	}
-	if v, _ := f.GetCellValue(sheet, "E3"); v != "08 Oktober 2026" {
-		t.Errorf("E3 tanggal = %q", v)
+	if v, _ := f.GetCellValue(sheet, "D3"); v != "08 Oktober 2026" {
+		t.Errorf("D3 tanggal = %q", v)
 	}
 	if v, _ := f.GetCellValue(sheet, "B4"); v != "Grahita Bandung" {
 		t.Errorf("B4 cabang = %q", v)
@@ -166,9 +166,8 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	}{
 		{"A8", "No"},
 		{"B8", "Nama Barang"},
-		{"C8", "Satuan"},
-		{"D8", "Qty"},
-		{"E8", "Serial Number"},
+		{"C8", "Qty"},
+		{"D8", "Serial Number"},
 	}
 	for _, h := range header {
 		if v, _ := f.GetCellValue(sheet, h.sel); v != h.mau {
@@ -178,13 +177,13 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 
 	// Satu baris per order line, urut line_no.
 	mauBaris := [][]string{
-		{"1", "Bio Magnetik", "pcs", "2", "20261008001"},
-		{"2", "Bio Listrik", "pcs", "1", "20261008002"},
-		{"3", "Biaya packaging", "paket", "1", "-"},
+		{"1", "Bio Magnetik", "2", "20261008001"},
+		{"2", "Bio Listrik", "1", "20261008002"},
+		{"3", "Biaya packaging", "1", "-"},
 	}
 	for i, mau := range mauBaris {
 		row := rowAwal + i
-		for j, kolom := range []string{"A", "B", "C", "D", "E"} {
+		for j, kolom := range []string{"A", "B", "C", "D"} {
 			sel := kolom + itoa(row)
 			v, err := f.GetCellValue(sheet, sel)
 			if err != nil {
@@ -225,7 +224,7 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	// Area cetak berhenti di baris data TERAKHIR — bukan satu baris setelahnya,
 	// supaya tidak ada baris kosong yang ikut tercetak.
 	mauName := map[string]string{
-		"_xlnm.Print_Area":   fmt.Sprintf("'%s'!$A$1:$E$%d", sheet, rowAwal+len(mauBaris)-1),
+		"_xlnm.Print_Area":   fmt.Sprintf("'%s'!$A$1:$D$%d", sheet, rowAwal+len(mauBaris)-1),
 		"_xlnm.Print_Titles": fmt.Sprintf("'%s'!$%d:$%d", sheet, rowHeader, rowHeader),
 	}
 	for _, dn := range f.GetDefinedName() {

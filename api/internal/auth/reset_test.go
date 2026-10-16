@@ -39,6 +39,37 @@ func (f *fakeMailer) Send(_ context.Context, m mailer.Message) error { f.msg = m
 
 func (f *fakeMailer) Health(context.Context) error { return nil }
 
+type resetDitolakSetelahLookup struct{ ResetStore }
+
+func (resetDitolakSetelahLookup) CreateResetToken(context.Context, ResetToken, []byte) error {
+	return ErrInactiveAccount
+}
+
+type gantiEmailSebelumReset struct {
+	ResetStore
+	store   *Memory
+	current Credentials
+}
+
+func (g gantiEmailSebelumReset) CreateResetToken(ctx context.Context, token ResetToken, hash []byte) error {
+	g.store.PutBranch(g.current)
+	return g.ResetStore.CreateResetToken(ctx, token, hash)
+}
+
+type konsumsiLamaSebelumResetAtomik struct {
+	ResetStore
+	store   *Memory
+	current Credentials
+}
+
+func (g konsumsiLamaSebelumResetAtomik) ResetPassword(ctx context.Context, tokenHash []byte, now time.Time, next string) error {
+	if _, err := g.ConsumeResetToken(ctx, tokenHash, now); err != nil {
+		return err
+	}
+	g.store.PutBranch(g.current)
+	return g.ResetStore.ResetPassword(ctx, tokenHash, now, next)
+}
+
 var waktuUji = time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC)
 
 func newResetFixture(t *testing.T) (*Memory, *Service, *fakeResetMailer, setterClock) {
@@ -106,6 +137,84 @@ func TestLupaKataSandiNonEnumeratif(t *testing.T) {
 	}
 	if len(mailNonaktif.sent) != 0 || nonaktif.ResetTokenCount() != 0 {
 		t.Error("akun nonaktif tidak boleh menerima tautan atur ulang")
+	}
+}
+
+func TestLupaKataSandiTetapNonEnumeratifSaatKelayakanDicabutSetelahLookup(t *testing.T) {
+	store, _, mail, clk := newResetFixture(t)
+	svc := NewService(store, store, resetDitolakSetelahLookup{ResetStore: store}, clk, time.Hour, time.Hour)
+	svc.SetResetMailer(mail)
+
+	if err := svc.ForgotPassword(context.Background(), "bandung@example.test", time.Hour, RequestMeta{}); err != nil {
+		t.Fatalf("revokasi setelah lookup tidak boleh membocorkan status akun: %v", err)
+	}
+	if len(mail.sent) != 0 {
+		t.Fatalf("token yang ditolak repository tidak boleh dikirim, dapat %d email", len(mail.sent))
+	}
+	if err := svc.SendPasswordResetFor(context.Background(), KindBranch, "u-1", time.Hour, nil); !errors.Is(err, ErrInactiveAccount) {
+		t.Fatalf("jalur admin harus menerima kegagalan fail-closed, dapat %v", err)
+	}
+}
+
+func TestResetMenolakEmailYangBerubahSetelahLookup(t *testing.T) {
+	store, _, mail, clk := newResetFixture(t)
+	creds, err := store.BranchByID(context.Background(), "u-1")
+	if err != nil {
+		t.Fatalf("baca fixture: %v", err)
+	}
+	creds.Email = "alamat-baru@example.test"
+	resets := gantiEmailSebelumReset{ResetStore: store, store: store, current: creds}
+	svc := NewService(store, store, resets, clk, time.Hour, time.Hour)
+	svc.SetResetMailer(mail)
+
+	if err := svc.ForgotPassword(context.Background(), "bandung@example.test", time.Hour, RequestMeta{}); err != nil {
+		t.Fatalf("jalur publik harus tetap non-enumeratif, dapat %v", err)
+	}
+	if len(mail.sent) != 0 || store.ResetTokenCount() != 0 {
+		t.Fatal("request publik dengan snapshot email usang tidak boleh menerbitkan atau mengirim token")
+	}
+
+	store.PutBranch(Credentials{
+		UserID: "u-1", Kind: KindBranch, Role: RoleBranch, BranchID: "br-1",
+		Nama: "Grahita Bandung", Email: "bandung@example.test", PasswordHash: creds.PasswordHash, Active: true,
+	})
+	if err := svc.SendPasswordResetFor(context.Background(), KindBranch, "u-1", time.Hour, nil); !errors.Is(err, ErrInactiveAccount) {
+		t.Fatalf("jalur admin dengan snapshot email usang harus fail-closed, dapat %v", err)
+	}
+	if len(mail.sent) != 0 || store.ResetTokenCount() != 0 {
+		t.Fatal("request admin dengan snapshot email usang tidak boleh menerbitkan atau mengirim token")
+	}
+}
+
+func TestResetMenolakGenerasiKredensialLamaWalauEmailTetap(t *testing.T) {
+	store, _, mail, clk := newResetFixture(t)
+	creds, err := store.BranchByID(context.Background(), "u-1")
+	if err != nil {
+		t.Fatalf("baca fixture: %v", err)
+	}
+	credsLama := creds
+	hashBaru, err := HashPassword("credentialbaru123")
+	if err != nil {
+		t.Fatalf("hash credential baru: %v", err)
+	}
+	creds.PasswordHash = hashBaru
+	resets := gantiEmailSebelumReset{ResetStore: store, store: store, current: creds}
+	svc := NewService(store, store, resets, clk, time.Hour, time.Hour)
+	svc.SetResetMailer(mail)
+
+	if err := svc.ForgotPassword(context.Background(), "bandung@example.test", time.Hour, RequestMeta{}); err != nil {
+		t.Fatalf("jalur publik harus tetap non-enumeratif, dapat %v", err)
+	}
+	if len(mail.sent) != 0 || store.ResetTokenCount() != 0 {
+		t.Fatal("request publik dari generasi credential lama tidak boleh menerbitkan atau mengirim token")
+	}
+
+	store.PutBranch(credsLama)
+	if err := svc.SendPasswordResetFor(context.Background(), KindBranch, "u-1", time.Hour, nil); !errors.Is(err, ErrInactiveAccount) {
+		t.Fatalf("jalur admin dari generasi credential lama harus fail-closed, dapat %v", err)
+	}
+	if len(mail.sent) != 0 || store.ResetTokenCount() != 0 {
+		t.Fatal("request admin dari generasi credential lama tidak boleh menerbitkan atau mengirim token")
 	}
 }
 
@@ -329,5 +438,30 @@ func TestOwnershipBranchDariSesi(t *testing.T) {
 	}
 	if Anonymous().OwnsBranch("br-a") {
 		t.Error("anonim tidak boleh memiliki cabang")
+	}
+}
+
+func TestAturUlangTidakMenimpaCredentialPemulihanSetelahTokenLamaDikonsumsi(t *testing.T) {
+	store, svcIssue, mail, clk := newResetFixture(t)
+	if err := svcIssue.ForgotPassword(context.Background(), "bandung@example.test", time.Hour, RequestMeta{}); err != nil {
+		t.Fatalf("terbitkan tautan fixture: %v", err)
+	}
+	creds, err := store.BranchByID(context.Background(), "u-1")
+	if err != nil {
+		t.Fatalf("baca fixture: %v", err)
+	}
+	hashPemulihan, _ := HashPassword("credentialbaru123")
+	creds.PasswordHash = hashPemulihan
+	resets := konsumsiLamaSebelumResetAtomik{ResetStore: store, store: store, current: creds}
+	svc := NewService(store, store, resets, clk, time.Hour, time.Hour)
+	if err := svc.ResetPassword(context.Background(), mail.sent[0].Token, "pilihanlama123", RequestMeta{}); !errors.Is(err, ErrResetInvalid) {
+		t.Fatalf("token yang dikonsumsi di luar boundary atomik harus ditolak, dapat %v", err)
+	}
+	akhir, err := store.BranchByID(context.Background(), "u-1")
+	if err != nil {
+		t.Fatalf("baca credential akhir: %v", err)
+	}
+	if !VerifyPassword(akhir.PasswordHash, "credentialbaru123") || VerifyPassword(akhir.PasswordHash, "pilihanlama123") {
+		t.Fatal("request reset lama tidak boleh menimpa credential pemulihan")
 	}
 }

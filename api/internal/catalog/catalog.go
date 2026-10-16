@@ -67,7 +67,6 @@ type Product struct {
 	Kode         string `json:"kode,omitempty"`
 	Nama         string `json:"nama"`
 	Jenis        string `json:"jenis"`
-	Satuan       string `json:"satuan"`
 	Deskripsi    string `json:"deskripsi,omitempty"`
 	HargaDefault int64  `json:"harga_default"`
 	Urutan       int    `json:"urutan"`
@@ -81,7 +80,6 @@ type BranchProduct struct {
 	ID        string `json:"id"`
 	Nama      string `json:"nama"`
 	Jenis     string `json:"jenis"`
-	Satuan    string `json:"satuan"`
 	Deskripsi string `json:"deskripsi,omitempty"`
 	Harga     int64  `json:"harga"`
 	Urutan    int    `json:"urutan"`
@@ -135,7 +133,6 @@ type NewProduct struct {
 	Kode         string
 	Nama         string
 	Jenis        string
-	Satuan       string
 	Deskripsi    string
 	HargaDefault int64
 	Urutan       int
@@ -148,7 +145,6 @@ type ProductPatch struct {
 	Kode         *string
 	Nama         *string
 	Jenis        *string
-	Satuan       *string
 	Deskripsi    *string
 	HargaDefault *int64
 	Urutan       *int
@@ -336,7 +332,6 @@ func (s *Service) CreateProduct(ctx context.Context, actor auth.Actor, in NewPro
 		Kode:         in.Kode,
 		Nama:         in.Nama,
 		Jenis:        in.Jenis,
-		Satuan:       in.Satuan,
 		Deskripsi:    in.Deskripsi,
 		HargaDefault: in.HargaDefault,
 		Urutan:       in.Urutan,
@@ -381,9 +376,7 @@ func (s *Service) UpdateProduct(ctx context.Context, actor auth.Actor, id string
 	if p.Jenis != nil {
 		next.Jenis = strings.ToLower(strings.TrimSpace(*p.Jenis))
 	}
-	if p.Satuan != nil {
-		next.Satuan = strings.TrimSpace(*p.Satuan)
-	}
+
 	if p.Deskripsi != nil {
 		next.Deskripsi = strings.TrimSpace(*p.Deskripsi)
 	}
@@ -658,14 +651,11 @@ func normProduct(p Product) Product {
 	p.Kode = strings.TrimSpace(p.Kode)
 	p.Nama = strings.TrimSpace(p.Nama)
 	p.Jenis = strings.ToLower(strings.TrimSpace(p.Jenis))
-	p.Satuan = strings.TrimSpace(p.Satuan)
 	p.Deskripsi = strings.TrimSpace(p.Deskripsi)
 	if p.Jenis == "" {
 		p.Jenis = JenisReguler
 	}
-	if p.Satuan == "" {
-		p.Satuan = "pcs"
-	}
+
 	return p
 }
 
@@ -678,8 +668,7 @@ func validateProduct(p Product) error {
 		return fmt.Errorf("%w: nama produk maksimal 160 karakter", ErrInvalidData)
 	case !knownJenis(p.Jenis):
 		return fmt.Errorf("%w: jenis produk harus %s atau %s", ErrInvalidData, JenisReguler, JenisSertifikat)
-	case len([]rune(p.Satuan)) < 1 || len([]rune(p.Satuan)) > 40:
-		return fmt.Errorf("%w: satuan wajib 1–40 karakter", ErrInvalidData)
+
 	case len([]rune(p.Kode)) > 40:
 		return fmt.Errorf("%w: kode produk maksimal 40 karakter", ErrInvalidData)
 	case len([]rune(p.Deskripsi)) > 500:

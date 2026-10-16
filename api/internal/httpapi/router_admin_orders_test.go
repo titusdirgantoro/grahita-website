@@ -90,7 +90,7 @@ func newAdminOrdersServer(t *testing.T) *adminOrdersServer {
 	ordRepo.Put(order.Order{
 		ID: orderSubmittedID, BranchID: "br-a", Status: order.StatusSubmitted,
 		Nomor: "2026-10-01", Tanggal: "2026-10-08", VerifStatus: "belum",
-		Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Satuan: "pcs", Qty: 2, HargaSatuan: 100000}},
+		Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Qty: 2, HargaSatuan: 100000}},
 	})
 
 	repo := &adminOrderRepoUji{
@@ -109,7 +109,7 @@ func newAdminOrdersServer(t *testing.T) *adminOrdersServer {
 			Status: "submitted", VerifStatus: "belum", Catatan: "dikirim pagi",
 			NoteAdmin: "hubungi cabang", Total: 200000, JumlahItem: 2,
 			CreatedAt: "2026-10-08T03:00:00Z", UpdatedAt: "2026-10-08T03:00:00Z",
-			Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, Nama: "Bio Magnetik", Satuan: "pcs", Qty: 2, HargaSatuan: 100000, Subtotal: 200000, SerialNumber: "20261008001"}},
+			Lines: []order.Line{{LineNo: 1, Jenis: order.JenisProduct, Nama: "Bio Magnetik", Qty: 2, HargaSatuan: 100000, Subtotal: 200000, SerialNumber: "20261008001"}},
 		},
 	}
 

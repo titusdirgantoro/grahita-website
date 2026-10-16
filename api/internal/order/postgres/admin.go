@@ -213,7 +213,6 @@ func (r *Repo) GetAdmin(ctx context.Context, id string, emailGagalIDs []string) 
 			Jenis:        l.Jenis,
 			ProductID:    pgtypes.UUIDString(l.ProductID),
 			Nama:         l.NamaSnapshot,
-			Satuan:       l.SatuanSnapshot,
 			Qty:          int(l.Qty),
 			HargaSatuan:  l.HargaSatuan,
 			Subtotal:     l.Subtotal.Int64,

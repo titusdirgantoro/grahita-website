@@ -382,8 +382,8 @@ func TestPGSubmitNonCNCTanpaBuktiDitolak(t *testing.T) {
 	}
 }
 
-// TestPGSubmitHargaDanNamaMasterBerubah memverifikasi BR-05: harga, nama, dan
-// satuan yang di-snapshot saat submit adalah nilai master yang berlaku SAAT
+// TestPGSubmitHargaDanNamaMasterBerubah memverifikasi BR-05: harga dan nama
+// yang di-snapshot saat submit adalah nilai master yang berlaku SAAT
 // ITU — bukan angka yang tersimpan di draft.
 func TestPGSubmitHargaDanNamaMasterBerubah(t *testing.T) {
 	f := newPGFixture(t)
@@ -408,7 +408,7 @@ func TestPGSubmitHargaDanNamaMasterBerubah(t *testing.T) {
 		t.Fatalf("ubah harga cabang: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx,
-		`UPDATE products SET nama = 'Bio Magnetik Edisi Baru', satuan = 'box' WHERE id = $1`, produk); err != nil {
+		`UPDATE products SET nama = 'Bio Magnetik Edisi Baru' WHERE id = $1`, produk); err != nil {
 		t.Fatalf("ubah master produk: %v", err)
 	}
 
@@ -422,8 +422,11 @@ func TestPGSubmitHargaDanNamaMasterBerubah(t *testing.T) {
 	if baris["harga_satuan"] != float64(150000) || baris["subtotal"] != float64(300000) {
 		t.Errorf("snapshot harus memakai harga terbaru 150000: %v", baris)
 	}
-	if baris["nama"] != "Bio Magnetik Edisi Baru" || baris["satuan"] != "box" {
-		t.Errorf("snapshot nama/satuan harus dari master terbaru: %v", baris)
+	if baris["nama"] != "Bio Magnetik Edisi Baru" {
+		t.Errorf("snapshot nama harus dari master terbaru: %v", baris)
+	}
+	if _, ada := baris["satuan"]; ada {
+		t.Errorf("snapshot tidak boleh memuat satuan: %v", baris)
 	}
 	if hasil["total"] != float64(300000) {
 		t.Errorf("total harus dihitung ulang 2×150000, dapat %v", hasil["total"])
@@ -525,8 +528,8 @@ func TestPGSubmitPackagingTanpaSerial(t *testing.T) {
 	// Produk Sertifikat baru yang dijual ke cabang A (harga 0, constraint).
 	var sertifikat string
 	err := f.pool.QueryRow(ctx,
-		`INSERT INTO products (kode, nama, jenis, satuan, harga_default, urutan)
-		 VALUES ('P-SER-F114', 'Sertifikat F114', 'sertifikat', 'pcs', 0, 9) RETURNING id`).Scan(&sertifikat)
+		`INSERT INTO products (kode, nama, jenis, harga_default, urutan)
+		 VALUES ('P-SER-F114', 'Sertifikat F114', 'sertifikat', 0, 9) RETURNING id`).Scan(&sertifikat)
 	if err != nil {
 		t.Fatalf("seed produk sertifikat: %v", err)
 	}
@@ -610,8 +613,8 @@ func TestPGSubmit100ParalelNomorDanSerialUnik(t *testing.T) {
 			t.Fatalf("seed draft ke-%d: %v", i, err)
 		}
 		if _, err := f.pool.Exec(ctx,
-			`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-			 VALUES ($1, 1, 'product', $2, 'Bio Magnetik', 'pcs', 1, 100000)`, id, produk); err != nil {
+			`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
+			 VALUES ($1, 1, 'product', $2, 'Bio Magnetik', 1, 100000)`, id, produk); err != nil {
 			t.Fatalf("seed baris ke-%d: %v", i, err)
 		}
 		// Bukti transfer unik per pesanan (submit non-C&C wajib punya bukti).

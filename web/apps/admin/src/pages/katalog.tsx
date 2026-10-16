@@ -29,7 +29,6 @@ export interface Produk {
   kode?: string;
   nama: string;
   jenis: "reguler" | "sertifikat";
-  satuan: string;
   deskripsi?: string;
   harga_default: number;
   urutan: number;
@@ -61,7 +60,6 @@ interface FormProduk {
   kode: string;
   nama: string;
   jenis: "reguler" | "sertifikat";
-  satuan: string;
   harga_default: string;
   urutan: string;
   is_active: boolean;
@@ -71,7 +69,6 @@ const PRODUK_BARU: FormProduk = {
   kode: "",
   nama: "",
   jenis: "reguler",
-  satuan: "pcs",
   harga_default: "0",
   urutan: "0",
   is_active: true,
@@ -179,7 +176,6 @@ export function TabProduk() {
       kode: form.kode.trim(),
       nama: form.nama.trim(),
       jenis: form.jenis,
-      satuan: form.satuan.trim() || "pcs",
       harga_default: angka(form.harga_default) ?? 0,
       urutan: angka(form.urutan) ?? 0,
       is_active: form.is_active,
@@ -279,7 +275,6 @@ export function TabProduk() {
             <tr>
               <th scope="col">Produk</th>
               <th scope="col">Jenis</th>
-              <th scope="col">Satuan</th>
               <th scope="col" className="num">
                 Harga default
               </th>
@@ -303,7 +298,6 @@ export function TabProduk() {
                     <span className="muted">Reguler</span>
                   )}
                 </td>
-                <td>{p.satuan}</td>
                 <td className="num">{p.jenis === "sertifikat" ? "Rp0" : rupiah.format(p.harga_default)}</td>
                 <td>
                   <Badge tone={p.is_active ? "success" : "draft"}>{p.is_active ? "Aktif" : "Nonaktif"}</Badge>
@@ -320,7 +314,6 @@ export function TabProduk() {
                           kode: p.kode ?? "",
                           nama: p.nama,
                           jenis: p.jenis,
-                          satuan: p.satuan,
                           harga_default: String(p.harga_default),
                           urutan: String(p.urutan),
                           is_active: p.is_active,
@@ -388,9 +381,7 @@ export function TabProduk() {
                 <option value="sertifikat">Sertifikat</option>
               </Select>
             </Field>
-            <Field label="Satuan" htmlFor="kat-satuan" error={errorFields.satuan}>
-              <Input id="kat-satuan" value={form.satuan} onChange={(e) => setForm({ ...form, satuan: e.target.value })} />
-            </Field>
+
             <Field
               label="Harga default"
               htmlFor="kat-harga"

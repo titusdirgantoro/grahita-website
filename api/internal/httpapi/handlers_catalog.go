@@ -84,10 +84,10 @@ func (a *API) myBranch(w http.ResponseWriter, r *http.Request) error {
 
 // createProductRequest adalah body POST /api/v1/admin/products.
 type createProductRequest struct {
-	Kode         string `json:"kode" validate:"omitempty,max=40"`
-	Nama         string `json:"nama" validate:"required,min=2,max=160"`
-	Jenis        string `json:"jenis" validate:"omitempty,oneof=reguler sertifikat"`
-	Satuan       string `json:"satuan" validate:"omitempty,min=1,max=40"`
+	Kode  string `json:"kode" validate:"omitempty,max=40"`
+	Nama  string `json:"nama" validate:"required,min=2,max=160"`
+	Jenis string `json:"jenis" validate:"omitempty,oneof=reguler sertifikat"`
+
 	Deskripsi    string `json:"deskripsi" validate:"omitempty,max=500"`
 	HargaDefault *int64 `json:"harga_default" validate:"omitempty,gte=0"`
 	Urutan       *int   `json:"urutan" validate:"omitempty,gte=0"`
@@ -97,10 +97,10 @@ type createProductRequest struct {
 // updateProductRequest adalah body PUT /api/v1/admin/products/{id}. Semua field
 // opsional: yang dikirim saja yang diubah.
 type updateProductRequest struct {
-	Kode         *string `json:"kode" validate:"omitempty,max=40"`
-	Nama         *string `json:"nama" validate:"omitempty,min=2,max=160"`
-	Jenis        *string `json:"jenis" validate:"omitempty,oneof=reguler sertifikat"`
-	Satuan       *string `json:"satuan" validate:"omitempty,min=1,max=40"`
+	Kode  *string `json:"kode" validate:"omitempty,max=40"`
+	Nama  *string `json:"nama" validate:"omitempty,min=2,max=160"`
+	Jenis *string `json:"jenis" validate:"omitempty,oneof=reguler sertifikat"`
+
 	Deskripsi    *string `json:"deskripsi" validate:"omitempty,max=500"`
 	HargaDefault *int64  `json:"harga_default" validate:"omitempty,gte=0"`
 	Urutan       *int    `json:"urutan" validate:"omitempty,gte=0"`
@@ -148,10 +148,10 @@ func (a *API) adminProductCreate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	in := catalog.NewProduct{
-		Kode:      req.Kode,
-		Nama:      req.Nama,
-		Jenis:     req.Jenis,
-		Satuan:    req.Satuan,
+		Kode:  req.Kode,
+		Nama:  req.Nama,
+		Jenis: req.Jenis,
+
 		Deskripsi: req.Deskripsi,
 		IsActive:  req.IsActive,
 	}
@@ -179,10 +179,10 @@ func (a *API) adminProductUpdate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	p, err := a.d.Catalog.UpdateProduct(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"), catalog.ProductPatch{
-		Kode:         req.Kode,
-		Nama:         req.Nama,
-		Jenis:        req.Jenis,
-		Satuan:       req.Satuan,
+		Kode:  req.Kode,
+		Nama:  req.Nama,
+		Jenis: req.Jenis,
+
 		Deskripsi:    req.Deskripsi,
 		HargaDefault: req.HargaDefault,
 		Urutan:       req.Urutan,

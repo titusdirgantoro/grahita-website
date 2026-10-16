@@ -97,7 +97,7 @@ func TestSertifikatMenambahTepatSatuBarisPackaging(t *testing.T) {
 func TestSertifikatHargaSelaluNol(t *testing.T) {
 	repo := NewMemory()
 	cat := fakeCatalog{perBranch: map[string][]catalog.BranchProduct{
-		"br-a": {{ID: "p3", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, Satuan: "pcs", Harga: 7500}},
+		"br-a": {{ID: "p3", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, Harga: 7500}},
 	}}
 	svc := NewService(repo, cat, cfgUji())
 
@@ -200,8 +200,8 @@ func TestBarisPackagingSatuUntukBeberapaProdukSertifikat(t *testing.T) {
 	repo := NewMemory()
 	cat := fakeCatalog{perBranch: map[string][]catalog.BranchProduct{
 		"br-a": {
-			{ID: "p3", Nama: "Sertifikat A", Jenis: catalog.JenisSertifikat, Satuan: "pcs", Harga: 0},
-			{ID: "p5", Nama: "Sertifikat B", Jenis: catalog.JenisSertifikat, Satuan: "pcs", Harga: 0},
+			{ID: "p3", Nama: "Sertifikat A", Jenis: catalog.JenisSertifikat, Harga: 0},
+			{ID: "p5", Nama: "Sertifikat B", Jenis: catalog.JenisSertifikat, Harga: 0},
 		},
 	}}
 	svc := NewService(repo, cat, cfgUji())

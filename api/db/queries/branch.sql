@@ -4,7 +4,9 @@
 -- Dipakai portal cabang untuk /me/branch (data cabang milik sesi). `telepon`
 -- selalu dikembalikan sebagai string (kosong bila belum diisi) supaya bentuk
 -- respons profil cabang stabil untuk UI (PRD §3.8).
-SELECT id, nama, nama_kepala, email::text AS email, COALESCE(telepon, '') AS telepon,
+SELECT id, nama, COALESCE(nama_kepala, '') AS nama_kepala,
+       COALESCE(email::text, ''::text)::text AS email, COALESCE(jabatan_kepala, '') AS jabatan_kepala,
+       identity_status::text AS identity_status, COALESCE(telepon, '') AS telepon,
        is_cnc, is_special, pajak_in, is_active
   FROM branches
  WHERE id = $1;
@@ -20,8 +22,10 @@ SELECT id, nama, nama_kepala, email::text AS email, COALESCE(telepon, '') AS tel
 -- special. q dikirim sudah berbentuk pola '%kata%'.
 SELECT b.id,
        b.nama,
-       b.nama_kepala,
-       b.email::text                 AS email,
+       COALESCE(b.nama_kepala, '')   AS nama_kepala,
+       COALESCE(b.email::text, ''::text)::text   AS email,
+       COALESCE(b.jabatan_kepala, '') AS jabatan_kepala,
+       b.identity_status::text       AS identity_status,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
        b.is_special,
@@ -33,10 +37,11 @@ SELECT b.id,
   LEFT JOIN registration_tokens t
          ON t.branch_id = b.id
         AND t.used_at IS NULL
+       AND t.revoked_at IS NULL
         AND t.expires_at > now()
  WHERE (sqlc.narg(q)::text IS NULL
         OR b.nama ILIKE sqlc.narg(q)::text
-        OR b.email::text ILIKE sqlc.narg(q)::text)
+        OR COALESCE(b.email::text, ''::text)::text ILIKE sqlc.narg(q)::text)
    AND (sqlc.narg(aktif)::boolean IS NULL OR b.is_active = sqlc.narg(aktif)::boolean)
    AND (sqlc.narg(cnc)::boolean IS NULL OR b.is_cnc = sqlc.narg(cnc)::boolean)
    AND (sqlc.narg(special)::boolean IS NULL OR b.is_special = sqlc.narg(special)::boolean)
@@ -45,8 +50,10 @@ SELECT b.id,
 -- name: GetBranchDetail :one
 SELECT b.id,
        b.nama,
-       b.nama_kepala,
-       b.email::text                 AS email,
+       COALESCE(b.nama_kepala, '')   AS nama_kepala,
+       COALESCE(b.email::text, ''::text)::text   AS email,
+       COALESCE(b.jabatan_kepala, '') AS jabatan_kepala,
+       b.identity_status::text       AS identity_status,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
        b.is_special,
@@ -58,15 +65,18 @@ SELECT b.id,
   LEFT JOIN registration_tokens t
          ON t.branch_id = b.id
         AND t.used_at IS NULL
+       AND t.revoked_at IS NULL
         AND t.expires_at > now()
  WHERE b.id = $1;
 
 -- name: CreateBranchDetail :one
-INSERT INTO branches (nama, nama_kepala, email, telepon, is_cnc, is_special, pajak_in, is_active)
+INSERT INTO branches (nama, nama_kepala, email, jabatan_kepala, identity_status, telepon, is_cnc, is_special, pajak_in, is_active)
 VALUES (
     sqlc.arg(nama),
-    sqlc.arg(nama_kepala),
-    sqlc.arg(email),
+    sqlc.narg(nama_kepala),
+    sqlc.narg(email),
+    sqlc.narg(jabatan_kepala),
+    sqlc.arg(identity_status)::branch_identity_status,
     sqlc.arg(telepon),
     sqlc.arg(is_cnc),
     sqlc.arg(is_special),
@@ -80,8 +90,10 @@ RETURNING id;
 -- pemanggil wajib ikut menyelaraskan branch_users.email di transaksi yang sama.
 UPDATE branches
    SET nama        = sqlc.arg(nama),
-       nama_kepala = sqlc.arg(nama_kepala),
-       email       = sqlc.arg(email),
+       nama_kepala = sqlc.narg(nama_kepala),
+       email       = sqlc.narg(email),
+       jabatan_kepala = sqlc.narg(jabatan_kepala),
+       identity_status = sqlc.arg(identity_status)::branch_identity_status,
        telepon     = sqlc.arg(telepon),
        is_cnc      = sqlc.arg(is_cnc),
        is_special  = sqlc.arg(is_special),
@@ -108,7 +120,7 @@ SELECT EXISTS (SELECT 1 FROM branch_users WHERE branch_id = $1)::boolean;
 -- Email cabang unik; except_id dipakai saat mengubah cabang itu sendiri.
 SELECT EXISTS (
     SELECT 1 FROM branches
-     WHERE email = sqlc.arg(email)
+     WHERE email = sqlc.arg(email) AND email IS NOT NULL
        AND (sqlc.narg(except_id)::uuid IS NULL OR id <> sqlc.narg(except_id)::uuid)
 )::boolean;
 
@@ -139,7 +151,9 @@ DELETE FROM branches WHERE id = $1;
 -- name: ReplaceRegistrationToken :exec
 -- Token lama yang belum terpakai digantikan token baru (PRD AP-CAB-02);
 -- token yang sudah terpakai dibiarkan sebagai jejak.
-DELETE FROM registration_tokens WHERE branch_id = $1 AND used_at IS NULL;
+UPDATE registration_tokens
+   SET revoked_at = now(), used_at = COALESCE(used_at, now())
+ WHERE branch_id = $1 AND used_at IS NULL AND revoked_at IS NULL;
 
 -- name: CreateRegistrationToken :one
 INSERT INTO registration_tokens (branch_id, token_hash, token_prefix, expires_at, created_by)

@@ -11,6 +11,7 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/dashboard"
 	"github.com/grahita/portal/api/internal/document"
+	"github.com/grahita/portal/api/internal/masterimport"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/payment"
@@ -95,6 +96,30 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, audit.ErrFilterInvalid):
 		return apierr.Validation("Filter audit log tidak valid.",
 			map[string]string{"filter": err.Error()})
+	case errors.Is(err, masterimport.ErrForbidden):
+		return apierr.Forbidden("Hanya Superadmin yang boleh membuat preview impor master.")
+	case errors.Is(err, masterimport.ErrProduction):
+		return apierr.Conflict("IMPORT_PRODUCTION_FORBIDDEN", "Preview/import master Impact tidak boleh dijalankan di production.")
+	case errors.Is(err, masterimport.ErrHashMismatch):
+		return apierr.New(http.StatusUnprocessableEntity, "IMPORT_SOURCE_HASH_MISMATCH", "Workbook bukan artefak sumber Impact yang diotorisasi.")
+	case errors.Is(err, masterimport.ErrStructure):
+		return apierr.New(http.StatusUnprocessableEntity, "IMPORT_STRUCTURE_CHANGED", "Sheet, rentang, header, atau jumlah cabang workbook berubah.")
+	case errors.Is(err, masterimport.ErrInvalidValue):
+		return apierr.New(http.StatusUnprocessableEntity, "IMPORT_VALUE_INVALID", "Workbook memuat nilai tarif atau identitas yang tidak valid.")
+	case errors.Is(err, masterimport.ErrTooLarge):
+		return apierr.New(http.StatusRequestEntityTooLarge, "IMPORT_FILE_TOO_LARGE", "Workbook melebihi batas 5 MiB.")
+	case errors.Is(err, masterimport.ErrInvalidWorkbook):
+		return apierr.New(http.StatusUnsupportedMediaType, "IMPORT_FILE_UNSUPPORTED", "Berkas bukan workbook XLSX yang valid.")
+	case errors.Is(err, masterimport.ErrAttemptNotFound):
+		return apierr.NotFound("Attempt atau apply run impor master tidak ditemukan.")
+	case errors.Is(err, masterimport.ErrApplyBlocked):
+		return apierr.Conflict("IMPORT_APPLY_BLOCKED", "Apply ditahan sampai seluruh conflict dan needs review diputus secara sah.")
+	case errors.Is(err, masterimport.ErrPreviewStale):
+		return apierr.Conflict("IMPORT_PREVIEW_STALE", "Data master atau akses berubah setelah preview. Buat preview baru.")
+	case errors.Is(err, masterimport.ErrAlreadyApplied):
+		return apierr.Conflict("IMPORT_ALREADY_APPLIED", "Attempt sudah diterapkan dengan idempotency key lain.")
+	case errors.Is(err, masterimport.ErrRollbackConflict):
+		return apierr.Conflict("IMPORT_ROLLBACK_CONFLICT", "Rollback ditolak karena data berubah setelah apply.")
 	case errors.Is(err, catalog.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
 	case errors.Is(err, catalog.ErrKodeTaken):
@@ -178,11 +203,22 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, payment.ErrNotSubmitted):
 		return apierr.Conflict("ORDER_NOT_SUBMITTED",
 			"Verifikasi hanya untuk pesanan yang sudah dikirim. Pesanan draf belum punya nomor/tanggal untuk diselesaikan.")
+	case errors.Is(err, payment.ErrAIDisabled):
+		return apierr.Conflict("AI_DISABLED", "Penilaian AI sedang nonaktif. Gunakan verifikasi manual.")
+	case errors.Is(err, payment.ErrOCRResultMissing):
+		return apierr.Conflict("OCR_RESULT_MISSING", "Hasil OCR belum tersedia untuk seluruh bukti pembayaran.")
+	case errors.Is(err, payment.ErrPaymentProofRequired):
+		return apierr.New(http.StatusUnprocessableEntity, "PAYMENT_PROOF_REQUIRED", "Pesanan belum mempunyai bukti pembayaran.")
 	case errors.Is(err, payment.ErrAlasanInvalid), errors.Is(err, payment.ErrHasilInvalid),
 		errors.Is(err, payment.ErrNominalInvalid), errors.Is(err, payment.ErrCatatanInvalid),
 		errors.Is(err, payment.ErrMetodeInvalid), errors.Is(err, payment.ErrInvalidData):
 		return apierr.Validation("Data verifikasi tidak valid.",
 			map[string]string{"verifikasi": err.Error()})
+	case errors.Is(err, payment.ErrDestinationRequired):
+		return apierr.New(http.StatusUnprocessableEntity, "DESTINATION_ACCOUNT_REQUIRED",
+			"Setiap bukti yang disetujui harus dipetakan tepat sekali ke rekening tujuan.")
+	case errors.Is(err, payment.ErrDestinationNotAllowed):
+		return apierr.Conflict("BANK_ACCOUNT_NOT_ALLOWED", "Rekening tujuan tidak efektif untuk cabang pesanan.")
 	case errors.Is(err, payment.ErrQueueUnavailable), errors.Is(err, payment.ErrVerifierUnavailable):
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
 			"Penjadwal pekerjaan dokumen belum siap sehingga verifikasi belum dapat diselesaikan.")
@@ -206,14 +242,29 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, branch.ErrInactive):
 		return apierr.Conflict("BRANCH_INACTIVE",
 			"Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.")
+	case errors.Is(err, branch.ErrIdentityIncomplete):
+		return apierr.Conflict("BRANCH_IDENTITY_INCOMPLETE",
+			"Identitas cabang belum lengkap. Lengkapi nama kepala cabang dan email sebelum membuat token registrasi.")
 	case errors.Is(err, branch.ErrInvalidData):
 		return apierr.Validation("Data cabang tidak valid.", map[string]string{"cabang": err.Error()})
 	case errors.Is(err, bank.ErrForbidden):
 		return apierr.Forbidden("Anda tidak memiliki akses ke rekening bank.")
 	case errors.Is(err, bank.ErrNotFound):
 		return apierr.NotFound("Rekening yang diminta tidak ditemukan.")
+	case errors.Is(err, bank.ErrBranchNotFound):
+		return apierr.New(http.StatusNotFound, "BRANCH_NOT_FOUND", "Cabang yang diminta tidak ditemukan.")
 	case errors.Is(err, bank.ErrDuplicate):
 		return apierr.Conflict("BANK_DUPLICATE", "Rekening dengan bank dan nomor tersebut sudah terdaftar.")
+	case errors.Is(err, bank.ErrVersionConflict):
+		return apierr.Conflict("ALLOWLIST_VERSION_CONFLICT", "Data rekening cabang telah berubah. Muat ulang sebelum menyimpan.")
+	case errors.Is(err, bank.ErrAccountInactive):
+		return apierr.Conflict("BANK_ACCOUNT_INACTIVE", "Rekening nonaktif tidak dapat ditambahkan ke cabang.")
+	case errors.Is(err, bank.ErrIdentityImmutable):
+		return apierr.Conflict("BANK_ACCOUNT_IDENTITY_IMMUTABLE", "Bank dan nomor rekening tidak dapat diubah. Buat rekening pengganti.")
+	case errors.Is(err, bank.ErrUnavailable):
+		return apierr.Conflict("BRANCH_BANK_ACCOUNT_UNAVAILABLE", "Rekening tujuan untuk cabang ini belum ditetapkan.")
+	case errors.Is(err, bank.ErrNotAllowed):
+		return apierr.Conflict("BANK_ACCOUNT_NOT_ALLOWED", "Rekening tujuan tidak diizinkan untuk cabang pesanan.")
 	case errors.Is(err, bank.ErrInvalidData):
 		return apierr.Validation("Data rekening tidak valid.", map[string]string{"rekening": err.Error()})
 	case errors.Is(err, users.ErrForbidden):
@@ -228,6 +279,9 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, users.ErrNoAccount):
 		return apierr.Conflict("NO_ACCOUNT",
 			"Cabang ini belum punya akun. Buat token registrasi lebih dahulu di halaman Cabang.")
+	case errors.Is(err, users.ErrIdentityIncomplete):
+		return apierr.Conflict("BRANCH_IDENTITY_INCOMPLETE",
+			"Identitas cabang belum lengkap. Lengkapi nama kepala cabang dan email lebih dahulu.")
 	case errors.Is(err, users.ErrNotInvited):
 		return apierr.Conflict("NOT_INVITED",
 			"Akun admin ini bukan undangan yang menunggu aktivasi. Gunakan lupa kata sandi bila akunnya sudah aktif.")
@@ -319,6 +373,9 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, registration.ErrBranchInactive):
 		return apierr.Conflict("BRANCH_INACTIVE",
 			"Cabang ini sedang nonaktif. Hubungi admin Pusat untuk mengaktifkannya kembali.")
+	case errors.Is(err, registration.ErrIdentityIncomplete):
+		return apierr.Conflict("BRANCH_IDENTITY_INCOMPLETE",
+			"Identitas cabang belum lengkap. Hubungi admin Pusat untuk melengkapinya sebelum registrasi.")
 	case errors.Is(err, registration.ErrBranchHasAccount):
 		return apierr.Conflict("BRANCH_HAS_ACCOUNT",
 			"Cabang ini sudah punya akun. Gunakan lupa kata sandi bila perlu masuk kembali.")

@@ -20,7 +20,9 @@ SELECT id, nama, email::text AS email, password_hash, role::text AS role, is_act
 -- name: GetBranchUserByEmail :one
 SELECT bu.id, bu.email::text AS email, bu.password_hash, bu.is_active, bu.branch_id,
        b.nama AS branch_nama,
-       COALESCE(bu.is_active AND b.is_active, false)::boolean AS boleh_login
+       COALESCE(bu.is_active AND b.is_active
+                AND b.identity_status = 'registered'
+                AND b.nama_kepala IS NOT NULL AND b.email IS NOT NULL, false)::boolean AS boleh_login
   FROM branch_users bu
   JOIN branches b ON b.id = bu.branch_id
  WHERE bu.email = $1;
@@ -28,7 +30,9 @@ SELECT bu.id, bu.email::text AS email, bu.password_hash, bu.is_active, bu.branch
 -- name: GetBranchUserByID :one
 SELECT bu.id, bu.email::text AS email, bu.password_hash, bu.is_active, bu.branch_id,
        b.nama AS branch_nama,
-       COALESCE(bu.is_active AND b.is_active, false)::boolean AS boleh_login
+       COALESCE(bu.is_active AND b.is_active
+                AND b.identity_status = 'registered'
+                AND b.nama_kepala IS NOT NULL AND b.email IS NOT NULL, false)::boolean AS boleh_login
   FROM branch_users bu
   JOIN branches b ON b.id = bu.branch_id
  WHERE bu.id = $1;
@@ -71,8 +75,9 @@ UPDATE admin_users
 -- tetap tampil dengan status "belum registrasi" (PRD §4.8).
 SELECT b.id::text                                          AS branch_id,
        b.nama,
-       b.nama_kepala,
-       b.email::text                                       AS email,
+       COALESCE(b.nama_kepala, '')                          AS nama_kepala,
+       COALESCE(b.email::text, ''::text)::text                          AS email,
+       b.identity_status::text                              AS identity_status,
        b.is_active                                         AS branch_active,
        COALESCE(bu.id::text, '')::text                      AS user_id,
        COALESCE(bu.telepon, '')                            AS telepon,
@@ -85,6 +90,7 @@ SELECT b.id::text                                          AS branch_id,
   LEFT JOIN registration_tokens t
          ON t.branch_id = b.id
         AND t.used_at IS NULL
+       AND t.revoked_at IS NULL
         AND t.expires_at > now()
  ORDER BY b.nama;
 
@@ -92,8 +98,9 @@ SELECT b.id::text                                          AS branch_id,
 -- Satu baris akun cabang berdasarkan id branch_users (dipakai setelah mutasi).
 SELECT b.id::text                                          AS branch_id,
        b.nama,
-       b.nama_kepala,
-       b.email::text                                       AS email,
+       COALESCE(b.nama_kepala, '')                          AS nama_kepala,
+       COALESCE(b.email::text, ''::text)::text                          AS email,
+       b.identity_status::text                              AS identity_status,
        b.is_active                                         AS branch_active,
        COALESCE(bu.id::text, '')::text                      AS user_id,
        COALESCE(bu.telepon, '')                            AS telepon,
@@ -106,6 +113,7 @@ SELECT b.id::text                                          AS branch_id,
   LEFT JOIN registration_tokens t
          ON t.branch_id = b.id
         AND t.used_at IS NULL
+       AND t.revoked_at IS NULL
         AND t.expires_at > now()
  WHERE bu.id = $1;
 
@@ -143,7 +151,7 @@ SELECT id, nama, email::text AS email, role::text AS role,
 -- tidak akan pernah bisa masuk. Cermin dari branch.AdminEmailTaken (F1-06);
 -- tanpa keduanya, salah satu arah saja yang aman.
 SELECT (EXISTS (SELECT 1 FROM branch_users bu WHERE bu.email = $1)
-     OR EXISTS (SELECT 1 FROM branches b WHERE b.email = $1))::boolean;
+     OR EXISTS (SELECT 1 FROM branches b WHERE b.email = $1 AND b.email IS NOT NULL))::boolean;
 
 -- name: CreateAdminInvitation :one
 -- Admin undangan: password_hash dan activated_at dibiarkan NULL sehingga tidak

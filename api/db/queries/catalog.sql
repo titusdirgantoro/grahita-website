@@ -6,13 +6,13 @@
 -- ---------- Pembacaan katalog ----------
 
 -- name: ListProducts :many
-SELECT id, kode, nama, jenis::text AS jenis, satuan,
+SELECT id, kode, nama, jenis::text AS jenis,
        COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
   FROM products
  ORDER BY urutan, nama;
 
 -- name: ListActiveProducts :many
-SELECT id, kode, nama, jenis::text AS jenis, satuan,
+SELECT id, kode, nama, jenis::text AS jenis,
        COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
   FROM products
  WHERE is_active
@@ -22,7 +22,7 @@ SELECT id, kode, nama, jenis::text AS jenis, satuan,
 -- Hanya produk yang benar-benar dijual ke cabang tersebut (punya baris harga).
 -- Harga default TIDAK dipakai sebagai cadangan: sel kosong = tidak dijual
 -- (PRD CP-KAT-01/02).
-SELECT p.id, p.nama, p.jenis::text AS jenis, p.satuan,
+SELECT p.id, p.nama, p.jenis::text AS jenis,
        COALESCE(p.deskripsi, '') AS deskripsi, bp.harga, p.urutan
   FROM products p
   JOIN branch_prices bp ON bp.product_id = p.id
@@ -35,7 +35,7 @@ SELECT p.id, p.nama, p.jenis::text AS jenis, p.satuan,
 -- Daftar produk untuk halaman katalog admin: TERMASUK produk nonaktif supaya
 -- bisa diaktifkan kembali. Filter opsional: q (pola ILIKE nama/kode, sudah
 -- berbentuk '%kata%'), jenis, aktif.
-SELECT id, kode, nama, jenis::text AS jenis, satuan,
+SELECT id, kode, nama, jenis::text AS jenis,
        COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
   FROM products
  WHERE (sqlc.narg(q)::text IS NULL
@@ -46,24 +46,24 @@ SELECT id, kode, nama, jenis::text AS jenis, satuan,
  ORDER BY urutan, nama;
 
 -- name: GetProductForAdmin :one
-SELECT id, kode, nama, jenis::text AS jenis, satuan,
+SELECT id, kode, nama, jenis::text AS jenis,
        COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
   FROM products
  WHERE id = $1;
 
 -- name: CreateProduct :one
-INSERT INTO products (kode, nama, jenis, satuan, deskripsi, harga_default, urutan, is_active)
+INSERT INTO products (kode, nama, jenis, deskripsi, harga_default, urutan, is_active)
 VALUES (
     sqlc.narg(kode),
     sqlc.arg(nama),
     sqlc.arg(jenis)::product_kind,
-    sqlc.arg(satuan),
+
     sqlc.narg(deskripsi),
     sqlc.arg(harga_default),
     sqlc.arg(urutan),
     sqlc.arg(is_active)
 )
-RETURNING id, kode, nama, jenis::text AS jenis, satuan,
+RETURNING id, kode, nama, jenis::text AS jenis,
           COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active;
 
 -- name: UpdateProduct :one
@@ -73,14 +73,14 @@ UPDATE products
    SET kode          = sqlc.narg(kode),
        nama          = sqlc.arg(nama),
        jenis         = sqlc.arg(jenis)::product_kind,
-       satuan        = sqlc.arg(satuan),
+
        deskripsi     = sqlc.narg(deskripsi),
        harga_default = sqlc.arg(harga_default),
        urutan        = sqlc.arg(urutan),
        is_active     = sqlc.arg(is_active),
        updated_at    = now()
  WHERE id = sqlc.arg(id)
-RETURNING id, kode, nama, jenis::text AS jenis, satuan,
+RETURNING id, kode, nama, jenis::text AS jenis,
           COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active;
 
 -- name: DeleteProduct :exec

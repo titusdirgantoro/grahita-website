@@ -28,14 +28,15 @@ type Memory struct {
 }
 
 type memToken struct {
-	branchID     string
-	expiresAt    time.Time
-	used         bool
-	usedBy       string
-	branchActive bool
-	nama         string
-	namaKepala   string
-	email        string
+	branchID       string
+	expiresAt      time.Time
+	used           bool
+	usedBy         string
+	branchActive   bool
+	identityStatus string
+	nama           string
+	namaKepala     string
+	email          string
 }
 
 type memAkun struct {
@@ -62,13 +63,14 @@ func (m *Memory) PutToken(rawToken string, snap Snapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tokens[hex.EncodeToString(auth.HashRegistrationToken(rawToken))] = &memToken{
-		branchID:     snap.BranchID,
-		expiresAt:    snap.ExpiresAt,
-		used:         snap.UsedAt != nil,
-		branchActive: snap.BranchActive,
-		nama:         snap.Nama,
-		namaKepala:   snap.NamaKepala,
-		email:        snap.Email,
+		branchID:       snap.BranchID,
+		expiresAt:      snap.ExpiresAt,
+		used:           snap.UsedAt != nil,
+		branchActive:   snap.BranchActive,
+		identityStatus: snap.IdentityStatus,
+		nama:           snap.Nama,
+		namaKepala:     snap.NamaKepala,
+		email:          snap.Email,
 	}
 }
 
@@ -79,14 +81,15 @@ func (m *Memory) PutUsedToken(rawToken string, snap Snapshot) {
 	defer m.mu.Unlock()
 	key := hex.EncodeToString(auth.HashRegistrationToken(rawToken))
 	m.tokens[key] = &memToken{
-		branchID:     snap.BranchID,
-		expiresAt:    snap.ExpiresAt,
-		used:         true,
-		usedBy:       "usr-lama",
-		branchActive: snap.BranchActive,
-		nama:         snap.Nama,
-		namaKepala:   snap.NamaKepala,
-		email:        snap.Email,
+		branchID:       snap.BranchID,
+		expiresAt:      snap.ExpiresAt,
+		used:           true,
+		usedBy:         "usr-lama",
+		branchActive:   snap.BranchActive,
+		identityStatus: snap.IdentityStatus,
+		nama:           snap.Nama,
+		namaKepala:     snap.NamaKepala,
+		email:          snap.Email,
 	}
 }
 
@@ -189,13 +192,14 @@ func (m *Memory) Register(_ context.Context, req RegisterRequest, rec audit.Entr
 // snapshotLocked menyusun keadaan token apa adanya saat ini.
 func (m *Memory) snapshotLocked(t *memToken) Snapshot {
 	s := Snapshot{
-		TokenID:      "tok-" + t.branchID,
-		BranchID:     t.branchID,
-		ExpiresAt:    t.expiresAt,
-		Nama:         t.nama,
-		NamaKepala:   t.namaKepala,
-		Email:        t.email,
-		BranchActive: t.branchActive,
+		TokenID:        "tok-" + t.branchID,
+		BranchID:       t.branchID,
+		ExpiresAt:      t.expiresAt,
+		Nama:           t.nama,
+		NamaKepala:     t.namaKepala,
+		Email:          t.email,
+		IdentityStatus: t.identityStatus,
+		BranchActive:   t.branchActive,
 	}
 	if t.used {
 		used := t.expiresAt

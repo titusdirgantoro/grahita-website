@@ -86,9 +86,9 @@ const KindOCRBukti = "ocr_bukti"
 
 // OCRBuktiArgs meminta pembacaan AI/OCR seluruh bukti satu pesanan.
 //
-// Muatannya SENGAJA hanya id pesanan: seluruh keadaan (bukti mana yang sudah
-// dibaca — kolom `payment_proofs.ocr_at`, setelan `ai` yang berlaku, status
-// pesanan, dan log verifikasi terakhir) dibaca ulang saat pekerjaan dijalankan.
+// Job upload membawa hanya id pesanan. Job reevaluate eksplisit juga membawa
+// versi allowlist dan fingerprint bukti agar worker hanya menilai snapshot
+// tersebut, tanpa memanggil provider untuk bukti baru.
 // Job yang terlewat/tergandakan karena itu tidak pernah menggandakan keputusan
 // maupun log: bukti yang sudah dibaca tidak dipanggil lagi ke provider, dan
 // keputusan untuk satu himpunan bukti yang sama tidak ditulis dua kali
@@ -96,6 +96,11 @@ const KindOCRBukti = "ocr_bukti"
 type OCRBuktiArgs struct {
 	// OrderID adalah id pesanan yang buktinya harus dibaca.
 	OrderID string `json:"order_id"`
+	// Dua field ini hanya diisi oleh aksi reevaluate eksplisit dan menjadi
+	// dimensi idempotensi snapshot policy+bukti. Job upload lama tetap hanya
+	// membawa OrderID dan tidak berubah perilakunya.
+	AllowlistVersion    int64  `json:"allowlist_version,omitempty"`
+	ProofSetFingerprint string `json:"proof_set_fingerprint,omitempty"`
 }
 
 // Kind mengidentifikasi jenis job pembacaan bukti di tabel River.

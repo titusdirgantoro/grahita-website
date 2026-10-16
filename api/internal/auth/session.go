@@ -33,6 +33,10 @@ type Session struct {
 	BranchID   string
 	ExpiresAt  time.Time
 	LastSeenAt time.Time
+	// ExpectedPasswordHash adalah hash yang sudah diverifikasi oleh Login.
+	// Store wajib membandingkannya kembali setelah mengunci identitas, tetapi
+	// tidak boleh menyimpannya pada baris sesi.
+	ExpectedPasswordHash string
 }
 
 // Expired memeriksa batas absolut maupun batas diam (idle timeout).
@@ -47,7 +51,10 @@ func (s Session) Expired(now time.Time, idle time.Duration) bool {
 }
 
 // SessionStore menyimpan sesi di database. Token TIDAK pernah disimpan apa
-// adanya; yang disimpan hanya SHA-256-nya.
+// adanya; yang disimpan hanya SHA-256-nya. Create wajib memeriksa ulang
+// kelayakan aktor dan hash kredensial yang sudah diverifikasi di dalam
+// transaksi yang terserialisasi dengan mutasi identitas sebelum menyisipkan
+// sesi.
 type SessionStore interface {
 	Create(ctx context.Context, s Session, tokenHash []byte, meta RequestMeta) (Session, error)
 	ByTokenHash(ctx context.Context, tokenHash []byte) (Session, error)

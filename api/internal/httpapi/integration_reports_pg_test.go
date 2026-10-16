@@ -184,8 +184,8 @@ func (l *laporanPG) seedProdukSertifikat(t *testing.T, branchID string) string {
 	ctx := context.Background()
 	var id string
 	if err := l.pool.QueryRow(ctx,
-		`INSERT INTO products (kode, nama, jenis, satuan, harga_default, urutan)
-		 VALUES ('S-01','Sertifikat Halal','sertifikat','pcs',0,2) RETURNING id`).Scan(&id); err != nil {
+		`INSERT INTO products (kode, nama, jenis, harga_default, urutan)
+		 VALUES ('S-01','Sertifikat Halal','sertifikat',0,2) RETURNING id`).Scan(&id); err != nil {
 		t.Fatalf("seed produk sertifikat: %v", err)
 	}
 	if _, err := l.pool.Exec(ctx,

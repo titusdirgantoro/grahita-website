@@ -487,8 +487,8 @@ func TestPGTokenResetHanyaSatuYangAktif(t *testing.T) {
 	ctx := context.Background()
 
 	var branchID, userID string
-	if err := pool.QueryRow(ctx, `INSERT INTO branches (nama, nama_kepala, email)
-		VALUES ('Cabang Uji','Kepala','uji@example.test') RETURNING id`).Scan(&branchID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO branches (nama, nama_kepala, email, identity_status)
+		VALUES ('Cabang Uji','Kepala','uji@example.test','registered') RETURNING id`).Scan(&branchID); err != nil {
 		t.Fatalf("seed cabang: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO branch_users (branch_id, email, password_hash)
@@ -498,22 +498,22 @@ func TestPGTokenResetHanyaSatuYangAktif(t *testing.T) {
 
 	repo := authpg.New(pool)
 	akhir := time.Now().UTC().Add(time.Hour)
-	if err := repo.CreateResetToken(ctx, auth.ResetToken{Kind: auth.KindBranch, UserID: userID, ExpiresAt: akhir}, []byte("hash-pertama")); err != nil {
+	if err := repo.CreateResetToken(ctx, auth.ResetToken{Kind: auth.KindBranch, UserID: userID, ExpiresAt: akhir, ExpectedEmail: "uji@example.test", ExpectedPasswordHash: "x"}, []byte("hash-pertama")); err != nil {
 		t.Fatalf("CreateResetToken pertama: %v", err)
 	}
-	if err := repo.CreateResetToken(ctx, auth.ResetToken{Kind: auth.KindBranch, UserID: userID, ExpiresAt: akhir}, []byte("hash-kedua")); err != nil {
+	if err := repo.CreateResetToken(ctx, auth.ResetToken{Kind: auth.KindBranch, UserID: userID, ExpiresAt: akhir, ExpectedEmail: "uji@example.test", ExpectedPasswordHash: "x"}, []byte("hash-kedua")); err != nil {
 		t.Fatalf("CreateResetToken kedua: %v", err)
 	}
 
 	var aktif int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM password_reset_tokens WHERE user_id=$1::uuid AND used_at IS NULL`, userID).Scan(&aktif); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM password_reset_tokens WHERE user_id=$1::uuid AND used_at IS NULL AND revoked_at IS NULL`, userID).Scan(&aktif); err != nil {
 		t.Fatalf("hitung token aktif: %v", err)
 	}
 	if aktif != 1 {
 		t.Fatalf("harus tepat satu tautan aktif per akun, dapat %d", aktif)
 	}
 	var hash []byte
-	if err := pool.QueryRow(ctx, `SELECT token_hash FROM password_reset_tokens WHERE user_id=$1::uuid AND used_at IS NULL`, userID).Scan(&hash); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT token_hash FROM password_reset_tokens WHERE user_id=$1::uuid AND used_at IS NULL AND revoked_at IS NULL`, userID).Scan(&hash); err != nil {
 		t.Fatalf("baca token aktif: %v", err)
 	}
 	if string(hash) != "hash-kedua" {

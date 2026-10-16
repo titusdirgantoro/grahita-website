@@ -32,6 +32,17 @@ type ResetToken struct {
 	Kind      Kind
 	UserID    string
 	ExpiresAt time.Time
+	// ExpectedEmail adalah alamat tujuan yang dibaca sebelum penerbitan. Store
+	// wajib memastikan alamat yang sama masih berlaku setelah lock agar token
+	// tidak diterbitkan untuk identitas baru lalu dikirim ke alamat lama.
+	// Nilai ini tidak disimpan pada password_reset_tokens.
+	ExpectedEmail string
+	// ExpectedPasswordHash mengikat request pada generasi credential yang
+	// dibaca sebelum penerbitan. Revokasi identitas mengganti hash credential;
+	// karena itu request pra-revokasi tetap ditolak walaupun identitas pulih
+	// dengan alamat email yang sama. Hash ini hanya snapshot validasi dan tidak
+	// disimpan pada password_reset_tokens. Nilai kosong sah untuk undangan admin.
+	ExpectedPasswordHash string
 	// Audit, bila terisi, WAJIB ditulis implementasi CreateResetToken di DALAM
 	// transaksi yang sama dengan tokennya (F2-28): kegagalan menulis entri
 	// audit membatalkan token barunya, sehingga tidak mungkin ada tautan yang
@@ -67,8 +78,10 @@ type ResetAudit struct {
 
 // ResetStore menyimpan token atur ulang kata sandi.
 //
-// CreateResetToken wajib membatalkan token aktif sebelumnya milik pengguna
-// yang sama sehingga hanya satu tautan yang berlaku pada satu waktu, dan
+// CreateResetToken wajib mengunci serta memeriksa ulang kelayakan, email, dan
+// generasi credential yang dibaca pemanggil,
+// lalu membatalkan token aktif sebelumnya milik pengguna yang sama sehingga
+// hanya satu tautan yang berlaku pada satu waktu, dan
 // wajib menyimpan t.Audit (bila terisi) di dalam transaksi yang sama —
 // kegagalan menyimpan audit membatalkan token barunya.
 // ConsumeResetToken wajib atomik: satu token hanya boleh terpakai sekali
@@ -76,6 +89,10 @@ type ResetAudit struct {
 type ResetStore interface {
 	CreateResetToken(ctx context.Context, t ResetToken, tokenHash []byte) error
 	ConsumeResetToken(ctx context.Context, tokenHash []byte, now time.Time) (ResetToken, error)
+	// ResetPassword mengonsumsi token, mengunci dan memeriksa ulang pemiliknya,
+	// mengganti credential, lalu mencabut seluruh sesi dalam satu transaksi.
+	// Untuk akun cabang urutan lock wajib branches -> branch_users.
+	ResetPassword(ctx context.Context, tokenHash []byte, now time.Time, passwordHash string) error
 }
 
 // ResetMessage adalah data yang dibutuhkan pengirim email tautan atur ulang.

@@ -22,6 +22,7 @@ import (
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/dashboard"
 	"github.com/grahita/portal/api/internal/document"
+	"github.com/grahita/portal/api/internal/masterimport"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/payment"
@@ -89,6 +90,8 @@ type Deps struct {
 	// Done, lengkap dengan dokumen + email) atau penandaan perlu review
 	// (F1-18, PRD AP-ORD-07).
 	Verify *payment.VerificationService
+	// Reevaluate menitipkan penilaian ulang tujuan dari hasil OCR tersimpan.
+	Reevaluate *payment.ReevaluateService
 
 	// Payments melayani bukti transfer: unggah multi-berkas, daftar, dan
 	// tautan unduh berumur pendek (F1-13).
@@ -118,6 +121,10 @@ type Deps struct {
 	// server. Penulisan entri tetap dilakukan produsennya masing-masing di
 	// dalam transaksinya; layanan ini hanya membaca.
 	Audit *audit.Service
+
+	// MasterImport membuat preview dry-run workbook Impact. Hanya Superadmin;
+	// service menolak production dan tidak pernah mengubah tabel master.
+	MasterImport *masterimport.Service
 
 	Storage   storage.Store
 	Gotenberg pdf.Renderer

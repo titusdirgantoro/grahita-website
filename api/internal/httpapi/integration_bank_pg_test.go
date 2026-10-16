@@ -12,7 +12,9 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 )
 
@@ -24,6 +26,15 @@ func TestPGBankRekeningTransaksionalDanNonaktif(t *testing.T) {
 	cabangCookies, cabangCsrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	mgrCookies, mgrCsrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
 	saCookies, saCsrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	// Cabang fixture mempunyai assignment sintetis agar suite submit lama tetap
+	// dapat berjalan. Kosongkan secara eksplisit untuk membuktikan fail-closed.
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut,
+		base+"/admin/branches/"+f.branchA+"/bank-accounts",
+		`{"expected_version":1,"bank_account_ids":[]}`, saCookies, saCsrf)
+	if status != http.StatusOK {
+		t.Fatalf("kosongkan assignment fixture harus 200, dapat %d (%v)", status, body)
+	}
 
 	// Otorisasi: cabang & Manager ditolak (PRD §2.1).
 	for _, aktor := range []struct {
@@ -40,15 +51,27 @@ func TestPGBankRekeningTransaksionalDanNonaktif(t *testing.T) {
 		if status != http.StatusForbidden {
 			t.Errorf("%s ubah rekening harus 403, dapat %d", aktor.nama, status)
 		}
+		status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+			base+"/admin/branches/"+f.branchA+"/bank-accounts",
+			`{"expected_version":2,"bank_account_ids":[]}`, aktor.cookies, aktor.csrf)
+		if status != http.StatusForbidden {
+			t.Errorf("%s mutasi assignment harus 403, dapat %d", aktor.nama, status)
+		}
 	}
 
 	// Superadmin membuat dua rekening (satu langsung nonaktif).
-	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, base+"/admin/bank-accounts",
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, base+"/admin/bank-accounts",
 		`{"bank":"BCA","nama_pemilik":"PT Grahita Indonesia","nomor":"1234567890"}`, saCookies, saCsrf)
 	if status != http.StatusCreated {
 		t.Fatalf("buat rekening BCA harus 201, dapat %d (%v)", status, body)
 	}
 	bcaID := body["data"].(map[string]any)["id"].(string)
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		base+"/admin/branches/"+f.branchA+"/bank-accounts",
+		`{"expected_version":2,"bank_account_ids":["`+bcaID+`"]}`, saCookies, saCsrf)
+	if status != http.StatusOK {
+		t.Fatalf("assign rekening BCA ke cabang A harus 200, dapat %d (%v)", status, body)
+	}
 
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, base+"/admin/bank-accounts",
 		`{"bank":"BRI","nama_pemilik":"PT Grahita Indonesia","nomor":"0987654321","is_active":false}`, saCookies, saCsrf)
@@ -73,12 +96,20 @@ func TestPGBankRekeningTransaksionalDanNonaktif(t *testing.T) {
 	if len(pub) != 1 || pub[0].(map[string]any)["id"] != bcaID {
 		t.Fatalf("hanya rekening aktif yang boleh tampil, dapat %v", pub)
 	}
+	ocrOrderID, ocrTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-122")
+	_ = bodyVerifikasiCocok(t, f, ocrOrderID, &ocrTotal, "")
 
 	// Nonaktifkan rekening BCA, lalu daftar publik kosong.
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/bank-accounts/"+bcaID,
 		`{"is_active":false}`, saCookies, saCsrf)
 	if status != http.StatusOK {
 		t.Fatalf("nonaktifkan rekening harus 200, dapat %d", status)
+	}
+	if n := jobOCR(t, f, ocrOrderID); n != 0 {
+		t.Fatalf("perubahan policy hanya menandai stale dan tidak boleh auto-enqueue, dapat %d job", n)
+	}
+	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, ocrOrderID); n != 0 {
+		t.Fatalf("perubahan policy tidak boleh membuat attempt otomatis, dapat %d", n)
 	}
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/bank-accounts", "", cabangCookies, "")
 	if status != http.StatusOK {
@@ -87,6 +118,75 @@ func TestPGBankRekeningTransaksionalDanNonaktif(t *testing.T) {
 	if pub = body["data"].([]any); len(pub) != 0 {
 		t.Fatalf("tidak ada rekening aktif yang tersisa, dapat %v", pub)
 	}
+
+	// Deaktivasi rekening mempertahankan assignment sebagai dormant dan menaikkan
+	// versi. Replacement identik boleh mempertahankannya, versi basi konflik,
+	// dan rekening dormant yang sudah dicabut tidak boleh ditambahkan lagi.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet,
+		base+"/admin/branches/"+f.branchA+"/bank-accounts", "", saCookies, "")
+	if status != http.StatusOK {
+		t.Fatalf("baca assignment dormant harus 200, dapat %d (%v)", status, body)
+	}
+	assignment := body["data"].(map[string]any)
+	if assignment["version"] != float64(4) {
+		t.Fatalf("deaktivasi rekening harus menaikkan versi ke 4, dapat %v", assignment["version"])
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		base+"/admin/branches/"+f.branchA+"/bank-accounts",
+		`{"expected_version":4,"bank_account_ids":["`+bcaID+`"]}`, saCookies, saCsrf)
+	if status != http.StatusOK || body["meta"].(map[string]any)["changed"] != false {
+		t.Fatalf("mempertahankan dormant harus no-op 200, dapat %d (%v)", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		base+"/admin/branches/"+f.branchA+"/bank-accounts",
+		`{"expected_version":3,"bank_account_ids":[]}`, saCookies, saCsrf)
+	if status != http.StatusConflict {
+		t.Fatalf("versi assignment basi harus 409, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "ALLOWLIST_VERSION_CONFLICT")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		base+"/admin/branches/"+f.branchA+"/bank-accounts",
+		`{"expected_version":4,"bank_account_ids":[]}`, saCookies, saCsrf)
+	if status != http.StatusOK {
+		t.Fatalf("cabut dormant harus 200, dapat %d (%v)", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		base+"/admin/branches/"+f.branchA+"/bank-accounts",
+		`{"expected_version":5,"bank_account_ids":["`+bcaID+`"]}`, saCookies, saCsrf)
+	if status != http.StatusConflict {
+		t.Fatalf("rekening nonaktif yang dicabut tak boleh ditambah lagi, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "BANK_ACCOUNT_INACTIVE")
+
+	// Tanpa rekening efektif, backend menolak unggah bukti dan submit non-C&C.
+	var orderID, productID string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO orders (branch_id, status) VALUES ($1,'draft') RETURNING id`, f.branchA).Scan(&orderID); err != nil {
+		t.Fatalf("seed order fail-closed: %v", err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT id FROM products WHERE kode='P-01'`).Scan(&productID); err != nil {
+		t.Fatalf("baca produk fixture: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO order_lines
+		(order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
+		VALUES ($1,1,'product',$2,'Bio Magnetik',1,100000)`, orderID, productID); err != nil {
+		t.Fatalf("seed baris order fail-closed: %v", err)
+	}
+	status = unggahBuktiHTTP(t, base+"/orders/"+orderID+"/proofs", cabangCookies, cabangCsrf,
+		map[string][]byte{"bukti.jpg": berkasJPEGUji("allowlist-kosong")})
+	if status != http.StatusConflict {
+		t.Fatalf("unggah bukti tanpa rekening efektif harus 409, dapat %d", status)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO payment_proofs
+		(order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
+		VALUES ($1,'proofs/sintetis','bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$2)`, orderID, f.userA); err != nil {
+		t.Fatalf("seed bukti untuk uji submit fail-closed: %v", err)
+	}
+	resp, submitBody := multipartSubmit(t, base+"/orders/"+orderID+"/submit", cabangCookies, cabangCsrf, nil, "false")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("submit tanpa rekening efektif harus 409, dapat %d (%v)", resp.StatusCode, submitBody)
+	}
+	assertErrorShape(t, submitBody, "BRANCH_BANK_ACCOUNT_UNAVAILABLE")
 
 	// Audit: 2 create + 1 update tercatat; percobaan duplikat TIDAK meninggalkan
 	// event (rollback transaksi yang sama dengan mutasinya).
@@ -274,5 +374,102 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 	}
 	if auditCount, _ = hitungPengaturan(); auditCount != 4 {
 		t.Errorf("ai valid harus menambah 1 audit, dapat %d (mau 4)", auditCount)
+	}
+}
+
+func TestPGBankRaceVersionDanDeactivateVsPUT(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	base := f.srv.URL + "/api/v1"
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	insertAccount := func(bankCode, owner, number string) string {
+		t.Helper()
+		var id string
+		if err := f.pool.QueryRow(ctx, `INSERT INTO bank_accounts(bank,nama_pemilik,nomor,is_active)
+			VALUES ($1,$2,$3,true) RETURNING id`, bankCode, owner, number).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	accountA := insertAccount("BCA", "Race A", "7000000001")
+	accountB := insertAccount("BRI", "Race B", "7000000002")
+	var version int64
+	if err := f.pool.QueryRow(ctx, `SELECT bank_allowlist_version FROM branches WHERE id=$1`, f.branchA).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	statuses := make(chan int, 2)
+	var wg sync.WaitGroup
+	for _, accountID := range []string{accountA, accountB} {
+		accountID := accountID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			status, _, _ := apiReq(t, http.DefaultClient, http.MethodPut,
+				base+"/admin/branches/"+f.branchA+"/bank-accounts",
+				fmt.Sprintf(`{"expected_version":%d,"bank_account_ids":["%s"]}`, version, accountID), cookies, csrf)
+			statuses <- status
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+	ok, conflict := 0, 0
+	for status := range statuses {
+		switch status {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Fatalf("status race PUT tak terduga: %d", status)
+		}
+	}
+	if ok != 1 || conflict != 1 {
+		t.Fatalf("dua PUT versi sama harus 1 sukses/1 konflik, dapat %d/%d", ok, conflict)
+	}
+
+	raceAccount := insertAccount("BCA", "Race Deactivate", "7000000003")
+	if err := f.pool.QueryRow(ctx, `SELECT bank_allowlist_version FROM branches WHERE id=$1`, f.branchA).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	start = make(chan struct{})
+	statuses = make(chan int, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		status, _, _ := apiReq(t, http.DefaultClient, http.MethodPut,
+			base+"/admin/branches/"+f.branchA+"/bank-accounts",
+			fmt.Sprintf(`{"expected_version":%d,"bank_account_ids":["%s"]}`, version, raceAccount), cookies, csrf)
+		statuses <- status
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		status, _, _ := apiReq(t, http.DefaultClient, http.MethodPut,
+			base+"/admin/bank-accounts/"+raceAccount, `{"is_active":false}`, cookies, csrf)
+		statuses <- status
+	}()
+	close(start)
+	wg.Wait()
+	close(statuses)
+	for status := range statuses {
+		if status != http.StatusOK && status != http.StatusConflict {
+			t.Fatalf("race deactivate/PUT status tak terduga: %d", status)
+		}
+	}
+	var effective bool
+	if err := f.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM branches b
+	 JOIN branch_bank_accounts x ON x.branch_id=b.id AND x.is_allowed
+	 JOIN bank_accounts a ON a.id=x.bank_account_id AND a.is_active
+	 WHERE b.id=$1 AND b.is_active AND a.id=$2)`, f.branchA, raceAccount).Scan(&effective); err != nil {
+		t.Fatal(err)
+	}
+	if effective {
+		t.Fatal("race deactivate/PUT tidak boleh meninggalkan rekening efektif nonaktif")
 	}
 }

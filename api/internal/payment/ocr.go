@@ -43,6 +43,8 @@ package payment
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,11 +64,13 @@ var (
 	// ErrOCRBelumTerpasang dikembalikan bila layanan pembaca belum dirakit
 	// (kesalahan wiring, bukan kesalahan pemanggil).
 	ErrOCRBelumTerpasang = errors.New("layanan pembacaan bukti belum terpasang")
+	ErrOCRSnapshotStale  = errors.New("snapshot reevaluate OCR sudah berubah")
 )
 
 // OrderOCR adalah konteks pesanan yang dibutuhkan penilaian otomatis.
 type OrderOCR struct {
-	ID string
+	ID       string
+	BranchID string
 	// Status adalah status pesanan (hanya "submitted" yang dinilai).
 	Status string
 	// Total adalah total pesanan (Rupiah bulat).
@@ -121,10 +125,10 @@ type OCRRepository interface {
 	SudahDinilaiAI(ctx context.Context, orderID string) (bool, error)
 }
 
-// RekeningSource menyediakan rekening bank AKTIF sebagai acuan pencocokan
-// rekening tujuan (PRD §5, §4.6). Implementasinya adalah bank.Service.
+// RekeningSource menyediakan rekening efektif cabang sebagai satu-satunya
+// acuan pencocokan tujuan. Tidak ada fallback ke master rekening global.
 type RekeningSource interface {
-	Active(ctx context.Context) ([]bank.Account, error)
+	EffectiveForBranch(ctx context.Context, branchID string) (bank.EffectiveSet, error)
 }
 
 // AISettingsSource menyediakan setelan `ai` yang sedang berlaku (PRD §4.9).
@@ -156,7 +160,8 @@ type Keputusan struct {
 	// JumlahBukti adalah banyaknya bukti yang dinilai.
 	JumlahBukti int
 	// Catatan adalah ringkasan yang bisa dibaca manusia untuk log verifikasi.
-	Catatan string
+	Catatan           string
+	ProofDestinations []ProofDestination
 }
 
 // OCRHasil adalah ringkasan satu kali pembacaan seluruh bukti satu pesanan.
@@ -202,6 +207,16 @@ func (s *OCRService) Tersedia() bool {
 
 // Baca menjalankan satu siklus pembacaan + penilaian untuk satu pesanan.
 func (s *OCRService) Baca(ctx context.Context, orderID string) (OCRHasil, error) {
+	return s.bacaDenganSnapshot(ctx, orderID, 0, "")
+}
+
+// BacaUlang menilai ulang hanya hasil OCR tersimpan untuk snapshot policy dan
+// bukti yang dicatat saat job dibuat. Perubahan state membuat job lama dilewati.
+func (s *OCRService) BacaUlang(ctx context.Context, orderID string, allowlistVersion int64, proofSetFingerprint string) (OCRHasil, error) {
+	return s.bacaDenganSnapshot(ctx, orderID, allowlistVersion, strings.ToLower(strings.TrimSpace(proofSetFingerprint)))
+}
+
+func (s *OCRService) bacaDenganSnapshot(ctx context.Context, orderID string, expectedVersion int64, expectedFingerprint string) (OCRHasil, error) {
 	if s == nil || !s.Tersedia() {
 		return OCRHasil{}, ErrOCRBelumTerpasang
 	}
@@ -238,6 +253,25 @@ func (s *OCRService) Baca(ctx context.Context, orderID string) (OCRHasil, error)
 		return out, nil
 	}
 	out.JumlahBukti = len(proofs)
+	if expectedVersion > 0 || expectedFingerprint != "" {
+		h := sha256.New()
+		for i := range proofs {
+			if proofs[i].At == nil {
+				out.Dilewati, out.Sebab = true, "snapshot bukti reevaluate sudah berubah"
+				return out, nil
+			}
+			if i > 0 {
+				h.Write([]byte{0x1e})
+			}
+			h.Write([]byte(strings.ToLower(proofs[i].ID)))
+			h.Write([]byte{0x1f})
+			h.Write([]byte(proofs[i].At.UTC().Format(time.RFC3339Nano)))
+		}
+		if hex.EncodeToString(h.Sum(nil)) != expectedFingerprint {
+			out.Dilewati, out.Sebab = true, "snapshot bukti reevaluate sudah berubah"
+			return out, nil
+		}
+	}
 
 	// 3. Baca bukti yang BELUM pernah dibaca. Sebuah kegagalan provider di
 	//    tengah jalan menghentikan pekerjaan tanpa menyimpan apa pun untuk
@@ -262,9 +296,14 @@ func (s *OCRService) Baca(ctx context.Context, orderID string) (OCRHasil, error)
 
 	// 4. Penilaian: jumlahkan nominal, bandingkan rekening + tanggal +
 	//    toleransi (PRD §5).
-	rekening, err := s.rek.Active(ctx)
+	set, err := s.rek.EffectiveForBranch(ctx, ord.BranchID)
 	if err != nil {
 		return out, fmt.Errorf("baca rekening aktif: %w", err)
+	}
+	rekening := set.Accounts
+	if expectedVersion > 0 && set.Version != expectedVersion {
+		out.Dilewati, out.Sebab = true, "versi allowlist reevaluate sudah berubah"
+		return out, nil
 	}
 	pembacaan := make([]PembacaanBukti, 0, len(proofs))
 	for _, p := range proofs {
@@ -294,11 +333,16 @@ func (s *OCRService) Baca(ctx context.Context, orderID string) (OCRHasil, error)
 	// 6. Keputusan diteruskan ke SATU pintu transisi Done (metode `ai`).
 	total := keputusan.TotalTerbaca
 	in := VerifyInput{
-		Hasil:        keputusan.Hasil,
-		Metode:       MetodeAI,
-		Alasan:       keputusan.Alasan,
-		Catatan:      keputusan.Catatan,
-		TotalTerbaca: &total,
+		Hasil:             keputusan.Hasil,
+		Metode:            MetodeAI,
+		Alasan:            keputusan.Alasan,
+		Catatan:           keputusan.Catatan,
+		TotalTerbaca:      &total,
+		ProofDestinations: keputusan.ProofDestinations,
+	}
+	if expectedVersion > 0 || expectedFingerprint != "" {
+		in.ExpectedAllowlistVersion = expectedVersion
+		in.ExpectedProofFingerprint = expectedFingerprint
 	}
 	if keputusan.Hasil == VerifPerluReview && !keputusan.nominalDapatDipercaya() {
 		// Nominal belum bisa dipercaya sama sekali (ada bukti yang tidak
@@ -308,6 +352,10 @@ func (s *OCRService) Baca(ctx context.Context, orderID string) (OCRHasil, error)
 	}
 	hasilVerif, err := s.verify.MarkVerified(ctx, SystemActor(), orderID, in)
 	if err != nil {
+		if errors.Is(err, ErrOCRSnapshotStale) {
+			out.Dilewati, out.Sebab = true, "snapshot reevaluate berubah sebelum commit final"
+			return out, nil
+		}
 		if errors.Is(err, ErrAlreadyDone) || errors.Is(err, ErrNotFound) {
 			// Pesanan sudah selesai/dihapus di antara pembacaan dan
 			// keputusan: tidak ada yang perlu dilakukan, bukan kegagalan.
@@ -415,9 +463,14 @@ func Nilai(totalPesanan int64, tanggalOrder time.Time, bukti []PembacaanBukti, r
 		if strings.TrimSpace(b.RekAkhir) == "" {
 			return k.tolak(AlasanTidakTerbaca, "nomor rekening tujuan tidak terbaca")
 		}
-		if !rekeningCocok(b.RekAkhir, rules.DigitRek, rekeningAktif) {
+		matched, ambiguous := rekeningTunggal(b.Bank, b.RekAkhir, rules.DigitRek, rekeningAktif)
+		if ambiguous {
+			return k.tolak(AlasanRekeningBeda, "rekening tujuan ambigu pada rekening efektif cabang")
+		}
+		if matched == nil {
 			return k.tolak(AlasanRekeningBeda, "rekening tujuan tidak cocok dengan rekening aktif")
 		}
+		k.ProofDestinations = append(k.ProofDestinations, ProofDestination{PaymentProofID: b.ProofID, BankAccountID: matched.ID})
 	}
 
 	// 3. Tanggal transfer tidak boleh lebih tua dari tanggal pesanan − mundur.
@@ -475,22 +528,36 @@ func ringkasCatatan(s string) string {
 // pemeriksaan, dan mencocokkan lebih sedikit digit daripada yang disetel akan
 // meloloskan rekening yang salah (fail closed → perlu review).
 func rekeningCocok(baca string, digit int64, rekening []bank.Account) bool {
+	matched, ambiguous := rekeningTunggal("", baca, digit, rekening)
+	return matched != nil && !ambiguous
+}
+
+func rekeningTunggal(bankBaca, baca string, digit int64, rekening []bank.Account) (*bank.Account, bool) {
 	b := digitSaja(baca)
 	n := int(digit)
 	if n <= 0 || len(b) < n {
-		return false
+		return nil, false
 	}
 	ekorBaca := b[len(b)-n:]
-	for _, r := range rekening {
+	var matched *bank.Account
+	for i := range rekening {
+		r := rekening[i]
+		if strings.TrimSpace(bankBaca) != "" && !strings.EqualFold(strings.TrimSpace(bankBaca), r.Bank) {
+			continue
+		}
 		a := digitSaja(r.Nomor)
 		if len(a) < n {
 			continue
 		}
 		if a[len(a)-n:] == ekorBaca {
-			return true
+			if matched != nil {
+				return nil, true
+			}
+			copy := r
+			matched = &copy
 		}
 	}
-	return false
+	return matched, false
 }
 
 // digitSaja membuang semua karakter selain angka.

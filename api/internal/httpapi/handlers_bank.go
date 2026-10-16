@@ -30,6 +30,11 @@ type updateBankAccountRequest struct {
 	IsActive    *bool   `json:"is_active"`
 }
 
+type replaceBranchBankAccountsRequest struct {
+	ExpectedVersion int64    `json:"expected_version" validate:"min=0"`
+	BankAccountIDs  []string `json:"bank_account_ids" validate:"dive,uuid"`
+}
+
 // bankAccountsPublic mengembalikan HANYA rekening AKTIF untuk instruksi
 // pembayaran Customer Portal dan referensi pencocokan rekening tujuan pada
 // verifikasi OCR (PRD §4.6, §5). Rekening nonaktif tidak pernah muncul.
@@ -37,11 +42,25 @@ func (a *API) bankAccountsPublic(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Bank == nil {
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan rekening bank belum tersedia.")
 	}
-	list, err := a.d.Bank.Active(r.Context())
+	set, err := a.d.Bank.EffectiveForActor(r.Context(), auth.ActorFrom(r.Context()))
 	if err != nil {
 		return mapDomainErr(err)
 	}
-	httpx.OK(w, data(list))
+	available := len(set.Accounts) > 0
+	reason := ""
+	if !available {
+		reason = "NO_ASSIGNED_BANK_ACCOUNT"
+	}
+	items := make([]map[string]any, 0, len(set.Accounts))
+	for _, account := range set.Accounts {
+		items = append(items, map[string]any{
+			"id": account.ID, "bank": account.Bank, "nama_pemilik": account.NamaPemilik,
+			"nomor": account.Nomor, "display_nomor": account.DisplayNomor(), "is_active": account.IsActive,
+		})
+	}
+	httpx.OK(w, map[string]any{"data": items, "meta": map[string]any{
+		"payment_available": available, "allowlist_version": set.Version, "reason": reason,
+	}})
 	return nil
 }
 
@@ -56,6 +75,36 @@ func (a *API) adminBankAccounts(w http.ResponseWriter, r *http.Request) error {
 		return mapDomainErr(err)
 	}
 	httpx.OK(w, data(list))
+	return nil
+}
+
+func (a *API) adminBranchBankAccounts(w http.ResponseWriter, r *http.Request) error {
+	if a.d.Bank == nil {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan rekening bank belum tersedia.")
+	}
+	out, err := a.d.Bank.ListAssignments(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"))
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.OK(w, data(out))
+	return nil
+}
+
+func (a *API) adminBranchBankAccountsReplace(w http.ResponseWriter, r *http.Request) error {
+	if a.d.Bank == nil {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan rekening bank belum tersedia.")
+	}
+	var req replaceBranchBankAccountsRequest
+	if err := httpx.DecodeJSON(r, &req); err != nil {
+		return err
+	}
+	out, err := a.d.Bank.ReplaceAssignments(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"), bank.ReplaceInput{
+		ExpectedVersion: req.ExpectedVersion, BankAccountIDs: req.BankAccountIDs,
+	})
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.OK(w, map[string]any{"data": out, "meta": map[string]any{"changed": out.Changed}})
 	return nil
 }
 

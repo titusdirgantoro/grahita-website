@@ -192,8 +192,8 @@ func insertOrder(t *testing.T, f *pgFixture, branchID, status, nomor string) str
 		t.Fatalf("seed pesanan %s: %v", status, err)
 	}
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-		 VALUES ($1, 1, 'product', (SELECT id FROM products LIMIT 1), 'Bio Magnetik', 'pcs', 1, 100000)`,
+		`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
+		 VALUES ($1, 1, 'product', (SELECT id FROM products LIMIT 1), 'Bio Magnetik', 1, 100000)`,
 		id); err != nil {
 		t.Fatalf("seed baris pesanan: %v", err)
 	}

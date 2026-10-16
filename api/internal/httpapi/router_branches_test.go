@@ -293,7 +293,7 @@ func TestApiGenerateTokenRegistrasiSekaliPakai(t *testing.T) {
 	cookies, csrf := login(t, bs.srv, "budi@example.test")
 
 	// Cabang D baru, belum punya akun dan belum punya token.
-	bs.repo.Put(branch.Branch{ID: "br-d", Nama: "Grahita Cabang D", NamaKepala: "Kepala D", Email: "d@example.test", IsActive: true})
+	bs.repo.Put(branch.Branch{ID: "br-d", Nama: "Grahita Cabang D", NamaKepala: "Kepala D", Email: "d@example.test", IdentityStatus: branch.IdentityReady, IsActive: true})
 
 	sebelum := time.Now().UTC()
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, bs.srv.URL+"/api/v1/admin/branches/br-d/token", "", cookies, csrf)
@@ -366,12 +366,20 @@ func TestApiGenerateTokenRegistrasiSekaliPakai(t *testing.T) {
 	assertErrorShape(t, body, "BRANCH_HAS_ACCOUNT")
 
 	// Cabang nonaktif tidak boleh memegang token.
-	bs.repo.Put(branch.Branch{ID: "br-e", Nama: "Grahita Cabang E", NamaKepala: "Kepala E", Email: "e@example.test", IsActive: false})
+	bs.repo.Put(branch.Branch{ID: "br-e", Nama: "Grahita Cabang E", NamaKepala: "Kepala E", Email: "e@example.test", IdentityStatus: branch.IdentityReady, IsActive: false})
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, bs.srv.URL+"/api/v1/admin/branches/br-e/token", "", cookies, csrf)
 	if status != http.StatusConflict {
 		t.Fatalf("cabang nonaktif harus 409, dapat %d (%v)", status, body)
 	}
 	assertErrorShape(t, body, "BRANCH_INACTIVE")
+
+	// Identitas belum lengkap harus fail-closed dan tidak boleh memperoleh token.
+	bs.repo.Put(branch.Branch{ID: "br-f", Nama: "Grahita Cabang F", IdentityStatus: branch.IdentityIncomplete, IsActive: true})
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, bs.srv.URL+"/api/v1/admin/branches/br-f/token", "", cookies, csrf)
+	if status != http.StatusConflict {
+		t.Fatalf("cabang dengan identitas belum lengkap harus 409, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "BRANCH_IDENTITY_INCOMPLETE")
 
 	// Cabang tak dikenal → 404.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, bs.srv.URL+"/api/v1/admin/branches/tidak-ada/token", "", cookies, csrf)

@@ -188,7 +188,7 @@ func TestKapabilitasUserManagementDitegakkanService(t *testing.T) {
 
 func TestNonaktifkanAkunCabangMencabutSesi(t *testing.T) {
 	h := newHarness(t)
-	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", Email: "a@example.test", IsActive: true, BranchActive: true})
+	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", NamaKepala: "Kepala A", Email: "a@example.test", IdentityStatus: "registered", IsActive: true, BranchActive: true})
 
 	u, err := h.svc.SetBranchUserActive(context.Background(), adminActor(auth.RoleManager), "usr-a", false)
 	if err != nil {
@@ -216,7 +216,7 @@ func TestNonaktifkanAkunCabangMencabutSesi(t *testing.T) {
 
 func TestKirimUlangResetCabang(t *testing.T) {
 	h := newHarness(t)
-	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", Email: "a@example.test", IsActive: true, BranchActive: true})
+	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", NamaKepala: "Kepala A", Email: "a@example.test", IdentityStatus: "registered", IsActive: true, BranchActive: true})
 	h.repo.PutBranch(users.BranchUser{BranchID: "br-b", Nama: "Grahita B", Email: "b@example.test", BranchActive: true})
 
 	if err := h.svc.ResendBranchReset(context.Background(), adminActor(auth.RoleManager), "usr-a", 45*time.Minute); err != nil {
@@ -233,6 +233,24 @@ func TestKirimUlangResetCabang(t *testing.T) {
 	// Cabang belum registrasi tidak punya akun untuk direset.
 	if err := h.svc.ResendBranchReset(context.Background(), adminActor(auth.RoleManager), "tidak-ada", time.Minute); !errors.Is(err, users.ErrNotFound) {
 		t.Errorf("id tak dikenal harus ErrNotFound, dapat %v", err)
+	}
+}
+
+func TestIdentitasIncompleteMenolakAktivasiDanResetCabang(t *testing.T) {
+	h := newHarness(t)
+	h.repo.PutBranch(users.BranchUser{
+		BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", Email: "a@example.test",
+		IdentityStatus: "identity_incomplete", HasAccount: true, BranchActive: true,
+	})
+
+	if _, err := h.svc.SetBranchUserActive(context.Background(), adminActor(auth.RoleManager), "usr-a", true); !errors.Is(err, users.ErrIdentityIncomplete) {
+		t.Fatalf("aktivasi harus ditolak ErrIdentityIncomplete, dapat %v", err)
+	}
+	if err := h.svc.ResendBranchReset(context.Background(), adminActor(auth.RoleManager), "usr-a", time.Minute); !errors.Is(err, users.ErrIdentityIncomplete) {
+		t.Fatalf("reset harus ditolak ErrIdentityIncomplete, dapat %v", err)
+	}
+	if len(h.resetter.sent) != 0 {
+		t.Fatalf("token reset tidak boleh dibuat, dapat %d permintaan", len(h.resetter.sent))
 	}
 }
 

@@ -45,6 +45,8 @@ import (
 	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/fulfillment"
 	"github.com/grahita/portal/api/internal/httpapi"
+	"github.com/grahita/portal/api/internal/masterimport"
+	masterimportpg "github.com/grahita/portal/api/internal/masterimport/postgres"
 	"github.com/grahita/portal/api/internal/notification"
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
 	"github.com/grahita/portal/api/internal/order"
@@ -430,6 +432,12 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		users.WithEmailQueue(notification.NewQueue(notifSvc)),
 		users.WithResetURLBuilder(resetURL),
 	)
+	// Penjadwal insert-only dipakai mutasi kebijakan rekening serta submit,
+	// unggah bukti, verifikasi, dan pekerjaan domain lainnya.
+	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
+	}
 
 	// Master cabang + token registrasi sekali pakai (F1-06).
 	branchSvc := branch.NewService(branchpg.New(pool), clock.System())
@@ -461,15 +469,6 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// Setelan sistem (F1-09) sekaligus sumber angka server untuk pesanan:
 	// biaya_packaging pesanan Sertifikat dan cnc_hari tenggat C&C (F1-12).
 	settingsSvc := settings.NewService(settingspg.New(pool))
-	// Penjadwal pekerjaan River (insert-only) dipakai beberapa repository untuk
-	// MENITIPKAN job DI DALAM transaksinya; worker-lah yang menjalankannya.
-	// Sejak F2-26 submit pesanan juga menitipkan pekerjaan pembacaan bukti,
-	// jadi penjadwal ini disiapkan sebelum repository pesanan dibuat.
-	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
-	if err != nil {
-		return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
-	}
-
 	// Pesanan cabang: draft, editor order line, aturan Sertifikat/packaging,
 	// daftar dan detail (F1-11 + F1-12). Sumber setelan AI dipasang supaya
 	// pesanan yang dikirim saat `ai.aktif` menyala menitipkan pekerjaan
@@ -477,7 +476,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// SystemDesign.md §4.2).
 	orderRepo := orderpg.New(pool, orderpg.WithJobQueue(jobQueue))
 	orderSvc := order.NewService(orderRepo, catalogSvc, settingsSvc,
-		order.WithBranchFlags(branchSvc), order.WithClock(clock.System()),
+		order.WithBranchFlags(branchSvc), order.WithPaymentAccounts(bankSvc), order.WithClock(clock.System()),
 		order.WithAISettings(settingsSvc))
 
 	// Riwayat & detail pesanan seluruh cabang untuk admin Pusat (F1-15).
@@ -508,6 +507,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	paymentSvc := payment.NewService(paymentRepo, paymentRepo, store, settingsSvc,
 		payment.WithAISettings(settingsSvc))
 	verifySvc := payment.NewVerificationService(paymentRepo)
+	reevaluateSvc := payment.NewReevaluateService(paymentRepo, settingsSvc)
 
 	// Revisi invoice berversi (F2-25): repository pesanan dengan penjadwal
 	// River supaya transaksi revisi menitipkan pekerjaan "render invoice versi
@@ -527,6 +527,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// di dalam transaksi pembuatan baris `report_jobs`, jadi tidak mungkin ada
 	// pekerjaan yang dijadwalkan tanpa barisnya.
 	reportSvc := report.NewService(reportpg.New(pool, reportpg.WithJobQueue(jobQueue)), store)
+	masterImportSvc := masterimport.NewService(masterimportpg.New(pool, cfg.ImportSnapshotKey), masterimport.NewExcelParser(masterimport.ExpectedHash), cfg.AppEnv)
 
 	// Cadangan terenkripsi (F1-21). Service yang sama dengan worker; di mode
 	// API ia dipakai untuk MENAMPILKAN status di halaman Pengaturan
@@ -552,6 +553,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Dashboard:           dashboardSvc,
 		Payments:            paymentSvc,
 		Verify:              verifySvc,
+		Reevaluate:          reevaluateSvc,
 		Documents:           documentSvc,
 		Reports:             reportSvc,
 		Users:               usersSvc,
@@ -560,6 +562,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Registration:        registrationSvc,
 		Tutorial:            tutorialSvc,
 		Audit:               audit.NewService(auditRepo),
+		MasterImport:        masterImportSvc,
 		Emails:              notifSvc,
 		Backups:             backupSvc,
 		Storage:             store,

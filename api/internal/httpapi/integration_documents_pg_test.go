@@ -99,20 +99,19 @@ func (f *pgFixture) seedPesananDone(t *testing.T, branchID, nomor string, isCNC 
 	baris := []struct {
 		no     int
 		nama   string
-		satuan string
 		qty    int
 		harga  int64
 		serial string
 	}{
-		{1, "Bio Magnetik", "pcs", 2, 100000, serial1},
-		{2, "Bio Listrik", "pcs", 1, 50000, serial2},
+		{1, "Bio Magnetik", 2, 100000, serial1},
+		{2, "Bio Listrik", 1, 50000, serial2},
 	}
 	for _, b := range baris {
 		if _, err := f.pool.Exec(ctx,
-			`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, satuan_snapshot,
+			`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot,
 			                          qty, harga_satuan, serial_number)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-			id, b.no, produkID, b.nama, b.satuan, b.qty, b.harga, b.serial); err != nil {
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			id, b.no, produkID, b.nama, b.qty, b.harga, b.serial); err != nil {
 			t.Fatalf("seed baris pesanan %s: %v", nomor, err)
 		}
 	}
@@ -255,7 +254,7 @@ func TestPGDokumenGenerateIdempotenDanIsolasi(t *testing.T) {
 		t.Errorf("nomor di surat jalan = %q", v)
 	}
 	for i, s := range pesananA.Serials {
-		sel := fmt.Sprintf("E%d", 9+i)
+		sel := fmt.Sprintf("D%d", 9+i)
 		if v, _ := wb.GetCellValue(document.SheetSuratJalan, sel); v != s {
 			t.Errorf("%s = %q, mau %q", sel, v, s)
 		}

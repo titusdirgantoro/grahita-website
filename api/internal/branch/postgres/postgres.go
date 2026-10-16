@@ -17,6 +17,7 @@ import (
 
 	"github.com/grahita/portal/api/internal/audit"
 	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
+	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -50,6 +51,7 @@ func (r *Repo) List(ctx context.Context, f branch.Filter) ([]branch.Branch, erro
 	for _, row := range rows {
 		out = append(out, branch.Branch{
 			ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
+			JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
 			Telepon: row.Telepon, IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
 			PajakIn: row.PajakIn, IsActive: row.IsActive,
 			TokenPrefix: row.TokenPrefix, TokenExpiresAt: row.TokenExpiresAt,
@@ -69,6 +71,7 @@ func (r *Repo) Get(ctx context.Context, id string) (branch.Branch, error) {
 	}
 	return branch.Branch{
 		ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
+		JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
 		Telepon: row.Telepon, IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
 		PajakIn: row.PajakIn, IsActive: row.IsActive,
 		TokenPrefix: row.TokenPrefix, TokenExpiresAt: row.TokenExpiresAt,
@@ -84,14 +87,16 @@ func (r *Repo) Create(ctx context.Context, in branch.Branch, rec audit.Entry) (s
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	id, err := r.q.WithTx(tx).CreateBranchDetail(ctx, sqlc.CreateBranchDetailParams{
-		Nama:       in.Nama,
-		NamaKepala: in.NamaKepala,
-		Email:      in.Email,
-		Telepon:    pgtypes.Text(in.Telepon),
-		IsCnc:      in.IsCNC,
-		IsSpecial:  in.IsSpecial,
-		PajakIn:    in.PajakIn,
-		IsActive:   in.IsActive,
+		Nama:           in.Nama,
+		NamaKepala:     pgtypes.Text(in.NamaKepala),
+		Email:          pgtypes.Text(in.Email),
+		JabatanKepala:  pgtypes.Text(in.JabatanKepala),
+		IdentityStatus: sqlc.BranchIdentityStatus(in.IdentityStatus),
+		Telepon:        pgtypes.Text(in.Telepon),
+		IsCnc:          in.IsCNC,
+		IsSpecial:      in.IsSpecial,
+		PajakIn:        in.PajakIn,
+		IsActive:       in.IsActive,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -114,61 +119,149 @@ func (r *Repo) Create(ctx context.Context, in branch.Branch, rec audit.Entry) (s
 	return id, nil
 }
 
-// Update menyimpan perubahan penuh satu cabang. Email akun cabang ikut
-// diselaraskan bila email cabangnya berubah.
-func (r *Repo) Update(ctx context.Context, next branch.Branch, rec audit.Entry) error {
+// Update menerapkan patch terhadap state terkini setelah mengunci cabang lalu
+// seluruh akun cabangnya. Urutan ini mencegah snapshot pra-revokasi ditulis
+// kembali oleh PUT parsial yang lama.
+func (r *Repo) Update(ctx context.Context, id string, p branch.Patch, actor auth.Actor) (branch.Branch, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("mulai transaksi ubah cabang: %w", err)
+		return branch.Branch{}, fmt.Errorf("mulai transaksi ubah cabang: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
+		return branch.Branch{}, fmt.Errorf("kunci kebijakan rekening cabang: %w", err)
+	}
+	accountRows, err := tx.Query(ctx, `SELECT ba.id FROM bank_accounts ba
+ JOIN branch_bank_accounts x ON x.bank_account_id=ba.id
+ WHERE x.branch_id=$1 AND x.is_allowed ORDER BY ba.id FOR UPDATE`, id)
+	if err != nil {
+		return branch.Branch{}, fmt.Errorf("kunci rekening assignment cabang: %w", err)
+	}
+	for accountRows.Next() {
+		var accountID string
+		if err := accountRows.Scan(&accountID); err != nil {
+			accountRows.Close()
+			return branch.Branch{}, err
+		}
+	}
+	accountRows.Close()
 
-	// Kunci baris sekaligus memastikan cabangnya benar-benar ada, dan baca
-	// email lama untuk tahu apakah email login akun perlu ikut diubah.
-	var emailLama string
-	err = tx.QueryRow(ctx, `SELECT email::text FROM branches WHERE id = $1 FOR UPDATE`, next.ID).Scan(&emailLama)
+	var cur branch.Branch
+	var namaKepala, email, jabatanKepala *string
+	err = tx.QueryRow(ctx, `SELECT id, nama, nama_kepala, email::text, jabatan_kepala,
+       COALESCE(telepon, ''), is_cnc, is_special, pajak_in, is_active,
+       identity_status::text
+  FROM branches WHERE id = $1 FOR UPDATE`, id).Scan(
+		&cur.ID, &cur.Nama, &namaKepala, &email, &jabatanKepala, &cur.Telepon,
+		&cur.IsCNC, &cur.IsSpecial, &cur.PajakIn, &cur.IsActive, &cur.IdentityStatus,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return branch.ErrNotFound
+		return branch.Branch{}, branch.ErrNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("baca cabang saat ini: %w", err)
+		return branch.Branch{}, fmt.Errorf("baca cabang saat ini: %w", err)
+	}
+	cur.NamaKepala = textOrEmpty(namaKepala)
+	cur.Email = textOrEmpty(email)
+	cur.JabatanKepala = textOrEmpty(jabatanKepala)
+
+	rows, err := tx.Query(ctx, `SELECT id FROM branch_users WHERE branch_id=$1 FOR UPDATE`, id)
+	if err != nil {
+		return branch.Branch{}, fmt.Errorf("kunci akun cabang: %w", err)
+	}
+	hasAccount := rows.Next()
+	rows.Close()
+	if rows.Err() != nil {
+		return branch.Branch{}, fmt.Errorf("baca akun cabang: %w", rows.Err())
+	}
+
+	next, err := branch.ApplyPatch(cur, p, hasAccount)
+	if err != nil {
+		return branch.Branch{}, err
+	}
+	if next.Email != "" && next.Email != cur.Email {
+		var taken bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+ SELECT 1 FROM branches WHERE email=$1 AND id<>$2
+ UNION ALL SELECT 1 FROM admin_users WHERE email=$1
+)`, next.Email, id).Scan(&taken); err != nil {
+			return branch.Branch{}, fmt.Errorf("periksa email cabang: %w", err)
+		}
+		if taken {
+			return branch.Branch{}, branch.ErrEmailTaken
+		}
 	}
 
 	q := r.q.WithTx(tx)
 	if err := q.UpdateBranchDetail(ctx, sqlc.UpdateBranchDetailParams{
-		Nama:       next.Nama,
-		NamaKepala: next.NamaKepala,
-		Email:      next.Email,
-		Telepon:    pgtypes.Text(next.Telepon),
-		IsCnc:      next.IsCNC,
-		IsSpecial:  next.IsSpecial,
-		PajakIn:    next.PajakIn,
-		IsActive:   next.IsActive,
-		ID:         next.ID,
+		Nama:           next.Nama,
+		NamaKepala:     pgtypes.Text(next.NamaKepala),
+		Email:          pgtypes.Text(next.Email),
+		JabatanKepala:  pgtypes.Text(next.JabatanKepala),
+		IdentityStatus: sqlc.BranchIdentityStatus(next.IdentityStatus),
+		Telepon:        pgtypes.Text(next.Telepon),
+		IsCnc:          next.IsCNC,
+		IsSpecial:      next.IsSpecial,
+		PajakIn:        next.PajakIn,
+		IsActive:       next.IsActive,
+		ID:             next.ID,
 	}); err != nil {
 		if isUniqueViolation(err) {
-			return branch.ErrEmailTaken
+			return branch.Branch{}, branch.ErrEmailTaken
 		}
-		return fmt.Errorf("query UpdateBranchDetail: %w", err)
+		return branch.Branch{}, fmt.Errorf("query UpdateBranchDetail: %w", err)
 	}
-	if next.Email != emailLama {
+	if next.IsActive != cur.IsActive {
+		if _, err := tx.Exec(ctx, `UPDATE branches SET bank_allowlist_version=bank_allowlist_version+1 WHERE id=$1`, id); err != nil {
+			return branch.Branch{}, fmt.Errorf("naikkan versi allowlist status cabang: %w", err)
+		}
+	}
+	if next.Email != "" && next.Email != cur.Email {
 		if err := q.UpdateBranchLoginEmail(ctx, sqlc.UpdateBranchLoginEmailParams{
 			Email: next.Email, BranchID: next.ID,
 		}); err != nil {
 			if isUniqueViolation(err) {
-				return branch.ErrEmailTaken
+				return branch.Branch{}, branch.ErrEmailTaken
 			}
-			return fmt.Errorf("query UpdateBranchLoginEmail: %w", err)
+			return branch.Branch{}, fmt.Errorf("query UpdateBranchLoginEmail: %w", err)
+		}
+	}
+	if next.IdentityStatus == branch.IdentityIncomplete {
+		perintah := []string{
+			`UPDATE branch_users
+ SET is_active=false, password_hash='!identity-revoked!', updated_at=now()
+ WHERE branch_id=$1 AND (is_active OR password_hash <> '!identity-revoked!')`,
+			`UPDATE registration_tokens
+ SET revoked_at=now(), used_at=COALESCE(used_at, now())
+ WHERE branch_id=$1 AND used_at IS NULL AND revoked_at IS NULL`,
+			`UPDATE password_reset_tokens SET revoked_at=now()
+ WHERE actor_kind='branch' AND used_at IS NULL AND revoked_at IS NULL
+   AND user_id IN (SELECT id FROM branch_users WHERE branch_id=$1)`,
+			`UPDATE sessions SET revoked_at=now()
+ WHERE revoked_at IS NULL AND (branch_id=$1 OR user_id IN (SELECT id FROM branch_users WHERE branch_id=$1))`,
+		}
+		for _, query := range perintah {
+			if _, err := tx.Exec(ctx, query, next.ID); err != nil {
+				return branch.Branch{}, fmt.Errorf("cabut akses identitas incomplete: %w", err)
+			}
 		}
 	}
 
+	rec := audit.NewEntry(ctx, actor, audit.EntityBranch, id, audit.ActionUpdate, cur, next)
 	if err := auditpg.Insert(ctx, tx, rec); err != nil {
-		return err
+		return branch.Branch{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit ubah cabang: %w", err)
+		return branch.Branch{}, fmt.Errorf("commit ubah cabang: %w", err)
 	}
-	return nil
+	return next, nil
+}
+
+func textOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 // Delete menghapus cabang beserta akun, sesi, dan tokennya. Pemanggil sudah
@@ -226,7 +319,11 @@ func (r *Repo) IssueToken(ctx context.Context, branchID string, tokenHash []byte
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var aktif bool
-	err = tx.QueryRow(ctx, `SELECT is_active FROM branches WHERE id = $1 FOR UPDATE`, branchID).Scan(&aktif)
+	var status string
+	var lengkap bool
+	err = tx.QueryRow(ctx, `SELECT is_active, identity_status::text,
+       (nama_kepala IS NOT NULL AND email IS NOT NULL)
+  FROM branches WHERE id = $1 FOR UPDATE`, branchID).Scan(&aktif, &status, &lengkap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return branch.ErrNotFound
 	}
@@ -235,6 +332,9 @@ func (r *Repo) IssueToken(ctx context.Context, branchID string, tokenHash []byte
 	}
 	if !aktif {
 		return branch.ErrInactive
+	}
+	if status != branch.IdentityReady || !lengkap {
+		return branch.ErrIdentityIncomplete
 	}
 	var punyaAkun bool
 	if err := tx.QueryRow(ctx,
@@ -289,7 +389,7 @@ func (r *Repo) HasAccount(ctx context.Context, id string) (bool, error) {
 // EmailTaken melaporkan apakah email sudah dipakai cabang lain.
 func (r *Repo) EmailTaken(ctx context.Context, email, exceptID string) (bool, error) {
 	ada, err := r.q.BranchEmailTaken(ctx, sqlc.BranchEmailTakenParams{
-		Email: email, ExceptID: pgtypes.UUID(exceptID),
+		Email: pgtypes.Text(email), ExceptID: pgtypes.UUID(exceptID),
 	})
 	if err != nil {
 		return false, fmt.Errorf("query BranchEmailTaken: %w", err)

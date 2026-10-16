@@ -28,6 +28,7 @@ import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
 import { AuditPage, type FilterAudit } from "./pages/audit";
+import { ImporImpactPage } from "./pages/impor-impact";
 
 /** RouterLink menyambungkan shell (yang lepas router) ke <Link> TanStack. */
 function RouterLink({ to, className, active, children, title }: ShellLinkProps) {
@@ -175,6 +176,11 @@ const pesananDetailRoute = createRoute({
 });
 const cabangRoute = createRoute({ getParentRoute: () => shellRoute, path: "/cabang", component: CabangPage });
 const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogPage });
+const imporImpactRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/impor-impact",
+  component: ImporImpactPage,
+});
 const rekeningRoute = createRoute({ getParentRoute: () => shellRoute, path: "/rekening", component: RekeningPage });
 const reportingRoute = createRoute({ getParentRoute: () => shellRoute, path: "/reporting", component: ReportingPage });
 const penggunaRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pengguna", component: PenggunaPage });
@@ -209,6 +215,7 @@ const routeTree = rootRoute.addChildren([
     pesananDetailRoute,
     cabangRoute,
     katalogRoute,
+    imporImpactRoute,
     rekeningRoute,
     reportingRoute,
     penggunaRoute,

@@ -28,12 +28,11 @@ const penggunaCabang = {
 };
 
 const katalog = [
-  { id: "p1", nama: "Bio Magnetik", jenis: "reguler", satuan: "pcs", harga: 100000 },
+  { id: "p1", nama: "Bio Magnetik", jenis: "reguler", harga: 100000 },
   {
     id: "p7",
     nama: "Sertifikat Psikotes",
     jenis: "sertifikat",
-    satuan: "lembar",
     harga: 0,
     biaya_packaging: 3000,
   },
@@ -59,7 +58,6 @@ const draftLengkap = {
       jenis: "product",
       product_id: "p1",
       nama: "Bio Magnetik",
-      satuan: "pcs",
       qty: 3,
       harga_satuan: 100000,
       subtotal: 300000,
@@ -85,7 +83,6 @@ const terkirim = {
       jenis: "product",
       product_id: "p1",
       nama: "Bio Magnetik",
-      satuan: "pcs",
       qty: 5,
       harga_satuan: 100000,
       subtotal: 500000,
@@ -123,8 +120,7 @@ const sertifikatCNC = {
       jenis: "product",
       product_id: "p7",
       nama: "Sertifikat Psikotes",
-      satuan: "lembar",
-      qty: 10,
+        qty: 10,
       harga_satuan: 0,
       subtotal: 0,
     },
@@ -132,7 +128,6 @@ const sertifikatCNC = {
       line_no: 2,
       jenis: "packaging",
       nama: "Biaya packaging",
-      satuan: "paket",
       qty: 1,
       harga_satuan: 3000,
       subtotal: 3000,

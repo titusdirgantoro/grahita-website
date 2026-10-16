@@ -165,6 +165,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminVerify))
 					r.Post("/orders/{id}/verify", a.adapt(a.adminOrderVerify))
+					r.Post("/orders/{id}/verification/reevaluate-destination", a.adapt(a.adminOrderReevaluateDestination))
 				})
 				// Revisi invoice berversi (F2-25): kapabilitas sendiri
 				// `admin.revise` (Superadmin selalu; Manager hanya bila setelan
@@ -245,12 +246,23 @@ func NewRouter(d Deps) http.Handler {
 					r.Use(a.requireCap(auth.CapAdminAudit))
 					r.Get("/audit-logs", a.adapt(a.adminAuditLogs))
 				})
+				// Preview, apply idempoten, dan rollback staging master Impact:
+				// Superadmin saja dan seluruh POST tetap dilindungi CSRF.
+				r.Group(func(r chi.Router) {
+					r.Use(a.requireCap(auth.CapAdminMasterImport))
+					r.Post("/master-imports/impact/preview", a.adapt(a.adminMasterImpactPreview))
+					r.Get("/master-imports/impact/{id}/evidence", a.adapt(a.adminMasterImpactEvidence))
+					r.Post("/master-imports/impact/{id}/apply", a.adapt(a.adminMasterImpactApply))
+					r.Post("/master-imports/impact/apply-runs/{id}/rollback", a.adapt(a.adminMasterImpactRollback))
+				})
 				// Rekening bank: khusus Superadmin (PRD §2.1, §4.6).
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminBank))
 					r.Get("/bank-accounts", a.adapt(a.adminBankAccounts))
 					r.Post("/bank-accounts", a.adapt(a.adminBankAccountCreate))
 					r.Put("/bank-accounts/{id}", a.adapt(a.adminBankAccountUpdate))
+					r.Get("/branches/{id}/bank-accounts", a.adapt(a.adminBranchBankAccounts))
+					r.Put("/branches/{id}/bank-accounts", a.adapt(a.adminBranchBankAccountsReplace))
 				})
 				// Reporting & ekspor Excel: khusus Superadmin (PRD §2.1, §4.7).
 				// Manager ditolak 403 di sini (dan lagi di layer service), bukan

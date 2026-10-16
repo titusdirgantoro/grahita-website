@@ -31,7 +31,7 @@ SELECT sha256 FROM payment_proofs
 -- Mengunci baris pesanan selama transaksi unggah bukti: hitung + insert jadi
 -- aman-balapan per pesanan (dua permintaan bersamaan tidak bisa sama-sama
 -- membaca hitungan di bawah batas).
-SELECT o.id FROM orders o WHERE o.id = sqlc.arg(id)::uuid FOR UPDATE;
+SELECT o.id, o.branch_id, o.is_cnc FROM orders o WHERE o.id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: InsertPaymentProof :one
 -- Menyimpan metadata satu bukti. sha256 NOT NULL sehingga duplikat isi pada
@@ -95,7 +95,8 @@ VALUES (sqlc.arg(order_id)::uuid, sqlc.arg(icon), sqlc.arg(teks),
 -- `submitted` yang dinilai), total pesanan, tanggal bisnis (toleransi mundur),
 -- dan sub-status verifikasi yang sedang berlaku.
 SELECT o.id,
-       o.status::text                              AS status,
+	   o.branch_id,
+	   o.status::text                              AS status,
        o.total,
        o.tanggal,
        o.verif_status::text                        AS verif_status,

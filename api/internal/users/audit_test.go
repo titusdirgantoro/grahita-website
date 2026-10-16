@@ -183,7 +183,7 @@ func TestAuditStatusAkunCabangSatuEventDanNoOp(t *testing.T) {
 // PostgreSQL nyata); di sini yang diperiksa adalah apa yang diteruskan service.
 func TestAuditTautanResetDanKirimUlangUndanganLewatJalurToken(t *testing.T) {
 	h := harnessAudit(t)
-	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", Email: "a@example.test", IsActive: true, BranchActive: true})
+	h.repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita A", NamaKepala: "Kepala A", Email: "a@example.test", IdentityStatus: "registered", IsActive: true, BranchActive: true})
 	h.repo.PutAdmin(users.AdminUser{ID: "adm-undang", Nama: "Dewi", Email: "dewi@example.test", Role: auth.RoleManager, IsActive: true})
 	aktor := adminActor(auth.RoleSuperadmin)
 

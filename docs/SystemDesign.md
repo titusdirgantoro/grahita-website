@@ -99,7 +99,6 @@ type OrderLine struct {
     Jenis        LineKind       // product | packaging
     ProductID    *uuid.UUID
     NamaSnapshot string
-    SatuanSnapshot string
     Qty          int
     HargaSatuan  int64          // snapshot harga cabang saat submit
     Subtotal     int64
@@ -362,4 +361,4 @@ Dokumen disimpan di object storage dengan kunci `documents/{order_id}/{jenis}-{v
 
 ## 10. Catatan migrasi data awal
 
-Sebelum go-live: impor 16 cabang beserta email dan kepala cabang, 7 produk dengan satuan, dan matriks harga per cabang (sel kosong berarti produk tidak dijual ke cabang itu) dari spreadsheet yang ada melalui skrip `cmd/seed`. Nomor invoice historis **tidak** diimpor ke counter; counter dimulai dari 1 pada bulan go-live kecuali diputuskan lain.
+Sebelum go-live: impor 34 cabang dengan identitas nullable (`nama_kepala`, `jabatan_kepala`, dan email) serta status `identity_incomplete | ready | registered`, produk tanpa field satuan, dan matriks harga per cabang (sel kosong berarti produk tidak dijual ke cabang itu) dari spreadsheet yang ada melalui pipeline import tervalidasi. `qty` tetap menyatakan jumlah item. Nomor invoice historis **tidak** diimpor ke counter; counter dimulai dari 1 pada bulan go-live kecuali diputuskan lain.

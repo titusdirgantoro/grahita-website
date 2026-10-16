@@ -40,13 +40,12 @@ type Memory struct {
 }
 
 // MemoryProduct adalah keadaan satu produk di mata Memory: master (nama,
-// satuan, jenis, aktif) beserta harga untuk cabang tersebut.
+// jenis, aktif) beserta harga untuk cabang tersebut.
 type MemoryProduct struct {
-	Nama   string
-	Satuan string
-	Jenis  string // "" diperlakukan sebagai produk reguler
-	Aktif  bool
-	Harga  int64
+	Nama  string
+	Jenis string // "" diperlakukan sebagai produk reguler
+	Aktif bool
+	Harga int64
 }
 
 // NewMemory membuat penyimpanan pesanan in-memory kosong.
@@ -257,18 +256,17 @@ func (m *Memory) Submit(_ context.Context, req SubmitRequest) (Order, error) {
 	lines := make([]SubmitLine, 0, len(o.Lines))
 	for _, l := range o.Lines {
 		sl := SubmitLine{
-			LineNo:     l.LineNo,
-			Jenis:      l.Jenis,
-			Qty:        l.Qty,
-			NamaLama:   l.Nama,
-			SatuanLama: l.Satuan,
+			LineNo:   l.LineNo,
+			Jenis:    l.Jenis,
+			Qty:      l.Qty,
+			NamaLama: l.Nama,
 		}
 		if l.Jenis == JenisProduct {
 			if p, ok := dijual[l.ProductID]; ok {
 				sl.ProdukAda = true
 				sl.ProdukAktif = p.Aktif
 				sl.ProdukNama = p.Nama
-				sl.ProdukSatuan = p.Satuan
+
 				sl.ProdukJenis = p.Jenis
 				sl.HargaCabang = p.Harga
 				sl.AdaHargaCabang = true
@@ -315,7 +313,7 @@ func (m *Memory) Submit(_ context.Context, req SubmitRequest) (Order, error) {
 				continue
 			}
 			o.Lines[i].Nama = s.Nama
-			o.Lines[i].Satuan = s.Satuan
+
 			o.Lines[i].HargaSatuan = s.HargaSatuan
 			o.Lines[i].Subtotal = int64(o.Lines[i].Qty) * s.HargaSatuan
 			o.Lines[i].SerialNumber = serial[s.LineNo]

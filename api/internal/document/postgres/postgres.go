@@ -9,8 +9,11 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,9 +49,85 @@ func (r *Repo) OrderForDocument(ctx context.Context, orderID string) (document.O
 	if err != nil {
 		return document.Order{}, fmt.Errorf("query ListOrderLines(dokumen): %w", err)
 	}
-	rekening, err := r.q.ListActiveBankAccounts(ctx)
-	if err != nil {
-		return document.Order{}, fmt.Errorf("query ListActiveBankAccounts: %w", err)
+	type historicalAccount struct{ ID, Bank, Owner, Number string }
+	rekening := []historicalAccount{}
+	if row.Status == "done" {
+		var pointer *string
+		var destinationJSON []byte
+		var logOrderID, logResult *string
+		if err := r.pool.QueryRow(ctx, `SELECT o.done_verification_log_id::text,v.destination_results,
+ v.order_id::text,v.hasil::text
+ FROM orders o LEFT JOIN verification_logs v ON v.id=o.done_verification_log_id
+ WHERE o.id=$1`, orderID).Scan(&pointer, &destinationJSON, &logOrderID, &logResult); err != nil {
+			return document.Order{}, fmt.Errorf("baca pointer verifikasi dokumen: %w", err)
+		}
+		if pointer == nil {
+			return document.Order{}, fmt.Errorf("invariant dokumen: pesanan done tanpa pointer verifikasi")
+		}
+		if logOrderID == nil || *logOrderID != orderID || logResult == nil || *logResult != "cocok" {
+			return document.Order{}, fmt.Errorf("invariant dokumen: pointer verifikasi bukan attempt sukses milik pesanan")
+		}
+		type destinationSnapshot struct {
+			PaymentProofID            string `json:"payment_proof_id"`
+			Status                    string `json:"status"`
+			BankAccountID             string `json:"bank_account_id"`
+			BankSnapshot              string `json:"bank_snapshot"`
+			AccountOwnerSnapshot      string `json:"account_owner_snapshot"`
+			AccountLastDigitsSnapshot string `json:"account_last_digits_snapshot"`
+		}
+		var snapshots []destinationSnapshot
+		if err := json.Unmarshal(destinationJSON, &snapshots); err != nil {
+			return document.Order{}, fmt.Errorf("invariant dokumen: destination_results rusak: %w", err)
+		}
+		proofRows, err := r.pool.Query(ctx, `SELECT id::text FROM payment_proofs WHERE order_id=$1 ORDER BY id`, orderID)
+		if err != nil {
+			return document.Order{}, fmt.Errorf("baca bukti dokumen: %w", err)
+		}
+		proofIDs := map[string]bool{}
+		for proofRows.Next() {
+			var proofID string
+			if err := proofRows.Scan(&proofID); err != nil {
+				proofRows.Close()
+				return document.Order{}, fmt.Errorf("baca id bukti dokumen: %w", err)
+			}
+			proofIDs[proofID] = true
+		}
+		if err := proofRows.Err(); err != nil {
+			proofRows.Close()
+			return document.Order{}, fmt.Errorf("baca bukti dokumen: %w", err)
+		}
+		proofRows.Close()
+		if len(snapshots) != len(proofIDs) {
+			return document.Order{}, fmt.Errorf("invariant dokumen: snapshot tujuan tidak lengkap")
+		}
+		seenProof, seenAccount := map[string]bool{}, map[string]bool{}
+		for _, snap := range snapshots {
+			if snap.Status != "allowed" || snap.PaymentProofID == "" || !proofIDs[snap.PaymentProofID] || seenProof[snap.PaymentProofID] ||
+				snap.BankAccountID == "" || strings.TrimSpace(snap.BankSnapshot) == "" ||
+				strings.TrimSpace(snap.AccountOwnerSnapshot) == "" || strings.TrimSpace(snap.AccountLastDigitsSnapshot) == "" {
+				return document.Order{}, fmt.Errorf("invariant dokumen: snapshot tujuan tidak valid")
+			}
+			seenProof[snap.PaymentProofID] = true
+			var bankCode, number string
+			if err := r.pool.QueryRow(ctx, `SELECT bank::text,nomor FROM bank_accounts WHERE id=$1`, snap.BankAccountID).Scan(&bankCode, &number); err != nil {
+				return document.Order{}, fmt.Errorf("invariant dokumen: master rekening snapshot hilang: %w", err)
+			}
+			if bankCode != snap.BankSnapshot || !strings.HasSuffix(number, snap.AccountLastDigitsSnapshot) {
+				return document.Order{}, fmt.Errorf("invariant dokumen: identitas rekening tidak cocok dengan snapshot")
+			}
+			if seenAccount[snap.BankAccountID] {
+				continue
+			}
+			seenAccount[snap.BankAccountID] = true
+			rekening = append(rekening, historicalAccount{ID: snap.BankAccountID, Bank: snap.BankSnapshot,
+				Owner: snap.AccountOwnerSnapshot, Number: number})
+		}
+		sort.Slice(rekening, func(i, j int) bool {
+			if rekening[i].Bank == rekening[j].Bank {
+				return rekening[i].ID < rekening[j].ID
+			}
+			return rekening[i].Bank < rekening[j].Bank
+		})
 	}
 
 	out := document.Order{
@@ -79,7 +158,6 @@ func (r *Repo) OrderForDocument(ctx context.Context, orderID string) (document.O
 			LineNo:       int(l.LineNo),
 			Jenis:        l.Jenis,
 			Nama:         l.NamaSnapshot,
-			Satuan:       l.SatuanSnapshot,
 			Qty:          int(l.Qty),
 			HargaSatuan:  l.HargaSatuan,
 			Subtotal:     l.Subtotal.Int64,
@@ -91,8 +169,8 @@ func (r *Repo) OrderForDocument(ctx context.Context, orderID string) (document.O
 	for _, b := range rekening {
 		out.Rekening = append(out.Rekening, document.Rekening{
 			Bank:     b.Bank,
-			Nomor:    b.Nomor,
-			AtasNama: b.NamaPemilik,
+			Nomor:    b.Number,
+			AtasNama: b.Owner,
 		})
 	}
 	return out, nil

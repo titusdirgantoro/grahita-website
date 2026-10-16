@@ -35,12 +35,12 @@ function fetchAndalan() {
       if (input.endsWith("/catalog")) {
         return json({
           data: [
-            { id: "p1", nama: "Bio Magnetik", jenis: "reguler", satuan: "pcs", harga: 340000 },
+            { id: "p1", nama: "Bio Magnetik", jenis: "reguler", harga: 340000 },
             {
               id: "p7",
               nama: "Sertifikat Psikotes",
               jenis: "sertifikat",
-              satuan: "lembar",
+
               harga: 0,
               biaya_packaging: 3000,
             },

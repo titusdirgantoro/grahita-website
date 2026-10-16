@@ -37,7 +37,6 @@ export interface ProdukKatalog {
   id: string;
   nama: string;
   jenis: string;
-  satuan: string;
   deskripsi?: string;
   harga: number;
   /** Hanya pada produk Sertifikat: biaya packaging per pesanan (PRD CP-KAT-04). */
@@ -49,7 +48,6 @@ export interface BarisPesanan {
   jenis: string;
   product_id?: string;
   nama: string;
-  satuan: string;
   qty: number;
   harga_satuan: number;
   subtotal: number;
@@ -742,7 +740,12 @@ function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
               onChange={(e) => setBerkas(Array.from(e.target.files ?? []))}
             />
           </Field>
-          <Button variant="primary" type="submit" icon="upload-simple" disabled={mengunggah}>
+          <Button
+            variant="primary"
+            type="submit"
+            icon="upload-simple"
+            disabled={mengunggah || (rekening?.length ?? 0) === 0}
+          >
             {mengunggah ? "Mengunggah…" : "Unggah bukti"}
           </Button>
         </form>

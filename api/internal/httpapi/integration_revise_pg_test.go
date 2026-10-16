@@ -54,18 +54,12 @@ type barisDone struct {
 }
 
 // seedPesananDone menyemai satu pesanan berstatus Done versi 0 lengkap dengan
-// barisnya (dan serial number tetap), supaya revisi punya invoice untuk
-// direvisi. Nomor/tanggal dipilih uji supaya periode serial dapat diprediksi.
+// baris, bukti pembayaran, attempt verifikasi sukses, dan snapshot rekening
+// historisnya, supaya revisi punya invoice valid untuk direvisi. Nomor/tanggal
+// dipilih uji supaya periode serial dapat diprediksi.
 func seedPesananDone(t *testing.T, f *pgFixture, branchID, nomor, tanggal string, baris []barisDone) (string, int64) {
 	t.Helper()
 	ctx := context.Background()
-
-	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO bank_accounts (bank, nama_pemilik, nomor, is_active)
-		 VALUES ('BCA','PT Grahita Indonesia','1234567890',true)
-		 ON CONFLICT (bank, nomor) DO NOTHING`); err != nil {
-		t.Fatalf("seed rekening: %v", err)
-	}
 
 	var total int64
 	for _, b := range baris {
@@ -84,8 +78,8 @@ func seedPesananDone(t *testing.T, f *pgFixture, branchID, nomor, tanggal string
 		if b.packaging {
 			if _, err := f.pool.Exec(ctx,
 				`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
-				                          satuan_snapshot, qty, harga_satuan)
-				 VALUES ($1,$2,'packaging',NULL,$3,'paket',1,$4)`,
+				                          qty, harga_satuan)
+				 VALUES ($1,$2,'packaging',NULL,$3,1,$4)`,
 				id, b.lineNo, b.nama, b.harga); err != nil {
 				t.Fatalf("seed baris packaging %s: %v", nomor, err)
 			}
@@ -93,12 +87,14 @@ func seedPesananDone(t *testing.T, f *pgFixture, branchID, nomor, tanggal string
 		}
 		if _, err := f.pool.Exec(ctx,
 			`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
-			                          satuan_snapshot, qty, harga_satuan, serial_number)
-			 VALUES ($1,$2,'product',$3,$4,'pcs',$5,$6,$7)`,
+			                          qty, harga_satuan, serial_number)
+			 VALUES ($1,$2,'product',$3,$4,$5,$6,$7)`,
 			id, b.lineNo, b.product, b.nama, b.qty, b.harga, b.serial); err != nil {
 			t.Fatalf("seed baris pesanan %s: %v", nomor, err)
 		}
 	}
+
+	seedPointerVerifikasiDone(t, f, id, nomor, total)
 	// Satu entri timeline dasar supaya uji dapat membuktikan revisi MENAMBAH
 	// entri (dan rollback tidak menambah apa pun).
 	if _, err := f.pool.Exec(ctx,
@@ -107,6 +103,51 @@ func seedPesananDone(t *testing.T, f *pgFixture, branchID, nomor, tanggal string
 		t.Fatalf("seed timeline %s: %v", nomor, err)
 	}
 	return id, total
+}
+
+// seedPointerVerifikasiDone melengkapi pesanan Done hasil SQL fixture dengan
+// bukti dan attempt sukses yang menjadi satu-satunya sumber snapshot rekening
+// historis bagi renderer dokumen.
+func seedPointerVerifikasiDone(t *testing.T, f *pgFixture, orderID, nomor string, total int64) {
+	t.Helper()
+	ctx := context.Background()
+	var bankCode, accountOwner, accountNumber string
+	if err := f.pool.QueryRow(ctx,
+		`SELECT bank::text, nama_pemilik, nomor FROM bank_accounts WHERE id=$1`,
+		f.bankDefault).Scan(&bankCode, &accountOwner, &accountNumber); err != nil {
+		t.Fatalf("baca rekening snapshot %s: %v", nomor, err)
+	}
+	var proofID string
+	if err := f.pool.QueryRow(ctx,
+		`INSERT INTO payment_proofs
+		   (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+		    uploaded_by_kind, uploaded_by_id)
+		 VALUES ($1,$2,'bukti-revisi.jpg','image/jpeg',4,convert_to($3,'UTF8'),'admin',$4)
+		 RETURNING id`, orderID, "proofs/"+orderID+"/bukti-revisi.jpg", nomor, f.adminSA).Scan(&proofID); err != nil {
+		t.Fatalf("seed bukti pembayaran %s: %v", nomor, err)
+	}
+	var verificationID string
+	if err := f.pool.QueryRow(ctx,
+		`INSERT INTO verification_logs
+		   (order_id, metode, total_pesanan, total_terbaca, hasil, admin_id, catatan,
+		    destination_results)
+		 VALUES ($1,'manual',$2,$2,'cocok',$3,'fixture revisi dengan snapshot tujuan',
+		   jsonb_build_array(jsonb_build_object(
+		     'payment_proof_id',$4::text,
+		     'status','allowed',
+		     'source','manual',
+		     'bank_account_id',$5::text,
+		     'bank_snapshot',$6::text,
+		     'account_owner_snapshot',$7::text,
+		     'account_last_digits_snapshot',$8::text)))
+		 RETURNING id`, orderID, total, f.adminSA, proofID, f.bankDefault,
+		bankCode, accountOwner, accountNumber).Scan(&verificationID); err != nil {
+		t.Fatalf("seed attempt verifikasi %s: %v", nomor, err)
+	}
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE orders SET done_verification_log_id=$2 WHERE id=$1`, orderID, verificationID); err != nil {
+		t.Fatalf("pasang pointer verifikasi %s: %v", nomor, err)
+	}
 }
 
 // reviseBody menyusun body JSON permintaan revisi dari potongan baris mentah.
@@ -307,6 +348,21 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	ctx := context.Background()
 	_, periode := tanggalDanPeriode(3)
 
+	// Sesudah keputusan Done, master rekening boleh berubah/nonaktif dan
+	// assignment boleh dicabut. Dokumen tetap wajib memakai identitas yang
+	// disalin ke attempt sukses, bukan owner/status/assignment terkini.
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE bank_accounts SET nama_pemilik='PT Pemilik Baru', is_active=false WHERE id=$1`,
+		f.bankDefault); err != nil {
+		t.Fatalf("ubah master rekening setelah Done: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE branch_bank_accounts
+		    SET is_allowed=false, revoked_by=$3, revoked_at=now(), updated_at=now()
+		  WHERE branch_id=$1 AND bank_account_id=$2`, f.branchA, f.bankDefault, f.adminSA); err != nil {
+		t.Fatalf("cabut assignment rekening setelah Done: %v", err)
+	}
+
 	// Dokumen versi 0 (pesanan Done) dirender lebih dulu — peran worker.
 	if err := jalankanPekerjaanDone(t, f, id); err != nil {
 		t.Fatalf("pekerjaan Done: %v", err)
@@ -318,6 +374,10 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	htmlInvoiceV0 := isiObjek(t, f, docAwal["invoice_pdf-0"])
 	if strings.Contains(htmlInvoiceV0, "Revisi v") {
 		t.Errorf("invoice versi 0 tidak boleh mencantumkan versi revisi")
+	}
+	if !strings.Contains(htmlInvoiceV0, "PT Fixture Sintetis") ||
+		!strings.Contains(htmlInvoiceV0, "9999000011") || strings.Contains(htmlInvoiceV0, "PT Pemilik Baru") {
+		t.Errorf("invoice v0 harus memakai snapshot rekening saat Done: %s", htmlInvoiceV0)
 	}
 
 	// Revisi: baris 1 dinaikkan qty-nya, harga baris 1 naik, baris 2 tetap,
@@ -425,6 +485,10 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	htmlV1 := isiObjek(t, f, docAkhir["invoice_pdf-1"])
 	if !strings.Contains(htmlV1, "Revisi v1") {
 		t.Errorf("invoice versi baru harus mencantumkan Revisi v1: %s", htmlV1)
+	}
+	if !strings.Contains(htmlV1, "PT Fixture Sintetis") ||
+		!strings.Contains(htmlV1, "9999000011") || strings.Contains(htmlV1, "PT Pemilik Baru") {
+		t.Errorf("invoice revisi harus mempertahankan snapshot rekening saat Done: %s", htmlV1)
 	}
 	// Surat Jalan TIDAK dirender ulang untuk versi revisi.
 	if _, ada := docAkhir["surat_jalan_pdf-1"]; ada {
@@ -841,8 +905,8 @@ func TestPGRevisiMenolakPesananBelumDoneDanIdTakSah(t *testing.T) {
 		t.Fatalf("seed pesanan submitted: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan, serial_number)
-		 VALUES ($1,1,$2,'Bio Magnetik','pcs',1,100000,'20261009901')`, idSubmitted, produk); err != nil {
+		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, qty, harga_satuan, serial_number)
+		 VALUES ($1,1,$2,'Bio Magnetik',1,100000,'20261009901')`, idSubmitted, produk); err != nil {
 		t.Fatalf("seed baris submitted: %v", err)
 	}
 
@@ -892,8 +956,8 @@ func TestPGRevisiSertifikatPertahankanPackagingDanHargaNol(t *testing.T) {
 
 	var sertifikat string
 	if err := f.pool.QueryRow(ctx,
-		`INSERT INTO products (kode, nama, jenis, satuan, harga_default, urutan)
-		 VALUES ('S-01','Sertifikat Halal','sertifikat','pcs',0,1) RETURNING id`).Scan(&sertifikat); err != nil {
+		`INSERT INTO products (kode, nama, jenis, harga_default, urutan)
+		 VALUES ('S-01','Sertifikat Halal','sertifikat',0,1) RETURNING id`).Scan(&sertifikat); err != nil {
 		t.Fatalf("seed produk sertifikat: %v", err)
 	}
 	tgl, periode := tanggalDanPeriode(2)
@@ -986,6 +1050,7 @@ func TestPGRevisiPDFNyataVersiLamaDanBaru(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	pesanan := f.seedPesananDone(t, f.branchA, "2026-10-780", false)
+	seedPointerVerifikasiDone(t, f, pesanan.ID, pesanan.Nomor, pesanan.Total)
 	sa, csrfSA := pgLogin(t, srv, "rina@example.test", "rahasia123")
 
 	// Versi 0: render tiga dokumen (Invoice PDF nyata) lewat endpoint admin.

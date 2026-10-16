@@ -2,7 +2,9 @@ package bank
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/grahita/portal/api/internal/auth"
@@ -62,6 +64,13 @@ func TestCreateNormalisasiDanAudit(t *testing.T) {
 	}
 	if entries[0].Entity != "bank_account" || entries[0].Action != "create" || entries[0].EntityID != saved.ID {
 		t.Errorf("entri audit tidak sesuai: %+v", entries[0])
+	}
+	raw, err := json.Marshal(entries[0].After)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), saved.Nomor) || !strings.Contains(string(raw), "••••7890") {
+		t.Fatalf("audit harus masked tanpa nomor lengkap: %s", raw)
 	}
 }
 
@@ -183,7 +192,7 @@ func TestUpdateTidakDitemukanDanDuplikat(t *testing.T) {
 		t.Errorf("id tak dikenal harus ErrNotFound, dapat %v", err)
 	}
 	nomor := "222222222"
-	if _, err := svc.Update(context.Background(), superadmin(), "bk-1", Patch{Nomor: &nomor}); !errors.Is(err, ErrDuplicate) {
-		t.Errorf("nomor milik rekening lain harus ErrDuplicate, dapat %v", err)
+	if _, err := svc.Update(context.Background(), superadmin(), "bk-1", Patch{Nomor: &nomor}); !errors.Is(err, ErrIdentityImmutable) {
+		t.Errorf("nomor rekening historis tidak boleh diubah, dapat %v", err)
 	}
 }

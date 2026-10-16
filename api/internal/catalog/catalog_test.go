@@ -78,7 +78,7 @@ func TestCRUDProduk(t *testing.T) {
 	ctx := context.Background()
 	actor := adminActor()
 
-	p, err := s.CreateProduct(ctx, actor, NewProduct{Nama: "Bio Magnetik", Kode: "P-01", Jenis: JenisReguler, Satuan: "pcs", HargaDefault: 350000, Urutan: 1})
+	p, err := s.CreateProduct(ctx, actor, NewProduct{Nama: "Bio Magnetik", Kode: "P-01", Jenis: JenisReguler, HargaDefault: 350000, Urutan: 1})
 	if err != nil {
 		t.Fatalf("buat produk: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestUbahProdukJadiSertifikatMenolakHargaCabang(t *testing.T) {
 	s, m := svc()
 	ctx := context.Background()
 	actor := adminActor()
-	m.PutProduct(Product{ID: "p1", Nama: "Reguler", Jenis: JenisReguler, Satuan: "pcs"})
+	m.PutProduct(Product{ID: "p1", Nama: "Reguler", Jenis: JenisReguler})
 	m.PutPrice("br-a", "p1", 100000)
 
 	if _, err := s.UpdateProduct(ctx, actor, "p1", ProductPatch{Jenis: ptr(JenisSertifikat), HargaDefault: ptr(int64(0))}); !errors.Is(err, ErrInvalidData) {

@@ -32,7 +32,8 @@ type verifyRequest struct {
 	// tidak_terbaca, rekening_beda, lainnya.
 	Alasan string `json:"alasan"`
 	// Catatan bebas opsional.
-	Catatan string `json:"catatan"`
+	Catatan           string                     `json:"catatan"`
+	ProofDestinations []payment.ProofDestination `json:"proof_destinations"`
 }
 
 // adminOrderVerify memverifikasi pembayaran satu pesanan: menyetujui
@@ -52,15 +53,30 @@ func (a *API) adminOrderVerify(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	out, err := a.d.Verify.MarkVerified(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"), payment.VerifyInput{
-		Hasil:        req.Hasil,
-		Metode:       payment.MetodeManual,
-		TotalTerbaca: req.TotalTerbaca,
-		Alasan:       req.Alasan,
-		Catatan:      req.Catatan,
+		Hasil:             req.Hasil,
+		Metode:            payment.MetodeManual,
+		TotalTerbaca:      req.TotalTerbaca,
+		Alasan:            req.Alasan,
+		Catatan:           req.Catatan,
+		ProofDestinations: req.ProofDestinations,
 	})
 	if err != nil {
 		return mapDomainErr(err)
 	}
 	httpx.OK(w, data(out))
+	return nil
+}
+
+// adminOrderReevaluateDestination hanya menjadwalkan pemakaian ulang hasil OCR
+// tersimpan. Provider tidak dipanggil oleh request ini.
+func (a *API) adminOrderReevaluateDestination(w http.ResponseWriter, r *http.Request) error {
+	if a.d.Reevaluate == nil {
+		return verifyUnavailable()
+	}
+	out, err := a.d.Reevaluate.Enqueue(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"))
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.JSON(w, http.StatusAccepted, data(out))
 	return nil
 }

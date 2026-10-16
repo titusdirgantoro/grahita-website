@@ -87,9 +87,9 @@ func newUsersServer(t *testing.T, tune func(*Deps)) *usersServer {
 
 	aktifSejak := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	repo := users.NewMemory()
-	repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A", Email: "a@example.test", IsActive: true, BranchActive: true})
-	repo.PutBranch(users.BranchUser{BranchID: "br-b", UserID: "usr-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IsActive: true, BranchActive: true})
-	repo.PutBranch(users.BranchUser{BranchID: "br-c", UserID: "usr-c", Nama: "Grahita Cabang C", NamaKepala: "Kepala C", Email: "c@example.test", IsActive: true, BranchActive: false})
+	repo.PutBranch(users.BranchUser{BranchID: "br-a", UserID: "usr-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A", Email: "a@example.test", IdentityStatus: "registered", IsActive: true, BranchActive: true})
+	repo.PutBranch(users.BranchUser{BranchID: "br-b", UserID: "usr-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IdentityStatus: "registered", IsActive: true, BranchActive: true})
+	repo.PutBranch(users.BranchUser{BranchID: "br-c", UserID: "usr-c", Nama: "Grahita Cabang C", NamaKepala: "Kepala C", Email: "c@example.test", IdentityStatus: "registered", IsActive: true, BranchActive: false})
 	repo.PutBranch(users.BranchUser{BranchID: "br-d", Nama: "Grahita Cabang D", NamaKepala: "Kepala D", Email: "d@example.test", BranchActive: true, TokenPrefix: "GRH-1234", TokenExpiresAt: ptr(waktuUjiTambah(12))})
 	repo.PutAdmin(users.AdminUser{ID: "adm-sa", Nama: "Rina", Email: "rina@example.test", Role: auth.RoleSuperadmin, IsActive: true, ActivatedAt: &aktifSejak, NotifInvoice: true})
 	repo.PutAdmin(users.AdminUser{ID: "adm-mgr", Nama: "Budi", Email: "budi@example.test", Role: auth.RoleManager, IsActive: true, ActivatedAt: &aktifSejak, NotifSuratJalan: true})

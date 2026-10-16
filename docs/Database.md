@@ -47,6 +47,7 @@ bank_accounts   settings   numbering_counters   backup_runs   river_job
 CREATE TYPE actor_kind    AS ENUM ('branch','admin','system');
 CREATE TYPE admin_role    AS ENUM ('superadmin','manager');
 CREATE TYPE product_kind  AS ENUM ('reguler','sertifikat');
+CREATE TYPE branch_identity_status AS ENUM ('identity_incomplete','ready','registered');
 CREATE TYPE order_status  AS ENUM ('draft','submitted','done');
 CREATE TYPE verif_status  AS ENUM ('belum','cocok','perlu_review');
 CREATE TYPE review_reason AS ENUM ('kurang_bayar','lebih_bayar','tidak_terbaca','rekening_beda','lainnya');
@@ -69,8 +70,10 @@ CREATE TYPE bank_code     AS ENUM ('BCA','BRI');
 CREATE TABLE branches (
     id              uuid PRIMARY KEY DEFAULT uuidv7(),
     nama            text        NOT NULL,
-    nama_kepala     text        NOT NULL,
-    email           citext      NOT NULL UNIQUE,          -- email cabang = email login
+    nama_kepala     text,
+    jabatan_kepala  text,
+    email           citext      UNIQUE,                   -- email cabang = email login bila lengkap
+    identity_status branch_identity_status NOT NULL DEFAULT 'identity_incomplete',
     telepon         text,
     is_cnc          boolean     NOT NULL DEFAULT false,   -- Cash and Carry
     is_special      boolean     NOT NULL DEFAULT false,   -- flag "Special" (lihat PRD §8 no.1)
@@ -163,7 +166,6 @@ CREATE TABLE products (
     kode          text UNIQUE,
     nama          text NOT NULL,
     jenis         product_kind NOT NULL DEFAULT 'reguler',
-    satuan        text NOT NULL DEFAULT 'pcs',
     deskripsi     text,
     harga_default bigint NOT NULL DEFAULT 0 CHECK (harga_default >= 0),
     urutan        int    NOT NULL DEFAULT 0,
@@ -241,7 +243,6 @@ CREATE TABLE order_lines (
     jenis           line_kind NOT NULL DEFAULT 'product',
     product_id      uuid REFERENCES products(id) ON DELETE RESTRICT,
     nama_snapshot   text   NOT NULL,                  -- nama produk saat dipesan
-    satuan_snapshot text   NOT NULL DEFAULT 'pcs',
     qty             int    NOT NULL CHECK (qty > 0),
     harga_satuan    bigint NOT NULL CHECK (harga_satuan >= 0),
     subtotal        bigint GENERATED ALWAYS AS (qty * harga_satuan) STORED,
@@ -478,7 +479,7 @@ Catatan desain:
 ### 7.1 Katalog untuk satu cabang
 
 ```sql
-SELECT p.id, p.nama, p.jenis, p.satuan, p.deskripsi, bp.harga
+SELECT p.id, p.nama, p.jenis, p.deskripsi, bp.harga
 FROM products p
 JOIN branch_prices bp ON bp.product_id = p.id AND bp.branch_id = $1
 WHERE p.is_active
@@ -552,7 +553,7 @@ CREATE UNIQUE INDEX order_lines_satu_packaging
 
 ## 9. Retensi & pertumbuhan
 
-Estimasi: ±16 cabang × ±30 pesanan/bulan × ±3 baris = ±1.500 order line/bulan (±18.000/tahun). Volume ini sangat kecil untuk PostgreSQL — tidak perlu partisi sekarang.
+Estimasi: 34 cabang × ±30 pesanan/bulan × ±3 baris = ±3.060 order line/bulan (±36.720/tahun). Volume ini sangat kecil untuk PostgreSQL — tidak perlu partisi sekarang.
 
 Bila dalam beberapa tahun `orders`/`order_lines` tumbuh besar, partisi `RANGE` per tahun pada `orders.tanggal` adalah langkah berikutnya (struktur tabel sudah siap karena semua query laporan memfilter tanggal).
 

@@ -51,9 +51,9 @@ func newSubmitService() (*Service, *Memory, *fakeConfig) {
 // sama dengan katalog uji ditambah produk reguler tambahan.
 func hargaA() map[string]MemoryProduct {
 	return map[string]MemoryProduct{
-		"p1": {Nama: "Bio Magnetik", Satuan: "pcs", Jenis: catalog.JenisReguler, Aktif: true, Harga: 100000},
-		"p3": {Nama: "Sertifikat", Satuan: "pcs", Jenis: catalog.JenisSertifikat, Aktif: true, Harga: 0},
-		"p4": {Nama: "Kertas HVS", Satuan: "rim", Jenis: catalog.JenisReguler, Aktif: true, Harga: 5000},
+		"p1": {Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Aktif: true, Harga: 100000},
+		"p3": {Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, Aktif: true, Harga: 0},
+		"p4": {Nama: "Kertas HVS", Jenis: catalog.JenisReguler, Aktif: true, Harga: 5000},
 	}
 }
 
@@ -70,14 +70,14 @@ func draftReguler(t *testing.T, svc *Service, branchID string, qty int) Order {
 }
 
 // TestSiapkanSubmitMemakaiHargaTerbaru memverifikasi BR-05 di tingkat aturan:
-// snapshot yang ditulis saat submit memakai nama/satuan/harga yang berlaku
+// snapshot yang ditulis saat submit memakai nama/harga yang berlaku
 // SAAT SUBMIT, bukan angka yang tersimpan di draft.
 func TestSiapkanSubmitMemakaiHargaTerbaru(t *testing.T) {
 	lines := []SubmitLine{{
 		LineNo: 1, Jenis: JenisProduct, Qty: 3,
-		NamaLama: "Nama Lama", SatuanLama: "pcs",
+		NamaLama:  "Nama Lama",
 		ProdukAda: true, ProdukAktif: true,
-		ProdukNama: "Nama Baru", ProdukSatuan: "box", ProdukJenis: catalog.JenisReguler,
+		ProdukNama: "Nama Baru", ProdukJenis: catalog.JenisReguler,
 		HargaCabang: 120000, AdaHargaCabang: true,
 	}}
 
@@ -88,7 +88,7 @@ func TestSiapkanSubmitMemakaiHargaTerbaru(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("harus 1 snapshot, dapat %d", len(got))
 	}
-	if got[0].Nama != "Nama Baru" || got[0].Satuan != "box" || got[0].HargaSatuan != 120000 {
+	if got[0].Nama != "Nama Baru" || got[0].HargaSatuan != 120000 {
 		t.Errorf("snapshot harus dari master terbaru, dapat %+v", got[0])
 	}
 }
@@ -125,15 +125,15 @@ func TestSiapkanSubmitMenolakProdukTakLagiDijual(t *testing.T) {
 func TestSiapkanSubmitAturanSertifikatDanPackaging(t *testing.T) {
 	sertifikat := SubmitLine{
 		LineNo: 1, Jenis: JenisProduct, Qty: 5, ProdukAda: true, ProdukAktif: true,
-		ProdukNama: "Sertifikat", ProdukSatuan: "pcs", ProdukJenis: catalog.JenisSertifikat,
+		ProdukNama: "Sertifikat", ProdukJenis: catalog.JenisSertifikat,
 		HargaCabang: 25000, AdaHargaCabang: true,
 	}
 	reguler := SubmitLine{
 		LineNo: 1, Jenis: JenisProduct, Qty: 1, ProdukAda: true, ProdukAktif: true,
-		ProdukNama: "Bio", ProdukSatuan: "pcs", ProdukJenis: catalog.JenisReguler,
+		ProdukNama: "Bio", ProdukJenis: catalog.JenisReguler,
 		HargaCabang: 100000, AdaHargaCabang: true,
 	}
-	packaging := SubmitLine{LineNo: 2, Jenis: JenisPackaging, Qty: 1, NamaLama: NamaBiayaPackaging, SatuanLama: SatuanBiayaPackaging}
+	packaging := SubmitLine{LineNo: 2, Jenis: JenisPackaging, Qty: 1, NamaLama: NamaBiayaPackaging}
 
 	// Sertifikat + packaging: harga produk 0 berapa pun qty, harga packaging
 	// memakai setelan saat submit (5000), bukan angka draft (3000).
@@ -144,8 +144,8 @@ func TestSiapkanSubmitAturanSertifikatDanPackaging(t *testing.T) {
 	if len(got) != 2 || got[0].HargaSatuan != 0 || got[1].HargaSatuan != 5000 {
 		t.Fatalf("snapshot sertifikat salah: %+v", got)
 	}
-	if got[1].Nama != NamaBiayaPackaging || got[1].Satuan != SatuanBiayaPackaging {
-		t.Errorf("nama/satuan packaging harus teks baku server, dapat %+v", got[1])
+	if got[1].Nama != NamaBiayaPackaging {
+		t.Errorf("nama packaging harus teks baku server, dapat %+v", got[1])
 	}
 
 	kasus := map[string]struct {
@@ -318,7 +318,7 @@ func TestSubmitCNCDitolakTanpaFlagCabang(t *testing.T) {
 	svc, repo, _ := newSubmitService()
 	ctx := context.Background()
 	repo.SetHargaCabang("br-b", map[string]MemoryProduct{
-		"p1": {Nama: "Bio Magnetik", Satuan: "pcs", Jenis: catalog.JenisReguler, Aktif: true, Harga: 200000},
+		"p1": {Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Aktif: true, Harga: 200000},
 	})
 	d := draftReguler(t, svc, "br-b", 1)
 	repo.SetProofs(d.ID, 1)

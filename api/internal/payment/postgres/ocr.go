@@ -14,8 +14,11 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -39,6 +42,7 @@ func (r *Repo) OrderForOCR(ctx context.Context, orderID string) (payment.OrderOC
 	}
 	return payment.OrderOCR{
 		ID:           row.ID,
+		BranchID:     row.BranchID,
 		Status:       row.Status,
 		Total:        row.Total,
 		Tanggal:      row.Tanggal,
@@ -108,12 +112,48 @@ func (r *Repo) SimpanBacaan(ctx context.Context, req payment.SimpanBacaanRequest
 	return nil
 }
 
-// SudahDinilaiAI melaporkan apakah sudah ada keputusan AI yang dibuat sesudah
-// bukti terakhir dibaca (penjaga idempotensi pekerjaan River).
+// SudahDinilaiAI hanya menerima attempt dengan versi policy dan fingerprint
+// himpunan bukti yang persis sama. Perubahan assignment/status membuat attempt
+// lama stale tanpa menghapus histori atau menulis attempt baru.
 func (r *Repo) SudahDinilaiAI(ctx context.Context, orderID string) (bool, error) {
-	sudah, err := r.q.OrderSudahDinilaiAI(ctx, orderID)
+	var version int64
+	if err := r.pool.QueryRow(ctx, `SELECT b.bank_allowlist_version
+		FROM orders o JOIN branches b ON b.id=o.branch_id WHERE o.id=$1`, orderID).Scan(&version); err != nil {
+		return false, fmt.Errorf("baca versi allowlist OCR: %w", err)
+	}
+	rows, err := r.pool.Query(ctx, `SELECT id::text, ocr_at FROM payment_proofs WHERE order_id=$1 ORDER BY id`, orderID)
 	if err != nil {
-		return false, fmt.Errorf("query OrderSudahDinilaiAI: %w", err)
+		return false, fmt.Errorf("baca fingerprint bukti OCR: %w", err)
+	}
+	defer rows.Close()
+	h := sha256.New()
+	i := 0
+	for rows.Next() {
+		var id string
+		var at *time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return false, err
+		}
+		if i > 0 {
+			h.Write([]byte{0x1e})
+		}
+		h.Write([]byte(strings.ToLower(id)))
+		h.Write([]byte{0x1f})
+		if at != nil {
+			h.Write([]byte(at.UTC().Format(time.RFC3339Nano)))
+		}
+		i++
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	var sudah bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM verification_logs
+		WHERE order_id=$1 AND metode='ai'
+		  AND branch_allowlist_version=$2 AND proof_set_fingerprint=$3
+	)`, orderID, version, h.Sum(nil)).Scan(&sudah); err != nil {
+		return false, fmt.Errorf("periksa attempt AI terkini: %w", err)
 	}
 	return sudah, nil
 }

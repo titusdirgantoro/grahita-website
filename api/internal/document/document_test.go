@@ -131,8 +131,8 @@ func fixtureOrder(id string) Order {
 			Telepon: "022-123456",
 		},
 		Lines: []Line{
-			{LineNo: 1, Jenis: "product", Nama: "Bio Magnetik", Satuan: "pcs", Qty: 2, HargaSatuan: 2500000, Subtotal: 5000000, SerialNumber: "20261008001"},
-			{LineNo: 2, Jenis: "product", Nama: "Bio Listrik", Satuan: "pcs", Qty: 1, HargaSatuan: 3000, Subtotal: 3000, SerialNumber: "20261008002"},
+			{LineNo: 1, Jenis: "product", Nama: "Bio Magnetik", Qty: 2, HargaSatuan: 2500000, Subtotal: 5000000, SerialNumber: "20261008001"},
+			{LineNo: 2, Jenis: "product", Nama: "Bio Listrik", Qty: 1, HargaSatuan: 3000, Subtotal: 3000, SerialNumber: "20261008002"},
 		},
 		Rekening: []Rekening{
 			{Bank: "BCA", Nomor: "1234567890", AtasNama: "PT Grahita Indonesia"},

@@ -11,15 +11,19 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/riverqueue/river"
 
+	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -44,6 +48,93 @@ func New(pool *database.Pool, opts ...Option) *Repo {
 		o(r)
 	}
 	return r
+}
+
+// EnqueueDestinationReevaluation menitipkan penilaian ulang dari hasil OCR
+// yang sudah tersimpan. Seluruh bukti wajib mempunyai ocr_at, sehingga worker
+// tidak akan membuka object storage atau memanggil provider lagi.
+func (r *Repo) EnqueueDestinationReevaluation(ctx context.Context, orderID string) (payment.ReevaluateResult, error) {
+	if r.jobs == nil {
+		return payment.ReevaluateResult{}, payment.ErrQueueUnavailable
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return payment.ReevaluateResult{}, fmt.Errorf("mulai transaksi reevaluate tujuan: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var status string
+	var version int64
+	if err := tx.QueryRow(ctx, `SELECT o.status::text,b.bank_allowlist_version
+ FROM orders o JOIN branches b ON b.id=o.branch_id
+ WHERE o.id=$1 FOR SHARE OF o,b`, orderID).Scan(&status, &version); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return payment.ReevaluateResult{}, payment.ErrNotFound
+		}
+		return payment.ReevaluateResult{}, err
+	}
+	if status != payment.StatusSubmitted {
+		return payment.ReevaluateResult{}, payment.ErrNotSubmitted
+	}
+
+	rows, err := tx.Query(ctx, `SELECT id::text,ocr_at FROM payment_proofs WHERE order_id=$1 ORDER BY id`, orderID)
+	if err != nil {
+		return payment.ReevaluateResult{}, err
+	}
+	h := sha256.New()
+	count := 0
+	for rows.Next() {
+		var id string
+		var at *time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			rows.Close()
+			return payment.ReevaluateResult{}, err
+		}
+		if at == nil {
+			rows.Close()
+			return payment.ReevaluateResult{}, payment.ErrOCRResultMissing
+		}
+		if count > 0 {
+			h.Write([]byte{0x1e})
+		}
+		h.Write([]byte(strings.ToLower(id)))
+		h.Write([]byte{0x1f})
+		h.Write([]byte(at.UTC().Format(time.RFC3339Nano)))
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return payment.ReevaluateResult{}, err
+	}
+	rows.Close()
+	if count == 0 {
+		return payment.ReevaluateResult{}, payment.ErrPaymentProofRequired
+	}
+	fingerprint := h.Sum(nil)
+
+	var attempted bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM verification_logs
+ WHERE order_id=$1 AND metode='ai' AND branch_allowlist_version=$2 AND proof_set_fingerprint=$3)`,
+		orderID, version, fingerprint).Scan(&attempted); err != nil {
+		return payment.ReevaluateResult{}, err
+	}
+	if attempted {
+		if err := tx.Commit(ctx); err != nil {
+			return payment.ReevaluateResult{}, err
+		}
+		return payment.ReevaluateResult{Duplicate: true}, nil
+	}
+	inserted, err := r.jobs.InsertTx(ctx, tx, jobs.OCRBuktiArgs{
+		OrderID: orderID, AllowlistVersion: version, ProofSetFingerprint: hex.EncodeToString(fingerprint),
+	}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}})
+	if err != nil {
+		return payment.ReevaluateResult{}, fmt.Errorf("titipkan reevaluate tujuan: %w", err)
+	}
+	duplicate := inserted != nil && inserted.UniqueSkippedAsDuplicate
+	if err := tx.Commit(ctx); err != nil {
+		return payment.ReevaluateResult{}, err
+	}
+	return payment.ReevaluateResult{Queued: !duplicate, Duplicate: duplicate}, nil
 }
 
 // Sha256ByOrder mengembalikan sidik jari isi seluruh bukti satu pesanan,
@@ -76,14 +167,36 @@ func (r *Repo) CommitProofs(ctx context.Context, req payment.CommitRequest) ([]p
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
+	// Ambil lock policy sebelum lock baris order. Urutan global ini mencegah
+	// deadlock dengan submit/verifikasi dan murah untuk unggahan C&C.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
+		return nil, fmt.Errorf("kunci kebijakan rekening: %w", err)
+	}
 
-	// Kunci baris pesanan lebih dulu: hanya satu unggahan per pesanan yang
-	// boleh menghitung + menulis dalam satu waktu.
-	if _, err := q.LockOrderForProof(ctx, req.OrderID); err != nil {
+	// Sesudah lock policy, kunci baris pesanan: hanya satu unggahan per pesanan
+	// yang boleh menghitung + menulis dalam satu waktu.
+	locked, err := q.LockOrderForProof(ctx, req.OrderID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, payment.ErrNotFound
 		}
 		return nil, fmt.Errorf("query LockOrderForProof: %w", err)
+	}
+	if !locked.IsCnc {
+		var tersedia bool
+		if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM branches b
+			JOIN branch_bank_accounts bba ON bba.branch_id = b.id AND bba.is_allowed
+			JOIN bank_accounts ba ON ba.id = bba.bank_account_id AND ba.is_active
+			WHERE b.id = $1 AND b.is_active
+		)`, locked.BranchID).Scan(&tersedia); err != nil {
+			return nil, fmt.Errorf("periksa rekening efektif cabang: %w", err)
+		}
+		if !tersedia {
+			return nil, bank.ErrUnavailable
+		}
 	}
 	ada, err := q.CountPaymentProofs(ctx, req.OrderID)
 	if err != nil {

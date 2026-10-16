@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/settings"
@@ -53,6 +54,10 @@ type BranchFlags interface {
 	IsCNC(ctx context.Context, branchID string) (bool, error)
 }
 
+type PaymentAccountSource interface {
+	PaymentAvailable(ctx context.Context, branchID string) (bool, error)
+}
+
 // Option mengubah perilaku Service pesanan.
 type Option func(*Service)
 
@@ -72,6 +77,8 @@ func WithAISettings(a AISettingsSource) Option { return func(s *Service) { s.ai 
 // C&C SELALU ditolak (fail closed): flag yang tidak bisa diverifikasi tidak
 // boleh dianggap benar.
 func WithBranchFlags(f BranchFlags) Option { return func(s *Service) { s.flags = f } }
+
+func WithPaymentAccounts(b PaymentAccountSource) Option { return func(s *Service) { s.banks = b } }
 
 // WithClock memasang sumber waktu (SystemDesign §5.5). Bawaannya clock.System.
 func WithClock(c clock.Clock) Option {
@@ -114,16 +121,15 @@ type SubmitLine struct {
 	Jenis  string
 	Qty    int
 
-	// NamaLama/SatuanLama adalah snapshot yang tersimpan di draft; dipakai
-	// hanya sebagai cadangan bila teks master kosong.
-	NamaLama   string
-	SatuanLama string
+	// NamaLama adalah snapshot yang tersimpan di draft; dipakai sebagai
+	// cadangan bila teks master kosong.
+	NamaLama string
 
 	// Keadaan master produk (hanya berarti untuk baris jenis "product").
-	ProdukAda      bool
-	ProdukAktif    bool
-	ProdukNama     string
-	ProdukSatuan   string
+	ProdukAda   bool
+	ProdukAktif bool
+	ProdukNama  string
+
 	ProdukJenis    string
 	HargaCabang    int64
 	AdaHargaCabang bool
@@ -131,9 +137,9 @@ type SubmitLine struct {
 
 // SnapshotSubmit adalah nilai final satu baris yang ditulis saat submit.
 type SnapshotSubmit struct {
-	LineNo      int
-	Nama        string
-	Satuan      string
+	LineNo int
+	Nama   string
+
 	HargaSatuan int64
 }
 
@@ -178,10 +184,8 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 			}
 			out = append(out, SnapshotSubmit{
 				LineNo: l.LineNo,
-				// Nama dan satuan baris biaya packaging adalah teks baku
-				// server (bukan karangan klien).
+				// Nama baris biaya packaging adalah teks baku server.
 				Nama:        NamaBiayaPackaging,
-				Satuan:      SatuanBiayaPackaging,
 				HargaSatuan: biayaPackaging,
 			})
 		case JenisProduct:
@@ -199,17 +203,15 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 			} else {
 				reguler++
 			}
-			nama, satuan := l.ProdukNama, l.ProdukSatuan
+			nama := l.ProdukNama
 			if nama == "" {
 				nama = l.NamaLama
 			}
-			if satuan == "" {
-				satuan = l.SatuanLama
-			}
+
 			out = append(out, SnapshotSubmit{
-				LineNo:      l.LineNo,
-				Nama:        nama,
-				Satuan:      satuan,
+				LineNo: l.LineNo,
+				Nama:   nama,
+
 				HargaSatuan: harga,
 			})
 		default:
@@ -271,6 +273,15 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 	}
 	if err := ValidateCNC(cabangCNC, in.IsCNC); err != nil {
 		return Order{}, err
+	}
+	if !in.IsCNC && s.banks != nil {
+		available, err := s.banks.PaymentAvailable(ctx, branchID)
+		if err != nil {
+			return Order{}, fmt.Errorf("baca rekening pembayaran cabang: %w", err)
+		}
+		if !available {
+			return Order{}, bank.ErrUnavailable
+		}
 	}
 
 	// Setelan dibaca pada saat submit: nilai final yang di-snapshot tidak

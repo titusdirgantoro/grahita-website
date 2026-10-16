@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/grahita/portal/api/internal/audit"
@@ -31,7 +32,13 @@ var (
 	// ErrInvalidData: data rekening tidak lolos validasi domain.
 	ErrInvalidData = errors.New("data rekening tidak valid")
 	// ErrDuplicate: pasangan bank + nomor sudah terdaftar.
-	ErrDuplicate = errors.New("rekening sudah terdaftar")
+	ErrDuplicate         = errors.New("rekening sudah terdaftar")
+	ErrIdentityImmutable = errors.New("identitas rekening tidak dapat diubah")
+	ErrBranchNotFound    = errors.New("cabang tidak ditemukan")
+	ErrVersionConflict   = errors.New("versi allowlist sudah berubah")
+	ErrAccountInactive   = errors.New("rekening nonaktif tidak dapat ditambahkan")
+	ErrUnavailable       = errors.New("cabang tidak mempunyai rekening pembayaran efektif")
+	ErrNotAllowed        = errors.New("rekening tidak diizinkan untuk cabang")
 )
 
 // Kode bank yang dikenal (Database.md §3 tipe enum bank_code).
@@ -51,6 +58,49 @@ type Account struct {
 	NamaPemilik string `json:"nama_pemilik"`
 	Nomor       string `json:"nomor"`
 	IsActive    bool   `json:"is_active"`
+}
+
+func (a Account) DisplayNomor() string {
+	n := NormalizeNomor(a.Nomor)
+	if len(n) <= 4 {
+		return "••••" + n
+	}
+	return "••••" + n[len(n)-4:]
+}
+
+type EffectiveSet struct {
+	Accounts []Account `json:"data"`
+	Version  int64     `json:"allowlist_version"`
+}
+
+type AssignmentItem struct {
+	ID           string `json:"id"`
+	Bank         string `json:"bank"`
+	NamaPemilik  string `json:"nama_pemilik"`
+	DisplayNomor string `json:"display_nomor"`
+	IsActive     bool   `json:"is_active"`
+	IsAllowed    bool   `json:"is_allowed"`
+	Dormant      bool   `json:"dormant"`
+	Effective    bool   `json:"effective"`
+}
+
+type AssignmentList struct {
+	BranchID string           `json:"branch_id"`
+	Version  int64            `json:"version"`
+	Items    []AssignmentItem `json:"items"`
+}
+
+type ReplaceInput struct {
+	ExpectedVersion int64
+	BankAccountIDs  []string
+}
+
+type ReplaceResult struct {
+	BranchID         string   `json:"branch_id"`
+	Version          int64    `json:"version"`
+	BankAccountIDs   []string `json:"bank_account_ids"`
+	PaymentAvailable bool     `json:"payment_available"`
+	Changed          bool     `json:"-"`
 }
 
 // NewAccount adalah permintaan pembuatan rekening.
@@ -81,6 +131,9 @@ type Repository interface {
 	Get(ctx context.Context, id string) (Account, error)
 	Create(ctx context.Context, in Account, rec audit.Entry) (Account, error)
 	Update(ctx context.Context, next Account, rec audit.Entry) (Account, error)
+	EffectiveForBranch(ctx context.Context, branchID string) (EffectiveSet, error)
+	ListAssignments(ctx context.Context, branchID string) (AssignmentList, error)
+	ReplaceAssignments(ctx context.Context, branchID string, in ReplaceInput, actor auth.Actor) (ReplaceResult, error)
 }
 
 // Service adalah logika bisnis rekening bank.
@@ -115,6 +168,67 @@ func (s *Service) Active(ctx context.Context) ([]Account, error) {
 	return rows, nil
 }
 
+// EffectiveForBranch adalah satu-satunya sumber rekening instruksi/verifikasi
+// cabang. Hasil kosong tidak pernah diganti daftar rekening global.
+func (s *Service) EffectiveForBranch(ctx context.Context, branchID string) (EffectiveSet, error) {
+	if strings.TrimSpace(branchID) == "" {
+		return EffectiveSet{}, ErrBranchNotFound
+	}
+	set, err := s.repo.EffectiveForBranch(ctx, branchID)
+	if err != nil {
+		return EffectiveSet{}, err
+	}
+	if set.Accounts == nil {
+		set.Accounts = []Account{}
+	}
+	return set, nil
+}
+
+func (s *Service) EffectiveForActor(ctx context.Context, actor auth.Actor) (EffectiveSet, error) {
+	if !actor.IsBranch() || actor.BranchID == "" {
+		return EffectiveSet{}, ErrForbidden
+	}
+	return s.EffectiveForBranch(ctx, actor.BranchID)
+}
+
+func (s *Service) PaymentAvailable(ctx context.Context, branchID string) (bool, error) {
+	set, err := s.EffectiveForBranch(ctx, branchID)
+	if err != nil {
+		return false, err
+	}
+	return len(set.Accounts) > 0, nil
+}
+
+func (s *Service) ListAssignments(ctx context.Context, actor auth.Actor, branchID string) (AssignmentList, error) {
+	if !actor.Can(auth.CapAdminBank) {
+		return AssignmentList{}, ErrForbidden
+	}
+	return s.repo.ListAssignments(ctx, strings.TrimSpace(branchID))
+}
+
+func (s *Service) ReplaceAssignments(ctx context.Context, actor auth.Actor, branchID string, in ReplaceInput) (ReplaceResult, error) {
+	if !actor.Can(auth.CapAdminBank) {
+		return ReplaceResult{}, ErrForbidden
+	}
+	branchID = strings.TrimSpace(branchID)
+	if branchID == "" || in.ExpectedVersion < 0 {
+		return ReplaceResult{}, ErrInvalidData
+	}
+	seen := make(map[string]bool, len(in.BankAccountIDs))
+	ids := make([]string, 0, len(in.BankAccountIDs))
+	for _, raw := range in.BankAccountIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			return ReplaceResult{}, fmt.Errorf("%w: bank_account_ids harus unik dan tidak kosong", ErrInvalidData)
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	in.BankAccountIDs = ids
+	return s.repo.ReplaceAssignments(ctx, branchID, in, actor)
+}
+
 // Create menambahkan rekening baru (Superadmin).
 func (s *Service) Create(ctx context.Context, actor auth.Actor, in NewAccount) (Account, error) {
 	if !actor.Can(auth.CapAdminBank) {
@@ -132,7 +246,7 @@ func (s *Service) Create(ctx context.Context, actor auth.Actor, in NewAccount) (
 	if err := validate(next); err != nil {
 		return Account{}, err
 	}
-	rec := audit.NewEntry(ctx, actor, audit.EntityBankAccount, "", audit.ActionCreate, nil, next)
+	rec := audit.NewEntry(ctx, actor, audit.EntityBankAccount, "", audit.ActionCreate, nil, accountAuditSnapshot(next))
 	saved, err := s.repo.Create(ctx, next, rec)
 	if err != nil {
 		return Account{}, err
@@ -155,13 +269,17 @@ func (s *Service) Update(ctx context.Context, actor auth.Actor, id string, p Pat
 	}
 	next := cur
 	if p.Bank != nil {
-		next.Bank = NormalizeBank(*p.Bank)
+		if NormalizeBank(*p.Bank) != cur.Bank {
+			return Account{}, ErrIdentityImmutable
+		}
 	}
 	if p.NamaPemilik != nil {
 		next.NamaPemilik = strings.TrimSpace(*p.NamaPemilik)
 	}
 	if p.Nomor != nil {
-		next.Nomor = NormalizeNomor(*p.Nomor)
+		if NormalizeNomor(*p.Nomor) != cur.Nomor {
+			return Account{}, ErrIdentityImmutable
+		}
 	}
 	if p.IsActive != nil {
 		next.IsActive = *p.IsActive
@@ -169,12 +287,20 @@ func (s *Service) Update(ctx context.Context, actor auth.Actor, id string, p Pat
 	if err := validate(next); err != nil {
 		return Account{}, err
 	}
-	rec := audit.NewEntry(ctx, actor, audit.EntityBankAccount, id, audit.ActionUpdate, cur, next)
+	rec := audit.NewEntry(ctx, actor, audit.EntityBankAccount, id, audit.ActionUpdate,
+		accountAuditSnapshot(cur), accountAuditSnapshot(next))
 	saved, err := s.repo.Update(ctx, next, rec)
 	if err != nil {
 		return Account{}, err
 	}
 	return saved, nil
+}
+
+func accountAuditSnapshot(a Account) map[string]any {
+	return map[string]any{
+		"id": a.ID, "bank": a.Bank, "nama_pemilik": a.NamaPemilik,
+		"display_nomor": a.DisplayNomor(), "is_active": a.IsActive,
+	}
 }
 
 // validate memeriksa invarian data rekening.

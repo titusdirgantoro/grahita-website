@@ -50,8 +50,8 @@ func newUji(t *testing.T) (*Service, *Memory) {
 }
 
 func seedDuaCabang(m *Memory) {
-	m.Put(Branch{ID: "br-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A", Email: "a@example.test", IsActive: true, IsCNC: true})
-	m.Put(Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IsActive: false, IsSpecial: true})
+	m.Put(Branch{ID: "br-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A", Email: "a@example.test", IdentityStatus: IdentityReady, IsActive: true, IsCNC: true})
+	m.Put(Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IdentityStatus: IdentityReady, IsActive: false, IsSpecial: true})
 }
 
 // TestIsCNCFlagCabang memverifikasi pembacaan flag Cash & Carry lintas-domain
@@ -179,14 +179,26 @@ func TestBuatCabangMenolakDataTidakValid(t *testing.T) {
 		in   NewBranch
 	}{
 		{"nama terlalu pendek", NewBranch{Nama: "A", NamaKepala: "Kepala", Email: "x@example.test"}},
-		{"kepala kosong", NewBranch{Nama: "Cabang X", NamaKepala: " ", Email: "x@example.test"}},
 		{"email tanpa domain", NewBranch{Nama: "Cabang X", NamaKepala: "Kepala", Email: "bukan-email"}},
-		{"email kosong", NewBranch{Nama: "Cabang X", NamaKepala: "Kepala"}},
 	}
 	for _, k := range kasus {
 		if _, err := svc.Create(ctx, adminAktor(), k.in); !errors.Is(err, ErrInvalidData) {
 			t.Errorf("%s harus ErrInvalidData, dapat %v", k.nama, err)
 		}
+	}
+}
+
+func TestBuatCabangTanpaIdentitasBerstatusIncomplete(t *testing.T) {
+	svc, _ := newUji(t)
+	b, err := svc.Create(ctxUji("10.0.0.1"), adminAktor(), NewBranch{Nama: "Cabang Baru"})
+	if err != nil {
+		t.Fatalf("buat cabang tanpa identitas: %v", err)
+	}
+	if b.IdentityStatus != IdentityIncomplete {
+		t.Fatalf("status harus identity_incomplete, dapat %q", b.IdentityStatus)
+	}
+	if _, err := svc.GenerateToken(context.Background(), adminAktor(), b.ID, 24*time.Hour); !errors.Is(err, ErrIdentityIncomplete) {
+		t.Fatalf("token harus fail-closed, dapat %v", err)
 	}
 }
 
@@ -249,6 +261,77 @@ func TestUbahCabangMenonaktifkanDanMencatatPerubahan(t *testing.T) {
 	before, ok := entri[0].Before.(Branch)
 	if !ok || before.IsActive != true {
 		t.Errorf("snapshot sebelum harus cabang aktif: %+v", entri[0].Before)
+	}
+}
+
+func TestUbahCabangBolehMengosongkanIdentitasDanMenjadiIncomplete(t *testing.T) {
+	svc, mem := newUji(t)
+	seedDuaCabang(mem)
+	mem.PutAccount("br-a")
+
+	b, err := svc.Update(ctxUji("10.0.0.9"), adminAktor(), "br-a", Patch{
+		NamaKepala: ptr(""),
+		Email:      ptr(""),
+	})
+	if err != nil {
+		t.Fatalf("mengosongkan identitas cabang: %v", err)
+	}
+	if b.NamaKepala != "" || b.Email != "" || b.IdentityStatus != IdentityIncomplete {
+		t.Fatalf("identitas harus kosong dan fail-closed, dapat %+v", b)
+	}
+}
+
+func TestApplyPatchParsialTerhadapStateTerkiniTidakMemulihkanIdentitas(t *testing.T) {
+	special := true
+	for _, tc := range []struct {
+		nama       string
+		hasAccount bool
+		patch      Patch
+	}{
+		{nama: "non-identitas dengan akun nonaktif", hasAccount: true, patch: Patch{IsSpecial: &special}},
+		{nama: "non-identitas tanpa akun", hasAccount: false, patch: Patch{IsSpecial: &special}},
+		{nama: "email sama dengan akun nonaktif", hasAccount: true, patch: Patch{Email: ptr(" A@EXAMPLE.TEST ")}},
+		{nama: "nama kepala sama tanpa akun", hasAccount: false, patch: Patch{NamaKepala: ptr(" Kepala A ")}},
+		{nama: "email berbeda dengan akun revoked", hasAccount: true, patch: Patch{Email: ptr("baru-a@example.test")}},
+		{nama: "nama kepala berbeda dengan akun revoked", hasAccount: true, patch: Patch{NamaKepala: ptr("Kepala Baru")}},
+		{nama: "identitas lengkap berbeda tanpa akun", hasAccount: false, patch: Patch{
+			NamaKepala: ptr("Kepala Baru"), Email: ptr("baru-a@example.test"),
+		}},
+	} {
+		t.Run(tc.nama, func(t *testing.T) {
+			cur := Branch{
+				ID: "br-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A",
+				Email: "a@example.test", IdentityStatus: IdentityIncomplete, IsActive: true,
+			}
+			next, err := ApplyPatch(cur, normalizePatch(tc.patch), tc.hasAccount)
+			if err != nil {
+				t.Fatalf("apply patch parsial: %v", err)
+			}
+			if tc.patch.IsSpecial != nil && !next.IsSpecial {
+				t.Fatal("field parsial yang diminta harus berubah")
+			}
+			if tc.patch.NamaKepala == nil && next.NamaKepala != cur.NamaKepala {
+				t.Fatalf("nama kepala yang tidak diminta berubah: %+v", next)
+			}
+			if tc.patch.Email == nil && next.Email != cur.Email {
+				t.Fatalf("email yang tidak diminta berubah: %+v", next)
+			}
+			if next.IdentityStatus != IdentityIncomplete {
+				t.Fatalf("PUT atribut biasa tidak boleh memulihkan status incomplete: %+v", next)
+			}
+		})
+	}
+
+	registered := Branch{
+		ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B",
+		Email: "b@example.test", IdentityStatus: IdentityRegistered, IsActive: true,
+	}
+	next, err := ApplyPatch(registered, normalizePatch(Patch{IsSpecial: &special}), true)
+	if err != nil {
+		t.Fatalf("apply patch pada cabang registered: %v", err)
+	}
+	if next.IdentityStatus != IdentityRegistered {
+		t.Fatalf("patch non-identitas tidak boleh menurunkan registered, dapat %q", next.IdentityStatus)
 	}
 }
 

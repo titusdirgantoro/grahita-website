@@ -157,7 +157,7 @@ func TestPGDokumenPDFNyataMelaluiChromium(t *testing.T) {
 		t.Errorf("nomor surat jalan = %q, mau %q", v, pesanan.Nomor)
 	}
 	for i, serial := range pesanan.Serials {
-		sel, err := excelize.CoordinatesToCellName(5, 9+i)
+		sel, err := excelize.CoordinatesToCellName(4, 9+i)
 		if err != nil {
 			t.Fatalf("nama sel: %v", err)
 		}

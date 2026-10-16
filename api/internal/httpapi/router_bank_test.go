@@ -46,6 +46,8 @@ func newBankServer(t *testing.T) *bankServer {
 	repo := bank.NewMemory()
 	repo.Put(bank.Account{ID: "bk-aktif", Bank: bank.BankBCA, NamaPemilik: "PT Grahita Indonesia", Nomor: "1234567890", IsActive: true})
 	repo.Put(bank.Account{ID: "bk-nonaktif", Bank: bank.BankBRI, NamaPemilik: "PT Grahita Indonesia", Nomor: "0987654321", IsActive: false})
+	repo.PutBranch("br-a", true)
+	repo.Assign("br-a", "bk-aktif")
 
 	setRepo := &fakeSettingsRepo{values: map[string]string{"biaya_packaging": "3000", "cnc_hari": "7"}}
 
@@ -133,6 +135,7 @@ func TestApiBankCRUDDanAudit(t *testing.T) {
 	bs := newBankServer(t)
 	base := bs.srv.URL + "/api/v1"
 	cookies, csrf := login(t, bs.srv, "rina@example.test")
+	cabangCookies, _ := login(t, bs.srv, "a@example.test")
 
 	// Daftar admin memuat rekening aktif DAN nonaktif (untuk dikelola SA).
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, base+"/admin/bank-accounts", "", cookies, "")
@@ -177,9 +180,9 @@ func TestApiBankCRUDDanAudit(t *testing.T) {
 		assertErrorShape(t, body, "VALIDATION_FAILED")
 	}
 
-	// Rekening nonaktif tidak pernah muncul di daftar publik (instruksi
-	// pembayaran & referensi OCR): hanya bk-aktif & bk-1 (baru) yang aktif.
-	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/bank-accounts", "", cookies, "")
+	// Daftar customer hanya memuat rekening efektif cabang sesi. Rekening baru
+	// yang aktif global tetapi belum assigned tidak boleh bocor sebagai fallback.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/bank-accounts", "", cabangCookies, "")
 	if status != http.StatusOK {
 		t.Fatalf("rekening publik harus 200, dapat %d", status)
 	}
@@ -187,26 +190,26 @@ func TestApiBankCRUDDanAudit(t *testing.T) {
 	for _, row := range body["data"].([]any) {
 		ids[row.(map[string]any)["id"].(string)] = true
 	}
-	if len(ids) != 2 || !ids["bk-aktif"] || !ids["bk-1"] {
-		t.Fatalf("hanya rekening aktif yang boleh tampil, dapat %v", ids)
+	if len(ids) != 1 || !ids["bk-aktif"] {
+		t.Fatalf("hanya rekening efektif cabang yang boleh tampil, dapat %v", ids)
 	}
 	if ids["bk-nonaktif"] {
 		t.Error("rekening nonaktif tidak boleh muncul di daftar publik")
 	}
 
-	// Nonaktifkan bk-aktif, lalu tersisa bk-1 di daftar publik.
+	// Nonaktifkan rekening assigned: daftar menjadi kosong, tanpa fallback bk-1.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/bank-accounts/bk-aktif",
 		`{"is_active":false}`, cookies, csrf)
 	if status != http.StatusOK {
 		t.Fatalf("nonaktifkan harus 200, dapat %d (%v)", status, body)
 	}
-	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/bank-accounts", "", cookies, "")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/bank-accounts", "", cabangCookies, "")
 	if status != http.StatusOK {
 		t.Fatalf("rekening publik harus 200, dapat %d", status)
 	}
 	pubList := body["data"].([]any)
-	if len(pubList) != 1 || pubList[0].(map[string]any)["id"] != "bk-1" {
-		t.Fatalf("setelah dinonaktifkan hanya bk-1 yang aktif, dapat %v", pubList)
+	if len(pubList) != 0 {
+		t.Fatalf("rekening assigned nonaktif harus hilang tanpa fallback, dapat %v", pubList)
 	}
 
 	// Daftar admin tetap memuat keduanya.

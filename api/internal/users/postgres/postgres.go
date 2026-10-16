@@ -49,6 +49,7 @@ func (r *Repo) ListBranchUsers(ctx context.Context) ([]users.BranchUser, error) 
 			Nama:           row.Nama,
 			NamaKepala:     row.NamaKepala,
 			Email:          row.Email,
+			IdentityStatus: row.IdentityStatus,
 			Telepon:        row.Telepon,
 			HasAccount:     row.UserID != "",
 			IsActive:       row.UserActive,
@@ -83,6 +84,7 @@ func branchUserByID(ctx context.Context, q *sqlc.Queries, id string) (users.Bran
 		Nama:           row.Nama,
 		NamaKepala:     row.NamaKepala,
 		Email:          row.Email,
+		IdentityStatus: row.IdentityStatus,
 		Telepon:        row.Telepon,
 		HasAccount:     row.UserID != "",
 		IsActive:       row.UserActive,
@@ -106,16 +108,35 @@ func (r *Repo) SetBranchUserActive(ctx context.Context, id string, active bool, 
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
 
-	var kunci string
-	if err := tx.QueryRow(ctx, `SELECT id FROM branch_users WHERE id = $1 FOR UPDATE`, id).Scan(&kunci); err != nil {
+	// Urutan lock harus sama dengan perubahan master cabang: branches dahulu,
+	// baru branch_users. Dengan begitu PUT cabang yang menurunkan identitas dan
+	// aktivasi akun tidak dapat saling melewati atau membentuk deadlock silang.
+	var branchID string
+	if err := tx.QueryRow(ctx, `SELECT branch_id FROM branch_users WHERE id = $1`, id).Scan(&branchID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return users.BranchUser{}, users.ErrNotFound
 		}
+		return users.BranchUser{}, fmt.Errorf("baca cabang akun: %w", err)
+	}
+	var identityStatus, namaKepala, email string
+	if err := tx.QueryRow(ctx, `
+SELECT identity_status::text, COALESCE(nama_kepala, ''), COALESCE(email::text, '')
+  FROM branches WHERE id = $1 FOR UPDATE`, branchID).Scan(&identityStatus, &namaKepala, &email); err != nil {
+		return users.BranchUser{}, fmt.Errorf("kunci cabang akun: %w", err)
+	}
+	var kunci string
+	if err := tx.QueryRow(ctx, `SELECT id FROM branch_users WHERE id = $1 FOR UPDATE`, id).Scan(&kunci); err != nil {
 		return users.BranchUser{}, fmt.Errorf("kunci akun cabang: %w", err)
+	}
+	if active && (identityStatus != "registered" || namaKepala == "" || email == "") {
+		return users.BranchUser{}, users.ErrIdentityIncomplete
 	}
 	cur, err := branchUserByID(ctx, q, id)
 	if err != nil {
 		return users.BranchUser{}, err
+	}
+	if cur.IsActive == active {
+		return cur, nil
 	}
 	if err := q.SetBranchUserActive(ctx, sqlc.SetBranchUserActiveParams{ID: id, IsActive: active}); err != nil {
 		return users.BranchUser{}, fmt.Errorf("query SetBranchUserActive: %w", err)

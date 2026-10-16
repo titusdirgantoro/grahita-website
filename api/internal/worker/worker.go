@@ -294,6 +294,7 @@ func (w *ReminderCNCWorker) Work(ctx context.Context, job *river.Job[jobs.Remind
 // verifikasinya secara otomatis (payment.OCRService, kartu F2-26).
 type PembacaBuktiAI interface {
 	Baca(ctx context.Context, orderID string) (payment.OCRHasil, error)
+	BacaUlang(ctx context.Context, orderID string, allowlistVersion int64, proofSetFingerprint string) (payment.OCRHasil, error)
 }
 
 // OCRBuktiWorker menjalankan job "ocr_bukti": membaca bukti transfer lewat
@@ -328,7 +329,13 @@ func (w *OCRBuktiWorker) Work(ctx context.Context, job *river.Job[jobs.OCRBuktiA
 		// begitu saja (pesanan menunggu pembacaan yang tak pernah datang).
 		return fmt.Errorf("job %s: layanan pembacaan bukti belum terpasang", w.Kind())
 	}
-	hasil, err := w.ocr.Baca(ctx, job.Args.OrderID)
+	var hasil payment.OCRHasil
+	var err error
+	if job.Args.AllowlistVersion > 0 || job.Args.ProofSetFingerprint != "" {
+		hasil, err = w.ocr.BacaUlang(ctx, job.Args.OrderID, job.Args.AllowlistVersion, job.Args.ProofSetFingerprint)
+	} else {
+		hasil, err = w.ocr.Baca(ctx, job.Args.OrderID)
+	}
 	if err != nil {
 		return err
 	}

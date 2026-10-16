@@ -121,7 +121,25 @@ func (r *Repo) TouchLogin(ctx context.Context, kind auth.Kind, id string) error 
 
 // Create menyimpan sesi baru dan mengembalikan barisnya.
 func (r *Repo) Create(ctx context.Context, s auth.Session, tokenHash []byte, meta auth.RequestMeta) (auth.Session, error) {
-	row, err := r.q.CreateSession(ctx, sqlc.CreateSessionParams{
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return auth.Session{}, fmt.Errorf("mulai transaksi sesi: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Serialkan penerbitan sesi dengan mutasi identitas. Mutasi cabang selalu
+	// mengunci branches lebih dulu, lalu mencabut credential/sesi. Jalur ini
+	// memakai urutan yang sama dan memeriksa ulang kelayakan setelah lock:
+	// bila login menang, revokasi berikutnya pasti melihat sesi baru; bila
+	// revokasi menang, INSERT ditolak setelah menunggu commit-nya.
+	locked, err := lockEligibleActor(ctx, tx, s.Kind, s.ActorID, s.BranchID, false)
+	if err != nil {
+		return auth.Session{}, err
+	}
+	if locked.passwordHash != s.ExpectedPasswordHash {
+		return auth.Session{}, auth.ErrInvalidCredentials
+	}
+	row, err := r.q.WithTx(tx).CreateSession(ctx, sqlc.CreateSessionParams{
 		ActorKind: sqlc.ActorKind(s.Kind),
 		UserID:    s.ActorID,
 		BranchID:  pgtypes.UUID(s.BranchID),
@@ -133,9 +151,13 @@ func (r *Repo) Create(ctx context.Context, s auth.Session, tokenHash []byte, met
 	if err != nil {
 		return auth.Session{}, fmt.Errorf("query CreateSession: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return auth.Session{}, fmt.Errorf("commit sesi: %w", err)
+	}
 	s.ID = row.ID
 	s.ExpiresAt = row.ExpiresAt
 	s.LastSeenAt = time.Now().UTC()
+	s.ExpectedPasswordHash = ""
 	return s, nil
 }
 
@@ -188,6 +210,56 @@ func (r *Repo) UpdatePassword(ctx context.Context, kind auth.Kind, id, passwordH
 	}
 	if err := r.q.UpdateBranchPassword(ctx, sqlc.UpdateBranchPasswordParams{ID: id, PasswordHash: passwordHash}); err != nil {
 		return fmt.Errorf("query UpdateBranchPassword: %w", err)
+	}
+	return nil
+}
+
+// ChangePassword memvalidasi ulang generasi credential dan sesi peminta lalu
+// mengganti hash serta mencabut sesi lain dalam satu transaksi. Untuk cabang,
+// lockEligibleActor menjaga urutan branches -> branch_users.
+func (r *Repo) ChangePassword(ctx context.Context, kind auth.Kind, id, sessionID, expectedPasswordHash, passwordHash string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("mulai transaksi ganti kata sandi: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	locked, err := lockEligibleActor(ctx, tx, kind, id, "", false)
+	if err != nil {
+		if errors.Is(err, auth.ErrInactiveAccount) || errors.Is(err, auth.ErrNoUser) {
+			return auth.ErrSessionInvalid
+		}
+		return err
+	}
+	if locked.passwordHash != expectedPasswordHash {
+		return auth.ErrSessionInvalid
+	}
+	var lockedSession string
+	err = tx.QueryRow(ctx, `
+SELECT id
+  FROM sessions
+ WHERE id = $1 AND actor_kind = $2 AND user_id = $3
+   AND revoked_at IS NULL AND expires_at > now()
+ FOR UPDATE`, sessionID, kind, id).Scan(&lockedSession)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.ErrSessionInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("kunci sesi ganti kata sandi: %w", err)
+	}
+	qtx := r.q.WithTx(tx)
+	if kind == auth.KindAdmin {
+		if err := qtx.UpdateAdminPassword(ctx, sqlc.UpdateAdminPasswordParams{ID: id, PasswordHash: pgtypes.Text(passwordHash)}); err != nil {
+			return fmt.Errorf("query UpdateAdminPassword: %w", err)
+		}
+	} else if err := qtx.UpdateBranchPassword(ctx, sqlc.UpdateBranchPasswordParams{ID: id, PasswordHash: passwordHash}); err != nil {
+		return fmt.Errorf("query UpdateBranchPassword: %w", err)
+	}
+	if err := qtx.RevokeOtherSessions(ctx, sqlc.RevokeOtherSessionsParams{UserID: id, ID: sessionID}); err != nil {
+		return fmt.Errorf("query RevokeOtherSessions: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit ganti kata sandi: %w", err)
 	}
 	return nil
 }
@@ -258,9 +330,10 @@ func (r *Repo) UpdateName(ctx context.Context, kind auth.Kind, id, nama string) 
 // CreateResetToken membatalkan token atur ulang lama milik pengguna lalu
 // menyimpan yang baru — hanya satu tautan berlaku pada satu waktu.
 //
-// Pembatalan dan penyimpanan terjadi dalam SATU pernyataan SQL (data-modifying
-// CTE) supaya kegagalan separuh jalan tidak mungkin meninggalkan akun tanpa
-// tautan aktif (catatan QA F1-04 untuk F1-16).
+// Pembatalan dan penyimpanan terjadi dalam SATU transaksi. Sebelum CTE
+// penggantian token dijalankan, transaksi mengunci identitas pemilik dan
+// memeriksa ulang kelayakannya supaya revokasi identitas tidak dapat disusul
+// INSERT token baru yang lolos dari pencabutan.
 //
 // Bila t.Audit terisi (penerbitan tautan oleh admin, F2-28), entri auditnya
 // ditulis di dalam TRANSAKSI YANG SAMA dengan token barunya: kegagalan
@@ -273,29 +346,109 @@ func (r *Repo) CreateResetToken(ctx context.Context, t auth.ResetToken, tokenHas
 		TokenHash: tokenHash,
 		ExpiresAt: t.ExpiresAt,
 	}
-	if t.Audit == nil {
-		// Alur publik (lupa kata sandi): token saja, tanpa catatan audit.
-		if err := r.q.ReplacePasswordResetToken(ctx, params); err != nil {
-			return fmt.Errorf("query ReplacePasswordResetToken: %w", err)
-		}
-		return nil
-	}
-
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("mulai transaksi token atur ulang: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Untuk cabang, urutannya branches -> branch_users, sama dengan mutasi
+	// identitas. Admin dikunci langsung pada admin_users; undangan admin yang
+	// masih aktif memang boleh menerima token aktivasi meski belum punya hash.
+	locked, err := lockEligibleActor(ctx, tx, t.Kind, t.UserID, "", true)
+	if err != nil {
+		return err
+	}
+	if auth.NormalizeEmail(locked.email) != auth.NormalizeEmail(t.ExpectedEmail) ||
+		locked.passwordHash != t.ExpectedPasswordHash {
+		return auth.ErrInactiveAccount
+	}
 	if err := r.q.WithTx(tx).ReplacePasswordResetToken(ctx, params); err != nil {
 		return fmt.Errorf("query ReplacePasswordResetToken: %w", err)
 	}
-	if err := auditpg.Insert(ctx, tx, resetAuditEntry(t.Audit)); err != nil {
-		return err
+	if t.Audit != nil {
+		if err := auditpg.Insert(ctx, tx, resetAuditEntry(t.Audit)); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit token atur ulang: %w", err)
 	}
 	return nil
+}
+
+// lockEligibleActor mengunci boundary identitas sebelum artefak autentikasi
+// diterbitkan. Urutan lock cabang wajib branches -> branch_users agar sama
+// dengan branch/postgres.Update dan users/postgres.SetBranchUserActive.
+type lockedActor struct {
+	email        string
+	passwordHash string
+}
+
+func lockEligibleActor(ctx context.Context, tx pgx.Tx, kind auth.Kind, userID, branchID string, allowAdminInvitation bool) (lockedActor, error) {
+	if kind == auth.KindAdmin {
+		var active, activated bool
+		var email string
+		var passwordHash *string
+		err := tx.QueryRow(ctx, `
+SELECT is_active, password_hash IS NOT NULL AND activated_at IS NOT NULL, email, password_hash
+  FROM admin_users
+ WHERE id = $1
+	 FOR UPDATE`, userID).Scan(&active, &activated, &email, &passwordHash)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return lockedActor{}, auth.ErrNoUser
+		}
+		if err != nil {
+			return lockedActor{}, fmt.Errorf("kunci identitas admin: %w", err)
+		}
+		if !active || (!allowAdminInvitation && !activated) {
+			return lockedActor{}, auth.ErrInactiveAccount
+		}
+		locked := lockedActor{email: email}
+		if passwordHash != nil {
+			locked.passwordHash = *passwordHash
+		}
+		return locked, nil
+	}
+
+	if branchID == "" {
+		if err := tx.QueryRow(ctx, `SELECT branch_id FROM branch_users WHERE id = $1`, userID).Scan(&branchID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return lockedActor{}, auth.ErrNoUser
+			}
+			return lockedActor{}, fmt.Errorf("baca cabang pemilik akun: %w", err)
+		}
+	}
+	var branchActive, identityReady bool
+	err := tx.QueryRow(ctx, `
+SELECT is_active,
+       identity_status = 'registered' AND nama_kepala IS NOT NULL AND email IS NOT NULL
+  FROM branches
+ WHERE id = $1
+	 FOR UPDATE`, branchID).Scan(&branchActive, &identityReady)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return lockedActor{}, auth.ErrNoUser
+	}
+	if err != nil {
+		return lockedActor{}, fmt.Errorf("kunci identitas cabang: %w", err)
+	}
+
+	var userActive, correctBranch bool
+	var email, passwordHash string
+	err = tx.QueryRow(ctx, `
+SELECT is_active, branch_id = $2, email, password_hash
+  FROM branch_users
+ WHERE id = $1
+	 FOR UPDATE`, userID, branchID).Scan(&userActive, &correctBranch, &email, &passwordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return lockedActor{}, auth.ErrNoUser
+	}
+	if err != nil {
+		return lockedActor{}, fmt.Errorf("kunci akun cabang: %w", err)
+	}
+	if !branchActive || !identityReady || !userActive || !correctBranch {
+		return lockedActor{}, auth.ErrInactiveAccount
+	}
+	return lockedActor{email: email, passwordHash: passwordHash}, nil
 }
 
 // resetAuditEntry menerjemahkan fakta audit paket auth menjadi audit.Entry.
@@ -333,4 +486,61 @@ func (r *Repo) ConsumeResetToken(ctx context.Context, tokenHash []byte, now time
 		UserID:    row.UserID,
 		ExpiresAt: row.ExpiresAt,
 	}, nil
+}
+
+// ResetPassword mengunci identitas, mengonsumsi token, mengganti credential,
+// dan mencabut seluruh sesi dalam satu transaksi. Token dibaca tanpa lock
+// hanya untuk menemukan boundary identitas; keputusan berlaku dibuat kembali
+// oleh UPDATE kondisional setelah lock branches -> branch_users diperoleh.
+func (r *Repo) ResetPassword(ctx context.Context, tokenHash []byte, now time.Time, passwordHash string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("mulai transaksi atur ulang kata sandi: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var kindText, userID string
+	err = tx.QueryRow(ctx, `
+SELECT actor_kind::text, user_id
+  FROM password_reset_tokens
+ WHERE token_hash = $1 AND revoked_at IS NULL AND used_at IS NULL AND expires_at > $2`, tokenHash, now).Scan(&kindText, &userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.ErrResetInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("baca pemilik token atur ulang: %w", err)
+	}
+	kind := auth.Kind(kindText)
+	if _, err := lockEligibleActor(ctx, tx, kind, userID, "", true); err != nil {
+		if errors.Is(err, auth.ErrInactiveAccount) || errors.Is(err, auth.ErrNoUser) {
+			return auth.ErrResetInvalid
+		}
+		return err
+	}
+
+	qtx := r.q.WithTx(tx)
+	consumed, err := qtx.ConsumePasswordResetToken(ctx, sqlc.ConsumePasswordResetTokenParams{TokenHash: tokenHash, ExpiresAt: now})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.ErrResetInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("query ConsumePasswordResetToken: %w", err)
+	}
+	if consumed.ActorKind != kindText || consumed.UserID != userID {
+		return auth.ErrResetInvalid
+	}
+	if kind == auth.KindAdmin {
+		if err := qtx.ActivateAdminUser(ctx, sqlc.ActivateAdminUserParams{ID: userID, PasswordHash: pgtypes.Text(passwordHash)}); err != nil {
+			return fmt.Errorf("query ActivateAdminUser: %w", err)
+		}
+	} else if err := qtx.UpdateBranchPassword(ctx, sqlc.UpdateBranchPasswordParams{ID: userID, PasswordHash: passwordHash}); err != nil {
+		return fmt.Errorf("query UpdateBranchPassword: %w", err)
+	}
+	if err := qtx.RevokeSessionsForUser(ctx, userID); err != nil {
+		return fmt.Errorf("query RevokeSessionsForUser: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit atur ulang kata sandi: %w", err)
+	}
+	return nil
 }

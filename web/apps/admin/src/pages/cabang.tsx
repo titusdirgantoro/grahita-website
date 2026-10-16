@@ -23,6 +23,7 @@ import {
 
 import { formatWaktu } from "./pengguna";
 import type { Cabang } from "./shell-pages";
+import { useSesi } from "../session";
 import styles from "./admin-pages.module.css";
 
 /**
@@ -73,7 +74,9 @@ interface FormCabang {
   id?: string;
   nama: string;
   nama_kepala: string;
+  jabatan_kepala: string;
   email: string;
+  identity_status: "identity_incomplete" | "ready" | "registered";
   telepon: string;
   is_cnc: boolean;
   is_special: boolean;
@@ -91,7 +94,9 @@ interface FormCabang {
 const CABANG_BARU: FormCabang = {
   nama: "",
   nama_kepala: "",
+  jabatan_kepala: "",
   email: "",
+  identity_status: "identity_incomplete",
   telepon: "",
   is_cnc: false,
   is_special: false,
@@ -115,10 +120,10 @@ function pesanGalat(err: unknown): string {
 function validasiForm(f: FormCabang): Record<string, string> {
   const err: Record<string, string> = {};
   if (f.nama.trim().length < 2) err.nama = "Nama cabang wajib diisi (minimal 2 karakter).";
-  if (f.nama_kepala.trim().length < 2) {
-    err.nama_kepala = "Nama kepala cabang wajib diisi (minimal 2 karakter).";
+  if (f.nama_kepala.trim() && f.nama_kepala.trim().length < 2) {
+    err.nama_kepala = "Nama kepala cabang minimal 2 karakter bila diisi.";
   }
-  if (!POLA_EMAIL.test(f.email.trim())) err.email = "Format email belum benar.";
+  if (f.email.trim() && !POLA_EMAIL.test(f.email.trim())) err.email = "Format email belum benar.";
   return err;
 }
 
@@ -140,6 +145,7 @@ function validasiForm(f: FormCabang): Record<string, string> {
  */
 export function CabangPage() {
   const { tampilkan } = useToast();
+  const { peran } = useSesi();
   const [tab, setTab] = useState<TabCabang>("semua");
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<Cabang[] | null>(null);
@@ -221,7 +227,9 @@ export function CabangPage() {
       id: row.id,
       nama: row.nama,
       nama_kepala: row.nama_kepala,
+      jabatan_kepala: row.jabatan_kepala ?? "",
       email: row.email,
+      identity_status: row.identity_status ?? (row.email && row.nama_kepala ? "ready" : "identity_incomplete"),
       telepon: row.telepon ?? "",
       is_cnc: row.is_cnc,
       is_special: Boolean(row.is_special),
@@ -271,6 +279,7 @@ export function CabangPage() {
     const muatan = {
       nama: form.nama.trim(),
       nama_kepala: form.nama_kepala.trim(),
+      jabatan_kepala: form.jabatan_kepala.trim(),
       email: form.email.trim(),
       telepon: form.telepon.trim(),
       is_cnc: form.is_cnc,
@@ -448,8 +457,8 @@ export function CabangPage() {
                     <td>
                       <b>{c.nama}</b>
                     </td>
-                    <td>{c.nama_kepala}</td>
-                    <td className="muted">{c.email}</td>
+                    <td>{c.nama_kepala || "—"}</td>
+                    <td className="muted">{c.email || "—"}</td>
                     <td>
                       <div className={styles.row}>
                         {c.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
@@ -465,8 +474,8 @@ export function CabangPage() {
                       )}
                     </td>
                     <td>
-                      <Badge tone={c.is_active ? "success" : "danger"}>
-                        {c.is_active ? "Aktif" : "Nonaktif"}
+                      <Badge tone={!c.is_active ? "danger" : c.identity_status === "identity_incomplete" ? "warning" : "success"}>
+                        {!c.is_active ? "Nonaktif" : c.identity_status === "identity_incomplete" ? "Identitas belum lengkap" : "Aktif"}
                       </Badge>
                     </td>
                     <td className={`num ${styles.aksiSel}`}>
@@ -521,12 +530,7 @@ export function CabangPage() {
             </Button>
             <Button
               variant="primary"
-              disabled={
-                sibuk === "form" ||
-                !form?.nama.trim() ||
-                !form?.nama_kepala.trim() ||
-                !form?.email.trim()
-              }
+              disabled={sibuk === "form" || !form?.nama.trim()}
               onClick={() => void simpan()}
             >
               {konfirmasiEmail ? "Ya, ubah email login" : "Simpan"}
@@ -552,9 +556,25 @@ export function CabangPage() {
               />
             </Field>
             <Field
+              label="Jabatan kepala cabang"
+              htmlFor="cf-jabatan"
+              hint="Opsional."
+              error={errorFields.jabatan_kepala}
+            >
+              <Input
+                id="cf-jabatan"
+                value={form.jabatan_kepala}
+                onChange={(e) => setForm({ ...form, jabatan_kepala: e.target.value })}
+              />
+            </Field>
+            <Field
               label="Email cabang"
               htmlFor="cf-email"
-              hint={form.punyaAkun ? undefined : "Dipakai cabang untuk masuk ke portal."}
+              hint={
+                form.punyaAkun
+                  ? undefined
+                  : "Opsional saat membuat cabang; wajib sebelum token registrasi dapat dibuat."
+              }
               error={errorFields.email}
             >
               <Input
@@ -723,6 +743,13 @@ function BlokToken({
     return (
       <Notice tone="warning">
         Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.
+      </Notice>
+    );
+  }
+  if (!form.nama_kepala.trim() || !form.email.trim() || form.identity_status === "identity_incomplete") {
+    return (
+      <Notice tone="warning">
+        Lengkapi nama kepala cabang dan email, lalu simpan sebelum membuat token registrasi.
       </Notice>
     );
   }

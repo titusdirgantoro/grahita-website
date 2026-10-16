@@ -6,6 +6,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,6 +42,10 @@ type Config struct {
 	LogLevel string
 
 	DatabaseURL string
+	// ImportSnapshotKey adalah kunci AES-256 berformat base64 untuk
+	// before-snapshot rollback impor staging. Kunci berasal dari secret store
+	// runtime dan tidak pernah disimpan bersama ciphertext di database.
+	ImportSnapshotKey string
 
 	// Host publik per portal. Kedua host melayani API same-origin di
 	// /api/v1 (Architecture.md §5.1).
@@ -205,6 +210,7 @@ func Load() (Config, error) {
 		HTTPAddr:             env("HTTP_ADDR", ":8080"),
 		LogLevel:             env("LOG_LEVEL", "info"),
 		DatabaseURL:          env("DATABASE_URL", ""),
+		ImportSnapshotKey:    strings.TrimSpace(env("MASTER_IMPORT_SNAPSHOT_KEY", "")),
 		CustomerHost:         env("CUSTOMER_HOST", DefaultCustomerHost),
 		AdminHost:            env("ADMIN_HOST", DefaultAdminHost),
 		PublicScheme:         env("PUBLIC_SCHEME", "https"),
@@ -353,10 +359,21 @@ func (c Config) Validate() error {
 	if c.IsProduction() && !c.SessionSecure {
 		return errors.New("SESSION_SECURE wajib true di produksi")
 	}
+	if !validImportSnapshotKey(c.AppEnv, c.ImportSnapshotKey) {
+		return errors.New("MASTER_IMPORT_SNAPSHOT_KEY wajib berupa base64 32 byte di staging")
+	}
 	if err := c.ValidasiCadangan(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func validImportSnapshotKey(appEnv, encoded string) bool {
+	if !strings.EqualFold(strings.TrimSpace(appEnv), "staging") {
+		return true
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	return err == nil && len(key) == 32
 }
 
 // CadanganAktif melaporkan apakah tujuan cadangan dikonfigurasi.

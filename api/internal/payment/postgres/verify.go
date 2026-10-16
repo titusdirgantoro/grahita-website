@@ -25,8 +25,14 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -73,6 +79,20 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
+		return payment.VerifyOutcome{}, fmt.Errorf("kunci kebijakan rekening: %w", err)
+	}
+	var branchID string
+	if err := tx.QueryRow(ctx, `SELECT branch_id FROM orders WHERE id=$1`, req.OrderID).Scan(&branchID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return payment.VerifyOutcome{}, payment.ErrNotFound
+		}
+		return payment.VerifyOutcome{}, err
+	}
+	var allowlistVersion int64
+	if err := tx.QueryRow(ctx, `SELECT bank_allowlist_version FROM branches WHERE id=$1 FOR SHARE`, branchID).Scan(&allowlistVersion); err != nil {
+		return payment.VerifyOutcome{}, fmt.Errorf("kunci allowlist cabang: %w", err)
+	}
 
 	// 1. Kunci baris pesanan: hanya satu verifikasi per pesanan dalam satu
 	//    waktu, dan seluruh keputusan di bawah dibaca dari baris terkunci.
@@ -93,50 +113,68 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 	default:
 		return payment.VerifyOutcome{}, payment.ErrNotSubmitted
 	}
+	destinationResults, fingerprint, finalHasil, finalAlasan, err := r.validateDestinations(ctx, tx, req, row.BranchID)
+	if err != nil {
+		return payment.VerifyOutcome{}, err
+	}
+	if req.ExpectedAllowlistVersion > 0 && req.ExpectedAllowlistVersion != allowlistVersion {
+		return payment.VerifyOutcome{}, payment.ErrOCRSnapshotStale
+	}
+	if req.ExpectedProofFingerprint != "" && req.ExpectedProofFingerprint != hex.EncodeToString(fingerprint) {
+		return payment.VerifyOutcome{}, payment.ErrOCRSnapshotStale
+	}
+	req.Hasil, req.Alasan = finalHasil, finalAlasan
 
-	// 3. Transisi status.
+	// Log dibuat sebelum transisi Done agar pointer historis dapat ditulis dalam
+	// update status yang sama. Seluruhnya tetap satu transaksi.
+	destinationJSON, err := json.Marshal(destinationResults)
+	if err != nil {
+		return payment.VerifyOutcome{}, err
+	}
+	//    dari angka yang dikirim klien) supaya selisih selalu benar.
+	logRow, err := q.InsertVerificationLog(ctx, sqlc.InsertVerificationLogParams{
+		OrderID:                req.OrderID,
+		Metode:                 sqlc.VerifyMethod(req.Metode),
+		TotalPesanan:           row.Total,
+		TotalTerbaca:           pgtypes.Int8Ptr(req.TotalTerbaca),
+		Hasil:                  sqlc.VerifStatus(req.Hasil),
+		Alasan:                 sqlc.NullReviewReason{ReviewReason: sqlc.ReviewReason(req.Alasan), Valid: req.Alasan != ""},
+		AdminID:                adminIDVerifikasi(req),
+		Catatan:                pgtypes.Text(req.Catatan),
+		BranchAllowlistVersion: pgtype.Int8{Int64: allowlistVersion, Valid: true},
+		ProofSetFingerprint:    fingerprint,
+		DestinationResults:     destinationJSON,
+	})
+	if err != nil {
+		if req.Metode == payment.MetodeAI && isDuplicate(err) {
+			// Dua worker review dapat sama-sama melewati precheck. Unique index
+			// menjadi arbiter akhir; transaksi pecundang dibatalkan lalu membaca
+			// outcome immutable yang sudah dikomit worker pemenang.
+			_ = tx.Rollback(ctx)
+			return r.existingAIOutcome(ctx, req.OrderID, allowlistVersion, fingerprint)
+		}
+		return payment.VerifyOutcome{}, fmt.Errorf("query InsertVerificationLog: %w", err)
+	}
+
 	switch req.Hasil {
 	case payment.VerifCocok:
-		changed, err := q.SetOrderDone(ctx, req.OrderID)
+		changed, err := q.SetOrderDone(ctx, sqlc.SetOrderDoneParams{OrderID: req.OrderID, VerificationLogID: logRow.ID})
 		if err != nil {
 			return payment.VerifyOutcome{}, fmt.Errorf("query SetOrderDone: %w", err)
 		}
 		if changed == 0 {
-			// Baris berpindah status sesudah penguncian (mis. verifikasi
-			// paralel lain) — tidak ada efek samping yang ditulis.
 			return payment.VerifyOutcome{}, payment.ErrAlreadyDone
 		}
 	case payment.VerifPerluReview:
-		changed, err := q.SetOrderPerluReview(ctx, sqlc.SetOrderPerluReviewParams{
-			Alasan: sqlc.ReviewReason(req.Alasan),
-			ID:     req.OrderID,
-		})
+		changed, err := q.SetOrderPerluReview(ctx, sqlc.SetOrderPerluReviewParams{Alasan: sqlc.ReviewReason(req.Alasan), ID: req.OrderID})
 		if err != nil {
 			return payment.VerifyOutcome{}, fmt.Errorf("query SetOrderPerluReview: %w", err)
 		}
 		if changed == 0 {
-			// Klausa WHERE memeriksa ulang status; 0 baris berarti status
-			// berubah di luar dugaan (tidak terjadi selama baris terkunci).
 			return payment.VerifyOutcome{}, payment.ErrNotSubmitted
 		}
 	default:
 		return payment.VerifyOutcome{}, payment.ErrHasilInvalid
-	}
-
-	// 4. Log verifikasi. total_pesanan diambil dari baris yang DIKUNCI (bukan
-	//    dari angka yang dikirim klien) supaya selisih selalu benar.
-	logRow, err := q.InsertVerificationLog(ctx, sqlc.InsertVerificationLogParams{
-		OrderID:      req.OrderID,
-		Metode:       sqlc.VerifyMethod(req.Metode),
-		TotalPesanan: row.Total,
-		TotalTerbaca: pgtypes.Int8Ptr(req.TotalTerbaca),
-		Hasil:        sqlc.VerifStatus(req.Hasil),
-		Alasan:       sqlc.NullReviewReason{ReviewReason: sqlc.ReviewReason(req.Alasan), Valid: req.Alasan != ""},
-		AdminID:      adminIDVerifikasi(req),
-		Catatan:      pgtypes.Text(req.Catatan),
-	})
-	if err != nil {
-		return payment.VerifyOutcome{}, fmt.Errorf("query InsertVerificationLog: %w", err)
 	}
 
 	// 5a. Timeline: nama pelaku + keputusannya.
@@ -206,7 +244,229 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 	}, nil
 }
 
+func (r *Repo) existingAIOutcome(ctx context.Context, orderID string, version int64, fingerprint []byte) (payment.VerifyOutcome, error) {
+	var out payment.VerifyOutcome
+	var totalTerbaca *int64
+	var alasan, catatan *string
+	var destinationJSON []byte
+	err := r.pool.QueryRow(ctx, `SELECT o.id::text,COALESCE(o.nomor,''),o.versi,o.branch_id::text,
+ o.status::text,o.verif_status::text,COALESCE(o.alasan_review::text,''),o.total,
+ v.id::text,v.metode::text,v.total_pesanan,v.total_terbaca,v.hasil::text,
+ v.alasan::text,v.catatan,v.created_at,v.destination_results
+ FROM orders o JOIN verification_logs v ON v.order_id=o.id
+ WHERE o.id=$1 AND v.metode='ai' AND v.branch_allowlist_version=$2
+   AND v.proof_set_fingerprint=$3`, orderID, version, fingerprint).Scan(
+		&out.Order.ID, &out.Order.Nomor, &out.Order.Versi, &out.Order.BranchID,
+		&out.Order.Status, &out.Order.VerifStatus, &out.Order.AlasanReview, &out.Order.Total,
+		&out.Log.ID, &out.Log.Metode, &out.Log.TotalPesanan, &totalTerbaca, &out.Log.Hasil,
+		&alasan, &catatan, &out.Log.CreatedAt, &destinationJSON)
+	if err != nil {
+		return payment.VerifyOutcome{}, fmt.Errorf("baca outcome AI final: %w", err)
+	}
+	out.Log.OrderID = orderID
+	out.Log.BranchAllowlistVersion = version
+	if totalTerbaca != nil {
+		out.Log.TotalTerbaca = *totalTerbaca
+		out.Log.Selisih = *totalTerbaca - out.Log.TotalPesanan
+	}
+	if alasan != nil {
+		out.Log.Alasan = *alasan
+	}
+	if catatan != nil {
+		out.Log.Catatan = *catatan
+	}
+	if err := json.Unmarshal(destinationJSON, &out.Log.DestinationResults); err != nil {
+		return payment.VerifyOutcome{}, fmt.Errorf("urai outcome AI final: %w", err)
+	}
+	return out, nil
+}
+
 // ikonVerifikasi memilih ikon timeline untuk keputusan verifikasi.
+func (r *Repo) validateDestinations(ctx context.Context, tx pgx.Tx, req payment.MarkVerifiedRequest, branchID string) ([]payment.DestinationResult, []byte, string, string, error) {
+	type proofRow struct {
+		id       string
+		at       *time.Time
+		bank     string
+		rekAkhir string
+	}
+	rows, err := tx.Query(ctx, `SELECT id,ocr_at,COALESCE(ocr_bank::text,''),COALESCE(ocr_rek_akhir,'')
+ FROM payment_proofs WHERE order_id=$1 ORDER BY id`, req.OrderID)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	proofs := []proofRow{}
+	for rows.Next() {
+		var p proofRow
+		if err := rows.Scan(&p.id, &p.at, &p.bank, &p.rekAkhir); err != nil {
+			rows.Close()
+			return nil, nil, "", "", err
+		}
+		proofs = append(proofs, p)
+	}
+	rows.Close()
+
+	h := sha256.New()
+	for i, p := range proofs {
+		if i > 0 {
+			h.Write([]byte{0x1e})
+		}
+		h.Write([]byte(strings.ToLower(p.id)))
+		h.Write([]byte{0x1f})
+		if p.at != nil {
+			h.Write([]byte(p.at.UTC().Format(time.RFC3339Nano)))
+		}
+	}
+	fingerprint := h.Sum(nil)
+	if req.Hasil == payment.VerifCocok && req.Metode != payment.MetodeAI && len(proofs) != len(req.ProofDestinations) {
+		return nil, nil, "", "", payment.ErrDestinationRequired
+	}
+	mapped := map[string]string{}
+	for _, d := range req.ProofDestinations {
+		if _, exists := mapped[d.PaymentProofID]; exists {
+			return nil, nil, "", "", payment.ErrDestinationRequired
+		}
+		mapped[d.PaymentProofID] = d.BankAccountID
+	}
+	results := make([]payment.DestinationResult, 0, len(proofs))
+	var digitRek int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT (value->>'digit_rek')::bigint FROM settings WHERE key='ai'),4)`).Scan(&digitRek); err != nil {
+		return nil, nil, "", "", err
+	}
+	if digitRek < 1 {
+		digitRek = 4
+	}
+	for _, p := range proofs {
+		if req.Metode == payment.MetodeAI {
+			result, err := r.destinationFromOCR(ctx, tx, branchID, p.id, p.bank, p.rekAkhir, req.Metode, digitRek)
+			if err != nil {
+				return nil, nil, "", "", err
+			}
+			results = append(results, result)
+			continue
+		}
+		accountID, ok := mapped[p.id]
+		if req.Hasil == payment.VerifCocok && !ok {
+			return nil, nil, "", "", payment.ErrDestinationRequired
+		}
+		if !ok {
+			result, err := r.destinationFromOCR(ctx, tx, branchID, p.id, p.bank, p.rekAkhir, req.Metode, digitRek)
+			if err != nil {
+				return nil, nil, "", "", err
+			}
+			results = append(results, result)
+			continue
+		}
+		var bankCode, owner, nomor string
+		err := tx.QueryRow(ctx, `SELECT ba.bank::text,ba.nama_pemilik,ba.nomor
+ FROM branches b JOIN branch_bank_accounts x ON x.branch_id=b.id AND x.is_allowed
+ JOIN bank_accounts ba ON ba.id=x.bank_account_id AND ba.is_active
+ WHERE b.id=$1 AND b.is_active AND ba.id=$2`, branchID, accountID).Scan(&bankCode, &owner, &nomor)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if req.Hasil == payment.VerifCocok {
+				return nil, nil, "", "", payment.ErrDestinationNotAllowed
+			}
+			results = append(results, payment.DestinationResult{PaymentProofID: p.id, Source: req.Metode,
+				Status: "not_allowed", BankAccountID: accountID})
+			continue
+		}
+		if err != nil {
+			return nil, nil, "", "", err
+		}
+		digits := nomor
+		if len(digits) > 4 {
+			digits = digits[len(digits)-4:]
+		}
+		results = append(results, payment.DestinationResult{PaymentProofID: p.id, Source: req.Metode,
+			Status: "allowed", BankAccountID: accountID, BankSnapshot: bankCode,
+			AccountOwnerSnapshot: owner, AccountLastDigitsSnapshot: digits})
+	}
+	sort.Slice(results, func(i, j int) bool { return results[i].PaymentProofID < results[j].PaymentProofID })
+	finalHasil, finalAlasan := req.Hasil, req.Alasan
+	if req.Metode == payment.MetodeAI && req.Hasil == payment.VerifCocok {
+		for _, result := range results {
+			if result.Status == "allowed" {
+				continue
+			}
+			finalHasil, finalAlasan = payment.VerifPerluReview, payment.AlasanRekeningBeda
+			if result.Status == "unreadable" {
+				finalAlasan = payment.AlasanTidakTerbaca
+			}
+			break
+		}
+	}
+	return results, fingerprint, finalHasil, finalAlasan, nil
+}
+
+func (r *Repo) destinationFromOCR(ctx context.Context, tx pgx.Tx, branchID, proofID, bankCode, rekAkhir, source string, minDigits int64) (payment.DestinationResult, error) {
+	result := payment.DestinationResult{PaymentProofID: proofID, Source: source}
+	digits := onlyDigits(rekAkhir)
+	if digits == "" || int64(len(digits)) < minDigits {
+		result.Status = "unreadable"
+		return result, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT ba.id,ba.bank::text,ba.nama_pemilik,ba.nomor
+ FROM branches b JOIN branch_bank_accounts x ON x.branch_id=b.id AND x.is_allowed
+ JOIN bank_accounts ba ON ba.id=x.bank_account_id AND ba.is_active
+ WHERE b.id=$1 AND b.is_active AND right(ba.nomor,length($2))=$2
+   AND ($3='' OR ba.bank::text=$3) ORDER BY ba.id`, branchID, digits, strings.ToUpper(strings.TrimSpace(bankCode)))
+	if err != nil {
+		return result, err
+	}
+	type matchedAccount struct{ id, bank, owner, nomor string }
+	matches := []matchedAccount{}
+	for rows.Next() {
+		var a matchedAccount
+		if err := rows.Scan(&a.id, &a.bank, &a.owner, &a.nomor); err != nil {
+			rows.Close()
+			return result, err
+		}
+		matches = append(matches, a)
+	}
+	rows.Close()
+	if len(matches) > 1 {
+		result.Status = "ambiguous"
+		return result, nil
+	}
+	if len(matches) == 1 {
+		a := matches[0]
+		last := a.nomor
+		if len(last) > 4 {
+			last = last[len(last)-4:]
+		}
+		result.Status, result.BankAccountID = "allowed", a.id
+		result.BankSnapshot, result.AccountOwnerSnapshot, result.AccountLastDigitsSnapshot = a.bank, a.owner, last
+		return result, nil
+	}
+	var masterCount int
+	var assigned, inactive bool
+	if err := tx.QueryRow(ctx, `SELECT count(*)::int,
+ COALESCE(bool_or(x.is_allowed),false),COALESCE(bool_or(NOT ba.is_active),false)
+ FROM bank_accounts ba LEFT JOIN branch_bank_accounts x ON x.bank_account_id=ba.id AND x.branch_id=$1
+ WHERE right(ba.nomor,length($2))=$2 AND ($3='' OR ba.bank::text=$3)`,
+		branchID, digits, strings.ToUpper(strings.TrimSpace(bankCode))).Scan(&masterCount, &assigned, &inactive); err != nil {
+		return result, err
+	}
+	switch {
+	case masterCount == 0:
+		result.Status = "unknown"
+	case assigned && inactive:
+		result.Status = "inactive"
+	default:
+		result.Status = "not_allowed"
+	}
+	return result, nil
+}
+
+func onlyDigits(v string) string {
+	var out strings.Builder
+	for _, r := range v {
+		if r >= '0' && r <= '9' {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
 func ikonVerifikasi(hasil string) string {
 	if hasil == payment.VerifCocok {
 		return "selesai"
@@ -286,6 +546,10 @@ func toVerificationLog(row sqlc.InsertVerificationLogRow, adminNama string) paym
 		Catatan:      row.Catatan,
 		CreatedAt:    row.CreatedAt.UTC(),
 	}
+	if row.BranchAllowlistVersion.Valid {
+		out.BranchAllowlistVersion = row.BranchAllowlistVersion.Int64
+	}
+	_ = json.Unmarshal(row.DestinationResults, &out.DestinationResults)
 	if row.Selisih.Valid {
 		out.Selisih = row.Selisih.Int64
 	}

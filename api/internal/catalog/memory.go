@@ -43,9 +43,7 @@ func (m *Memory) PutProduct(p Product) {
 	if p.Jenis == "" {
 		p.Jenis = JenisReguler
 	}
-	if p.Satuan == "" {
-		p.Satuan = "pcs"
-	}
+
 	m.products = append(m.products, p)
 }
 
@@ -121,7 +119,7 @@ func (m *Memory) ListProductsForBranch(_ context.Context, branchID string) ([]Br
 			continue
 		}
 		out = append(out, BranchProduct{
-			ID: p.ID, Nama: p.Nama, Jenis: p.Jenis, Satuan: p.Satuan,
+			ID: p.ID, Nama: p.Nama, Jenis: p.Jenis,
 			Deskripsi: p.Deskripsi, Harga: harga, Urutan: p.Urutan,
 		})
 	}

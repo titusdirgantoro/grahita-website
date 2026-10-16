@@ -73,8 +73,8 @@ func insertOrderAdmin(t *testing.T, ctx context.Context, pool *database.Pool, s 
 	}
 	if productID != "" {
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan, serial_number)
-			VALUES ($1, 1, 'product', $2, 'Produk Uji', 'pcs', 1, $3, $4)`,
+			INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan, serial_number)
+			VALUES ($1, 1, 'product', $2, 'Produk Uji', 1, $3, $4)`,
 			id, productID, s.harga, serial); err != nil {
 			t.Fatalf("semai baris pesanan %s: %v", s.nomor, err)
 		}

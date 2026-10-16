@@ -139,6 +139,44 @@ func (m *Memory) UpdatePassword(_ context.Context, kind Kind, id, passwordHash s
 	return nil
 }
 
+// ChangePassword menerapkan CAS credential + validasi sesi secara atomik.
+func (m *Memory) ChangePassword(_ context.Context, kind Kind, id, sessionID, expectedPasswordHash, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var creds Credentials
+	var ok bool
+	if kind == KindAdmin {
+		creds, ok = m.admins[id]
+	} else {
+		creds, ok = m.branches[id]
+	}
+	if !ok || !creds.Active || creds.PasswordHash != expectedPasswordHash {
+		return ErrSessionInvalid
+	}
+	var current *memSession
+	for _, ms := range m.sessions {
+		if ms.session.ID == sessionID && ms.session.ActorID == id && ms.session.Kind == kind && !ms.revoked {
+			current = ms
+			break
+		}
+	}
+	if current == nil {
+		return ErrSessionInvalid
+	}
+	creds.PasswordHash = passwordHash
+	if kind == KindAdmin {
+		m.admins[id] = creds
+	} else {
+		m.branches[id] = creds
+	}
+	for _, ms := range m.sessions {
+		if ms.session.ActorID == id && ms.session.ID != sessionID {
+			ms.revoked = true
+		}
+	}
+	return nil
+}
+
 // ActivateAdmin menyimpan kata sandi DAN menandai admin sudah diaktivasi —
 // padanan memory dari password_hash + activated_at (kewajiban F1-04).
 func (m *Memory) ActivateAdmin(_ context.Context, id, passwordHash string) error {
@@ -180,6 +218,29 @@ func (m *Memory) UpdateName(_ context.Context, kind Kind, id, nama string) error
 func (m *Memory) CreateResetToken(_ context.Context, t ResetToken, tokenHash []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var creds Credentials
+	var ok bool
+	if t.Kind == KindAdmin {
+		creds, ok = m.admins[t.UserID]
+		if !ok {
+			return ErrNoUser
+		}
+		if !creds.IsActive {
+			return ErrInactiveAccount
+		}
+	} else {
+		creds, ok = m.branches[t.UserID]
+		if !ok {
+			return ErrNoUser
+		}
+		if !creds.Active {
+			return ErrInactiveAccount
+		}
+	}
+	if NormalizeEmail(creds.Email) != NormalizeEmail(t.ExpectedEmail) ||
+		creds.PasswordHash != t.ExpectedPasswordHash {
+		return ErrInactiveAccount
+	}
 	for _, r := range m.resets {
 		if r.token.UserID == t.UserID && !r.used {
 			r.used = true
@@ -191,7 +252,9 @@ func (m *Memory) CreateResetToken(_ context.Context, t ResetToken, tokenHash []b
 	if t.Audit != nil {
 		m.audits = append(m.audits, *t.Audit)
 	}
-	t.Audit = nil // token tersimpan tanpa pointer ke fakta auditnya
+	t.Audit = nil               // token tersimpan tanpa pointer ke fakta auditnya
+	t.ExpectedEmail = ""        // snapshot validasi tidak ikut dipersistenkan
+	t.ExpectedPasswordHash = "" // snapshot credential juga hanya untuk validasi
 	m.resets[string(tokenHash)] = &memReset{token: t}
 	return nil
 }
@@ -218,6 +281,41 @@ func (m *Memory) ConsumeResetToken(_ context.Context, tokenHash []byte, now time
 	return r.token, nil
 }
 
+// ResetPassword mengubah credential dan mencabut sesi pada critical section
+// yang sama dengan konsumsi token.
+func (m *Memory) ResetPassword(_ context.Context, tokenHash []byte, now time.Time, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.resets[string(tokenHash)]
+	if !ok || r.used || !now.Before(r.token.ExpiresAt) {
+		return ErrResetInvalid
+	}
+	var creds Credentials
+	if r.token.Kind == KindAdmin {
+		creds, ok = m.admins[r.token.UserID]
+		if !ok || !creds.IsActive {
+			return ErrResetInvalid
+		}
+		creds.PasswordHash = passwordHash
+		creds.Active = true
+		m.admins[r.token.UserID] = creds
+	} else {
+		creds, ok = m.branches[r.token.UserID]
+		if !ok || !creds.Active {
+			return ErrResetInvalid
+		}
+		creds.PasswordHash = passwordHash
+		m.branches[r.token.UserID] = creds
+	}
+	r.used = true
+	for _, ms := range m.sessions {
+		if ms.session.ActorID == r.token.UserID {
+			ms.revoked = true
+		}
+	}
+	return nil
+}
+
 // ResetTokenCount mengembalikan jumlah token atur ulang yang masih berlaku
 // (hanya untuk pengujian).
 func (m *Memory) ResetTokenCount() int {
@@ -236,12 +334,29 @@ func (m *Memory) ResetTokenCount() int {
 func (m *Memory) Create(_ context.Context, s Session, tokenHash []byte, _ RequestMeta) (Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var creds Credentials
+	var ok bool
+	if s.Kind == KindAdmin {
+		creds, ok = m.admins[s.ActorID]
+	} else {
+		creds, ok = m.branches[s.ActorID]
+	}
+	if !ok {
+		return Session{}, ErrNoUser
+	}
+	if !creds.Active {
+		return Session{}, ErrInactiveAccount
+	}
+	if creds.PasswordHash != s.ExpectedPasswordHash {
+		return Session{}, ErrInvalidCredentials
+	}
 	if s.LastSeenAt.IsZero() {
 		s.LastSeenAt = time.Now().UTC()
 	}
 	if s.ID == "" {
 		s.ID = "mem-" + time.Now().UTC().Format("150405.000000")
 	}
+	s.ExpectedPasswordHash = ""
 	cp := s
 	m.sessions[string(tokenHash)] = &memSession{session: cp, hash: tokenHash}
 	return s, nil

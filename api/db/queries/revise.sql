@@ -67,13 +67,11 @@ SELECT l.line_no,
        l.jenis::text                    AS jenis,
        COALESCE(l.product_id::text, '')::text AS product_id,
        l.nama_snapshot,
-       l.satuan_snapshot,
        l.qty,
        l.harga_satuan,
        COALESCE(l.serial_number, '')::text AS serial_number,
        COALESCE(p.jenis::text, '')::text   AS produk_jenis,
        COALESCE(p.nama, '')                AS produk_nama,
-       COALESCE(p.satuan, '')              AS produk_satuan,
        (p.id IS NOT NULL)::bool            AS produk_ada
   FROM order_lines l
   LEFT JOIN products p ON p.id = l.product_id
@@ -81,12 +79,11 @@ SELECT l.line_no,
  ORDER BY l.line_no;
 
 -- name: GetProductForRevise :one
--- Keadaan produk master untuk baris BARU: revision memakai nama & satuan
+-- Keadaan produk master untuk baris BARU: revision memakai nama
 -- master saat itu, tetapi harga tetap angka yang dikirim admin Pusat
 -- (koreksi harga adalah inti revisi) kecuali produk Sertifikat yang selalu 0.
 SELECT p.id,
        p.nama,
-       p.satuan,
        p.jenis::text AS jenis,
        p.is_active
   FROM products p
@@ -104,8 +101,8 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- Baris lama memakai serial lama apa adanya; baris baru memakai serial dari
 -- counter dengan periode tanggal pesanan asli.
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
-                         satuan_snapshot, qty, harga_satuan, serial_number)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7, $8);
+                         qty, harga_satuan, serial_number)
+VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
 
 -- name: SetOrderVersi :execrows
 -- Menaikkan versi pesanan SATU langkah (0 -> 1, 1 -> 2, ...); nomor invoice

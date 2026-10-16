@@ -28,7 +28,7 @@ Dokumen ini menjelaskan **pilihan teknologi, topologi deployment, dan operasiona
 
 ### Mengapa modular monolith, bukan microservice
 
-Beban kerja sistem ini kecil (± 16 cabang, puluhan pesanan/hari). Microservice akan menambah biaya operasional tanpa manfaat nyata. Struktur kode tetap dipisah per domain (lihat `SystemDesign.md` §2) sehingga bila kelak perlu dipecah, batasnya sudah jelas.
+Beban kerja sistem ini kecil (34 cabang pada master yang diotorisasi, puluhan pesanan/hari). Microservice akan menambah biaya operasional tanpa manfaat nyata. Struktur kode tetap dipisah per domain (lihat `SystemDesign.md` §2) sehingga bila kelak perlu dipecah, batasnya sudah jelas.
 
 ---
 

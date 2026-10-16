@@ -54,6 +54,22 @@ func (r *Repo) Register(ctx context.Context, req registration.RegisterRequest, r
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := r.q.WithTx(tx)
+	// Ambil branch_id tanpa lock, lalu kunci cabang sebelum token dan akun.
+	// Pembacaan token yang menentukan tetap diulang setelah lock, sehingga
+	// token yang dicabut sambil menunggu tetap ditolak. Urutan branch→token→
+	// branch_users konsisten dengan revokasi identitas.
+	var branchID string
+	if err := tx.QueryRow(ctx, `SELECT branch_id FROM registration_tokens WHERE token_hash=$1`, req.TokenHash).Scan(&branchID); errors.Is(err, pgx.ErrNoRows) {
+		return registration.Akun{}, registration.ErrTokenInvalid
+	} else if err != nil {
+		return registration.Akun{}, fmt.Errorf("baca cabang token registrasi: %w", err)
+	}
+	var lockedBranchID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM branches WHERE id=$1 FOR UPDATE`, branchID).Scan(&lockedBranchID); errors.Is(err, pgx.ErrNoRows) {
+		return registration.Akun{}, registration.ErrTokenInvalid
+	} else if err != nil {
+		return registration.Akun{}, fmt.Errorf("kunci cabang registrasi: %w", err)
+	}
 	// Kunci baris token: permintaan kedua untuk token yang sama menunggu
 	// commit permintaan pertama, lalu membaca ulang used_at yang sudah terisi
 	// sehingga jawabannya TOKEN_USED, bukan dua akun untuk satu cabang.
@@ -99,6 +115,12 @@ func (r *Repo) Register(ctx context.Context, req registration.RegisterRequest, r
 		// lain dan akun yang baru dibuat tidak boleh ikut tersimpan.
 		return registration.Akun{}, registration.ErrTokenUsed
 	}
+	if tag, err := tx.Exec(ctx, `UPDATE branches SET identity_status='registered', updated_at=now()
+ WHERE id=$1 AND identity_status='ready' AND nama_kepala IS NOT NULL AND email IS NOT NULL`, snap.BranchID); err != nil {
+		return registration.Akun{}, fmt.Errorf("tandai identitas registered: %w", err)
+	} else if tag.RowsAffected() != 1 {
+		return registration.Akun{}, registration.ErrIdentityIncomplete
+	}
 
 	rec.ActorID = akun.ID
 	rec.ActorNama = snap.Nama
@@ -123,7 +145,8 @@ func snapshotFromLookup(row sqlc.LookupRegistrationTokenRow) registration.Snapsh
 	return registration.Snapshot{
 		TokenID: row.TokenID, BranchID: row.BranchID, ExpiresAt: row.ExpiresAt,
 		UsedAt: row.UsedAt, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
-		BranchActive: row.BranchActive, BranchHasAccount: row.BranchHasAccount,
+		IdentityStatus: row.IdentityStatus,
+		BranchActive:   row.BranchActive, BranchHasAccount: row.BranchHasAccount,
 	}
 }
 
@@ -131,7 +154,8 @@ func snapshotFromLock(row sqlc.LockRegistrationTokenRow) registration.Snapshot {
 	return registration.Snapshot{
 		TokenID: row.TokenID, BranchID: row.BranchID, ExpiresAt: row.ExpiresAt,
 		UsedAt: row.UsedAt, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
-		BranchActive: row.BranchActive, BranchHasAccount: row.BranchHasAccount,
+		IdentityStatus: row.IdentityStatus,
+		BranchActive:   row.BranchActive, BranchHasAccount: row.BranchHasAccount,
 	}
 }
 

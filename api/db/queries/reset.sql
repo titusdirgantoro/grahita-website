@@ -8,9 +8,11 @@
 -- (data-modifying CTE). Dipakai jalur email (F1-16): kegagalan separuh jalan
 -- tidak boleh meninggalkan akun tanpa tautan aktif sama sekali.
 WITH dibatalkan AS (
-    DELETE FROM password_reset_tokens
+    UPDATE password_reset_tokens
+       SET revoked_at = now()
      WHERE user_id = sqlc.arg(user_id)
        AND used_at IS NULL
+       AND revoked_at IS NULL
 )
 INSERT INTO password_reset_tokens (actor_kind, user_id, token_hash, expires_at)
 VALUES (sqlc.arg(actor_kind)::actor_kind, sqlc.arg(user_id), sqlc.arg(token_hash), sqlc.arg(expires_at));
@@ -21,6 +23,7 @@ VALUES (sqlc.arg(actor_kind)::actor_kind, sqlc.arg(user_id), sqlc.arg(token_hash
 UPDATE password_reset_tokens
    SET used_at = now()
  WHERE token_hash = $1
+   AND revoked_at IS NULL
    AND used_at IS NULL
    AND expires_at > $2
 RETURNING id, actor_kind::text AS actor_kind, user_id, expires_at;

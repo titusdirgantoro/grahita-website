@@ -15,7 +15,6 @@ import {
   Notice,
   PageHead,
   Segmented,
-  Select,
   Skeleton,
   SkeletonList,
   Switch,
@@ -108,12 +107,7 @@ export function GayaPage() {
             <Field label="Nama cabang" htmlFor="g-nama">
               <Input id="g-nama" placeholder="Grahita …" />
             </Field>
-            <Field label="Satuan" htmlFor="g-satuan">
-              <Select id="g-satuan" defaultValue="pcs">
-                <option value="pcs">pcs</option>
-                <option value="eks">eks</option>
-              </Select>
-            </Field>
+
             <Field label="Catatan" htmlFor="g-catatan" hint="Opsional.">
               <Textarea id="g-catatan" rows={3} />
             </Field>

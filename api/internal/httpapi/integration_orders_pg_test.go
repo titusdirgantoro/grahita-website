@@ -316,8 +316,8 @@ func TestPGPesananSubmittedTidakBisaDiubahCabang(t *testing.T) {
 		t.Fatalf("seed pesanan submitted: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-		 VALUES ($1,1,$2,'Bio Magnetik','pcs',2,100000)`, orderID, produkA); err != nil {
+		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, qty, harga_satuan)
+		 VALUES ($1,1,$2,'Bio Magnetik',2,100000)`, orderID, produkA); err != nil {
 		t.Fatalf("seed baris pesanan: %v", err)
 	}
 
@@ -429,13 +429,13 @@ func TestPGSertifikatPackagingDanSnapshotSetelan(t *testing.T) {
 	// 2) Database menolak baris packaging kedua (indeks unik parsial) dan
 	// menolak pencampuran produk reguler ke pesanan Sertifikat (trigger).
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO order_lines (order_id, line_no, jenis, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-		 VALUES ($1, 3, 'packaging', 'Biaya packaging', 'paket', 1, 5000)`, id); err == nil {
+		`INSERT INTO order_lines (order_id, line_no, jenis, nama_snapshot, qty, harga_satuan)
+		 VALUES ($1, 3, 'packaging', 'Biaya packaging', 1, 5000)`, id); err == nil {
 		t.Error("baris packaging kedua harus ditolak database")
 	}
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-		 VALUES ($1, 4, $2, 'Bio Magnetik', 'pcs', 1, 100000)`, id, produkA); err == nil {
+		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, qty, harga_satuan)
+		 VALUES ($1, 4, $2, 'Bio Magnetik', 1, 100000)`, id, produkA); err == nil {
 		t.Error("mencampur produk reguler ke pesanan sertifikat harus ditolak trigger")
 	}
 	var jumlahBaris int

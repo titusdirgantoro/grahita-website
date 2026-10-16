@@ -90,7 +90,6 @@ interface BarisPesanan {
   line_no: number;
   jenis: string;
   nama: string;
-  satuan: string;
   qty: number;
   harga_satuan: number;
   subtotal: number;
@@ -172,7 +171,6 @@ interface BarisRevisi {
   line_no: number;
   product_id?: string;
   nama: string;
-  satuan: string;
   serial_number?: string;
   qty: string;
   harga: string;
@@ -182,7 +180,6 @@ interface BarisRevisi {
 interface ProdukMatriks {
   id: string;
   nama: string;
-  satuan: string;
   is_active: boolean;
 }
 
@@ -908,7 +905,7 @@ export function PesananDetailAdminPage() {
     }
     return matriks.produk
       .filter((p) => p.is_active && hargaPer.has(p.id))
-      .map((p) => ({ id: p.id, nama: p.nama, satuan: p.satuan, harga: hargaPer.get(p.id) ?? 0 }));
+      .map((p) => ({ id: p.id, nama: p.nama, harga: hargaPer.get(p.id) ?? 0 }));
   }, [matriks, data]);
 
   /**
@@ -929,7 +926,6 @@ export function PesananDetailAdminPage() {
           kunci: `lama-${l.line_no}-${i}`,
           line_no: l.line_no,
           nama: l.nama,
-          satuan: l.satuan,
           serial_number: l.serial_number,
           qty: String(l.qty),
           harga: String(l.harga_satuan),
@@ -964,7 +960,6 @@ export function PesananDetailAdminPage() {
         line_no: 0,
         product_id: p.id,
         nama: p.nama,
-        satuan: p.satuan,
         qty: "1",
         harga: String(p.harga),
       },

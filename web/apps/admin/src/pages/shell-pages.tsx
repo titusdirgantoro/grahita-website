@@ -25,7 +25,9 @@ export interface Cabang {
   id: string;
   nama: string;
   nama_kepala: string;
+  jabatan_kepala?: string;
   email: string;
+  identity_status?: "identity_incomplete" | "ready" | "registered";
   telepon?: string;
   is_cnc: boolean;
   is_special?: boolean;

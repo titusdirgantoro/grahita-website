@@ -204,6 +204,7 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
       expect(JSON.parse(String(post?.init?.body))).toEqual({
         nama: "Grahita Solo",
         nama_kepala: "Budi",
+        jabatan_kepala: "",
         email: "solo@example.test",
         telepon: "",
         is_cnc: true,

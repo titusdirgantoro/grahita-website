@@ -121,8 +121,25 @@ var (
 	ErrQueueUnavailable = errors.New("penjadwal pekerjaan dokumen belum tersedia")
 	// ErrVerifierUnavailable dikembalikan bila penyimpan verifikasi belum
 	// terpasang pada service (kesalahan wiring, bukan kesalahan pemanggil).
-	ErrVerifierUnavailable = errors.New("layanan penyimpanan verifikasi belum terpasang")
+	ErrVerifierUnavailable   = errors.New("layanan penyimpanan verifikasi belum terpasang")
+	ErrDestinationRequired   = errors.New("setiap bukti harus dipetakan ke rekening tujuan")
+	ErrDestinationNotAllowed = errors.New("rekening tujuan bukti tidak efektif untuk cabang")
 )
+
+type ProofDestination struct {
+	PaymentProofID string `json:"payment_proof_id"`
+	BankAccountID  string `json:"bank_account_id"`
+}
+
+type DestinationResult struct {
+	PaymentProofID            string `json:"payment_proof_id"`
+	Source                    string `json:"source"`
+	Status                    string `json:"status"`
+	BankAccountID             string `json:"bank_account_id,omitempty"`
+	BankSnapshot              string `json:"bank_snapshot,omitempty"`
+	AccountOwnerSnapshot      string `json:"account_owner_snapshot,omitempty"`
+	AccountLastDigitsSnapshot string `json:"account_last_digits_snapshot,omitempty"`
+}
 
 // VerifyInput adalah keputusan verifikasi yang datang dari pemanggil
 // (permintaan admin atau, kelak, keputusan AI).
@@ -140,7 +157,12 @@ type VerifyInput struct {
 	// Alasan wajib diisi (dan hanya diisi) ketika Hasil = VerifPerluReview.
 	Alasan string
 	// Catatan bebas opsional (maksimal MaxCatatanVerifikasi karakter).
-	Catatan string
+	Catatan           string
+	ProofDestinations []ProofDestination
+	// Expected* hanya diisi worker reevaluate agar transaksi final menolak job
+	// bila policy atau himpunan bukti berubah setelah pembacaan awal.
+	ExpectedAllowlistVersion int64
+	ExpectedProofFingerprint string
 }
 
 // VerificationLog adalah satu baris `verification_logs` (Database.md §4.5).
@@ -163,8 +185,10 @@ type VerificationLog struct {
 	// AdminNama adalah nama pemeriksa; kosong bila diverifikasi AI.
 	AdminNama string `json:"admin_nama,omitempty"`
 	// Catatan bebas dari pemeriksa.
-	Catatan   string    `json:"catatan,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Catatan                string              `json:"catatan,omitempty"`
+	CreatedAt              time.Time           `json:"created_at"`
+	BranchAllowlistVersion int64               `json:"branch_allowlist_version"`
+	DestinationResults     []DestinationResult `json:"destination_results"`
 }
 
 // VerifiedOrder adalah ringkasan pesanan setelah verifikasi.
@@ -194,14 +218,17 @@ type VerifyOutcome struct {
 // dibangun service (Before/After dasar) lalu DISEMPURNAKAN repository dari
 // baris pesanan yang dikunci — snapshot sebelum/sesudah tidak boleh basi.
 type MarkVerifiedRequest struct {
-	OrderID      string
-	Hasil        string
-	Metode       string
-	TotalTerbaca *int64
-	Alasan       string
-	Catatan      string
-	Actor        auth.Actor
-	Audit        audit.Entry
+	OrderID                  string
+	Hasil                    string
+	Metode                   string
+	TotalTerbaca             *int64
+	Alasan                   string
+	Catatan                  string
+	Actor                    auth.Actor
+	Audit                    audit.Entry
+	ProofDestinations        []ProofDestination
+	ExpectedAllowlistVersion int64
+	ExpectedProofFingerprint string
 }
 
 // Verifier adalah sisi penyimpanan verifikasi. Implementasinya menegakkan
@@ -289,13 +316,27 @@ func (s *VerificationService) siapkan(ctx context.Context, actor auth.Actor, ord
 	}
 
 	req := MarkVerifiedRequest{
-		OrderID:      orderID,
-		Hasil:        hasil,
-		Metode:       metode,
-		TotalTerbaca: in.TotalTerbaca,
-		Alasan:       alasan,
-		Catatan:      catatan,
-		Actor:        actor,
+		OrderID:                  orderID,
+		Hasil:                    hasil,
+		Metode:                   metode,
+		TotalTerbaca:             in.TotalTerbaca,
+		Alasan:                   alasan,
+		Catatan:                  catatan,
+		Actor:                    actor,
+		ProofDestinations:        append([]ProofDestination(nil), in.ProofDestinations...),
+		ExpectedAllowlistVersion: in.ExpectedAllowlistVersion,
+		ExpectedProofFingerprint: strings.ToLower(strings.TrimSpace(in.ExpectedProofFingerprint)),
+	}
+	if hasil == VerifCocok {
+		seen := map[string]bool{}
+		for _, d := range req.ProofDestinations {
+			proofID := strings.TrimSpace(d.PaymentProofID)
+			accountID := strings.TrimSpace(d.BankAccountID)
+			if !uuidRe.MatchString(proofID) || !uuidRe.MatchString(accountID) || seen[proofID] {
+				return MarkVerifiedRequest{}, ErrDestinationRequired
+			}
+			seen[proofID] = true
+		}
 	}
 	// Audit disusun di sini supaya aktor + IP request tercatat; Before/After
 	// diisi repository dari baris yang dikunci (lihat MarkVerifiedRequest).

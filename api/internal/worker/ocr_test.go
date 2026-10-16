@@ -19,15 +19,29 @@ import (
 
 // pembacaBuktiPalsu mencatat panggilan dan mengembalikan hasil/galat tetap.
 type pembacaBuktiPalsu struct {
-	dipanggil int
-	orderID   string
-	hasil     payment.OCRHasil
-	err       error
+	dipanggil      int
+	dipanggilUlang int
+	orderID        string
+	version        int64
+	fingerprint    string
+	hasil          payment.OCRHasil
+	err            error
 }
 
 func (p *pembacaBuktiPalsu) Baca(_ context.Context, orderID string) (payment.OCRHasil, error) {
 	p.dipanggil++
 	p.orderID = orderID
+	if p.err != nil {
+		return payment.OCRHasil{}, p.err
+	}
+	return p.hasil, nil
+}
+
+func (p *pembacaBuktiPalsu) BacaUlang(_ context.Context, orderID string, version int64, fingerprint string) (payment.OCRHasil, error) {
+	p.dipanggilUlang++
+	p.orderID = orderID
+	p.version = version
+	p.fingerprint = fingerprint
 	if p.err != nil {
 		return payment.OCRHasil{}, p.err
 	}
@@ -58,6 +72,20 @@ func TestOCRBuktiWorkerMeneruskanPesanan(t *testing.T) {
 	}
 	if pembaca.dipanggil != 1 || pembaca.orderID != "order-1" {
 		t.Errorf("layanan harus dipanggil sekali untuk order-1, dapat %d/%q", pembaca.dipanggil, pembaca.orderID)
+	}
+}
+
+func TestOCRBuktiWorkerMeneruskanSnapshotReevaluate(t *testing.T) {
+	pembaca := &pembacaBuktiPalsu{hasil: payment.OCRHasil{OrderID: "order-4"}}
+	w := NewOCRBuktiWorker(pembaca)
+	job := pekerjaanOCR("order-4")
+	job.Args.AllowlistVersion = 7
+	job.Args.ProofSetFingerprint = "abcd"
+	if err := w.Work(context.Background(), job); err != nil {
+		t.Fatalf("reevaluate sah tidak boleh gagal: %v", err)
+	}
+	if pembaca.dipanggil != 0 || pembaca.dipanggilUlang != 1 || pembaca.version != 7 || pembaca.fingerprint != "abcd" {
+		t.Fatalf("snapshot reevaluate tidak diteruskan utuh: %+v", pembaca)
 	}
 }
 

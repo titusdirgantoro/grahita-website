@@ -3,8 +3,8 @@ import type { NavGroup } from "@grahita/ui";
 /**
  * Menu Admin Portal (SystemDesign.md §7.1), persis nav admin_v2.html.
  *
- * Tiga item bertanda `superadminOnly` (Rekening bank, Reporting, Pengaturan)
- * disembunyikan untuk Manager oleh AdminShell (filterGroups); rutenya juga
+ * Item bertanda `superadminOnly` (termasuk Impor Impact) disembunyikan untuk
+ * Manager oleh AdminShell (filterGroups); rutenya juga
  * menolak lewat penjaga `PenjagaSuperadmin`, dan API tetap otoritas akhir.
  *
  * Catatan domain: prefix `/admin` pada dokumen hanya berlaku untuk endpoint API
@@ -23,6 +23,7 @@ export const NAV_ADMIN: NavGroup[] = [
     items: [
       { to: "/cabang", label: "Cabang", icon: "storefront" },
       { to: "/katalog", label: "Katalog product", icon: "tag" },
+      { to: "/impor-impact", label: "Impor Impact", icon: "file-arrow-up", superadminOnly: true },
       { to: "/rekening", label: "Rekening bank", icon: "bank", superadminOnly: true },
     ],
   },

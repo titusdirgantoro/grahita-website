@@ -21,8 +21,8 @@ SELECT o.id,
        o.tanggal,
        o.jatuh_tempo,
        b.nama                            AS cabang_nama,
-       b.nama_kepala                     AS cabang_kepala,
-       b.email::text                     AS cabang_email,
+       COALESCE(b.nama_kepala, '')       AS cabang_kepala,
+       COALESCE(b.email::text, ''::text)::text AS cabang_email,
        COALESCE(b.telepon, '')::text     AS cabang_telepon
   FROM orders o
   JOIN branches b ON b.id = o.branch_id

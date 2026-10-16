@@ -45,6 +45,10 @@ type UserStore interface {
 	TouchLogin(ctx context.Context, kind Kind, id string) error
 	// UpdatePassword menyimpan hash Argon2id baru untuk satu akun.
 	UpdatePassword(ctx context.Context, kind Kind, id, passwordHash string) error
+	// ChangePassword menyimpan hash baru hanya bila akun, generasi credential,
+	// dan sesi peminta masih sah. Perubahan hash dan pencabutan sesi lain wajib
+	// atomik terhadap revokasi identitas.
+	ChangePassword(ctx context.Context, kind Kind, id, sessionID, expectedPasswordHash, passwordHash string) error
 	// ActivateAdmin menyimpan hash Argon2id DAN activated_at sekaligus untuk
 	// admin hasil undangan. Keduanya wajib terisi bersamaan: aturan
 	// boleh_login di SQL menolak akun yang salah satunya NULL.
@@ -128,10 +132,11 @@ func (s *Service) Login(ctx context.Context, email, password string, meta Reques
 	}
 	now := s.clock.Now()
 	sess, err := s.sessions.Create(ctx, Session{
-		ActorID:   creds.UserID,
-		Kind:      creds.Kind,
-		BranchID:  creds.BranchID,
-		ExpiresAt: now.Add(s.absolute),
+		ActorID:              creds.UserID,
+		Kind:                 creds.Kind,
+		BranchID:             creds.BranchID,
+		ExpiresAt:            now.Add(s.absolute),
+		ExpectedPasswordHash: creds.PasswordHash,
 	}, hash, meta)
 	if err != nil {
 		return IssuedSession{}, err
@@ -249,11 +254,19 @@ func (s *Service) ForgotPassword(ctx context.Context, email string, ttl time.Dur
 		return err
 	}
 	rt := ResetToken{
-		Kind:      creds.Kind,
-		UserID:    creds.UserID,
-		ExpiresAt: s.clock.Now().Add(ttl),
+		Kind:                 creds.Kind,
+		UserID:               creds.UserID,
+		ExpiresAt:            s.clock.Now().Add(ttl),
+		ExpectedEmail:        creds.Email,
+		ExpectedPasswordHash: creds.PasswordHash,
 	}
 	if err := s.resets.CreateResetToken(ctx, rt, hash); err != nil {
+		// Kelayakan diperiksa ulang oleh repository di dalam transaksi. Bila
+		// identitas dicabut di antara lookup awal dan INSERT, endpoint publik
+		// tetap non-enumeratif sekaligus tidak menerbitkan token.
+		if errors.Is(err, ErrInactiveAccount) || errors.Is(err, ErrNoUser) || errors.Is(err, ErrInvalidCredentials) {
+			return nil
+		}
 		return fmt.Errorf("simpan token atur ulang: %w", err)
 	}
 	if s.mailer == nil {
@@ -291,40 +304,9 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string, 
 		return err
 	}
 
-	rt, err := s.resets.ConsumeResetToken(ctx, HashToken(token), s.clock.Now())
-	if err != nil {
-		return err
-	}
-	creds, err := s.findByID(ctx, rt.Kind, rt.UserID)
-	if err != nil {
-		return ErrResetInvalid
-	}
-	// Admin hasil undangan memakai tautan yang sama untuk AKTIVASI: akunnya
-	// masih is_active=true tetapi password_hash dan activated_at NULL. Yang
-	// boleh memakai jalur ini hanya akun yang masih aktif; admin yang sudah
-	// dinonaktifkan tetap ditolak (PRD AP-USR-02).
-	if rt.Kind == KindAdmin {
-		if !creds.IsActive {
-			return ErrInactiveAccount
-		}
-		// Aktivasi mengisi password_hash DAN activated_at bersamaan
-		// (kewajiban turunan F1-04); untuk admin yang sudah aktif ini sama
-		// dengan mengganti kata sandi.
-		if err := s.users.ActivateAdmin(ctx, rt.UserID, hash); err != nil {
-			return err
-		}
-	} else {
-		if !creds.Active {
-			return ErrInactiveAccount
-		}
-		if err := s.users.UpdatePassword(ctx, rt.Kind, rt.UserID, hash); err != nil {
-			return err
-		}
-	}
-	if err := s.sessions.RevokeForUser(ctx, rt.UserID); err != nil {
-		return err
-	}
-	return nil
+	// Store menjaga konsumsi token, validasi eligibility/generasi, perubahan
+	// hash, dan pencabutan sesi dalam satu boundary transaksi.
+	return s.resets.ResetPassword(ctx, HashToken(token), s.clock.Now(), hash)
 }
 
 // IssuedReset adalah tautan atur ulang yang sudah dibuat tetapi BELUM dikirim.
@@ -411,10 +393,12 @@ func (s *Service) issueResetFor(ctx context.Context, kind Kind, userID string, t
 	}
 	expiresAt := s.clock.Now().Add(ttl)
 	if err := s.resets.CreateResetToken(ctx, ResetToken{
-		Kind:      creds.Kind,
-		UserID:    creds.UserID,
-		ExpiresAt: expiresAt,
-		Audit:     audit,
+		Kind:                 creds.Kind,
+		UserID:               creds.UserID,
+		ExpiresAt:            expiresAt,
+		ExpectedEmail:        creds.Email,
+		ExpectedPasswordHash: creds.PasswordHash,
+		Audit:                audit,
 	}, hash); err != nil {
 		return Credentials{}, issuedReset{}, fmt.Errorf("simpan token atur ulang: %w", err)
 	}
@@ -455,13 +439,7 @@ func (s *Service) ChangePassword(ctx context.Context, actor Actor, oldPassword, 
 	if err != nil {
 		return err
 	}
-	if err := s.users.UpdatePassword(ctx, actor.Kind, actor.UserID, hash); err != nil {
-		return err
-	}
-	if err := s.sessions.RevokeOthers(ctx, actor.UserID, actor.SessionID); err != nil {
-		return err
-	}
-	return nil
+	return s.users.ChangePassword(ctx, actor.Kind, actor.UserID, actor.SessionID, creds.PasswordHash, hash)
 }
 
 func (s *Service) findByEmail(ctx context.Context, email string) (Credentials, error) {

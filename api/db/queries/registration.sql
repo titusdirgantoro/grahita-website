@@ -14,13 +14,15 @@ SELECT t.id            AS token_id,
        t.expires_at,
        t.used_at,
        b.nama,
-       b.nama_kepala,
-       b.email::text   AS email,
+       COALESCE(b.nama_kepala, '') AS nama_kepala,
+       COALESCE(b.email::text, ''::text)::text AS email,
+       b.identity_status::text AS identity_status,
        b.is_active     AS branch_active,
        EXISTS (SELECT 1 FROM branch_users bu WHERE bu.branch_id = b.id)::boolean AS branch_has_account
   FROM registration_tokens t
   JOIN branches b ON b.id = t.branch_id
- WHERE t.token_hash = $1;
+ WHERE t.token_hash = $1
+   AND t.revoked_at IS NULL;
 
 -- name: LockRegistrationToken :one
 -- Sama dengan LookupRegistrationToken, tetapi MENGUNCI baris token
@@ -32,13 +34,15 @@ SELECT t.id            AS token_id,
        t.expires_at,
        t.used_at,
        b.nama,
-       b.nama_kepala,
-       b.email::text   AS email,
+       COALESCE(b.nama_kepala, '') AS nama_kepala,
+       COALESCE(b.email::text, ''::text)::text AS email,
+       b.identity_status::text AS identity_status,
        b.is_active     AS branch_active,
        EXISTS (SELECT 1 FROM branch_users bu WHERE bu.branch_id = b.id)::boolean AS branch_has_account
   FROM registration_tokens t
   JOIN branches b ON b.id = t.branch_id
  WHERE t.token_hash = $1
+   AND t.revoked_at IS NULL
    FOR UPDATE OF t;
 
 -- name: CreateBranchAccount :one

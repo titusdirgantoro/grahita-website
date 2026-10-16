@@ -203,7 +203,6 @@ type Line struct {
 	LineNo       int
 	Jenis        string
 	Nama         string
-	Satuan       string
 	Qty          int
 	HargaSatuan  int64
 	Subtotal     int64

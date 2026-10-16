@@ -29,14 +29,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/grahita/portal/api/internal/payment"
+	paymentpg "github.com/grahita/portal/api/internal/payment/postgres"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/platform/jobs"
 	"github.com/grahita/portal/api/internal/settings"
@@ -173,13 +176,13 @@ func hasilBacaCocok(total int64, tanggalPesanan time.Time) payment.ReadResult {
 		"nominal":   total,
 		"tanggal":   t.Format("2006-01-02"),
 		"bank":      "BCA",
-		"rek_akhir": "1234567890",
+		"rek_akhir": "9999000011",
 		"keyakinan": 0.97,
 		// Kunci palsu untuk membuktikan penyensoran sebelum disimpan.
 		"debug_api_key": "sk-f2-26-rahasia",
 	})
 	return payment.ReadResult{
-		Nominal: &total, Tanggal: &t, Bank: "BCA", RekAkhir: "1234567890",
+		Nominal: &total, Tanggal: &t, Bank: "BCA", RekAkhir: "9999000011",
 		Confidence: 0.97, Raw: raw,
 	}
 }
@@ -258,7 +261,7 @@ func TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama(t *testing.T) {
 	if nominal == nil || *nominal != total {
 		t.Errorf("ocr_nominal harus %d, dapat %v", total, nominal)
 	}
-	if bank != "BCA" || rek != "1234567890" || keyakinan < 0.9 {
+	if bank != "BCA" || rek != "9999000011" || keyakinan < 0.9 {
 		t.Errorf("hasil baca tidak lengkap: bank=%q rek=%q keyakinan=%v", bank, rek, keyakinan)
 	}
 	if ocrAt == nil {
@@ -313,6 +316,16 @@ func TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama(t *testing.T) {
 	if n := jobOCR(t, f, id); n != 0 {
 		t.Errorf("pembacaan tidak boleh menitipkan job OCR lagi, dapat %d", n)
 	}
+	repo := paymentpg.New(f.pool)
+	if current, err := repo.SudahDinilaiAI(ctx, id); err != nil || !current {
+		t.Fatalf("attempt AI harus current sebelum policy berubah: current=%v err=%v", current, err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET bank_allowlist_version=bank_allowlist_version+1 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := repo.SudahDinilaiAI(ctx, id); err != nil || current {
+		t.Fatalf("attempt AI harus stale setelah versi allowlist berubah: current=%v err=%v", current, err)
+	}
 
 	// PENGULANGAN job River: tidak ada efek samping kedua.
 	ulang, err := svc.Baca(ctx, id)
@@ -352,7 +365,7 @@ func TestPGOCRBuktiBaruMenilaiUlang(t *testing.T) {
 	separuh := total / 2
 	reader := payment.NewMockReader(map[string]payment.ReadResult{
 		payment.MockKey(isi1): {
-			Nominal: &separuh, Tanggal: &tgl, Bank: "BCA", RekAkhir: "1234567890", Confidence: 0.96,
+			Nominal: &separuh, Tanggal: &tgl, Bank: "BCA", RekAkhir: "9999000011", Confidence: 0.96,
 		},
 	})
 	svc := ocrPipeline(t, f, reader)
@@ -376,7 +389,7 @@ func TestPGOCRBuktiBaruMenilaiUlang(t *testing.T) {
 	seedBuktiOCR(t, f, id, "b.jpg", isi2)
 	sisa := total - separuh
 	reader.Hasil[payment.MockKey(isi2)] = payment.ReadResult{
-		Nominal: &sisa, Tanggal: &tgl, Bank: "BCA", RekAkhir: "1234567890", Confidence: 0.96,
+		Nominal: &sisa, Tanggal: &tgl, Bank: "BCA", RekAkhir: "9999000011", Confidence: 0.96,
 	}
 
 	hasil, err := svc.Baca(ctx, id)
@@ -407,37 +420,33 @@ func TestPGOCRBuktiBaruMenilaiUlang(t *testing.T) {
 // kurang, dan nominal lebih.
 func TestPGOCRAlasanReviewSesuaiAturanPRD(t *testing.T) {
 	kasus := []struct {
-		nama      string
-		mauAlasan string
-		ubah      func(r *payment.ReadResult, total int64, tgl time.Time)
+		nama         string
+		mauAlasan    string
+		mauDestinasi string
+		ubah         func(r *payment.ReadResult, total int64, tgl time.Time)
 	}{
 		{
-			nama:      "bukti kabur (keyakinan rendah)",
-			mauAlasan: payment.AlasanTidakTerbaca,
-			ubah:      func(r *payment.ReadResult, _ int64, _ time.Time) { r.Confidence = 0.42 },
+			nama: "bukti kabur (keyakinan rendah)", mauAlasan: payment.AlasanTidakTerbaca,
+			mauDestinasi: "allowed", ubah: func(r *payment.ReadResult, _ int64, _ time.Time) { r.Confidence = 0.42 },
 		},
 		{
-			nama:      "rekening tujuan tidak cocok",
-			mauAlasan: payment.AlasanRekeningBeda,
-			ubah:      func(r *payment.ReadResult, _ int64, _ time.Time) { r.RekAkhir = "0000000000" },
+			nama: "rekening tujuan tidak cocok", mauAlasan: payment.AlasanRekeningBeda,
+			mauDestinasi: "unknown", ubah: func(r *payment.ReadResult, _ int64, _ time.Time) { r.RekAkhir = "0000000000" },
 		},
 		{
-			nama:      "tanggal transfer terlalu tua",
-			mauAlasan: payment.AlasanLainnya,
+			nama: "tanggal transfer terlalu tua", mauAlasan: payment.AlasanLainnya, mauDestinasi: "allowed",
 			ubah: func(r *payment.ReadResult, _ int64, tgl time.Time) {
 				tua := tgl.AddDate(0, 0, -5)
 				r.Tanggal = &tua
 			},
 		},
 		{
-			nama:      "kurang bayar",
-			mauAlasan: payment.AlasanKurangBayar,
-			ubah:      func(r *payment.ReadResult, total int64, _ time.Time) { kurang := total - 1; r.Nominal = &kurang },
+			nama: "kurang bayar", mauAlasan: payment.AlasanKurangBayar, mauDestinasi: "allowed",
+			ubah: func(r *payment.ReadResult, total int64, _ time.Time) { kurang := total - 1; r.Nominal = &kurang },
 		},
 		{
-			nama:      "lebih bayar",
-			mauAlasan: payment.AlasanLebihBayar,
-			ubah:      func(r *payment.ReadResult, total int64, _ time.Time) { lebih := total + 1; r.Nominal = &lebih },
+			nama: "lebih bayar", mauAlasan: payment.AlasanLebihBayar, mauDestinasi: "allowed",
+			ubah: func(r *payment.ReadResult, total int64, _ time.Time) { lebih := total + 1; r.Nominal = &lebih },
 		},
 	}
 
@@ -491,6 +500,17 @@ func TestPGOCRAlasanReviewSesuaiAturanPRD(t *testing.T) {
 			}
 			if k.mauAlasan != payment.AlasanTidakTerbaca && totalTerbaca == nil {
 				t.Error("nominal yang terbaca harus tersimpan pada log")
+			}
+			var destinationJSON []byte
+			if err := f.pool.QueryRow(ctx, `SELECT destination_results FROM verification_logs WHERE order_id=$1`, id).Scan(&destinationJSON); err != nil {
+				t.Fatalf("baca destination_results: %v", err)
+			}
+			var destinations []payment.DestinationResult
+			if err := json.Unmarshal(destinationJSON, &destinations); err != nil {
+				t.Fatalf("urai destination_results: %v", err)
+			}
+			if len(destinations) != 1 || destinations[0].Status != k.mauDestinasi {
+				t.Fatalf("attempt review harus punya satu hasil tujuan %s: %+v", k.mauDestinasi, destinations)
 			}
 		})
 	}
@@ -584,4 +604,168 @@ func TestPGSubmitDanUnggahMenitipJobOCR(t *testing.T) {
 	if status != "submitted" {
 		t.Errorf("pesanan harus tetap tersimpan submitted, dapat %s", status)
 	}
+}
+
+func TestPGOCRRaceAttemptAIIdentikMengembalikanOutcomeFinal(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	orderID, total := seedPesananSubmitted(t, f, f.branchA, nomorUji(t, f, 903))
+	proofID := seedBuktiOCR(t, f, orderID, "race-ai.jpg", berkasJPEGUji("race-ai"))
+	if _, err := f.pool.Exec(ctx, `UPDATE payment_proofs
+ SET ocr_at=now(),ocr_confidence=0 WHERE id=$1`, proofID); err != nil {
+		t.Fatal(err)
+	}
+
+	verify := payment.NewVerificationService(f.paymentsRepo)
+	const workers = 8
+	outcomes := make([]payment.VerifyOutcome, workers)
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			outcomes[i], errs[i] = verify.MarkVerified(ctx, payment.SystemActor(), orderID, payment.VerifyInput{
+				Hasil: payment.VerifPerluReview, Metode: payment.MetodeAI,
+				TotalTerbaca: &total, Alasan: payment.AlasanTidakTerbaca,
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	winnerID := outcomes[0].Log.ID
+	if winnerID == "" {
+		t.Fatalf("outcome pertama tidak memiliki verification log: %+v err=%v", outcomes[0], errs[0])
+	}
+	for i := range workers {
+		if errs[i] != nil {
+			t.Fatalf("worker %d harus membaca outcome final, dapat error %v", i, errs[i])
+		}
+		if outcomes[i].Log.ID != winnerID {
+			t.Fatalf("worker %d mendapat log %q, ingin outcome final %q", i, outcomes[i].Log.ID, winnerID)
+		}
+	}
+	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1 AND metode='ai'`, orderID); n != 1 {
+		t.Fatalf("race attempt AI identik harus menyimpan tepat satu log, dapat %d", n)
+	}
+}
+
+func TestPGOCRFinalRevalidationMenurunkanKeReview(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	setAIAktif(t, f, true)
+
+	t.Run("rekening menjadi ambigu", func(t *testing.T) {
+		orderID, total := seedPesananSubmitted(t, f, f.branchA, nomorUji(t, f, 906))
+		proofID := seedBuktiOCR(t, f, orderID, "ambigu.jpg", berkasJPEGUji("ambigu"))
+		if _, err := f.pool.Exec(ctx, `UPDATE payment_proofs SET ocr_at=now(),ocr_bank='BCA',ocr_rek_akhir='0011',ocr_confidence=0.99 WHERE id=$1`, proofID); err != nil {
+			t.Fatal(err)
+		}
+		set, err := f.bank.EffectiveForBranch(ctx, f.branchA)
+		if err != nil || len(set.Accounts) == 0 {
+			t.Fatalf("rekening awal: %+v %v", set, err)
+		}
+		var account2 string
+		if err := f.pool.QueryRow(ctx, `INSERT INTO bank_accounts(bank,nama_pemilik,nomor,is_active)
+			VALUES('BCA','Pemilik Ambigu','8888880011',true) RETURNING id`).Scan(&account2); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.pool.Exec(ctx, `INSERT INTO branch_bank_accounts(branch_id,bank_account_id,is_allowed,assigned_by)
+			VALUES($1,$2,true,$3)`, f.branchA, account2, f.adminSA); err != nil {
+			t.Fatal(err)
+		}
+		out, err := payment.NewVerificationService(f.paymentsRepo).MarkVerified(ctx, payment.SystemActor(), orderID, payment.VerifyInput{
+			Hasil: payment.VerifCocok, Metode: payment.MetodeAI, TotalTerbaca: &total,
+			ProofDestinations: []payment.ProofDestination{{PaymentProofID: proofID, BankAccountID: set.Accounts[0].ID}},
+		})
+		if err != nil {
+			t.Fatalf("ambigu harus menjadi review, bukan error retry: %v", err)
+		}
+		if out.Order.Status != payment.StatusSubmitted || out.Log.Hasil != payment.VerifPerluReview || out.Log.Alasan != payment.AlasanRekeningBeda {
+			t.Fatalf("hasil ambigu salah: %+v", out)
+		}
+		if len(out.Log.DestinationResults) != 1 || out.Log.DestinationResults[0].Status != "ambiguous" {
+			t.Fatalf("snapshot ambigu salah: %+v", out.Log.DestinationResults)
+		}
+		if _, err := f.pool.Exec(ctx, `UPDATE branch_bank_accounts SET is_allowed=false,revoked_by=$3,revoked_at=now()
+			WHERE branch_id=$1 AND bank_account_id=$2`, f.branchA, account2, f.adminSA); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("digit lebih pendek dari kebijakan", func(t *testing.T) {
+		orderID, total := seedPesananSubmitted(t, f, f.branchA, nomorUji(t, f, 907))
+		proofID := seedBuktiOCR(t, f, orderID, "pendek.jpg", berkasJPEGUji("pendek"))
+		if _, err := f.pool.Exec(ctx, `UPDATE payment_proofs SET ocr_at=now(),ocr_bank='BCA',ocr_rek_akhir='1',ocr_confidence=0.99 WHERE id=$1`, proofID); err != nil {
+			t.Fatal(err)
+		}
+		out, err := payment.NewVerificationService(f.paymentsRepo).MarkVerified(ctx, payment.SystemActor(), orderID, payment.VerifyInput{
+			Hasil: payment.VerifPerluReview, Metode: payment.MetodeAI, TotalTerbaca: &total,
+			Alasan: payment.AlasanRekeningBeda,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Log.DestinationResults) != 1 || out.Log.DestinationResults[0].Status != "unreadable" {
+			t.Fatalf("digit pendek tidak boleh allowed: %+v", out.Log.DestinationResults)
+		}
+	})
+
+	t.Run("assignment dicabut sebelum commit final", func(t *testing.T) {
+		orderID, total := seedPesananSubmitted(t, f, f.branchA, nomorUji(t, f, 908))
+		proofID := seedBuktiOCR(t, f, orderID, "cabut.jpg", berkasJPEGUji("cabut"))
+		if _, err := f.pool.Exec(ctx, `UPDATE payment_proofs SET ocr_at=now(),ocr_bank='BCA',ocr_rek_akhir='0011',ocr_confidence=0.99 WHERE id=$1`, proofID); err != nil {
+			t.Fatal(err)
+		}
+		set, err := f.bank.EffectiveForBranch(ctx, f.branchA)
+		if err != nil || len(set.Accounts) == 0 {
+			t.Fatalf("rekening awal: %+v %v", set, err)
+		}
+		oldAccount := set.Accounts[0].ID
+		if _, err := f.pool.Exec(ctx, `UPDATE branch_bank_accounts SET is_allowed=false,revoked_by=$3,revoked_at=now()
+			WHERE branch_id=$1 AND bank_account_id=$2`, f.branchA, oldAccount, f.adminSA); err != nil {
+			t.Fatal(err)
+		}
+		out, err := payment.NewVerificationService(f.paymentsRepo).MarkVerified(ctx, payment.SystemActor(), orderID, payment.VerifyInput{
+			Hasil: payment.VerifCocok, Metode: payment.MetodeAI, TotalTerbaca: &total,
+			ProofDestinations: []payment.ProofDestination{{PaymentProofID: proofID, BankAccountID: oldAccount}},
+		})
+		if err != nil {
+			t.Fatalf("rekening dicabut harus review, bukan error retry: %v", err)
+		}
+		if out.Log.Hasil != payment.VerifPerluReview || len(out.Log.DestinationResults) != 1 || out.Log.DestinationResults[0].Status != "not_allowed" {
+			t.Fatalf("hasil rekening dicabut salah: %+v", out)
+		}
+	})
+
+	t.Run("key reevaluate diverifikasi lagi di transaksi final", func(t *testing.T) {
+		orderID, total := seedPesananSubmitted(t, f, f.branchB, nomorUji(t, f, 909))
+		var account string
+		if err := f.pool.QueryRow(ctx, `INSERT INTO bank_accounts(bank,nama_pemilik,nomor,is_active)
+			VALUES('BRI','Cabang B','77770022',true) RETURNING id`).Scan(&account); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.pool.Exec(ctx, `INSERT INTO branch_bank_accounts(branch_id,bank_account_id,is_allowed,assigned_by)
+			VALUES($1,$2,true,$3)`, f.branchB, account, f.adminSA); err != nil {
+			t.Fatal(err)
+		}
+		proofID := seedBuktiOCR(t, f, orderID, "stale-final.jpg", berkasJPEGUji("stale-final"))
+		if _, err := f.pool.Exec(ctx, `UPDATE payment_proofs SET ocr_at=now(),ocr_bank='BRI',ocr_rek_akhir='0022',ocr_confidence=0.99 WHERE id=$1`, proofID); err != nil {
+			t.Fatal(err)
+		}
+		_, err := payment.NewVerificationService(f.paymentsRepo).MarkVerified(ctx, payment.SystemActor(), orderID, payment.VerifyInput{
+			Hasil: payment.VerifCocok, Metode: payment.MetodeAI, TotalTerbaca: &total,
+			ProofDestinations:        []payment.ProofDestination{{PaymentProofID: proofID, BankAccountID: account}},
+			ExpectedAllowlistVersion: 999, ExpectedProofFingerprint: "00",
+		})
+		if !errors.Is(err, payment.ErrOCRSnapshotStale) {
+			t.Fatalf("key stale harus ditolak di transaksi final, dapat %v", err)
+		}
+		if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, orderID); n != 0 {
+			t.Fatalf("key stale tidak boleh menulis attempt, dapat %d", n)
+		}
+	})
 }

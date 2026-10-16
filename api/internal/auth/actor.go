@@ -56,8 +56,9 @@ const (
 	// CapAdminTutorial hanya dimiliki Superadmin: konten halaman tutorial
 	// portal cabang (F2-27, PRD §3.8) — Manager dan akun cabang tidak boleh
 	// mengubahnya.
-	CapAdminTutorial Capability = "admin.tutorial" // konten tutorial cabang
-	CapAdminAudit    Capability = "admin.audit"    // audit log
+	CapAdminTutorial     Capability = "admin.tutorial"      // konten tutorial cabang
+	CapAdminAudit        Capability = "admin.audit"         // audit log
+	CapAdminMasterImport Capability = "admin.master_import" // preview/apply master Impact
 )
 
 var capabilities = map[Role]map[Capability]bool{
@@ -90,6 +91,7 @@ var capabilities = map[Role]map[Capability]bool{
 		CapAdminSettings:       true,
 		CapAdminTutorial:       true,
 		CapAdminAudit:          true,
+		CapAdminMasterImport:   true,
 	},
 }
 

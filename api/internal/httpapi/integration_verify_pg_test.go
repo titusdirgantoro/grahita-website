@@ -35,6 +35,7 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/document"
+	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/fulfillment"
 	"github.com/grahita/portal/api/internal/payment"
 	paymentpg "github.com/grahita/portal/api/internal/payment/postgres"
@@ -90,14 +91,64 @@ func seedPesananSubmitted(t *testing.T, f *pgFixture, branchID, nomor string) (s
 	}
 	for _, b := range baris {
 		if _, err := f.pool.Exec(ctx,
-			`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, satuan_snapshot,
+			`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot,
 			                          qty, harga_satuan, serial_number)
-			 VALUES ($1,$2,$3,$4,'pcs',$5,$6,$7)`,
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 			id, b.no, produk, "Bio Magnetik", b.qty, b.harga, b.serial); err != nil {
 			t.Fatalf("seed baris pesanan %s: %v", nomor, err)
 		}
 	}
 	return id, total
+}
+
+func bodyVerifikasiCocok(t *testing.T, f *pgFixture, orderID string, total *int64, catatan string) string {
+	return bodyVerifikasiCocokKe(t, f, orderID, total, catatan, f.bankDefault)
+}
+
+func bodyVerifikasiCocokKe(t *testing.T, f *pgFixture, orderID string, total *int64, catatan, bankAccountID string) string {
+	t.Helper()
+	ctx := context.Background()
+	rows, err := f.pool.Query(ctx, `SELECT id::text FROM payment_proofs WHERE order_id=$1 ORDER BY id`, orderID)
+	if err != nil {
+		t.Fatalf("baca bukti untuk body verifikasi: %v", err)
+	}
+	destinations := []payment.ProofDestination{}
+	for rows.Next() {
+		var proofID string
+		if err := rows.Scan(&proofID); err != nil {
+			t.Fatal(err)
+		}
+		destinations = append(destinations, payment.ProofDestination{PaymentProofID: proofID, BankAccountID: bankAccountID})
+	}
+	rows.Close()
+	if len(destinations) == 0 {
+		var isCNC bool
+		if err := f.pool.QueryRow(ctx, `SELECT is_cnc FROM orders WHERE id=$1`, orderID).Scan(&isCNC); err != nil {
+			t.Fatal(err)
+		}
+		if !isCNC {
+			var proofID string
+			if err := f.pool.QueryRow(ctx, `INSERT INTO payment_proofs
+				(order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
+				VALUES ($1,$2,'bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$3)
+				RETURNING id`, orderID, "proofs/"+orderID, f.userA).Scan(&proofID); err != nil {
+				t.Fatalf("seed bukti verifikasi manual: %v", err)
+			}
+			destinations = append(destinations, payment.ProofDestination{PaymentProofID: proofID, BankAccountID: bankAccountID})
+		}
+	}
+	payload := map[string]any{"hasil": "cocok", "proof_destinations": destinations}
+	if total != nil {
+		payload["total_terbaca"] = *total
+	}
+	if catatan != "" {
+		payload["catatan"] = catatan
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 // verifyHTTP mengirim permintaan verifikasi dan mengembalikan status + body.
@@ -106,6 +157,12 @@ func verifyHTTP(t *testing.T, f *pgFixture, cookies []*http.Cookie, csrf, id, bo
 	status, decoded, _ := apiReq(t, http.DefaultClient, http.MethodPost,
 		f.srv.URL+"/api/v1/admin/orders/"+id+"/verify", body, cookies, csrf)
 	return status, decoded
+}
+
+func kodeErrorVerifikasi(body map[string]any) string {
+	errObj, _ := body["error"].(map[string]any)
+	code, _ := errObj["code"].(string)
+	return code
 }
 
 // jalankanPekerjaanDone menjalankan pekerjaan worker "render dokumen pesanan"
@@ -170,7 +227,7 @@ func TestPGVerifikasiSetujuMenghasilkanDokumenDanEmailSekali(t *testing.T) {
 	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 
 	status, body := verifyHTTP(t, f, cookies, csrf, id,
-		fmt.Sprintf(`{"hasil":"cocok","total_terbaca":%d,"catatan":"transfer sesuai"}`, total))
+		bodyVerifikasiCocok(t, f, id, &total, "transfer sesuai"))
 	if status != http.StatusOK {
 		t.Fatalf("verifikasi setuju harus 200, dapat %d (%v)", status, body)
 	}
@@ -206,6 +263,21 @@ func TestPGVerifikasiSetujuMenghasilkanDokumenDanEmailSekali(t *testing.T) {
 	}
 	if logCount != 1 {
 		t.Errorf("log verifikasi harus memuat nominal + selisih yang benar, cocok=%d", logCount)
+	}
+	// Histori order done tidak boleh berubah saat rekening kemudian diganti nama
+	// pemilik, dinonaktifkan, dan dicabut dari cabang.
+	if _, err := f.pool.Exec(ctx, `UPDATE bank_accounts SET nama_pemilik='Pemilik Baru', is_active=false WHERE id=$1`, f.bankDefault); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE branch_bank_accounts SET is_allowed=false, revoked_by=$3, revoked_at=now() WHERE branch_id=$1 AND bank_account_id=$2`, f.branchA, f.bankDefault, f.adminSA); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := documentpg.New(f.pool).OrderForDocument(ctx, id)
+	if err != nil {
+		t.Fatalf("baca snapshot dokumen selesai: %v", err)
+	}
+	if len(snapshot.Rekening) != 1 || snapshot.Rekening[0].AtasNama != "PT Fixture Sintetis" || snapshot.Rekening[0].Nomor != "9999000011" {
+		t.Fatalf("snapshot rekening historis berubah: %+v", snapshot.Rekening)
 	}
 	var teks string
 	if err := f.pool.QueryRow(ctx,
@@ -316,12 +388,134 @@ func TestPGVerifikasiSetujuMenghasilkanDokumenDanEmailSekali(t *testing.T) {
 	}
 }
 
+// TestPGVerifikasiCocokWajibTujuanEfektifCabang menegakkan pemetaan tepat satu
+// bukti ke rekening efektif dari cabang order.
+func TestPGVerifikasiCocokWajibTujuanEfektifCabang(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-121")
+	// Helper ini sekaligus membuat fixture bukti sintetis, tetapi body sengaja
+	// tidak dipakai untuk menguji kontrak exact-one destination.
+	_ = bodyVerifikasiCocok(t, f, id, &total, "")
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	status, body := verifyHTTP(t, f, cookies, csrf, id,
+		fmt.Sprintf(`{"hasil":"cocok","total_terbaca":%d}`, total))
+	if status != http.StatusUnprocessableEntity || kodeErrorVerifikasi(body) != "DESTINATION_ACCOUNT_REQUIRED" {
+		t.Fatalf("tujuan kosong harus ditolak fail-closed, dapat %d %v", status, body)
+	}
+
+	var accountB string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO bank_accounts (bank,nama_pemilik,nomor,is_active)
+		VALUES ('BRI','Cabang B','9876543210',true) RETURNING id`).Scan(&accountB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO branch_bank_accounts
+		(branch_id,bank_account_id,is_allowed,assigned_by) VALUES ($1,$2,true,$3)`, f.branchB, accountB, f.adminSA); err != nil {
+		t.Fatal(err)
+	}
+	status, body = verifyHTTP(t, f, cookies, csrf, id,
+		bodyVerifikasiCocokKe(t, f, id, &total, "", accountB))
+	if status != http.StatusConflict || kodeErrorVerifikasi(body) != "BANK_ACCOUNT_NOT_ALLOWED" {
+		t.Fatalf("rekening cabang lain harus ditolak, dapat %d %v", status, body)
+	}
+	if st, _, _, _ := statusPesanan(t, f, id); st != "submitted" {
+		t.Fatalf("order harus tetap submitted setelah tujuan ditolak, dapat %s", st)
+	}
+}
+
+func TestPGDokumenDoneFailClosedUntukSnapshotParsialDanPointerHilang(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	repo := documentpg.New(f.pool)
+
+	transferID, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-918")
+	status, body := verifyHTTP(t, f, cookies, csrf, transferID, bodyVerifikasiCocok(t, f, transferID, &total, ""))
+	if status != http.StatusOK {
+		t.Fatalf("prasyarat transfer Done gagal: %d %v", status, body)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE verification_logs SET destination_results='[]'::jsonb
+		WHERE id=(SELECT done_verification_log_id FROM orders WHERE id=$1)`, transferID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.OrderForDocument(ctx, transferID); err == nil || !strings.Contains(err.Error(), "snapshot tujuan tidak lengkap") {
+		t.Fatalf("snapshot parsial harus fail closed, dapat %v", err)
+	}
+
+	cncID, cncTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-919")
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET is_cnc=true,jatuh_tempo=tanggal+7 WHERE id=$1`, cncID); err != nil {
+		t.Fatal(err)
+	}
+	status, body = verifyHTTP(t, f, cookies, csrf, cncID, bodyVerifikasiCocok(t, f, cncID, &cncTotal, ""))
+	if status != http.StatusOK {
+		t.Fatalf("prasyarat C&C Done gagal: %d %v", status, body)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET done_verification_log_id=NULL WHERE id=$1`, cncID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.OrderForDocument(ctx, cncID); err == nil || !strings.Contains(err.Error(), "tanpa pointer verifikasi") {
+		t.Fatalf("C&C Done tanpa pointer harus fail closed, dapat %v", err)
+	}
+
+	// Pointer ke attempt sukses milik order lain tidak boleh diterima.
+	leftID, leftTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-920")
+	rightID, rightTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-921")
+	if status, body = verifyHTTP(t, f, cookies, csrf, leftID, bodyVerifikasiCocok(t, f, leftID, &leftTotal, "")); status != http.StatusOK {
+		t.Fatalf("prasyarat left Done gagal: %d %v", status, body)
+	}
+	if status, body = verifyHTTP(t, f, cookies, csrf, rightID, bodyVerifikasiCocok(t, f, rightID, &rightTotal, "")); status != http.StatusOK {
+		t.Fatalf("prasyarat right Done gagal: %d %v", status, body)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET done_verification_log_id=(SELECT done_verification_log_id FROM orders WHERE id=$2) WHERE id=$1`, leftID, rightID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.OrderForDocument(ctx, leftID); err == nil || !strings.Contains(err.Error(), "bukan attempt sukses milik pesanan") {
+		t.Fatalf("pointer lintas order harus fail closed, dapat %v", err)
+	}
+
+	// Jumlah snapshot sama tidak cukup bila UUID bukti berasal dari order lain.
+	foreignID, foreignTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-922")
+	foreignProof := seedBuktiOCR(t, f, foreignID, "asing.jpg", berkasJPEGUji("asing"))
+	if status, body = verifyHTTP(t, f, cookies, csrf, foreignID, bodyVerifikasiCocok(t, f, foreignID, &foreignTotal, "")); status != http.StatusOK {
+		t.Fatalf("prasyarat foreign Done gagal: %d %v", status, body)
+	}
+	targetID, targetTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-923")
+	seedBuktiOCR(t, f, targetID, "target.jpg", berkasJPEGUji("target"))
+	if status, body = verifyHTTP(t, f, cookies, csrf, targetID, bodyVerifikasiCocok(t, f, targetID, &targetTotal, "")); status != http.StatusOK {
+		t.Fatalf("prasyarat target Done gagal: %d %v", status, body)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE verification_logs SET destination_results=jsonb_set(destination_results,'{0,payment_proof_id}',to_jsonb($2::text))
+		WHERE id=(SELECT done_verification_log_id FROM orders WHERE id=$1)`, targetID, foreignProof); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.OrderForDocument(ctx, targetID); err == nil || !strings.Contains(err.Error(), "snapshot tujuan tidak valid") {
+		t.Fatalf("UUID bukti asing harus fail closed, dapat %v", err)
+	}
+
+	// Semua snapshot divalidasi sebelum dedup rekening yang sama.
+	multiID, multiTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-924")
+	seedBuktiOCR(t, f, multiID, "satu.jpg", berkasJPEGUji("satu"))
+	seedBuktiOCR(t, f, multiID, "dua.jpg", berkasJPEGUji("dua"))
+	if status, body = verifyHTTP(t, f, cookies, csrf, multiID, bodyVerifikasiCocok(t, f, multiID, &multiTotal, "")); status != http.StatusOK {
+		t.Fatalf("prasyarat multi Done gagal: %d %v", status, body)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE verification_logs SET destination_results=jsonb_set(destination_results,'{1,bank_snapshot}','"BRI"'::jsonb)
+		WHERE id=(SELECT done_verification_log_id FROM orders WHERE id=$1)`, multiID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.OrderForDocument(ctx, multiID); err == nil || !strings.Contains(err.Error(), "identitas rekening tidak cocok") {
+		t.Fatalf("snapshot kedua rusak pada rekening sama harus fail closed, dapat %v", err)
+	}
+}
+
 // TestPGVerifikasiPerluReviewTidakMenyelesaikan menegakkan PRD §7.1: perlu
 // review adalah sub-status verifikasi, bukan status pesanan — dan tidak
 // melahirkan dokumen/email.
 func TestPGVerifikasiPerluReviewTidakMenyelesaikan(t *testing.T) {
 	f := newPGFixture(t)
 	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-119")
+	seedBuktiOCR(t, f, id, "manual-review.jpg", berkasJPEGUji("manual-review"))
 	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 
 	status, body := verifyHTTP(t, f, cookies, csrf, id,
@@ -355,9 +549,20 @@ func TestPGVerifikasiPerluReviewTidakMenyelesaikan(t *testing.T) {
 	if n := hitungBaris(t, f, "email_outbox", "order_id", id); n != 0 {
 		t.Errorf("perlu review tidak boleh mengantre email, dapat %d", n)
 	}
+	var destinationJSON []byte
+	if err := f.pool.QueryRow(context.Background(), `SELECT destination_results FROM verification_logs WHERE order_id=$1`, id).Scan(&destinationJSON); err != nil {
+		t.Fatal(err)
+	}
+	var destinations []payment.DestinationResult
+	if err := json.Unmarshal(destinationJSON, &destinations); err != nil {
+		t.Fatal(err)
+	}
+	if len(destinations) != 1 || destinations[0].Source != payment.MetodeManual || destinations[0].Status != "unreadable" {
+		t.Fatalf("review manual harus menyimpan hasil per bukti: %+v", destinations)
+	}
 
 	// Admin boleh menimpa keputusan review dengan persetujuan (PRD §5).
-	status, body = verifyHTTP(t, f, cookies, csrf, id, fmt.Sprintf(`{"hasil":"cocok","total_terbaca":%d}`, total))
+	status, body = verifyHTTP(t, f, cookies, csrf, id, bodyVerifikasiCocok(t, f, id, &total, ""))
 	if status != http.StatusOK {
 		t.Fatalf("verifikasi ulang sebagai setuju harus 200, dapat %d (%v)", status, body)
 	}
@@ -402,7 +607,7 @@ func TestPGVerifikasiBentukDataDitolak(t *testing.T) {
 	}
 
 	// Nominal terbaca boleh kosong (nominal belum terbaca) — tetap boleh setuju.
-	if status, body := verifyHTTP(t, f, cookies, csrf, id, `{"hasil":"cocok"}`); status != http.StatusOK {
+	if status, body := verifyHTTP(t, f, cookies, csrf, id, bodyVerifikasiCocok(t, f, id, nil, "")); status != http.StatusOK {
 		t.Errorf("setuju tanpa nominal harus 200, dapat %d (%v)", status, body)
 	}
 }
@@ -427,7 +632,7 @@ func TestPGVerifikasiBersamaanTepatSekali(t *testing.T) {
 		wg      sync.WaitGroup
 	)
 	url := f.srv.URL + "/api/v1/admin/orders/" + id + "/verify"
-	body := fmt.Sprintf(`{"hasil":"cocok","total_terbaca":%d}`, total)
+	body := bodyVerifikasiCocok(t, f, id, &total, "")
 	siap := make(chan struct{})
 	for i := 0; i < percobaan; i++ {
 		wg.Add(1)
@@ -499,7 +704,7 @@ func TestPGVerifikasiBersamaanTepatSekali(t *testing.T) {
 func TestPGVerifikasiOtorisasiDanBentukId(t *testing.T) {
 	f := newPGFixture(t)
 	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-122")
-	body := fmt.Sprintf(`{"hasil":"cocok","total_terbaca":%d}`, total)
+	body := bodyVerifikasiCocok(t, f, id, &total, "")
 
 	// Cabang: 403 (bukan 404 — pesanannya miliknya sendiri).
 	cookiesCabang, csrfCabang := pgLogin(t, f.srv, "a@example.test", "rahasia123")
@@ -566,7 +771,7 @@ func TestPGPekerjaanMenungguDokumenSebelumEmail(t *testing.T) {
 	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-123")
 	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 	if status, body := verifyHTTP(t, f, cookies, csrf, id,
-		fmt.Sprintf(`{"hasil":"cocok","total_terbaca":%d}`, total)); status != http.StatusOK {
+		bodyVerifikasiCocok(t, f, id, &total, "")); status != http.StatusOK {
 		t.Fatalf("verifikasi harus 200, dapat %d (%v)", status, body)
 	}
 

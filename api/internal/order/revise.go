@@ -15,7 +15,7 @@
 //     belum Done dijawab ErrNotDone (dokumen lahir saat Done, PRD §6.1).
 //   - Daftar baris yang dikirim adalah DAFTAR FINAL, bukan diff: baris lama
 //     yang tidak lagi disebut memang dihapus, dan baris baru disusun server.
-//     Qty/harga divalidasi di sini; NAMA/SATUAN baris baru diambil master dan
+//     Qty/harga divalidasi di sini; nama baris baru diambil dari master dan
 //     harga Sertifikat SELALU 0 (CP-SER-01), jadi angka dari klien tidak
 //     pernah lolos apa adanya untuk produk sertifikat.
 //   - Nomor invoice TIDAK berubah; versi naik satu langkah di dalam transaksi

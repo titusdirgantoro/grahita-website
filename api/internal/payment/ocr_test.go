@@ -24,12 +24,18 @@ import (
 
 // ------------------------------------------------------------- tolok bantu --
 
+const (
+	proofUUID1 = "11111111-1111-4111-8111-111111111111"
+	proofUUID2 = "22222222-2222-4222-8222-222222222222"
+	bankUUID   = "33333333-3333-4333-8333-333333333333"
+)
+
 func aiAktif() settings.AISettings {
 	return settings.AISettings{Aktif: true, MinKeyakinan: 0.90, TolKurang: 0, TolLebih: 0, DigitRek: 4, Mundur: 1}
 }
 
 func bankAktif() []bank.Account {
-	return []bank.Account{{ID: "b1", Bank: "BCA", NamaPemilik: "PT Grahita", Nomor: "1234567890", IsActive: true}}
+	return []bank.Account{{ID: bankUUID, Bank: "BCA", NamaPemilik: "PT Grahita", Nomor: "1234567890", IsActive: true}}
 }
 
 func tgl(s string) *time.Time {
@@ -47,6 +53,10 @@ func tv(s string) time.Time { return *tgl(s) }
 type rekeningPalsu struct{ akun []bank.Account }
 
 func (r rekeningPalsu) Active(context.Context) ([]bank.Account, error) { return r.akun, nil }
+
+func (r rekeningPalsu) EffectiveForBranch(context.Context, string) (bank.EffectiveSet, error) {
+	return bank.EffectiveSet{Accounts: r.akun}, nil
+}
 
 // aiPalsu adalah AISettingsSource in-memory (dengan penghitung panggilan).
 type aiPalsu struct {
@@ -378,7 +388,7 @@ func pesananOCR(total int64) OrderOCR {
 }
 
 func TestOCSKipTidakMemanggilProviderDanTidakMenulis(t *testing.T) {
-	repo := &ocrRepoPalsu{ord: pesananOCR(300000), proofs: []ProofOCR{{ID: "p1", StorageKey: "proofs/p1", MimeType: MimePNG}}}
+	repo := &ocrRepoPalsu{ord: pesananOCR(300000), proofs: []ProofOCR{{ID: proofUUID1, StorageKey: "proofs/p1", MimeType: MimePNG}}}
 	reader := NewMockReader(nil)
 	verifier := &verifierPalsu{}
 	svc, _ := siapkanOCR(t, repo, reader, settings.AISettings{Aktif: false}, verifier)
@@ -402,7 +412,7 @@ func TestOCRCocokMemverifikasiDenganMetodeAI(t *testing.T) {
 	isi := []byte("bukti-cocok")
 	repo := &ocrRepoPalsu{
 		ord:    pesananOCR(300000),
-		proofs: []ProofOCR{{ID: "p1", OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG, NamaFile: "a.png"}},
+		proofs: []ProofOCR{{ID: proofUUID1, OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG, NamaFile: "a.png"}},
 	}
 	reader := NewMockReader(map[string]ReadResult{
 		MockKey(isi): {
@@ -461,7 +471,7 @@ func TestOCRPerluReviewKarenaBuktiKaburTidakMenyetujui(t *testing.T) {
 	isi := []byte("bukti-buram")
 	repo := &ocrRepoPalsu{
 		ord:    pesananOCR(300000),
-		proofs: []ProofOCR{{ID: "p1", OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
+		proofs: []ProofOCR{{ID: proofUUID1, OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
 	}
 	reader := NewMockReader(map[string]ReadResult{
 		MockKey(isi): {Nominal: ptrInt64(300000), Tanggal: tgl("2026-10-09"), RekAkhir: "1234567890", Confidence: 0.35},
@@ -493,7 +503,7 @@ func TestOCRIdempotenSaatDiulang(t *testing.T) {
 	isi := []byte("bukti-idempoten")
 	repo := &ocrRepoPalsu{
 		ord:    pesananOCR(300000),
-		proofs: []ProofOCR{{ID: "p1", OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
+		proofs: []ProofOCR{{ID: proofUUID1, OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
 	}
 	reader := NewMockReader(map[string]ReadResult{
 		MockKey(isi): {Nominal: ptrInt64(300000), Tanggal: tgl("2026-10-09"), RekAkhir: "1234567890", Confidence: 0.99},
@@ -537,9 +547,9 @@ func TestOCRBuktiBaruMemicuPenilaianUlang(t *testing.T) {
 	repo := &ocrRepoPalsu{
 		ord: pesananOCR(300000),
 		proofs: []ProofOCR{
-			{ID: "p1", OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG,
+			{ID: proofUUID1, OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG,
 				Nominal: ptrInt64(100000), Tanggal: tgl("2026-10-09"), RekAkhir: "1234567890", Confidence: 0.95, At: &at},
-			{ID: "p2", OrderID: orderUUID, StorageKey: "proofs/p2", MimeType: MimePNG},
+			{ID: proofUUID2, OrderID: orderUUID, StorageKey: "proofs/p2", MimeType: MimePNG},
 		},
 	}
 	reader := NewMockReader(map[string]ReadResult{
@@ -572,7 +582,7 @@ func TestOCRBuktiBaruMemicuPenilaianUlang(t *testing.T) {
 func TestOCRGagalProviderTidakMenulisApaPun(t *testing.T) {
 	repo := &ocrRepoPalsu{
 		ord:    pesananOCR(300000),
-		proofs: []ProofOCR{{ID: "p1", OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
+		proofs: []ProofOCR{{ID: proofUUID1, OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
 	}
 	reader := NewMockReader(nil)
 	reader.Galat = errors.New("provider tumbang")
@@ -598,8 +608,8 @@ func TestOCRLewatiPesananYangTidakBisaDinilai(t *testing.T) {
 		ord   OrderOCR
 		bukti []ProofOCR
 	}{
-		{"pesanan masih draft", OrderOCR{ID: orderUUID, Status: StatusDraft, Total: 100}, []ProofOCR{{ID: "p1"}}},
-		{"pesanan sudah selesai", OrderOCR{ID: orderUUID, Status: StatusDone, Total: 100}, []ProofOCR{{ID: "p1"}}},
+		{"pesanan masih draft", OrderOCR{ID: orderUUID, Status: StatusDraft, Total: 100}, []ProofOCR{{ID: proofUUID1}}},
+		{"pesanan sudah selesai", OrderOCR{ID: orderUUID, Status: StatusDone, Total: 100}, []ProofOCR{{ID: proofUUID1}}},
 		{"tidak ada bukti", pesananOCR(100), nil},
 	}
 	for _, k := range kasus {
@@ -629,7 +639,7 @@ func TestOCRMenghormatiPesananSudahSelesaiSaatKeputusan(t *testing.T) {
 	isi := []byte("bukti-balapan")
 	repo := &ocrRepoPalsu{
 		ord:    pesananOCR(300000),
-		proofs: []ProofOCR{{ID: "p1", OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
+		proofs: []ProofOCR{{ID: proofUUID1, OrderID: orderUUID, StorageKey: "proofs/p1", MimeType: MimePNG}},
 	}
 	reader := NewMockReader(map[string]ReadResult{
 		MockKey(isi): {Nominal: ptrInt64(300000), Tanggal: tgl("2026-10-09"), RekAkhir: "1234567890", Confidence: 0.99},

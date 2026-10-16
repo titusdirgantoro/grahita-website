@@ -120,9 +120,15 @@ func (m *Memory) SetBranchUserActive(_ context.Context, id string, active bool, 
 	defer m.mu.Unlock()
 	for i, b := range m.branches {
 		if b.UserID != "" && b.UserID == id {
+			if active && (b.IdentityStatus != "registered" || b.NamaKepala == "" || b.Email == "") {
+				return BranchUser{}, ErrIdentityIncomplete
+			}
 			lama := b
 			lama.HasAccount = true
 			lama.Status = BranchStatus(true, lama.IsActive, lama.BranchActive)
+			if b.IsActive == active {
+				return lama, nil
+			}
 			m.branches[i].IsActive = active
 			b = m.branches[i]
 			b.HasAccount = true

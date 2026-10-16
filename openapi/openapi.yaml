@@ -518,7 +518,7 @@ paths:
       summary: Buat draft pesanan
       description: |
         Body HANYA memuat catatan dan daftar baris (`product_id`, `qty`); harga
-        satuan, subtotal, dan total dihitung server dari harga cabang di
+        per item, subtotal, dan total dihitung server dari harga cabang di
         `branch_prices` sehingga angka kiriman klien tidak pernah dipakai
         (BR-05, BR-10). Produk tanpa baris harga untuk cabang sesi ditolak
         `400` — `harga_default` bukan cadangan (PRD CP-KAT-02). Draft selalu
@@ -566,8 +566,8 @@ paths:
       summary: Detail satu pesanan milik cabang sesi
       description: |
         Pesanan cabang lain dijawab `404` (bukan `403`) supaya keberadaannya
-        tidak bocor. Detail memuat baris pesanan beserta snapshot nama, satuan,
-        harga satuan, dan subtotal.
+        tidak bocor. Detail memuat baris pesanan beserta snapshot nama, harga
+        per item, dan subtotal.
       responses:
         "200":
           description: Detail pesanan
@@ -653,7 +653,7 @@ paths:
       description: |
         Transisi `draft` → `submitted` (PRD CP-ORD-05, CP-ORD-09): nomor
         invoice dan serial number per baris produk diterbitkan, snapshot
-        harga/nama/satuan disegarkan dari master yang berlaku SAAT SUBMIT
+        harga/nama disegarkan dari master yang berlaku SAAT SUBMIT
         (BR-05), tanggal pesanan ditetapkan menurut zona Asia/Jakarta (BR-04,
         BR-11), dan pesanan terkunci untuk cabang (BR-07).
 
@@ -879,26 +879,34 @@ paths:
 
   /api/v1/bank-accounts:
     get:
-      tags: [customer, admin]
+      tags: [customer]
       operationId: listActiveBankAccounts
-      summary: Rekening bank AKTIF (instruksi pembayaran)
+      summary: Rekening efektif cabang sesi (instruksi pembayaran)
       description: |
-        Hanya rekening AKTIF yang dikembalikan. Dipakai Customer Portal untuk
-        instruksi pembayaran dan menjadi referensi pencocokan rekening tujuan
-        pada verifikasi bukti transfer (PRD §4.6, §5). Rekening nonaktif tidak
-        pernah ditampilkan di sini.
+        Hanya irisan assignment cabang sesi, rekening aktif, dan cabang aktif
+        yang dikembalikan. Assignment kosong menghasilkan data kosong tanpa
+        fallback ke master rekening global.
       responses:
         "200":
-          description: Daftar rekening aktif
+          description: Daftar rekening efektif cabang sesi
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required: [data, meta]
                 properties:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/BankAccount" }
+                  meta:
+                    type: object
+                    required: [payment_available, allowlist_version, reason]
+                    properties:
+                      payment_available: { type: boolean }
+                      allowlist_version: { type: integer, format: int64, minimum: 0 }
+                      reason:
+                        type: string
+                        description: Kosong bila tersedia; NO_ASSIGNED_BANK_ACCOUNT bila diblokir.
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
@@ -1068,6 +1076,65 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+
+  /api/v1/admin/branches/{id}/bank-accounts:
+    get:
+      tags: [admin]
+      operationId: listBranchBankAccounts
+      summary: Daftar assignment rekening satu cabang (Superadmin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Master rekening beserta status assignment/effective dan versi cabang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/BranchBankAccountAssignments" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [admin]
+      operationId: replaceBranchBankAccounts
+      summary: Ganti seluruh assignment rekening satu cabang (Superadmin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BranchBankAccountReplacement" }
+      responses:
+        "200":
+          description: Assignment tersimpan atomik
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { $ref: "#/components/schemas/BranchBankAccountReplacementResult" }
+                  meta:
+                    type: object
+                    required: [changed]
+                    properties:
+                      changed: { type: boolean }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/admin/branches/{id}/token:
     post:
@@ -2156,6 +2223,7 @@ paths:
             schema:
               type: object
               required: [hasil]
+              additionalProperties: false
               properties:
                 hasil:
                   type: string
@@ -2179,6 +2247,10 @@ paths:
                   type: string
                   maxLength: 2000
                   description: Catatan bebas pemeriksa.
+                proof_destinations:
+                  type: array
+                  description: Wajib lengkap dan tepat satu per bukti saat hasil=cocok.
+                  items: { $ref: "#/components/schemas/ProofDestination" }
       responses:
         "200":
           description: Verifikasi tersimpan
@@ -2215,6 +2287,48 @@ paths:
                       message: Verifikasi hanya untuk pesanan yang sudah dikirim.
         "503":
           $ref: "#/components/responses/Unavailable"
+
+  /api/v1/admin/orders/{id}/verification/reevaluate-destination:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    post:
+      tags: [admin]
+      operationId: reevaluateAdminOrderDestination
+      summary: Nilai ulang tujuan rekening dari hasil OCR tersimpan
+      description: |
+        Aksi eksplisit Manager/Superadmin. Tidak menerima body dan tidak
+        memanggil provider OCR; seluruh bukti harus sudah mempunyai `ocr_at`.
+        Job unik pada order, allowlist version, dan proof-set fingerprint.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "202":
+          description: Job baru dititipkan atau request terdeteksi duplikat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [queued, duplicate]
+                    properties:
+                      queued: { type: boolean }
+                      duplicate: { type: boolean }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: ORDER_NOT_SUBMITTED, AI_DISABLED, atau OCR_RESULT_MISSING
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "422":
+          description: PAYMENT_PROOF_REQUIRED
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "503": { $ref: "#/components/responses/Unavailable" }
 
   /api/v1/admin/orders/{id}/revise:
     parameters:
@@ -3168,6 +3282,177 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 
+  /api/v1/admin/master-imports/impact/preview:
+    post:
+      tags: [admin]
+      operationId: previewImpactMasterImport
+      summary: Membuat preview dry-run master Impact (Superadmin)
+      description: |
+        Memvalidasi hash, sheet, rentang, dua baris header, 34 cabang, komponen
+        tarif, catatan khusus, dan state akses existing. Endpoint hanya membuat
+        artifact/attempt/item preview; tabel master cabang, produk, dan tarif
+        tidak diubah. Workbook mentah tidak disimpan pada repo atau log.
+        Selalu ditolak pada APP_ENV=production.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Workbook XLSX Impact yang hash-nya diotorisasi (maksimum 5 MiB).
+      responses:
+        "201":
+          description: Preview immutable berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MasterImportPreview"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Production dilarang atau state preview tidak memenuhi kontrak
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "413":
+          description: Workbook melebihi 5 MiB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "415":
+          description: Berkas bukan XLSX
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "422":
+          description: Hash/struktur/nilai workbook tidak sesuai kontrak
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/admin/master-imports/impact/{id}/evidence:
+    get:
+      tags: [admin]
+      operationId: getImpactMasterImportEvidence
+      summary: Membaca evidence privat item review satu attempt (Superadmin)
+      description: |
+        Mengembalikan nilai catatan khusus/kolom luar kontrak hanya kepada
+        Superadmin untuk keputusan per-item. Nilai privat tidak ikut respons
+        preview umum dan tidak boleh dipindahkan ke log atau laporan umum.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Evidence privat attempt
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/MasterImportEvidenceItem" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/v1/admin/master-imports/impact/{id}/apply:
+    post:
+      tags: [admin]
+      operationId: applyImpactMasterImport
+      summary: Menerapkan satu attempt preview Impact secara atomik di staging
+      description: |
+        Superadmin saja. Server mengunci attempt dan seluruh state master/akses,
+        menghitung ulang fingerprint preview, memvalidasi keputusan per item,
+        lalu menerapkan cabang/produk/varian/tarif dalam satu transaksi. Retry
+        dengan idempotency_key yang sama mengembalikan hasil yang sama tanpa
+        audit atau mutasi ganda. Selalu ditolak pada APP_ENV=production.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MasterImportApplyRequest" }
+      responses:
+        "200":
+          description: Apply berhasil atau retry idempoten
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/MasterImportApplyResult" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Keputusan belum lengkap, preview stale, attempt sudah applied, atau production ditolak
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /api/v1/admin/master-imports/impact/apply-runs/{id}/rollback:
+    post:
+      tags: [admin]
+      operationId: rollbackImpactMasterImport
+      summary: Rollback perubahan reversibel satu apply run staging
+      description: |
+        Mengembalikan perubahan master/tarif hanya bila optimistic fingerprint
+        masih sama. Revokasi akun/token/sesi tidak pernah dibalik; respons dan
+        audit mencatat identity_revocation_not_reversed.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Rollback selesai atau sudah pernah selesai
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/MasterImportRollbackResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Data berubah sesudah apply atau production ditolak
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
 components:
   securitySchemes:
     cookieAuth:
@@ -3301,6 +3586,111 @@ components:
                   message: Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.
 
   schemas:
+    MasterImportPreview:
+      type: object
+      required: [attempt_id, artifact_id, source_hash, preview_hash, contract_version, sheet, counts, items, created_at]
+      properties:
+        attempt_id: { type: string, format: uuid }
+        artifact_id: { type: string, format: uuid }
+        source_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        preview_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        contract_version: { type: string }
+        sheet: { type: string }
+        created_at: { type: string, format: date-time }
+        counts:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/MasterImportStatusCount"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MasterImportPreviewItem"
+    MasterImportStatusCount:
+      type: object
+      required: [insert, update, skip, conflict, needs_review]
+      properties:
+        insert: { type: integer, minimum: 0 }
+        update: { type: integer, minimum: 0 }
+        skip: { type: integer, minimum: 0 }
+        conflict: { type: integer, minimum: 0 }
+        needs_review: { type: integer, minimum: 0 }
+    MasterImportPreviewItem:
+      type: object
+      required: [source_row, entity_kind, entity_code, fingerprint, status]
+      properties:
+        source_row: { type: integer, minimum: 0 }
+        entity_kind:
+          type: string
+          enum: [branch, product, variant, tariff, note]
+        entity_code: { type: string }
+        fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        status:
+          type: string
+          enum: [insert, update, skip, conflict, needs_review]
+        reason_code:
+          type: string
+          enum: [identity_remap_required, ambiguous_identity, existing_access_identity_blank, inconsistent_existing_access, tariff_mark_unavailable, already_unavailable, manual_review_required]
+    MasterImportEvidenceItem:
+      type: object
+      required: [source_row, entity_kind, entity_code, value]
+      properties:
+        source_row: { type: integer, minimum: 0 }
+        entity_kind: { type: string, enum: [note] }
+        entity_code:
+          type: string
+          description: Kode kolom sumber, misalnya AR atau AU.
+        value:
+          type: string
+          description: Nilai privat untuk review Superadmin; dilarang masuk log/laporan umum.
+    MasterImportDecision:
+      type: object
+      required: [source_row, entity_kind, entity_code, decision, reason]
+      properties:
+        source_row: { type: integer, minimum: 0 }
+        entity_kind: { type: string, enum: [branch, product, variant, tariff, note] }
+        entity_code: { type: string }
+        decision:
+          type: string
+          enum: [ignored_with_reason, mapped_by_explicit_rule, source_corrected, preserve_existing_verified_identity, revoke_access_and_mark_incomplete, revoke_inconsistent_access]
+        reason: { type: string, minLength: 1 }
+    MasterImportApplyRequest:
+      type: object
+      required: [preview_hash, idempotency_key]
+      properties:
+        preview_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        idempotency_key: { type: string, minLength: 8, maxLength: 200 }
+        decisions:
+          type: array
+          items: { $ref: "#/components/schemas/MasterImportDecision" }
+    MasterImportMutationCounts:
+      type: object
+      required: [branch, product, variant, tariff, identity_revocation]
+      properties:
+        branch: { type: integer, minimum: 0 }
+        product: { type: integer, minimum: 0 }
+        variant: { type: integer, minimum: 0 }
+        tariff: { type: integer, minimum: 0 }
+        identity_revocation: { type: integer, minimum: 0 }
+    MasterImportApplyResult:
+      type: object
+      required: [apply_run_id, attempt_id, status, mutations, idempotent, applied_at]
+      properties:
+        apply_run_id: { type: string, format: uuid }
+        attempt_id: { type: string, format: uuid }
+        status: { type: string, enum: [applied, rolled_back] }
+        mutations: { $ref: "#/components/schemas/MasterImportMutationCounts" }
+        idempotent: { type: boolean }
+        applied_at: { type: string, format: date-time }
+        rolled_back_at: { type: string, format: date-time }
+    MasterImportRollbackResult:
+      type: object
+      required: [apply_run_id, status, restored, identity_revocation_not_reversed, rolled_back_at]
+      properties:
+        apply_run_id: { type: string, format: uuid }
+        status: { type: string, enum: [rolled_back] }
+        restored: { type: integer, minimum: 0 }
+        identity_revocation_not_reversed: { type: integer, minimum: 0 }
+        rolled_back_at: { type: string, format: date-time }
     PaymentProof:
       type: object
       required: [id, order_id, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, created_at]
@@ -3343,7 +3733,7 @@ components:
         mime_type: { type: string }
     OrderLine:
       type: object
-      required: [line_no, jenis, nama, satuan, qty, harga_satuan, subtotal]
+      required: [line_no, jenis, nama, qty, harga_satuan, subtotal]
       properties:
         line_no: { type: integer }
         jenis:
@@ -3361,7 +3751,6 @@ components:
         nama:
           type: string
           description: Snapshot nama produk saat dipesan (BR-05).
-        satuan: { type: string }
         qty: { type: integer, minimum: 1 }
         harga_satuan:
           type: integer
@@ -3991,13 +4380,12 @@ components:
 
     Product:
       type: object
-      required: [id, nama, jenis, satuan, harga_default, urutan, is_active]
+      required: [id, nama, jenis, harga_default, urutan, is_active]
       properties:
         id: { type: string, format: uuid }
         kode: { type: string }
         nama: { type: string }
         jenis: { type: string, enum: [reguler, sertifikat] }
-        satuan: { type: string }
         deskripsi: { type: string }
         harga_default: { type: integer, format: int64, minimum: 0 }
         urutan: { type: integer }
@@ -4012,7 +4400,6 @@ components:
         kode: { type: string, maxLength: 40 }
         nama: { type: string, minLength: 2, maxLength: 160 }
         jenis: { type: string, enum: [reguler, sertifikat], default: reguler }
-        satuan: { type: string, minLength: 1, maxLength: 40, default: pcs }
         deskripsi: { type: string, maxLength: 500 }
         harga_default:
           type: integer
@@ -4032,7 +4419,6 @@ components:
         kode: { type: string, maxLength: 40 }
         nama: { type: string, minLength: 2, maxLength: 160 }
         jenis: { type: string, enum: [reguler, sertifikat] }
-        satuan: { type: string, minLength: 1, maxLength: 40 }
         deskripsi: { type: string, maxLength: 500 }
         harga_default: { type: integer, format: int64, minimum: 0 }
         urutan: { type: integer, minimum: 0 }
@@ -4135,12 +4521,11 @@ components:
     BranchProduct:
       type: object
       description: Produk beserta harga khusus cabang (Rupiah bulat)
-      required: [id, nama, jenis, satuan, harga, urutan]
+      required: [id, nama, jenis, harga, urutan]
       properties:
         id: { type: string, format: uuid }
         nama: { type: string }
         jenis: { type: string, enum: [reguler, sertifikat] }
-        satuan: { type: string }
         deskripsi: { type: string }
         harga: { type: integer, format: int64, minimum: 0 }
         urutan: { type: integer }
@@ -4163,7 +4548,61 @@ components:
         bank: { type: string, enum: [BCA, BRI] }
         nama_pemilik: { type: string }
         nomor: { type: string, pattern: "^[0-9]{6,34}$" }
+        display_nomor: { type: string, description: Nomor rekening termasking untuk tampilan. }
         is_active: { type: boolean }
+
+    BranchBankAccountAssignment:
+      type: object
+      required: [id, bank, nama_pemilik, display_nomor, is_active, is_allowed, dormant, effective]
+      properties:
+        id: { type: string, format: uuid }
+        bank: { type: string, enum: [BCA, BRI] }
+        nama_pemilik: { type: string }
+        display_nomor: { type: string }
+        is_active: { type: boolean }
+        is_allowed: { type: boolean }
+        dormant: { type: boolean }
+        effective: { type: boolean }
+
+    BranchBankAccountAssignments:
+      type: object
+      required: [branch_id, version, items]
+      properties:
+        branch_id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BranchBankAccountAssignment" }
+
+    BranchBankAccountReplacement:
+      type: object
+      required: [expected_version, bank_account_ids]
+      additionalProperties: false
+      properties:
+        expected_version: { type: integer, format: int64, minimum: 0 }
+        bank_account_ids:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+
+    BranchBankAccountReplacementResult:
+      type: object
+      required: [branch_id, version, bank_account_ids, payment_available]
+      properties:
+        branch_id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        bank_account_ids:
+          type: array
+          items: { type: string, format: uuid }
+        payment_available: { type: boolean }
+
+    ProofDestination:
+      type: object
+      required: [payment_proof_id, bank_account_id]
+      additionalProperties: false
+      properties:
+        payment_proof_id: { type: string, format: uuid }
+        bank_account_id: { type: string, format: uuid }
 
     BankAccountInput:
       type: object
@@ -4223,12 +4662,14 @@ components:
         portal cabang: nama, kepala cabang, email, dan telepon adalah data
         master yang dikelola admin Pusat (PRD §3.8), dan API tidak menyediakan
         rute tulis untuknya.
-      required: [id, nama, nama_kepala, email, telepon, is_cnc, is_special, pajak_in, is_active]
+      required: [id, nama, nama_kepala, jabatan_kepala, email, identity_status, telepon, is_cnc, is_special, pajak_in, is_active]
       properties:
         id: { type: string, format: uuid }
         nama: { type: string }
         nama_kepala: { type: string }
-        email: { type: string, format: email }
+        jabatan_kepala: { type: string }
+        email: { type: string, description: Kosong bila identitas cabang belum lengkap. }
+        identity_status: { type: string, enum: [identity_incomplete, ready, registered] }
         telepon: { type: string }
         is_cnc: { type: boolean }
         is_special: { type: boolean }
@@ -4242,12 +4683,13 @@ components:
     BranchInput:
       type: object
       description: Body pembuatan cabang (PRD §4.4).
-      required: [nama, nama_kepala, email]
+      required: [nama]
       additionalProperties: false
       properties:
         nama: { type: string, minLength: 2, maxLength: 120 }
-        nama_kepala: { type: string, minLength: 2, maxLength: 120 }
-        email: { type: string, format: email, maxLength: 254 }
+        nama_kepala: { type: string, maxLength: 120, description: Kosong berarti identitas belum lengkap. }
+        jabatan_kepala: { type: string, maxLength: 120 }
+        email: { type: string, maxLength: 254, description: Kosong berarti identitas belum lengkap; bila terisi harus berupa email valid. }
         telepon: { type: string, maxLength: 40 }
         is_cnc: { type: boolean }
         is_special: { type: boolean }
@@ -4262,8 +4704,9 @@ components:
       additionalProperties: false
       properties:
         nama: { type: string, minLength: 2, maxLength: 120 }
-        nama_kepala: { type: string, minLength: 2, maxLength: 120 }
-        email: { type: string, format: email, maxLength: 254 }
+        nama_kepala: { type: string, maxLength: 120, description: String kosong menghapus nilai dan membuat identitas incomplete. }
+        jabatan_kepala: { type: string, maxLength: 120 }
+        email: { type: string, maxLength: 254, description: String kosong menghapus nilai; selain itu harus berupa email valid. }
         telepon: { type: string, maxLength: 40 }
         is_cnc: { type: boolean }
         is_special: { type: boolean }
@@ -4291,13 +4734,14 @@ components:
       description: |
         Satu baris tab "User cabang": data cabang beserta akunnya. `user_id`
         kosong berarti cabang belum registrasi (belum punya akun).
-      required: [branch_id, nama, nama_kepala, email, has_account, is_active, branch_active, status]
+      required: [branch_id, nama, nama_kepala, email, identity_status, has_account, is_active, branch_active, status]
       properties:
         branch_id: { type: string, format: uuid }
         user_id: { type: string, format: uuid }
         nama: { type: string }
         nama_kepala: { type: string }
-        email: { type: string, format: email }
+        email: { type: string, description: Kosong bila identitas cabang belum lengkap. }
+        identity_status: { type: string, enum: [identity_incomplete, ready, registered] }
         telepon: { type: string }
         has_account: { type: boolean }
         is_active: { type: boolean }

@@ -50,7 +50,7 @@ func (rs *registrationServer) tokenRegistrasi(t *testing.T, branchID, nama, kepa
 	rs.repo.PutToken(token, registration.Snapshot{
 		TokenID: "tok-" + branchID, BranchID: branchID,
 		ExpiresAt: waktuUjiRegistrasi.Add(24 * time.Hour),
-		Nama:      nama, NamaKepala: kepala, Email: email, BranchActive: aktif,
+		Nama:      nama, NamaKepala: kepala, Email: email, IdentityStatus: "ready", BranchActive: aktif,
 	})
 	return token
 }
@@ -103,22 +103,22 @@ func TestApiRegistrasiPesanSpesifikPerKeadaanToken(t *testing.T) {
 	kedaluwarsa, _, _ := auth.NewRegistrationToken()
 	rs.repo.PutToken(kedaluwarsa, registration.Snapshot{
 		BranchID: "br-kadaluwarsa", ExpiresAt: waktuUjiRegistrasi.Add(-time.Minute),
-		Nama: "Cabang Kadaluwarsa", NamaKepala: "Kepala", Email: "k@example.test", BranchActive: true,
+		Nama: "Cabang Kadaluwarsa", NamaKepala: "Kepala", Email: "k@example.test", IdentityStatus: "ready", BranchActive: true,
 	})
 	terpakai, _, _ := auth.NewRegistrationToken()
 	rs.repo.PutUsedToken(terpakai, registration.Snapshot{
 		BranchID: "br-terpakai", ExpiresAt: waktuUjiRegistrasi.Add(time.Hour),
-		Nama: "Cabang Terpakai", NamaKepala: "Kepala", Email: "t@example.test", BranchActive: true,
+		Nama: "Cabang Terpakai", NamaKepala: "Kepala", Email: "t@example.test", IdentityStatus: "ready", BranchActive: true,
 	})
 	nonaktif, _, _ := auth.NewRegistrationToken()
 	rs.repo.PutToken(nonaktif, registration.Snapshot{
 		BranchID: "br-nonaktif", ExpiresAt: waktuUjiRegistrasi.Add(time.Hour),
-		Nama: "Cabang Nonaktif", NamaKepala: "Kepala", Email: "n@example.test", BranchActive: false,
+		Nama: "Cabang Nonaktif", NamaKepala: "Kepala", Email: "n@example.test", IdentityStatus: "ready", BranchActive: false,
 	})
 	berakun, _, _ := auth.NewRegistrationToken()
 	rs.repo.PutToken(berakun, registration.Snapshot{
 		BranchID: "br-berakun", ExpiresAt: waktuUjiRegistrasi.Add(time.Hour),
-		Nama: "Cabang Berakun", NamaKepala: "Kepala", Email: "a@example.test", BranchActive: true,
+		Nama: "Cabang Berakun", NamaKepala: "Kepala", Email: "a@example.test", IdentityStatus: "ready", BranchActive: true,
 	})
 	rs.repo.PutAccount("br-berakun")
 

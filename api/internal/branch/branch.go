@@ -46,6 +46,15 @@ var (
 	ErrHasAccount = errors.New("cabang sudah punya akun")
 	// ErrInactive: cabang nonaktif tidak boleh memegang token registrasi baru.
 	ErrInactive = errors.New("cabang nonaktif")
+	// ErrIdentityIncomplete: identitas wajib belum lengkap sehingga seluruh
+	// jalur autentikasi harus fail-closed.
+	ErrIdentityIncomplete = errors.New("identitas cabang belum lengkap")
+)
+
+const (
+	IdentityIncomplete = "identity_incomplete"
+	IdentityReady      = "ready"
+	IdentityRegistered = "registered"
 )
 
 // emailPattern adalah pemeriksaan bentuk email tingkat domain. Validasi
@@ -63,6 +72,8 @@ type Branch struct {
 	Nama           string     `json:"nama"`
 	NamaKepala     string     `json:"nama_kepala"`
 	Email          string     `json:"email"`
+	JabatanKepala  string     `json:"jabatan_kepala,omitempty"`
+	IdentityStatus string     `json:"identity_status"`
 	Telepon        string     `json:"telepon,omitempty"`
 	IsCNC          bool       `json:"is_cnc"`
 	IsSpecial      bool       `json:"is_special"`
@@ -83,27 +94,29 @@ type Filter struct {
 
 // NewBranch adalah permintaan pembuatan cabang.
 type NewBranch struct {
-	Nama       string
-	NamaKepala string
-	Email      string
-	Telepon    string
-	IsCNC      bool
-	IsSpecial  bool
-	PajakIn    bool
+	Nama          string
+	NamaKepala    string
+	Email         string
+	JabatanKepala string
+	Telepon       string
+	IsCNC         bool
+	IsSpecial     bool
+	PajakIn       bool
 	// IsActive nil berarti cabang baru aktif (default kolom).
 	IsActive *bool
 }
 
 // Patch adalah perubahan sebagian cabang. Field nil berarti tidak diubah.
 type Patch struct {
-	Nama       *string
-	NamaKepala *string
-	Email      *string
-	Telepon    *string
-	IsCNC      *bool
-	IsSpecial  *bool
-	PajakIn    *bool
-	IsActive   *bool
+	Nama          *string
+	NamaKepala    *string
+	Email         *string
+	JabatanKepala *string
+	Telepon       *string
+	IsCNC         *bool
+	IsSpecial     *bool
+	PajakIn       *bool
+	IsActive      *bool
 }
 
 // IssuedToken adalah token registrasi yang baru dibuat. Token hanya ada di
@@ -124,9 +137,10 @@ type Repository interface {
 	Get(ctx context.Context, id string) (Branch, error)
 	// Create menyimpan cabang baru dan mengembalikan id-nya.
 	Create(ctx context.Context, in Branch, rec audit.Entry) (string, error)
-	// Update menyimpan perubahan penuh satu cabang. Bila emailnya berubah,
-	// email akun cabang yang terhubung ikut diselaraskan.
-	Update(ctx context.Context, next Branch, rec audit.Entry) error
+	// Update menerapkan patch terhadap state terkini setelah repository
+	// mengunci cabang dan akun terkait. Hasil dan audit harus memakai snapshot
+	// aktual di dalam transaksi, bukan hasil pembacaan service sebelum lock.
+	Update(ctx context.Context, id string, p Patch, actor auth.Actor) (Branch, error)
 	Delete(ctx context.Context, id string, rec audit.Entry) error
 	// IssueToken menggantikan token lama yang belum terpakai dengan token baru.
 	IssueToken(ctx context.Context, branchID string, tokenHash []byte, prefix string, expiresAt time.Time, rec audit.Entry) error
@@ -200,15 +214,17 @@ func (s *Service) Create(ctx context.Context, actor auth.Actor, in NewBranch) (B
 		return Branch{}, ErrForbidden
 	}
 	next := Branch{
-		Nama:       strings.TrimSpace(in.Nama),
-		NamaKepala: strings.TrimSpace(in.NamaKepala),
-		Email:      NormalizeEmail(in.Email),
-		Telepon:    strings.TrimSpace(in.Telepon),
-		IsCNC:      in.IsCNC,
-		IsSpecial:  in.IsSpecial,
-		PajakIn:    in.PajakIn,
-		IsActive:   true,
+		Nama:          strings.TrimSpace(in.Nama),
+		NamaKepala:    strings.TrimSpace(in.NamaKepala),
+		Email:         NormalizeEmail(in.Email),
+		JabatanKepala: strings.TrimSpace(in.JabatanKepala),
+		Telepon:       strings.TrimSpace(in.Telepon),
+		IsCNC:         in.IsCNC,
+		IsSpecial:     in.IsSpecial,
+		PajakIn:       in.PajakIn,
+		IsActive:      true,
 	}
+	next.IdentityStatus = identityStatus(next, false)
 	if in.IsActive != nil {
 		next.IsActive = *in.IsActive
 	}
@@ -237,23 +253,31 @@ func (s *Service) Update(ctx context.Context, actor auth.Actor, id string, p Pat
 	if id == "" {
 		return Branch{}, ErrNotFound
 	}
-	cur, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return Branch{}, err
-	}
+	p = normalizePatch(p)
+	return s.repo.Update(ctx, id, p, actor)
+}
 
+// ApplyPatch menerapkan perubahan sebagian terhadap snapshot yang sudah
+// dikunci repository. Fungsi ini diekspor agar implementasi repository dapat
+// menjaga logika domain yang sama tanpa membaca state sebelum transaksi.
+func ApplyPatch(cur Branch, p Patch, hasAccount bool) (Branch, error) {
 	next := cur
+	identityChanged := (p.NamaKepala != nil && *p.NamaKepala != cur.NamaKepala) ||
+		(p.Email != nil && *p.Email != cur.Email)
 	if p.Nama != nil {
-		next.Nama = strings.TrimSpace(*p.Nama)
+		next.Nama = *p.Nama
 	}
 	if p.NamaKepala != nil {
-		next.NamaKepala = strings.TrimSpace(*p.NamaKepala)
+		next.NamaKepala = *p.NamaKepala
 	}
 	if p.Email != nil {
-		next.Email = NormalizeEmail(*p.Email)
+		next.Email = *p.Email
+	}
+	if p.JabatanKepala != nil {
+		next.JabatanKepala = *p.JabatanKepala
 	}
 	if p.Telepon != nil {
-		next.Telepon = strings.TrimSpace(*p.Telepon)
+		next.Telepon = *p.Telepon
 	}
 	if p.IsCNC != nil {
 		next.IsCNC = *p.IsCNC
@@ -267,20 +291,39 @@ func (s *Service) Update(ctx context.Context, actor auth.Actor, id string, p Pat
 	if p.IsActive != nil {
 		next.IsActive = *p.IsActive
 	}
+	// Status identity_incomplete dapat menandai akses yang sengaja dicabut
+	// walaupun nama dan email masih tersimpan. PUT master cabang hanya mengubah
+	// atribut; ia bukan workflow pemulihan identitas/credential terverifikasi.
+	// Karena itu state incomplete hanya boleh tetap incomplete (termasuk saat
+	// nilai identitas benar-benar berubah). State ready/registered tetap boleh
+	// turun menjadi incomplete saat atribut wajib dikosongkan.
+	if identityChanged && cur.IdentityStatus != IdentityIncomplete {
+		next.IdentityStatus = identityStatus(next, hasAccount)
+	}
 	if err := validate(next); err != nil {
 		return Branch{}, err
 	}
-	if next.Email != cur.Email {
-		if err := s.ensureEmailFree(ctx, next.Email, id); err != nil {
-			return Branch{}, err
-		}
-	}
-
-	rec := audit.NewEntry(ctx, actor, audit.EntityBranch, id, audit.ActionUpdate, cur, next)
-	if err := s.repo.Update(ctx, next, rec); err != nil {
-		return Branch{}, err
-	}
 	return next, nil
+}
+
+func normalizePatch(p Patch) Patch {
+	trim := func(v *string) *string {
+		if v == nil {
+			return nil
+		}
+		n := strings.TrimSpace(*v)
+		return &n
+	}
+	p.Nama = trim(p.Nama)
+	p.NamaKepala = trim(p.NamaKepala)
+	p.Email = trim(p.Email)
+	if p.Email != nil {
+		n := NormalizeEmail(*p.Email)
+		p.Email = &n
+	}
+	p.JabatanKepala = trim(p.JabatanKepala)
+	p.Telepon = trim(p.Telepon)
+	return p
 }
 
 // Delete menghapus cabang yang belum punya pesanan. Cabang yang sudah punya
@@ -337,6 +380,9 @@ func (s *Service) GenerateToken(ctx context.Context, actor auth.Actor, id string
 	if !cur.IsActive {
 		return IssuedToken{}, ErrInactive
 	}
+	if cur.IdentityStatus != IdentityReady || cur.Email == "" || cur.NamaKepala == "" {
+		return IssuedToken{}, ErrIdentityIncomplete
+	}
 
 	token, prefix, err := auth.NewRegistrationToken()
 	if err != nil {
@@ -362,6 +408,9 @@ func (s *Service) GenerateToken(ctx context.Context, actor auth.Actor, id string
 // emailnya dipegang admin, akun cabang dengan email itu tidak akan pernah
 // bisa masuk.
 func (s *Service) ensureEmailFree(ctx context.Context, email, exceptID string) error {
+	if email == "" {
+		return nil
+	}
 	taken, err := s.repo.EmailTaken(ctx, email, exceptID)
 	if err != nil {
 		return err
@@ -384,16 +433,32 @@ func validate(b Branch) error {
 	switch {
 	case len([]rune(b.Nama)) < 2:
 		return fmt.Errorf("%w: nama cabang minimal 2 karakter", ErrInvalidData)
-	case len([]rune(b.NamaKepala)) < 2:
+	case len([]rune(b.Nama)) > 120:
+		return fmt.Errorf("%w: nama cabang maksimal 120 karakter", ErrInvalidData)
+	case b.NamaKepala != "" && len([]rune(b.NamaKepala)) < 2:
 		return fmt.Errorf("%w: nama kepala cabang minimal 2 karakter", ErrInvalidData)
-	case b.Email == "" || !emailPattern.MatchString(b.Email):
+	case len([]rune(b.NamaKepala)) > 120:
+		return fmt.Errorf("%w: nama kepala cabang maksimal 120 karakter", ErrInvalidData)
+	case b.Email != "" && !emailPattern.MatchString(b.Email):
 		return fmt.Errorf("%w: format email cabang tidak valid", ErrInvalidData)
 	case len(b.Email) > 254:
 		return fmt.Errorf("%w: email cabang terlalu panjang", ErrInvalidData)
 	case len([]rune(b.Telepon)) > 40:
 		return fmt.Errorf("%w: telepon terlalu panjang", ErrInvalidData)
+	case len([]rune(b.JabatanKepala)) > 120:
+		return fmt.Errorf("%w: jabatan kepala terlalu panjang", ErrInvalidData)
 	}
 	return nil
+}
+
+func identityStatus(b Branch, registered bool) string {
+	if b.NamaKepala == "" || b.Email == "" {
+		return IdentityIncomplete
+	}
+	if registered {
+		return IdentityRegistered
+	}
+	return IdentityReady
 }
 
 // NormalizeEmail menyeragamkan email cabang (huruf kecil, tanpa spasi tepi).

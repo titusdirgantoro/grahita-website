@@ -41,18 +41,16 @@ Kartu ini menyediakan aturannya; ia tidak mengklaim alur submit.
    7500. Subtotal otomatis 0 karena kolomnya `GENERATED ALWAYS` (`qty × harga`).
 2. **Baris biaya packaging dibuat server, tepat satu, dari setelan.** Saat draft
    disimpan, `buildLines` menambahkan satu baris `jenis = 'packaging'`:
-   `nama = "Biaya packaging"`, `satuan = "paket"`, `qty = 1`, tanpa `product_id`,
+   `nama = "Biaya packaging"`, `qty = 1`, tanpa `product_id`,
    tanpa `serial_number`, `harga_satuan = settings.Int("biaya_packaging")`
    (CP-SER-02/05). Editor hanya mengirim `product_id` + `qty`, jadi klien tidak
    punya bentuk permintaan apa pun untuk menambah, mengubah, menghapus, atau
    menduplikasi baris itu: **setiap simpan draft menyusunnya ulang dari nol**.
    Permintaan yang mencoba menyisipkannya tetap ditolak `400` (baris tanpa
    produk / id karangan / field `jenis` & `harga_satuan` pada body).
-3. **Nama & satuan baris packaging adalah snapshot teks.** Dibaca tidak berubah
-   setelah tersimpan (`"Biaya packaging"` / `"paket"`); satuan yang dipilih
-   `paket` karena biayanya per pesanan, bukan per satuan produk. Tidak ada
-   spesifikasi lain di PRD/Database, jadi ini keputusan eksplisit kartu ini
-   (kolom `satuan_snapshot` defaultnya `pcs`).
+3. **Nama baris packaging adalah snapshot teks.** Dibaca tidak berubah setelah
+   tersimpan (`"Biaya packaging"`). Produk maupun baris packaging tidak lagi
+   menyimpan satuan; `qty = 1` tetap menyatakan satu biaya per pesanan.
 4. **Tepat satu per pesanan, bukan per baris Sertifikat.** Pesanan dengan dua
    produk Sertifikat berbeda tetap mendapat satu baris packaging (CP-SER-02:
    "per pesanan"). Ditegakkan juga di database lewat indeks unik parsial

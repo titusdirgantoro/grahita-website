@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/grahita/portal/api/internal/audit"
+	"github.com/grahita/portal/api/internal/auth"
 )
 
 // Memory adalah implementasi Repository in-memory untuk pengujian dan mode
@@ -145,26 +146,34 @@ func (m *Memory) Create(_ context.Context, in Branch, rec audit.Entry) (string, 
 	return in.ID, nil
 }
 
-// Update menyimpan perubahan penuh satu cabang beserta entri auditnya.
-func (m *Memory) Update(_ context.Context, next Branch, rec audit.Entry) error {
+// Update menerapkan patch terhadap state terkini sambil memegang mutex.
+func (m *Memory) Update(ctx context.Context, id string, p Patch, actor auth.Actor) (Branch, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, b := range m.rows {
-		if b.ID != next.ID {
+		if b.ID != id {
 			continue
 		}
+		next, err := ApplyPatch(b, p, m.accounts[id])
+		if err != nil {
+			return Branch{}, err
+		}
 		for _, lain := range m.rows {
-			if lain.ID != next.ID && NormalizeEmail(lain.Email) == NormalizeEmail(next.Email) {
-				return ErrEmailTaken
+			if next.Email != "" && lain.ID != id && NormalizeEmail(lain.Email) == NormalizeEmail(next.Email) {
+				return Branch{}, ErrEmailTaken
 			}
+		}
+		if next.Email != "" && m.admins[NormalizeEmail(next.Email)] {
+			return Branch{}, ErrEmailTaken
 		}
 		next.TokenPrefix = b.TokenPrefix
 		next.TokenExpiresAt = b.TokenExpiresAt
 		m.rows[i] = next
+		rec := audit.NewEntry(ctx, actor, audit.EntityBranch, id, audit.ActionUpdate, b, next)
 		m.audit = append(m.audit, rec)
-		return nil
+		return next, nil
 	}
-	return ErrNotFound
+	return Branch{}, ErrNotFound
 }
 
 // Delete menghapus cabang beserta token/akunnya dan mencatat auditnya.

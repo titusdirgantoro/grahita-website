@@ -71,6 +71,9 @@ var (
 	ErrLastSuperadmin = errors.New("superadmin aktif terakhir tidak boleh dinonaktifkan atau diturunkan")
 	// ErrNoAccount: cabang belum punya akun (belum registrasi).
 	ErrNoAccount = errors.New("cabang belum punya akun")
+	// ErrIdentityIncomplete: akun cabang tidak boleh diaktifkan atau menerima
+	// token reset selama identitas cabangnya belum lengkap.
+	ErrIdentityIncomplete = errors.New("identitas cabang belum lengkap")
 	// ErrNotInvited: akun admin bukan undangan yang menunggu aktivasi (sudah
 	// aktif atau nonaktif) sehingga tautan undangan tidak berlaku untuknya.
 	ErrNotInvited = errors.New("akun admin ini bukan undangan yang menunggu aktivasi")
@@ -82,16 +85,17 @@ var (
 // Sebuah cabang tetap tampil walau belum punya akun (status belum_registrasi),
 // karena 1 cabang = 1 akun dan akun dibuat lewat token registrasi (PRD BR-01).
 type BranchUser struct {
-	BranchID     string `json:"branch_id"`
-	UserID       string `json:"user_id,omitempty"`
-	Nama         string `json:"nama"`
-	NamaKepala   string `json:"nama_kepala"`
-	Email        string `json:"email"`
-	Telepon      string `json:"telepon,omitempty"`
-	HasAccount   bool   `json:"has_account"`
-	IsActive     bool   `json:"is_active"`
-	BranchActive bool   `json:"branch_active"`
-	Status       string `json:"status"`
+	BranchID       string `json:"branch_id"`
+	UserID         string `json:"user_id,omitempty"`
+	Nama           string `json:"nama"`
+	NamaKepala     string `json:"nama_kepala"`
+	Email          string `json:"email"`
+	IdentityStatus string `json:"identity_status"`
+	Telepon        string `json:"telepon,omitempty"`
+	HasAccount     bool   `json:"has_account"`
+	IsActive       bool   `json:"is_active"`
+	BranchActive   bool   `json:"branch_active"`
+	Status         string `json:"status"`
 	// LastLoginAt sengaja tanpa omitempty: kolom "login terakhir" harus selalu
 	// ada di respons (null bila belum pernah login) agar tabel UI konsisten.
 	LastLoginAt *time.Time `json:"last_login_at"`
@@ -346,7 +350,14 @@ func (s *Service) SetBranchUserActive(ctx context.Context, actor auth.Actor, id 
 	if err != nil {
 		return BranchUser{}, err
 	}
-	if cur.IsActive == active {
+	if active && (cur.IdentityStatus != "registered" || cur.NamaKepala == "" || cur.Email == "") {
+		return BranchUser{}, ErrIdentityIncomplete
+	}
+	// Aktivasi tetap harus masuk repository walau snapshot awal sudah aktif:
+	// repository mengunci cabang dan memeriksa identity_status secara atomik.
+	// Tanpa itu, PUT cabang concurrent dapat menurunkan identitas sesudah baca
+	// ini dan jalur no-op akan melewati guard fail-closed.
+	if cur.IsActive == active && !active {
 		return cur, nil
 	}
 	rec := audit.NewEntry(ctx, actor, audit.EntityBranchUser, cur.UserID, audit.ActionUpdate, nil, nil)
@@ -381,6 +392,9 @@ func (s *Service) ResendBranchReset(ctx context.Context, actor auth.Actor, id st
 	}
 	if !u.HasAccount || u.UserID == "" {
 		return ErrNoAccount
+	}
+	if u.IdentityStatus != "registered" || u.NamaKepala == "" || u.Email == "" {
+		return ErrIdentityIncomplete
 	}
 	rec := audit.NewEntry(ctx, actor, audit.EntityBranchUser, u.UserID, audit.ActionReset, nil,
 		map[string]any{"branch_id": u.BranchID, "user_id": u.UserID})

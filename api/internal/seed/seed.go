@@ -18,9 +18,9 @@ import (
 )
 
 type produk struct {
-	kode, nama, jenis, satuan, deskripsi string
-	harga                                int64
-	urutan                               int
+	kode, nama, jenis, deskripsi string
+	harga                        int64
+	urutan                       int
 }
 
 type cabang struct {
@@ -37,20 +37,20 @@ func Run(ctx context.Context, pool *database.Pool) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	produks := []produk{
-		{"P-01", "Bio Magnetik", "reguler", "pcs", "Alat terapi bio magnetik untuk klien cabang.", 350000, 1},
-		{"P-02", "Terapi Musik Pentatonic (USB)", "reguler", "pcs", "Rekaman musik terapi aktivasi otak.", 175000, 2},
-		{"P-03", "Buku Mengenal Potensi Anak", "reguler", "eks", "Buku pendamping hasil psikotes anak untuk orang tua.", 85000, 3},
-		{"P-04", "Buku Karier & Minat Remaja", "reguler", "eks", "Panduan minat dan bakat untuk siswa SMP-SMA.", 95000, 4},
-		{"P-05", "Rimpang Daun", "reguler", "pak", "Produk herbal Rimpang Daun.", 65000, 5},
-		{"P-06", "Map Laporan Psikotes", "reguler", "pcs", "Map untuk laporan hasil psikotes.", 12500, 6},
-		{"P-07", "Sertifikat Psikotes", "sertifikat", "lembar", "Dipesan terpisah. Biaya packaging ditambahkan otomatis.", 0, 7},
+		{"P-01", "Bio Magnetik", "reguler", "Alat terapi bio magnetik untuk klien cabang.", 350000, 1},
+		{"P-02", "Terapi Musik Pentatonic (USB)", "reguler", "Rekaman musik terapi aktivasi otak.", 175000, 2},
+		{"P-03", "Buku Mengenal Potensi Anak", "reguler", "Buku pendamping hasil psikotes anak untuk orang tua.", 85000, 3},
+		{"P-04", "Buku Karier & Minat Remaja", "reguler", "Panduan minat dan bakat untuk siswa SMP-SMA.", 95000, 4},
+		{"P-05", "Rimpang Daun", "reguler", "Produk herbal Rimpang Daun.", 65000, 5},
+		{"P-06", "Map Laporan Psikotes", "reguler", "Map untuk laporan hasil psikotes.", 12500, 6},
+		{"P-07", "Sertifikat Psikotes", "sertifikat", "Dipesan terpisah. Biaya packaging ditambahkan otomatis.", 0, 7},
 	}
 	for _, p := range produks {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO products (kode, nama, jenis, satuan, deskripsi, harga_default, urutan)
-			VALUES ($1,$2,$3::product_kind,$4,$5,$6,$7)
+			INSERT INTO products (kode, nama, jenis, deskripsi, harga_default, urutan)
+			VALUES ($1,$2,$3::product_kind,$4,$5,$6)
 			ON CONFLICT (kode) DO NOTHING`,
-			p.kode, p.nama, p.jenis, p.satuan, p.deskripsi, p.harga, p.urutan); err != nil {
+			p.kode, p.nama, p.jenis, p.deskripsi, p.harga, p.urutan); err != nil {
 			return fmt.Errorf("seed produk %s: %w", p.kode, err)
 		}
 	}
@@ -138,6 +138,12 @@ func seedUsers(ctx context.Context, tx pgx.Tx) error {
 		SELECT id, email, $1, true FROM branches
 		ON CONFLICT (email) DO NOTHING`, hash); err != nil {
 		return fmt.Errorf("seed akun cabang: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE branches
+		SET identity_status='registered', updated_at=now()
+		WHERE nama_kepala IS NOT NULL AND email IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM branch_users bu WHERE bu.branch_id=branches.id)`); err != nil {
+		return fmt.Errorf("seed status identitas cabang: %w", err)
 	}
 	slog.Info("akun contoh dibuat", "jumlah_admin", 2, "sumber_password", "SEED_PASSWORD")
 	return nil

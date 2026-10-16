@@ -25,8 +25,8 @@ func insertProdukFull(t *testing.T, ctx context.Context, pool *database.Pool, ko
 	t.Helper()
 	var id string
 	err := pool.QueryRow(ctx,
-		`INSERT INTO products (kode, nama, jenis, satuan, harga_default, urutan)
-		 VALUES ($1,$2,$3::product_kind,'pcs',$4,$5) RETURNING id`,
+		`INSERT INTO products (kode, nama, jenis, harga_default, urutan)
+		 VALUES ($1,$2,$3::product_kind,$4,$5) RETURNING id`,
 		kode, nama, jenis, hargaDefault, urutan).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed produk %s: %v", kode, err)
@@ -137,8 +137,8 @@ func TestPGPerubahanHargaTidakMengubahPesananLama(t *testing.T) {
 		t.Fatalf("baca produk: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, satuan_snapshot, qty, harga_satuan)
-		 VALUES ($1, 1, $2, 'Bio Magnetik', 'pcs', 3, 100000)`, orderID, produkID); err != nil {
+		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, qty, harga_satuan)
+		 VALUES ($1, 1, $2, 'Bio Magnetik', 3, 100000)`, orderID, produkID); err != nil {
 		t.Fatalf("seed order line: %v", err)
 	}
 
@@ -258,7 +258,7 @@ func TestPGMasterProdukValidasiDanAudit(t *testing.T) {
 
 	// Buat produk reguler.
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/products",
-		`{"kode":"P-QA","nama":"Produk QA","jenis":"reguler","satuan":"box","harga_default":12345,"urutan":9}`, cookiesMgr, csrfMgr)
+		`{"kode":"P-QA","nama":"Produk QA","jenis":"reguler","harga_default":12345,"urutan":9}`, cookiesMgr, csrfMgr)
 	if status != http.StatusCreated {
 		t.Fatalf("buat produk harus 201, dapat %d (%v)", status, body)
 	}

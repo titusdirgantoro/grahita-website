@@ -42,8 +42,9 @@ UPDATE orders
        verif_status  = 'cocok',
        alasan_review = NULL,
        done_at       = now(),
+	   done_verification_log_id = sqlc.arg(verification_log_id)::uuid,
        updated_at    = now()
- WHERE id = sqlc.arg(id)::uuid
+ WHERE id = sqlc.arg(order_id)::uuid
    AND status = 'submitted';
 
 -- name: SetOrderPerluReview :execrows
@@ -62,7 +63,8 @@ UPDATE orders
 -- datang dari klien; `total_terbaca` NULL berarti nominal belum terbaca.
 -- admin_id NULL berarti verifikasi oleh AI (Fase 2) — manual selalu mengisi.
 INSERT INTO verification_logs (order_id, metode, total_pesanan, total_terbaca,
-                               hasil, alasan, admin_id, catatan)
+                               hasil, alasan, admin_id, catatan,
+                               branch_allowlist_version, proof_set_fingerprint, destination_results)
 VALUES (sqlc.arg(order_id)::uuid,
         sqlc.arg(metode)::verify_method,
         sqlc.arg(total_pesanan),
@@ -70,11 +72,15 @@ VALUES (sqlc.arg(order_id)::uuid,
         sqlc.arg(hasil)::verif_status,
         sqlc.narg(alasan)::review_reason,
         sqlc.narg(admin_id)::uuid,
-        sqlc.narg(catatan))
+        sqlc.narg(catatan),
+        sqlc.arg(branch_allowlist_version),
+        sqlc.arg(proof_set_fingerprint),
+        sqlc.arg(destination_results)::jsonb)
 RETURNING id, order_id, metode::text AS metode, total_pesanan,
           COALESCE(total_terbaca, 0)::bigint AS total_terbaca, selisih,
           hasil::text AS hasil, COALESCE(alasan::text, '')::text AS alasan,
-          COALESCE(catatan, '')::text AS catatan, admin_id, created_at;
+          COALESCE(catatan, '')::text AS catatan, admin_id, created_at,
+          branch_allowlist_version, destination_results;
 
 -- name: InsertVerifyOrderEvent :exec
 -- Timeline pesanan (PRD AP-ORD-07/CP-ORD-08): keputusan verifikasi dan

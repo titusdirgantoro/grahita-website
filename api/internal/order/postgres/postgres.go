@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -185,24 +186,22 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 	for _, l := range lines {
 		if l.Jenis == order.JenisPackaging {
 			if err := q.InsertOrderLinePackaging(ctx, sqlc.InsertOrderLinePackagingParams{
-				OrderID:        orderID,
-				LineNo:         int32(l.LineNo),
-				NamaSnapshot:   l.Nama,
-				SatuanSnapshot: l.Satuan,
-				HargaSatuan:    l.HargaSatuan,
+				OrderID:      orderID,
+				LineNo:       int32(l.LineNo),
+				NamaSnapshot: l.Nama,
+				HargaSatuan:  l.HargaSatuan,
 			}); err != nil {
 				return fmt.Errorf("query InsertOrderLinePackaging: %w", err)
 			}
 			continue
 		}
 		if err := q.InsertOrderLineProduct(ctx, sqlc.InsertOrderLineProductParams{
-			OrderID:        orderID,
-			LineNo:         int32(l.LineNo),
-			ProductID:      pgtypes.UUID(l.ProductID),
-			NamaSnapshot:   l.Nama,
-			SatuanSnapshot: l.Satuan,
-			Qty:            int32(l.Qty),
-			HargaSatuan:    l.HargaSatuan,
+			OrderID:      orderID,
+			LineNo:       int32(l.LineNo),
+			ProductID:    pgtypes.UUID(l.ProductID),
+			NamaSnapshot: l.Nama,
+			Qty:          int32(l.Qty),
+			HargaSatuan:  l.HargaSatuan,
 		}); err != nil {
 			return fmt.Errorf("query InsertOrderLineProduct: %w", err)
 		}
@@ -227,7 +226,7 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 //  4. nomor invoice (global bulanan) dan serial (harian, satu rentang untuk
 //     seluruh baris produk) diambil dari tabel counter DI DALAM transaksi yang
 //     sama; rollback karena itu tidak memakai nomor (BR-09);
-//  5. snapshot nama/satuan/harga disegarkan, serial ditulis, lalu status,
+//  5. snapshot nama/harga disegarkan, serial ditulis, lalu status,
 //     nomor, tanggal WIB, tenggat C&C, total, dan timeline ditulis; trigger
 //     orders_guard_submit menjadi benteng terakhir atas invariant isi pesanan.
 //
@@ -240,6 +239,13 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
+	if !req.IsCNC {
+		// Ambil lock policy sebelum lock baris order. Urutan yang sama dipakai
+		// upload/verifikasi agar tidak membentuk siklus deadlock order↔policy.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
+			return order.Order{}, fmt.Errorf("kunci kebijakan rekening: %w", err)
+		}
+	}
 
 	// 1. Kunci baris pesanan milik cabang sesi.
 	status, err := q.LockOrderForSubmit(ctx, sqlc.LockOrderForSubmitParams{ID: req.ID, BranchID: req.BranchID})
@@ -251,6 +257,24 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	}
 	if status != order.StatusDraft {
 		return order.Order{}, order.ErrLocked
+	}
+	if !req.IsCNC {
+		// Serialisasi submit dengan perubahan policy rekening. Dengan demikian
+		// rekening yang dicabut serentak tidak bisa lolos lewat pra-cek service.
+		var tersedia bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM branches b
+				JOIN branch_bank_accounts bba ON bba.branch_id = b.id AND bba.is_allowed
+				JOIN bank_accounts ba ON ba.id = bba.bank_account_id AND ba.is_active
+				WHERE b.id = $1 AND b.is_active
+			)`, req.BranchID).Scan(&tersedia); err != nil {
+			return order.Order{}, fmt.Errorf("periksa rekening efektif cabang: %w", err)
+		}
+		if !tersedia {
+			return order.Order{}, bank.ErrUnavailable
+		}
 	}
 
 	// 2. Baca ulang isi draft + master + harga cabang, lalu validasi.
@@ -268,11 +292,9 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 			Jenis:          row.Jenis,
 			Qty:            int(row.Qty),
 			NamaLama:       row.NamaSnapshot,
-			SatuanLama:     row.SatuanSnapshot,
 			ProdukAda:      row.ProdukAda,
 			ProdukAktif:    row.ProdukAktif,
 			ProdukNama:     row.ProdukNama,
-			ProdukSatuan:   row.ProdukSatuan,
 			ProdukJenis:    row.ProdukJenis,
 			HargaCabang:    row.HargaCabang,
 			AdaHargaCabang: row.AdaHargaCabang,
@@ -352,11 +374,10 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	// 5. Tulis snapshot final, serial, lalu transisi status.
 	for _, s := range snapshots {
 		if err := q.UpdateOrderLineSnapshot(ctx, sqlc.UpdateOrderLineSnapshotParams{
-			NamaSnapshot:   s.Nama,
-			SatuanSnapshot: s.Satuan,
-			HargaSatuan:    s.HargaSatuan,
-			OrderID:        req.ID,
-			LineNo:         int32(s.LineNo),
+			NamaSnapshot: s.Nama,
+			HargaSatuan:  s.HargaSatuan,
+			OrderID:      req.ID,
+			LineNo:       int32(s.LineNo),
 		}); err != nil {
 			return order.Order{}, fmt.Errorf("query UpdateOrderLineSnapshot: %w", err)
 		}
@@ -480,7 +501,6 @@ func loadOrder(ctx context.Context, q *sqlc.Queries, id, branchID string) (order
 			Jenis:        l.Jenis,
 			ProductID:    pgtypes.UUIDString(l.ProductID),
 			Nama:         l.NamaSnapshot,
-			Satuan:       l.SatuanSnapshot,
 			Qty:          int(l.Qty),
 			HargaSatuan:  l.HargaSatuan,
 			Subtotal:     l.Subtotal.Int64,

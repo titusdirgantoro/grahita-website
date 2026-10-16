@@ -40,7 +40,7 @@ func (r *Repo) ListProducts(ctx context.Context) ([]catalog.Product, error) {
 	for _, row := range rows {
 		out = append(out, catalog.Product{
 			ID: row.ID, Kode: pgtypes.TextOr(row.Kode), Nama: row.Nama, Jenis: row.Jenis,
-			Satuan: row.Satuan, Deskripsi: row.Deskripsi, HargaDefault: row.HargaDefault,
+			Deskripsi: row.Deskripsi, HargaDefault: row.HargaDefault,
 			Urutan: int(row.Urutan), IsActive: row.IsActive,
 		})
 	}
@@ -57,7 +57,7 @@ func (r *Repo) ListActiveProducts(ctx context.Context) ([]catalog.Product, error
 	for _, row := range rows {
 		out = append(out, catalog.Product{
 			ID: row.ID, Kode: pgtypes.TextOr(row.Kode), Nama: row.Nama, Jenis: row.Jenis,
-			Satuan: row.Satuan, Deskripsi: row.Deskripsi, HargaDefault: row.HargaDefault,
+			Deskripsi: row.Deskripsi, HargaDefault: row.HargaDefault,
 			Urutan: int(row.Urutan), IsActive: row.IsActive,
 		})
 	}
@@ -73,7 +73,7 @@ func (r *Repo) ListProductsForBranch(ctx context.Context, branchID string) ([]ca
 	out := make([]catalog.BranchProduct, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, catalog.BranchProduct{
-			ID: row.ID, Nama: row.Nama, Jenis: row.Jenis, Satuan: row.Satuan,
+			ID: row.ID, Nama: row.Nama, Jenis: row.Jenis,
 			Deskripsi: row.Deskripsi, Harga: row.Harga, Urutan: int(row.Urutan),
 		})
 	}
@@ -112,7 +112,7 @@ func (r *Repo) ListProductsForAdmin(ctx context.Context, f catalog.ProductFilter
 	out := make([]catalog.Product, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, productFromAdmin(
-			row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis, row.Satuan,
+			row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis,
 			row.Deskripsi, row.HargaDefault, int(row.Urutan), row.IsActive))
 	}
 	return out, nil
@@ -128,7 +128,7 @@ func (r *Repo) GetProduct(ctx context.Context, id string) (catalog.Product, erro
 		return catalog.Product{}, fmt.Errorf("query GetProductForAdmin: %w", err)
 	}
 	return productFromAdmin(
-		row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis, row.Satuan,
+		row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis,
 		row.Deskripsi, row.HargaDefault, int(row.Urutan), row.IsActive), nil
 }
 
@@ -144,7 +144,6 @@ func (r *Repo) CreateProduct(ctx context.Context, in catalog.Product, rec audit.
 		Kode:         pgtypes.Text(in.Kode),
 		Nama:         in.Nama,
 		Jenis:        sqlc.ProductKind(in.Jenis),
-		Satuan:       in.Satuan,
 		Deskripsi:    pgtypes.Text(in.Deskripsi),
 		HargaDefault: in.HargaDefault,
 		Urutan:       int32(in.Urutan),
@@ -157,7 +156,7 @@ func (r *Repo) CreateProduct(ctx context.Context, in catalog.Product, rec audit.
 		return catalog.Product{}, fmt.Errorf("query CreateProduct: %w", err)
 	}
 	saved := productFromAdmin(
-		row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis, row.Satuan,
+		row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis,
 		row.Deskripsi, row.HargaDefault, int(row.Urutan), row.IsActive)
 	rec.EntityID = saved.ID
 	rec.After = saved
@@ -182,7 +181,6 @@ func (r *Repo) UpdateProduct(ctx context.Context, in catalog.Product, rec audit.
 		Kode:         pgtypes.Text(in.Kode),
 		Nama:         in.Nama,
 		Jenis:        sqlc.ProductKind(in.Jenis),
-		Satuan:       in.Satuan,
 		Deskripsi:    pgtypes.Text(in.Deskripsi),
 		HargaDefault: in.HargaDefault,
 		Urutan:       int32(in.Urutan),
@@ -199,7 +197,7 @@ func (r *Repo) UpdateProduct(ctx context.Context, in catalog.Product, rec audit.
 		return catalog.Product{}, fmt.Errorf("query UpdateProduct: %w", err)
 	}
 	saved := productFromAdmin(
-		row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis, row.Satuan,
+		row.ID, pgtypes.TextOr(row.Kode), row.Nama, row.Jenis,
 		row.Deskripsi, row.HargaDefault, int(row.Urutan), row.IsActive)
 	if err := auditpg.Insert(ctx, tx, rec); err != nil {
 		return catalog.Product{}, err
@@ -357,9 +355,9 @@ func (r *Repo) CopyPrices(ctx context.Context, fromBranchID string, toBranchIDs 
 }
 
 // productFromAdmin menyusun Product dari kolom hasil query admin.
-func productFromAdmin(id, kode, nama, jenis, satuan, deskripsi string, harga int64, urutan int, aktif bool) catalog.Product {
+func productFromAdmin(id, kode, nama, jenis, deskripsi string, harga int64, urutan int, aktif bool) catalog.Product {
 	return catalog.Product{
-		ID: id, Kode: kode, Nama: nama, Jenis: jenis, Satuan: satuan,
+		ID: id, Kode: kode, Nama: nama, Jenis: jenis,
 		Deskripsi: deskripsi, HargaDefault: harga, Urutan: urutan, IsActive: aktif,
 	}
 }

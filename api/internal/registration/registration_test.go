@@ -26,7 +26,17 @@ func tokenUji(t *testing.T, branchID, nama, kepala, email string, expiresAt time
 	}
 	return token, Snapshot{
 		TokenID: "tok-" + branchID, BranchID: branchID, ExpiresAt: expiresAt,
-		Nama: nama, NamaKepala: kepala, Email: email, BranchActive: aktif,
+		Nama: nama, NamaKepala: kepala, Email: email, IdentityStatus: "ready", BranchActive: aktif,
+	}
+}
+
+func TestValidasiTokenMenolakIdentitasBelumLengkap(t *testing.T) {
+	svc, mem := newUji(t)
+	token, snap := tokenUji(t, "br-a", "Grahita Cabang A", "", "", waktuUji.Add(time.Hour), true)
+	snap.IdentityStatus = "identity_incomplete"
+	mem.PutToken(token, snap)
+	if _, err := svc.Validate(context.Background(), token); !errors.Is(err, ErrIdentityIncomplete) {
+		t.Fatalf("identitas belum lengkap harus ditolak, dapat %v", err)
 	}
 }
 

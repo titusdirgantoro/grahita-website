@@ -8,6 +8,8 @@ package worker_test
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,16 +28,50 @@ import (
 )
 
 func TestWorkerMenjalankanPengingatCNC(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL tidak diisi — uji integrasi worker dilewati")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	pool, err := database.Connect(ctx, url)
+	adminPool, err := database.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatalf("koneksi database: %v", err)
+	}
+	defer adminPool.Close()
+
+	// Setiap package integrasi memakai skema unik agar migrasi/TRUNCATE worker
+	// tidak berdeadlock dengan suite HTTP atau migrasi yang berjalan paralel.
+	skema := fmt.Sprintf("worker_%d", time.Now().UnixNano())
+	if _, err := adminPool.Exec(ctx, `CREATE SCHEMA `+skema); err != nil {
+		t.Fatalf("buat skema worker: %v", err)
+	}
+	defer func() {
+		bersihCtx, batal := context.WithTimeout(context.Background(), 30*time.Second)
+		defer batal()
+		if _, err := adminPool.Exec(bersihCtx, `DROP SCHEMA IF EXISTS `+skema+` CASCADE`); err != nil {
+			t.Logf("hapus skema worker: %v", err)
+		}
+	}()
+	if _, err := adminPool.Exec(ctx, `CREATE TABLE `+skema+`.goose_db_version (
+		id serial NOT NULL, version_id bigint NOT NULL, is_applied boolean NOT NULL,
+		tstamp timestamp NULL DEFAULT now(), PRIMARY KEY (id));
+		INSERT INTO `+skema+`.goose_db_version (version_id, is_applied) VALUES (0, true)`); err != nil {
+		t.Fatalf("siapkan versi migrasi worker: %v", err)
+	}
+	parsedURL, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("DSN worker tidak valid: %v", err)
+	}
+	query := parsedURL.Query()
+	query.Set("search_path", skema+",public")
+	parsedURL.RawQuery = query.Encode()
+	scopedDSN := parsedURL.String()
+
+	pool, err := database.Connect(ctx, scopedDSN)
+	if err != nil {
+		t.Fatalf("koneksi skema worker: %v", err)
 	}
 	defer pool.Close()
 
@@ -59,7 +95,7 @@ func TestWorkerMenjalankanPengingatCNC(t *testing.T) {
 			t.Fatalf("pasang shim uuidv7: %v", err)
 		}
 	}
-	if err := database.Up(ctx, url); err != nil {
+	if err := database.Up(ctx, scopedDSN); err != nil {
 		t.Fatalf("migrasi skema: %v", err)
 	}
 	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
@@ -68,10 +104,6 @@ func TestWorkerMenjalankanPengingatCNC(t *testing.T) {
 	}
 	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
 		t.Fatalf("migrasi tabel River: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `TRUNCATE branches, orders, cnc_reminders, email_outbox, audit_logs,
-		river_job, river_queue RESTART IDENTITY CASCADE`); err != nil {
-		t.Fatalf("kosongkan tabel: %v", err)
 	}
 
 	// Pesanan C&C jatuh tempo 2026-10-09; pekerjaan disuntik clock 2026-10-07

@@ -56,9 +56,9 @@ func newCatalogServer(t *testing.T) *catalogServer {
 	brRepo.Put(branch.Branch{ID: "br-c", Nama: "Grahita Cabang C", NamaKepala: "Kepala C", Email: "c@example.test", IsActive: false})
 
 	catRepo := catalog.NewMemory()
-	catRepo.PutProduct(catalog.Product{ID: "p1", Kode: "P-01", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Satuan: "pcs", HargaDefault: 350000, Urutan: 1, IsActive: true})
-	catRepo.PutProduct(catalog.Product{ID: "p2", Kode: "P-02", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, Satuan: "pcs", HargaDefault: 0, Urutan: 2, IsActive: true})
-	catRepo.PutProduct(catalog.Product{ID: "p3", Kode: "P-03", Nama: "Produk Lama", Jenis: catalog.JenisReguler, Satuan: "pcs", HargaDefault: 10000, Urutan: 3, IsActive: false})
+	catRepo.PutProduct(catalog.Product{ID: "p1", Kode: "P-01", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, HargaDefault: 350000, Urutan: 1, IsActive: true})
+	catRepo.PutProduct(catalog.Product{ID: "p2", Kode: "P-02", Nama: "Sertifikat", Jenis: catalog.JenisSertifikat, HargaDefault: 0, Urutan: 2, IsActive: true})
+	catRepo.PutProduct(catalog.Product{ID: "p3", Kode: "P-03", Nama: "Produk Lama", Jenis: catalog.JenisReguler, HargaDefault: 10000, Urutan: 3, IsActive: false})
 	// p1 punya harga di dua cabang (berbeda) dan TIDAK punya harga di br-c;
 	// p3 sengaja tidak punya harga di cabang mana pun.
 	catRepo.PutPrice("br-a", "p1", 100000)
@@ -139,7 +139,7 @@ func TestApiProdukCRUDDanFilter(t *testing.T) {
 
 	// Buat produk baru.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, cs.srv.URL+"/api/v1/admin/products",
-		`{"kode":"P-99","nama":"Produk Baru","jenis":"reguler","satuan":"box","harga_default":5000,"urutan":9}`, cookies, csrf)
+		`{"kode":"P-99","nama":"Produk Baru","jenis":"reguler","harga_default":5000,"urutan":9}`, cookies, csrf)
 	if status != http.StatusCreated {
 		t.Fatalf("buat produk harus 201, dapat %d (%v)", status, body)
 	}

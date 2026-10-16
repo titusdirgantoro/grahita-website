@@ -112,16 +112,16 @@ Yang dihasilkan satu pesanan Done (SystemDesign.md §4.4): **Invoice PDF**,
    (`TestInvoiceHTMLMemuatIdentitasDanAngka`) dan uji HTTP yang memeriksa isi
    berkas terhadap nilai yang sama di database.
 7. **Surat jalan XLSX satu baris per order line, siap cetak.** Header kolom
-   tetap `No | Nama Barang | Satuan | Qty | Serial Number`; baris data urut
+   sekarang `No | Nama Barang | Qty | Serial Number`; baris data urut
    `line_no`; serial apa adanya (`-` untuk baris packaging yang memang tidak
    berserial); A4 tegak, `FitToWidth=1`, header tabel diulang saat cetak
    (`_xlnm.Print_Titles`), header dibekukan saat dilihat, area cetak sebatas
    isi. Perbaikan putaran 2 (saran QA-1): `_xlnm.Print_Area` kini berhenti di
-   baris data TERAKHIR (`$A$1:$E$<rowAwal+baris-1>`, mis. `$E$10` untuk dua
+   baris data TERAKHIR (`$A$1:$D$<rowAwal+baris-1>`, mis. `$D$10` untuk dua
    baris), bukan satu baris setelahnya, sehingga tidak ada baris kosong yang
    ikut tercetak. PDF surat jalan memakai data dan kolom yang sama supaya kedua
    berkas konsisten. Bukti: `TestSuratJalanXLSXSatuBarisPerLine` (berkas dibuka
-   ulang dengan excelize: A1/A2 kop, B3 nomor, E3 tanggal, header baris 8, tiga
+   ulang dengan excelize: A1/A2 kop, B3 nomor, D3 tanggal, header baris 8, tiga
    baris data termasuk packaging, layout/panes, serta `_xlnm.Print_Area` dan
    `_xlnm.Print_Titles` yang benar).
 8. **Akses dokumen selalu lewat presigned URL berumur pendek.** Kunci storage

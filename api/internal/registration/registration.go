@@ -42,6 +42,8 @@ var (
 	ErrBranchInactive = errors.New("cabang nonaktif")
 	// ErrBranchHasAccount: cabang sudah punya akun (1 cabang = 1 akun).
 	ErrBranchHasAccount = errors.New("cabang sudah punya akun")
+	// ErrIdentityIncomplete: identitas wajib belum lengkap.
+	ErrIdentityIncomplete = errors.New("identitas cabang belum lengkap")
 	// ErrEmailTaken: email cabang sudah dipakai akun lain (admin atau cabang).
 	ErrEmailTaken = errors.New("email cabang sudah dipakai akun lain")
 	// ErrTeleponInvalid: nomor telepon kosong atau melebihi batas panjang.
@@ -71,9 +73,10 @@ type Snapshot struct {
 	// UsedAt terisi bila token sudah dipakai.
 	UsedAt *time.Time
 	// Data cabang (read-only bagi pengguna).
-	Nama       string
-	NamaKepala string
-	Email      string
+	Nama           string
+	NamaKepala     string
+	Email          string
+	IdentityStatus string
 	// BranchActive false berarti cabangnya nonaktif.
 	BranchActive bool
 	// BranchHasAccount true berarti cabang sudah punya akun.
@@ -98,6 +101,8 @@ func (s Snapshot) Cek(now time.Time) error {
 		return ErrBranchInactive
 	case s.BranchHasAccount:
 		return ErrBranchHasAccount
+	case s.IdentityStatus != "ready" || s.NamaKepala == "" || s.Email == "":
+		return ErrIdentityIncomplete
 	}
 	return nil
 }

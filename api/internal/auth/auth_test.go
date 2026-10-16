@@ -9,6 +9,29 @@ import (
 	"github.com/grahita/portal/api/internal/platform/clock"
 )
 
+type gantiKredensialSebelumCreate struct {
+	SessionStore
+	store   *Memory
+	current Credentials
+}
+
+func (g gantiKredensialSebelumCreate) Create(ctx context.Context, s Session, hash []byte, meta RequestMeta) (Session, error) {
+	g.store.PutBranch(g.current)
+	return g.SessionStore.Create(ctx, s, hash, meta)
+}
+
+type gantiKredensialSebelumChange struct {
+	UserStore
+	store   *Memory
+	current Credentials
+}
+
+func (g gantiKredensialSebelumChange) ChangePassword(ctx context.Context, kind Kind, id, sessionID, expected, next string) error {
+	g.store.PutBranch(g.current)
+	_ = g.store.RevokeForUser(ctx, id)
+	return g.UserStore.ChangePassword(ctx, kind, id, sessionID, expected, next)
+}
+
 func TestMatriksKapabilitas(t *testing.T) {
 	cabang := Actor{UserID: "b1", Kind: KindBranch, Role: RoleBranch, BranchID: "br1"}
 	manager := Actor{UserID: "a1", Kind: KindAdmin, Role: RoleManager}
@@ -139,6 +162,27 @@ func TestKredensialSalahTidakMembocorkanAkun(t *testing.T) {
 	}
 }
 
+func TestLoginMenolakHashYangSudahDigantiSetelahVerifikasi(t *testing.T) {
+	store := NewMemory()
+	hashLama, _ := HashPassword("rahasia123")
+	hashBaru, _ := HashPassword("sandibaru123")
+	creds := Credentials{
+		UserID: "u-1", Kind: KindBranch, Role: RoleBranch, BranchID: "br-1",
+		Nama: "Cabang", Email: "cabang@example.test", PasswordHash: hashLama, Active: true,
+	}
+	store.PutBranch(creds)
+	creds.PasswordHash = hashBaru
+	sessions := gantiKredensialSebelumCreate{SessionStore: store, store: store, current: creds}
+	svc := NewService(store, sessions, store, clock.System(), time.Hour, time.Hour)
+
+	if _, err := svc.Login(context.Background(), "cabang@example.test", "rahasia123", RequestMeta{}); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("password lama yang sudah diverifikasi sebelum pergantian harus ditolak, dapat %v", err)
+	}
+	if store.SessionCount() != 0 {
+		t.Fatal("hash kredensial usang tidak boleh menghasilkan sesi")
+	}
+}
+
 func TestAkunNonaktifDitolak(t *testing.T) {
 	store := NewMemory()
 	hash, _ := HashPassword("rahasia123")
@@ -186,5 +230,34 @@ func TestSesiDicabutSetelahGantiSandi(t *testing.T) {
 	}
 	if _, err := svc.Authenticate(context.Background(), issued.Token); !errors.Is(err, ErrSessionInvalid) {
 		t.Errorf("sesi harus dicabut setelah ganti sandi, dapat %v", err)
+	}
+}
+
+func TestGantiSandiMenolakRequestDariGenerasiSebelumPemulihan(t *testing.T) {
+	store := NewMemory()
+	hashLama, _ := HashPassword("rahasia123")
+	hashPemulihan, _ := HashPassword("credentialbaru123")
+	creds := Credentials{
+		UserID: "u-1", Kind: KindBranch, Role: RoleBranch, BranchID: "br-1",
+		Nama: "Cabang", Email: "cabang@example.test", PasswordHash: hashLama, Active: true,
+	}
+	store.PutBranch(creds)
+	svcLogin := NewService(store, store, store, clock.System(), time.Hour, time.Hour)
+	issued, err := svcLogin.Login(context.Background(), creds.Email, "rahasia123", RequestMeta{})
+	if err != nil {
+		t.Fatalf("login fixture: %v", err)
+	}
+	creds.PasswordHash = hashPemulihan
+	guarded := gantiKredensialSebelumChange{UserStore: store, store: store, current: creds}
+	svc := NewService(guarded, store, store, clock.System(), time.Hour, time.Hour)
+	if err := svc.ChangePassword(context.Background(), issued.Actor, "rahasia123", "pilihanlama123", RequestMeta{}); !errors.Is(err, ErrSessionInvalid) {
+		t.Fatalf("request sesi pra-revokasi harus ditolak, dapat %v", err)
+	}
+	akhir, err := store.BranchByID(context.Background(), creds.UserID)
+	if err != nil {
+		t.Fatalf("baca credential akhir: %v", err)
+	}
+	if !VerifyPassword(akhir.PasswordHash, "credentialbaru123") || VerifyPassword(akhir.PasswordHash, "pilihanlama123") {
+		t.Fatal("request lama tidak boleh menimpa credential pemulihan")
 	}
 }

@@ -157,6 +157,7 @@ type pgFixture struct {
 	branchA, branchB, branchC string
 	userA, userB, userC       string
 	adminSA, adminMgr         string
+	bankDefault               string
 }
 
 // pgEnv membaca DSN database uji; uji dilewati bila tidak diisi.
@@ -275,6 +276,25 @@ func newPGFixture(t *testing.T) *pgFixture {
 	// Nonaktif: pernah aktif, lalu dimatikan.
 	insertAdmin(t, ctx, pool, "Mantan", "mantan@example.test", hash, "manager", false, true)
 
+	// Fixture sintetis non-produksi: kebanyakan skenario lama menguji submit dan
+	// unggah bukti, sehingga cabang aktif diberi satu assignment eksplisit. Ini
+	// bukan backfill migrasi; test fail-closed mencabut assignment ini sendiri.
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO bank_accounts (bank, nama_pemilik, nomor, is_active)
+		 VALUES ('BCA', 'PT Fixture Sintetis', '9999000011', true) RETURNING id`).Scan(&f.bankDefault); err != nil {
+		t.Fatalf("seed rekening sintetis: %v", err)
+	}
+	for _, branchID := range []string{f.branchA, f.branchB} {
+		if _, err := pool.Exec(ctx, `INSERT INTO branch_bank_accounts
+			(branch_id, bank_account_id, is_allowed, assigned_by)
+			VALUES ($1, $2, true, $3)`, branchID, f.bankDefault, f.adminSA); err != nil {
+			t.Fatalf("seed assignment rekening sintetis: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE branches SET bank_allowlist_version=1 WHERE id=$1`, branchID); err != nil {
+			t.Fatalf("seed versi allowlist sintetis: %v", err)
+		}
+	}
+
 	// Matriks harga per cabang: harga berbeda supaya kebocoran langsung terlihat.
 	productID := insertProduct(t, ctx, pool, "P-01", "Bio Magnetik", 350000)
 	for branch, harga := range map[string]int64{f.branchA: 100000, f.branchB: 200000, f.branchC: 300000} {
@@ -322,6 +342,10 @@ func newPGFixture(t *testing.T) *pgFixture {
 	)
 	f.queue = queue
 	f.users = usersSvc
+	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		t.Fatalf("siapkan penjadwal pekerjaan: %v", err)
+	}
 
 	branchSvc := branch.NewService(branchpg.New(pool), clock.System())
 	f.branches = branchSvc
@@ -343,10 +367,6 @@ func newPGFixture(t *testing.T) *pgFixture {
 	// storage in-memory, batas unggah dari setelan yang sama dengan produksi.
 	// Repository yang sama menyimpan transaksi verifikasi (F1-18); klien River
 	// di bawah hanya menitipkan job (insert-only), worker-lah yang menjalankan.
-	jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
-	if err != nil {
-		t.Fatalf("siapkan penjadwal pekerjaan: %v", err)
-	}
 	payRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
 	// Sumber setelan AI dipasang (F2-26): unggahan bukti pada pesanan yang
 	// sudah dikirim menitipkan pekerjaan pembacaan bukti pada transaksi yang
@@ -376,13 +396,14 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Settings: settingsSvc,
 		Catalog:  catalogSvc,
 		Orders: order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc),
-			order.WithClock(clock.System()), order.WithAISettings(settingsSvc)),
+			order.WithPaymentAccounts(bankSvc), order.WithClock(clock.System()), order.WithAISettings(settingsSvc)),
 		AdminOrders: order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
 		Revise:      f.revise,
 		Dashboard: dashboard.NewService(dashboardpg.New(pool),
 			dashboard.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,
 		Verify:              payment.NewVerificationService(payRepo),
+		Reevaluate:          payment.NewReevaluateService(payRepo, settings.NewService(settingspg.New(pool))),
 		Documents:           docSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,
@@ -459,7 +480,8 @@ func insertBranch(t *testing.T, ctx context.Context, pool *database.Pool, nama, 
 	t.Helper()
 	var id string
 	err := pool.QueryRow(ctx,
-		`INSERT INTO branches (nama, nama_kepala, email, is_active) VALUES ($1,$2,$3,$4) RETURNING id`,
+		`INSERT INTO branches (nama, nama_kepala, email, identity_status, is_active)
+		 VALUES ($1,$2,$3,'ready',$4) RETURNING id`,
 		nama, kepala, email, aktif).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed cabang %s: %v", nama, err)
@@ -475,6 +497,9 @@ func insertBranchUser(t *testing.T, ctx context.Context, pool *database.Pool, br
 		branchID, email, hash, aktif).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed akun cabang %s: %v", email, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE branches SET identity_status='registered' WHERE id=$1`, branchID); err != nil {
+		t.Fatalf("tandai identitas cabang registered: %v", err)
 	}
 	return id
 }
@@ -504,8 +529,8 @@ func insertProduct(t *testing.T, ctx context.Context, pool *database.Pool, kode,
 	t.Helper()
 	var id string
 	err := pool.QueryRow(ctx,
-		`INSERT INTO products (kode, nama, jenis, satuan, harga_default, urutan)
-		 VALUES ($1,$2,'reguler','pcs',$3,1) RETURNING id`,
+		`INSERT INTO products (kode, nama, jenis, harga_default, urutan)
+		 VALUES ($1,$2,'reguler',$3,1) RETURNING id`,
 		kode, nama, harga).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed produk %s: %v", kode, err)

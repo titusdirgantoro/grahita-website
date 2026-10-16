@@ -77,7 +77,6 @@ func penandaPembayaran(o Order) string {
 type lineView struct {
 	No       string
 	Nama     string
-	Satuan   string
 	Qty      string
 	Harga    string
 	Subtotal string
@@ -135,7 +134,6 @@ func viewLines(o Order) []lineView {
 		out = append(out, lineView{
 			No:       fmt.Sprintf("%d", l.LineNo),
 			Nama:     l.Nama,
-			Satuan:   l.Satuan,
 			Qty:      fmt.Sprintf("%d", l.Qty),
 			Harga:    FormatAngka(l.HargaSatuan),
 			Subtotal: FormatAngka(l.Subtotal),
@@ -314,7 +312,6 @@ const templateInvoice = `<!DOCTYPE html>
       <tr>
         <th>No</th>
         <th>Nama</th>
-        <th>Satuan</th>
         <th class="num">Qty</th>
         <th class="num">Harga</th>
         <th class="num">Subtotal</th>
@@ -326,7 +323,6 @@ const templateInvoice = `<!DOCTYPE html>
       <tr>
         <td>{{.No}}</td>
         <td>{{.Nama}}</td>
-        <td>{{.Satuan}}</td>
         <td class="num">{{.Qty}}</td>
         <td class="num">{{.Harga}}</td>
         <td class="num">{{.Subtotal}}</td>
@@ -336,7 +332,7 @@ const templateInvoice = `<!DOCTYPE html>
     </tbody>
     <tfoot>
       <tr class="total">
-        <td colspan="5">TOTAL</td>
+        <td colspan="4">TOTAL</td>
         <td class="num">{{.Total}}</td>
         <td></td>
       </tr>
@@ -429,7 +425,6 @@ const templateSuratJalan = `<!DOCTYPE html>
       <tr>
         <th>No</th>
         <th>Nama barang</th>
-        <th>Satuan</th>
         <th class="num">Qty</th>
         <th>Serial number</th>
       </tr>
@@ -439,7 +434,6 @@ const templateSuratJalan = `<!DOCTYPE html>
       <tr>
         <td>{{.No}}</td>
         <td>{{.Nama}}</td>
-        <td>{{.Satuan}}</td>
         <td class="num">{{.Qty}}</td>
         <td>{{.Serial}}</td>
       </tr>
@@ -447,7 +441,7 @@ const templateSuratJalan = `<!DOCTYPE html>
     </tbody>
     <tfoot>
       <tr class="total">
-        <td colspan="3">TOTAL</td>
+        <td colspan="2">TOTAL</td>
         <td class="num">{{.TotalQty}}</td>
         <td></td>
       </tr>
