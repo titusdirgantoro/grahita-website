@@ -158,6 +158,17 @@ func (r *Repo) Credit(ctx context.Context, in deposit.CreditInput) (deposit.Tran
 	if err != nil {
 		return deposit.Transaction{}, deposit.Account{}, false, err
 	}
+	out, account, replayed, err := creditLocked(ctx, tx, in)
+	if err != nil {
+		return deposit.Transaction{}, deposit.Account{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return deposit.Transaction{}, deposit.Account{}, false, err
+	}
+	return out, account, replayed, nil
+}
+
+func creditLocked(ctx context.Context, tx pgx.Tx, in deposit.CreditInput) (deposit.Transaction, deposit.Account, bool, error) {
 	if replay, ok, err := loadReplay(ctx, tx, in.BranchID, in.IdempotencyKey, in.RequestFingerprint); err != nil {
 		return deposit.Transaction{}, deposit.Account{}, false, err
 	} else if ok {
@@ -165,7 +176,7 @@ func (r *Repo) Credit(ctx context.Context, in deposit.CreditInput) (deposit.Tran
 		if err != nil {
 			return deposit.Transaction{}, deposit.Account{}, false, err
 		}
-		return replay, replayAccount, true, tx.Commit(ctx)
+		return replay, replayAccount, true, nil
 	}
 	if in.Kind == "topup_credit" {
 		var sourceBranch, sourceProof string
@@ -194,8 +205,11 @@ WHERE v.id=$1 FOR UPDATE OF t`, in.DepositVerificationLogID).
 			}
 			return deposit.Transaction{}, deposit.Account{}, false, err
 		}
-		if sourceBranch != in.BranchID || sourceProof != in.SourceProofID {
+		if sourceBranch != in.BranchID {
 			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrBranchMismatch
+		}
+		if sourceProof != in.SourceProofID {
+			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
 		}
 		if sourceAdmin != in.ActorID {
 			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
@@ -205,24 +219,24 @@ WHERE v.id=$1 FOR UPDATE OF t`, in.DepositVerificationLogID).
 		}
 	}
 	if in.Kind == "overpay_credit" {
-		var sourceBranch, sourceOrder, sourceProof, sourceAdmin string
+		var sourceBranch, sourceOrder, sourceAdmin string
 		var sourceVersion int32
-		var sourceAmount int64
+		var settlementTotal, depositAmount, transferAmount, approvedNominal int64
 		var valid bool
-		if err := tx.QueryRow(ctx, `SELECT o.branch_id,v.order_id,s.payment_proof_id,v.admin_id,
- s.order_version,s.new_credit_to_deposit,
- (v.metode='manual' AND v.hasil='cocok' AND au.is_active AND au.role='superadmin'
-  AND p.purpose='order_payment' AND p.order_id=o.id AND p.branch_id=o.branch_id
-  AND d.decided_by=v.admin_id AND d.approved_nominal=s.approved_nominal) AS valid
-FROM verification_proof_splits s
-JOIN verification_logs v ON v.id=s.verification_log_id
+		if err := tx.QueryRow(ctx, `SELECT o.branch_id,v.order_id,v.admin_id,v.order_version,
+ v.total_pesanan,v.deposit_amount,v.transfer_amount,d.approved_nominal,
+	 (v.metode='manual' AND v.hasil='cocok' AND au.is_active AND au.role='superadmin'
+	  AND p.purpose='order_payment' AND p.order_id=o.id AND p.branch_id=o.branch_id
+	  AND d.decided_by=v.admin_id) AS valid
+FROM verification_logs v
 JOIN orders o ON o.id=v.order_id
-JOIN payment_proofs p ON p.id=s.payment_proof_id
-JOIN payment_proof_economic_decisions d ON d.payment_proof_id=s.payment_proof_id
+JOIN payment_proofs p ON p.id=$2 AND p.order_id=o.id
+JOIN payment_proof_economic_decisions d ON d.payment_proof_id=p.id
 JOIN admin_users au ON au.id=v.admin_id
-WHERE v.id=$1 AND s.payment_proof_id=$2 FOR UPDATE OF o`,
+WHERE v.id=$1 FOR UPDATE OF o`,
 			in.OrderVerificationLogID, in.SourceProofID).
-			Scan(&sourceBranch, &sourceOrder, &sourceProof, &sourceAdmin, &sourceVersion, &sourceAmount, &valid); err != nil {
+			Scan(&sourceBranch, &sourceOrder, &sourceAdmin, &sourceVersion, &settlementTotal,
+				&depositAmount, &transferAmount, &approvedNominal, &valid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrNotFound
 			}
@@ -234,14 +248,24 @@ WHERE v.id=$1 AND s.payment_proof_id=$2 FOR UPDATE OF o`,
 		if sourceAdmin != in.ActorID {
 			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
 		}
-		if sourceProof != in.SourceProofID || in.OrderVersion == nil || sourceVersion != *in.OrderVersion ||
-			sourceAmount != in.Amount || !valid {
+		if in.OrderVersion == nil || sourceVersion != *in.OrderVersion || !valid ||
+			approvedNominal != in.ApprovedNominal || in.AppliedToOrder < 0 || in.AppliedToOrder > in.ApprovedNominal ||
+			in.CreditedToDepositTotal != in.ApprovedNominal-in.AppliedToOrder || in.AppliedToOrder > settlementTotal ||
+			in.Amount <= 0 || in.Amount > in.CreditedToDepositTotal || depositAmount+transferAmount != settlementTotal {
+			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
+		}
+		var splitExists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM verification_proof_splits
+WHERE verification_log_id=$1 AND payment_proof_id=$2)`, in.OrderVerificationLogID, in.SourceProofID).Scan(&splitExists); err != nil {
+			return deposit.Transaction{}, deposit.Account{}, false, err
+		}
+		if splitExists {
 			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
 		}
 	}
 	var out deposit.Transaction
 	var orderID, depositLogID, orderLogID, proofID *string
-	err = tx.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
+	err := tx.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
 branch_id,kind,amount,source_proof_id,deposit_verification_log_id,
 order_verification_log_id,order_id,order_version,idempotency_key_hash,
 request_fingerprint,actor_kind,actor_id,reason)
@@ -269,14 +293,116 @@ deposit_verification_log_id,order_verification_log_id,source_proof_id,created_at
 	if proofID != nil {
 		out.SourceProofID = *proofID
 	}
+	if in.Kind == "overpay_credit" {
+		if _, err := tx.Exec(ctx, `INSERT INTO verification_proof_splits(
+verification_log_id,order_id,order_version,settlement_total,
+settlement_deposit_amount,settlement_transfer_amount,payment_proof_id,branch_id,
+approved_nominal,applied_to_order,credited_to_deposit_total,new_credit_to_deposit,
+new_credit_transaction_id)
+SELECT v.id,v.order_id,v.order_version,v.total_pesanan,v.deposit_amount,v.transfer_amount,
+$2,o.branch_id,$3,$4,$5,$6,$7
+FROM verification_logs v JOIN orders o ON o.id=v.order_id WHERE v.id=$1`,
+			in.OrderVerificationLogID, in.SourceProofID, in.ApprovedNominal, in.AppliedToOrder,
+			in.CreditedToDepositTotal, in.Amount, out.ID); err != nil {
+			return deposit.Transaction{}, deposit.Account{}, false, mapConstraint(err)
+		}
+	}
 	account, err := updateAccount(ctx, tx, in.BranchID, in.Amount)
 	if err != nil {
 		return deposit.Transaction{}, deposit.Account{}, false, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return deposit.Transaction{}, deposit.Account{}, false, err
-	}
 	return out, account, false, nil
+}
+
+// ApproveTopup menjaga keputusan ekonomi dan kredit journal tetap atomik:
+// tidak pernah ada top-up verified yang belum mempunyai kredit terkait.
+func (r *Repo) ApproveTopup(ctx context.Context, in deposit.TopupApprovalInput) (deposit.TopupApprovalResult, error) {
+	if in.Amount <= 0 || in.ActorID == "" || in.TopupID == "" || in.BankAccountID == "" {
+		return deposit.TopupApprovalResult{}, deposit.ErrCreditSourceInvalid
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return deposit.TopupApprovalResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := lockBranchAndAccount(ctx, tx, in.BranchID); err != nil {
+		return deposit.TopupApprovalResult{}, err
+	}
+	if replay, ok, err := loadReplay(ctx, tx, in.BranchID, in.IdempotencyKey, in.RequestFingerprint); err != nil {
+		return deposit.TopupApprovalResult{}, err
+	} else if ok {
+		var topupID string
+		if err := tx.QueryRow(ctx, `SELECT v.topup_id FROM deposit_verification_logs v
+WHERE v.id=$1`, replay.DepositVerificationLogID).Scan(&topupID); err != nil || topupID != in.TopupID {
+			return deposit.TopupApprovalResult{}, deposit.ErrIdempotencyReused
+		}
+		account, err := accountAtTransaction(ctx, tx, replay)
+		if err != nil {
+			return deposit.TopupApprovalResult{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return deposit.TopupApprovalResult{}, err
+		}
+		return deposit.TopupApprovalResult{VerificationLogID: replay.DepositVerificationLogID,
+			Transaction: replay, Account: account, Replayed: true}, nil
+	}
+
+	var branchID, bankID, proofID, status string
+	var declared int64
+	var sourceValid bool
+	if err := tx.QueryRow(ctx, `SELECT t.branch_id,t.bank_account_id,t.payment_proof_id,
+ t.status::text,t.declared_amount,
+ (p.purpose='deposit_topup' AND p.branch_id=t.branch_id
+  AND b.is_active AND b.bank_allowlist_version=$4
+  AND ba.is_active AND x.is_allowed
+  AND au.is_active AND au.role='superadmin') AS source_valid
+FROM deposit_topups t
+JOIN payment_proofs p ON p.id=t.payment_proof_id
+JOIN branches b ON b.id=t.branch_id
+JOIN bank_accounts ba ON ba.id=t.bank_account_id
+JOIN branch_bank_accounts x ON x.branch_id=t.branch_id AND x.bank_account_id=t.bank_account_id
+JOIN admin_users au ON au.id=$3
+WHERE t.id=$1 AND t.branch_id=$2
+FOR UPDATE OF t`, in.TopupID, in.BranchID, in.ActorID, in.BranchAllowlistVersion).
+		Scan(&branchID, &bankID, &proofID, &status, &declared, &sourceValid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return deposit.TopupApprovalResult{}, deposit.ErrNotFound
+		}
+		return deposit.TopupApprovalResult{}, err
+	}
+	if branchID != in.BranchID || bankID != in.BankAccountID || !sourceValid ||
+		(status != "pending_review" && status != "needs_review") {
+		return deposit.TopupApprovalResult{}, deposit.ErrCreditSourceInvalid
+	}
+	var logID string
+	if err := tx.QueryRow(ctx, `INSERT INTO deposit_verification_logs(
+topup_id,method,result,declared_amount,approved_amount,bank_account_id,
+branch_allowlist_version,destination_result,admin_id,reason)
+VALUES($1,'manual','verified',$2,$3,$4,$5,$6::jsonb,$7,$8) RETURNING id`,
+		in.TopupID, declared, in.Amount, in.BankAccountID, in.BranchAllowlistVersion,
+		in.DestinationResult, in.ActorID, in.Reason).Scan(&logID); err != nil {
+		return deposit.TopupApprovalResult{}, fmt.Errorf("tulis log approval top-up: %w", err)
+	}
+	if tag, err := tx.Exec(ctx, `UPDATE deposit_topups
+SET status='verified',verified_amount=$2,verified_by=$3,verified_at=now(),updated_at=now()
+WHERE id=$1 AND status IN ('pending_review','needs_review')`, in.TopupID, in.Amount, in.ActorID); err != nil {
+		return deposit.TopupApprovalResult{}, fmt.Errorf("finalisasi top-up: %w", err)
+	} else if tag.RowsAffected() != 1 {
+		return deposit.TopupApprovalResult{}, deposit.ErrCreditSourceInvalid
+	}
+	transaction, account, _, err := creditLocked(ctx, tx, deposit.CreditInput{
+		BranchID: in.BranchID, Kind: "topup_credit", Amount: in.Amount,
+		SourceProofID: proofID, DepositVerificationLogID: logID,
+		IdempotencyKey: in.IdempotencyKey, RequestFingerprint: in.RequestFingerprint,
+		ActorKind: "admin", ActorID: in.ActorID, Reason: in.Reason,
+	})
+	if err != nil {
+		return deposit.TopupApprovalResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return deposit.TopupApprovalResult{}, err
+	}
+	return deposit.TopupApprovalResult{VerificationLogID: logID, Transaction: transaction, Account: account}, nil
 }
 
 func (r *Repo) Allocate(ctx context.Context, in deposit.AllocationInput) (deposit.AllocationResult, error) {

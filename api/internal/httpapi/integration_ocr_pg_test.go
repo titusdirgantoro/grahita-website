@@ -130,8 +130,8 @@ func seedBuktiOCR(t *testing.T, f *pgFixture, orderID, nama string, isi []byte) 
 	sum := sha256.Sum256(isi)
 	var id string
 	err := f.pool.QueryRow(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1,$2,$3,'image/jpeg',$4,$5,'branch') RETURNING id`,
+		`INSERT INTO payment_proofs (purpose,branch_id,order_id,storage_key,nama_file,mime_type,ukuran_byte,sha256,uploaded_by_kind)
+		 VALUES ('order_payment',(SELECT branch_id FROM orders WHERE id=$1),$1,$2,$3,'image/jpeg',$4,$5,'branch') RETURNING id`,
 		orderID, kunci, nama, len(isi), sum[:]).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed bukti %s: %v", nama, err)

@@ -107,13 +107,33 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
 
-	// 1. Kunci baris pesanan: hanya satu revisi per pesanan dalam satu waktu.
+	// 1. Ikuti urutan kunci global branch -> account -> order -> allocation.
+	//    Pembacaan branch pertama tidak menjadi keputusan; nilainya diverifikasi
+	//    lagi oleh baris order yang kemudian dikunci.
+	var preliminaryBranch string
+	if err := tx.QueryRow(ctx, `SELECT branch_id FROM orders WHERE id=$1`, req.OrderID).Scan(&preliminaryBranch); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return order.ReviseOutcome{}, order.ErrNotFound
+		}
+		return order.ReviseOutcome{}, fmt.Errorf("baca cabang revisi: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT id FROM branches WHERE id=$1 FOR SHARE`, preliminaryBranch); err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("kunci cabang revisi: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT branch_id FROM branch_deposit_accounts WHERE branch_id=$1 FOR UPDATE`, preliminaryBranch); err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("kunci akun deposit revisi: %w", err)
+	}
+
+	// Kunci baris pesanan: hanya satu revisi per pesanan dalam satu waktu.
 	row, err := q.LockOrderForRevise(ctx, req.OrderID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return order.ReviseOutcome{}, order.ErrNotFound
 	}
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query LockOrderForRevise: %w", err)
+	}
+	if row.BranchID != preliminaryBranch {
+		return order.ReviseOutcome{}, fmt.Errorf("%w: cabang pesanan berubah", order.ErrInvalidData)
 	}
 
 	// 2. Revisi hanya untuk pesanan yang sudah selesai.
@@ -224,6 +244,23 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	totalBaru, err := q.SumOrderLineSubtotals(ctx, req.OrderID)
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query SumOrderLineSubtotals(revisi): %w", err)
+	}
+	rowsAllocation, err := tx.Query(ctx, `SELECT id FROM deposit_allocations
+WHERE order_id=$1 ORDER BY id FOR UPDATE`, req.OrderID)
+	if err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("kunci alokasi deposit revisi: %w", err)
+	}
+	rowsAllocation.Close()
+	if err := rowsAllocation.Err(); err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("kunci alokasi deposit revisi: %w", err)
+	}
+	var committed int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount-reversed_amount),0)::bigint
+FROM deposit_allocations WHERE order_id=$1`, req.OrderID).Scan(&committed); err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("hitung committed deposit revisi: %w", err)
+	}
+	if committed > totalBaru {
+		return order.ReviseOutcome{}, fmt.Errorf("%w: committed deposit %d melebihi total revisi %d; reversal eksplisit wajib", order.ErrInvalidData, committed, totalBaru)
 	}
 	delta := totalBaru - row.Total
 	transition := sqlc.RevisionPaymentTransitionTotalUnchanged

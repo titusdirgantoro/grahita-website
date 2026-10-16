@@ -113,6 +113,26 @@ func creditInput(f fixture, key string) deposit.CreditInput {
 		IdempotencyKey: key, RequestFingerprint: []byte("credit-1000"), ActorKind: "admin", ActorID: f.adminID}
 }
 
+func pendingTopup(t *testing.T, ctx context.Context, pool *database.Pool, f fixture, suffix string) (string, string) {
+	t.Helper()
+	var proofID, topupID string
+	if err := pool.QueryRow(ctx, `INSERT INTO payment_proofs(
+purpose,branch_id,order_id,storage_key,nama_file,mime_type,ukuran_byte,sha256,uploaded_by_kind)
+VALUES('deposit_topup',$1,NULL,$2,'UJI-bukti-pending','image/png',1,digest($3,'sha256'),'branch') RETURNING id`,
+		f.branchID, "uji/deposit/pending/"+suffix, suffix).Scan(&proofID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO deposit_topups(
+branch_id,bank_account_id,declared_amount,payment_proof_id,created_by_kind)
+VALUES($1,$2,1000,$3,'branch') RETURNING id`, f.branchID, f.bankID, proofID).Scan(&topupID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM payment_proofs WHERE id=$1`, proofID)
+	})
+	return topupID, proofID
+}
+
 func TestPGCreditMenolakSumberDanPelakuTidakMengikat(t *testing.T) {
 	t.Run("nominal berbeda", func(t *testing.T) {
 		ctx, _, repo, f := setup(t)
@@ -149,6 +169,133 @@ VALUES($1,'manual','needs_review',1000,1000,$2,0,'{}',$3) RETURNING id`,
 			t.Fatalf("non-verified log err=%v", err)
 		}
 	})
+	t.Run("proof berbeda", func(t *testing.T) {
+		ctx, pool, repo, f := setup(t)
+		_, otherProof := pendingTopup(t, ctx, pool, f, "proof-mismatch")
+		in := creditInput(f, "credit-proof-mismatch")
+		in.SourceProofID = otherProof
+		if _, _, _, err := repo.Credit(ctx, in); !errors.Is(err, deposit.ErrCreditSourceInvalid) {
+			t.Fatalf("proof mismatch err=%v", err)
+		}
+	})
+}
+
+func TestPGApproveTopupAtomikRetryDanRollback(t *testing.T) {
+	t.Run("approval dan retry identik", func(t *testing.T) {
+		ctx, pool, repo, f := setup(t)
+		topupID, _ := pendingTopup(t, ctx, pool, f, "approve-ok")
+		in := deposit.TopupApprovalInput{TopupID: topupID, BranchID: f.branchID,
+			BankAccountID: f.bankID, Amount: 1000, BranchAllowlistVersion: 0,
+			DestinationResult: []byte(`{"status":"matched"}`), IdempotencyKey: "approve-ok",
+			RequestFingerprint: []byte("approve-ok-1000"), ActorID: f.adminID, Reason: "UJI-disetujui"}
+		got, err := repo.ApproveTopup(ctx, in)
+		if err != nil || got.Replayed || got.Account.Balance != 1000 || got.VerificationLogID == "" {
+			t.Fatalf("approval=%+v err=%v", got, err)
+		}
+		retry, err := repo.ApproveTopup(ctx, in)
+		if err != nil || !retry.Replayed || retry.Transaction.ID != got.Transaction.ID || retry.Account.Balance != 1000 {
+			t.Fatalf("retry=%+v err=%v", retry, err)
+		}
+		beda := in
+		beda.RequestFingerprint = []byte("approve-berbeda")
+		if _, err := repo.ApproveTopup(ctx, beda); !errors.Is(err, deposit.ErrIdempotencyReused) {
+			t.Fatalf("replay berbeda err=%v", err)
+		}
+		var status string
+		var logs, journals int
+		if err := pool.QueryRow(ctx, `SELECT status::text FROM deposit_topups WHERE id=$1`, topupID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM deposit_verification_logs WHERE topup_id=$1`, topupID).Scan(&logs); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM branch_deposit_transactions WHERE deposit_verification_log_id=$1`, got.VerificationLogID).Scan(&journals); err != nil {
+			t.Fatal(err)
+		}
+		if status != "verified" || logs != 1 || journals != 1 {
+			t.Fatalf("hasil atomik status=%s logs=%d journals=%d", status, logs, journals)
+		}
+	})
+
+	t.Run("gagal kredit rollback status dan log", func(t *testing.T) {
+		ctx, pool, repo, f := setup(t)
+		topupID, _ := pendingTopup(t, ctx, pool, f, "approve-rollback")
+		_, err := repo.ApproveTopup(ctx, deposit.TopupApprovalInput{TopupID: topupID,
+			BranchID: f.branchID, BankAccountID: f.bankID, Amount: 1000,
+			BranchAllowlistVersion: 0, DestinationResult: []byte(`{}`),
+			IdempotencyKey: "approve-rollback", RequestFingerprint: nil,
+			ActorID: f.adminID, Reason: "UJI-paksa rollback"})
+		if err == nil {
+			t.Fatal("approval dengan fingerprint NULL harus gagal")
+		}
+		var status string
+		var logs int
+		if err := pool.QueryRow(ctx, `SELECT status::text FROM deposit_topups WHERE id=$1`, topupID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM deposit_verification_logs WHERE topup_id=$1`, topupID).Scan(&logs); err != nil {
+			t.Fatal(err)
+		}
+		if status != "pending_review" || logs != 0 {
+			t.Fatalf("rollback gagal status=%s logs=%d", status, logs)
+		}
+	})
+}
+
+func TestPGCreditOverpayTypedValidInvalidDanReplay(t *testing.T) {
+	ctx, pool, repo, f := setup(t)
+	var proofID, verificationID string
+	if err := pool.QueryRow(ctx, `INSERT INTO payment_proofs(
+purpose,branch_id,order_id,storage_key,nama_file,mime_type,ukuran_byte,sha256,uploaded_by_kind)
+VALUES('order_payment',$1,$2,'uji/overpay','UJI-overpay','image/png',1,digest('uji-overpay','sha256'),'branch') RETURNING id`,
+		f.branchID, f.orderA).Scan(&proofID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM payment_proofs WHERE id=$1`, proofID) })
+	if _, err := pool.Exec(ctx, `INSERT INTO payment_proof_economic_decisions(
+payment_proof_id,order_id,branch_id,approved_nominal,decided_by)
+VALUES($1,$2,$3,1200,$4)`, proofID, f.orderA, f.branchID, f.adminID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO verification_logs(
+order_id,metode,total_pesanan,total_terbaca,hasil,admin_id,order_version,deposit_amount,transfer_amount)
+VALUES($1,'manual',1000,1200,'cocok',$2,0,0,1000) RETURNING id`, f.orderA, f.adminID).Scan(&verificationID); err != nil {
+		t.Fatal(err)
+	}
+	version := int32(0)
+	in := deposit.CreditInput{BranchID: f.branchID, Kind: "overpay_credit", Amount: 200,
+		SourceProofID: proofID, OrderVerificationLogID: verificationID, OrderID: f.orderA,
+		OrderVersion: &version, ApprovedNominal: 1200, AppliedToOrder: 1000,
+		CreditedToDepositTotal: 200, IdempotencyKey: "overpay-ok",
+		RequestFingerprint: []byte("overpay-200"), ActorKind: "admin", ActorID: f.adminID}
+	invalid := in
+	invalid.IdempotencyKey = "overpay-invalid"
+	invalid.RequestFingerprint = []byte("overpay-invalid")
+	invalid.ApprovedNominal = 1199
+	if _, _, _, err := repo.Credit(ctx, invalid); !errors.Is(err, deposit.ErrCreditSourceInvalid) {
+		t.Fatalf("overpay invalid err=%v", err)
+	}
+	tx, account, replay, err := repo.Credit(ctx, in)
+	if err != nil || replay || tx.Amount != 200 || account.Balance != 200 {
+		t.Fatalf("overpay valid tx=%+v account=%+v replay=%v err=%v", tx, account, replay, err)
+	}
+	_, _, replay, err = repo.Credit(ctx, in)
+	if err != nil || !replay {
+		t.Fatalf("overpay retry replay=%v err=%v", replay, err)
+	}
+	beda := in
+	beda.RequestFingerprint = []byte("overpay-payload-berbeda")
+	if _, _, _, err := repo.Credit(ctx, beda); !errors.Is(err, deposit.ErrIdempotencyReused) {
+		t.Fatalf("overpay replay berbeda err=%v", err)
+	}
+	var splitTx string
+	if err := pool.QueryRow(ctx, `SELECT new_credit_transaction_id FROM verification_proof_splits
+WHERE verification_log_id=$1 AND payment_proof_id=$2`, verificationID, proofID).Scan(&splitTx); err != nil {
+		t.Fatal(err)
+	}
+	if splitTx != tx.ID {
+		t.Fatalf("pointer split=%s ingin %s", splitTx, tx.ID)
+	}
 }
 
 func TestPGCreditRetryAlokasiConcurrentDanReversalParsial(t *testing.T) {

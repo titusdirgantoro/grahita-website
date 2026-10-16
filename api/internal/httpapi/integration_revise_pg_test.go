@@ -565,6 +565,52 @@ func TestPGRevisiC1TotalTetapNaikTurunMenjagaSettlementTyped(t *testing.T) {
 	}
 }
 
+func TestPGRevisiTurunMenolakCommittedDepositTanpaReversalPlan(t *testing.T) {
+	f := newPGFixture(t)
+	produk := produkKode(t, f, "P-01")
+	tanggal, periode := tanggalDanPeriode(3)
+	id, _ := seedPesananDone(t, f, f.branchA, "2026-10-993", tanggal, []barisDone{
+		{lineNo: 1, product: produk, nama: "Bio Magnetik", qty: 5, harga: 100000, serial: periode + "993"},
+	})
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("render prasyarat: %v", err)
+	}
+	seedAlokasiDepositAktif(t, f, id, f.branchA, 400000)
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	var pointerAwal string
+	var journalAwal int
+	if err := f.pool.QueryRow(context.Background(), `SELECT done_verification_log_id FROM orders WHERE id=$1`, id).Scan(&pointerAwal); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM branch_deposit_transactions WHERE order_id=$1`, id).Scan(&journalAwal); err != nil {
+		t.Fatal(err)
+	}
+	body := reviseBody("UJI-turun butuh reversal", `{"line_no":1,"qty":3,"harga_satuan":100000}`)
+	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
+	if status != http.StatusBadRequest || errorKode(t, hasil) != "VALIDATION_FAILED" {
+		t.Fatalf("revisi harus ditolak 400, dapat %d %v", status, hasil)
+	}
+	var orderStatus string
+	var versi int
+	var total int64
+	var pointerAkhir string
+	if err := f.pool.QueryRow(context.Background(), `SELECT status::text,versi,total,done_verification_log_id
+FROM orders WHERE id=$1`, id).Scan(&orderStatus, &versi, &total, &pointerAkhir); err != nil {
+		t.Fatal(err)
+	}
+	var revisions, journalAkhir int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM invoice_revisions WHERE order_id=$1`, id).Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM branch_deposit_transactions WHERE order_id=$1`, id).Scan(&journalAkhir); err != nil {
+		t.Fatal(err)
+	}
+	if orderStatus != "done" || versi != 0 || total != 500000 || pointerAkhir != pointerAwal || revisions != 0 || journalAkhir != journalAwal {
+		t.Fatalf("rollback tidak utuh status=%s versi=%d total=%d pointer=%s/%s revisi=%d journal=%d/%d",
+			orderStatus, versi, total, pointerAwal, pointerAkhir, revisions, journalAwal, journalAkhir)
+	}
+}
+
 // TestPGRevisiUnduhVersiLamaDanBaru membuktikan kedua versi invoice dapat
 // diunduh lewat API (presigned) setelah revisi.
 func TestPGRevisiUnduhVersiLamaDanBaru(t *testing.T) {

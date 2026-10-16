@@ -159,6 +159,23 @@ func verifyHTTP(t *testing.T, f *pgFixture, cookies []*http.Cookie, csrf, id, bo
 	return status, decoded
 }
 
+func seedAlokasiDepositAktif(t *testing.T, f *pgFixture, orderID, branchID string, amount int64) {
+	t.Helper()
+	ctx := context.Background()
+	var transactionID string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
+branch_id,kind,amount,order_id,order_version,idempotency_key_hash,request_fingerprint,actor_kind)
+VALUES($1,'order_allocation_debit',$2,$3,0,digest($4,'sha256'),digest($4,'sha256'),'system') RETURNING id`,
+		branchID, -amount, orderID, "UJI-active-allocation-"+orderID).Scan(&transactionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO deposit_allocations(
+branch_id,order_id,order_version,debit_transaction_id,amount,created_by_kind)
+VALUES($1,$2,0,$3,$4,'system')`, branchID, orderID, transactionID, amount); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func kodeErrorVerifikasi(body map[string]any) string {
 	errObj, _ := body["error"].(map[string]any)
 	code, _ := errObj["code"].(string)
@@ -821,6 +838,46 @@ func TestPGVerifikasiTanpaPenjadwalDitolak(t *testing.T) {
 	if n := hitungBaris(t, f, "verification_logs", "order_id", id); n != 0 {
 		t.Errorf("tidak boleh ada log verifikasi, dapat %d", n)
 	}
+}
+
+func TestPGVerifikasiTransferOnlyMenolakAlokasiDepositAktifManualDanAI(t *testing.T) {
+	t.Run("manual", func(t *testing.T) {
+		f := newPGFixture(t)
+		id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-991")
+		seedAlokasiDepositAktif(t, f, id, f.branchA, 400)
+		cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+		status, body := verifyHTTP(t, f, cookies, csrf, id, bodyVerifikasiCocok(t, f, id, &total, ""))
+		if status != http.StatusBadRequest || kodeErrorVerifikasi(body) != "VALIDATION_FAILED" {
+			t.Fatalf("manual harus fail-closed 400, dapat %d %v", status, body)
+		}
+		st, verif, _, _ := statusPesanan(t, f, id)
+		if st != "submitted" || verif != "belum" || hitungBaris(t, f, "verification_logs", "order_id", id) != 0 {
+			t.Fatalf("manual mengubah state: %s/%s", st, verif)
+		}
+	})
+
+	t.Run("AI", func(t *testing.T) {
+		f := newPGFixture(t)
+		ctx := context.Background()
+		id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-992")
+		seedAlokasiDepositAktif(t, f, id, f.branchA, 400)
+		_ = bodyVerifikasiCocok(t, f, id, &total, "")
+		var proofID string
+		if err := f.pool.QueryRow(ctx, `SELECT id FROM payment_proofs WHERE order_id=$1 ORDER BY created_at LIMIT 1`, id).Scan(&proofID); err != nil {
+			t.Fatal(err)
+		}
+		_, err := payment.NewVerificationService(f.paymentsRepo).MarkVerified(ctx, payment.SystemActor(), id, payment.VerifyInput{
+			Hasil: payment.VerifCocok, Metode: payment.MetodeAI, TotalTerbaca: &total,
+			ProofDestinations: []payment.ProofDestination{{PaymentProofID: proofID, BankAccountID: f.bankDefault}},
+		})
+		if !errors.Is(err, payment.ErrInvalidData) {
+			t.Fatalf("AI harus fail-closed ErrInvalidData, dapat %v", err)
+		}
+		st, verif, _, _ := statusPesanan(t, f, id)
+		if st != "submitted" || verif != "belum" || hitungBaris(t, f, "verification_logs", "order_id", id) != 0 {
+			t.Fatalf("AI mengubah state: %s/%s", st, verif)
+		}
+	})
 }
 
 // TestPGCnCTanpaBuktiMenungguVerifikasi menjalankan alur C&C yang sesungguhnya

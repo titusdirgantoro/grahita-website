@@ -113,6 +113,18 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 	default:
 		return payment.VerifyOutcome{}, payment.ErrNotSubmitted
 	}
+	if req.Hasil == payment.VerifCocok {
+		var revisionPending, hasActiveAllocation bool
+		if err := tx.QueryRow(ctx, `SELECT revision_payment_state IS NOT NULL,
+EXISTS(SELECT 1 FROM deposit_allocations a
+       WHERE a.order_id=orders.id AND a.amount>a.reversed_amount)
+FROM orders WHERE id=$1`, req.OrderID).Scan(&revisionPending, &hasActiveAllocation); err != nil {
+			return payment.VerifyOutcome{}, fmt.Errorf("periksa settlement deposit: %w", err)
+		}
+		if revisionPending || hasActiveAllocation {
+			return payment.VerifyOutcome{}, fmt.Errorf("%w: settlement deposit harus diorkestrasi atomik", payment.ErrInvalidData)
+		}
+	}
 	destinationResults, fingerprint, finalHasil, finalAlasan, err := r.validateDestinations(ctx, tx, req, row.BranchID)
 	if err != nil {
 		return payment.VerifyOutcome{}, err

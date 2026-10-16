@@ -52,11 +52,38 @@ type CreditInput struct {
 	OrderVerificationLogID   string
 	OrderID                  string
 	OrderVersion             *int32
+	ApprovedNominal          int64
+	AppliedToOrder           int64
+	CreditedToDepositTotal   int64
 	IdempotencyKey           string
 	RequestFingerprint       []byte
 	ActorKind                string
 	ActorID                  string
 	Reason                   string
+}
+
+// TopupApprovalInput adalah keputusan manual Superadmin yang harus mengubah
+// top-up, menulis log verifikasi immutable, dan mengkredit journal dalam satu
+// transaksi. DepositVerificationLogID sengaja tidak diterima dari pemanggil;
+// repository membuatnya di dalam transaksi approval.
+type TopupApprovalInput struct {
+	TopupID                string
+	BranchID               string
+	BankAccountID          string
+	Amount                 int64
+	BranchAllowlistVersion int64
+	DestinationResult      []byte
+	IdempotencyKey         string
+	RequestFingerprint     []byte
+	ActorID                string
+	Reason                 string
+}
+
+type TopupApprovalResult struct {
+	VerificationLogID string
+	Transaction       Transaction
+	Account           Account
+	Replayed          bool
 }
 
 type AllocationInput struct {
@@ -126,6 +153,7 @@ type SnapshotInput struct {
 type Repository interface {
 	Account(context.Context, string) (Account, error)
 	Credit(context.Context, CreditInput) (Transaction, Account, bool, error)
+	ApproveTopup(context.Context, TopupApprovalInput) (TopupApprovalResult, error)
 	Allocate(context.Context, AllocationInput) (AllocationResult, error)
 	ReverseAllocation(context.Context, ReversalInput) (ReversalResult, error)
 	SnapshotActiveAllocations(context.Context, SnapshotInput) ([]SourceSnapshot, error)
