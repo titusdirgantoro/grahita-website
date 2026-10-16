@@ -514,9 +514,20 @@ interface CabangRingkas {
   is_cnc: boolean;
 }
 
+const EVENT_REKENING_TIDAK_SEGAR = "grahita:rekening-tidak-segar";
+
+function tandaiRekeningTidakSegar() {
+  window.dispatchEvent(new Event(EVENT_REKENING_TIDAK_SEGAR));
+}
+
 function KartuRekeningPembayaran() {
-  const { data, memuat, galat } = useApi<RekeningPembayaran[]>("/bank-accounts");
+  const { data, memuat, galat, muatUlang } = useApi<RekeningPembayaran[]>("/bank-accounts");
   const rekening = data ?? [];
+  useEffect(() => {
+    const muatTerbaru = () => muatUlang();
+    window.addEventListener(EVENT_REKENING_TIDAK_SEGAR, muatTerbaru);
+    return () => window.removeEventListener(EVENT_REKENING_TIDAK_SEGAR, muatTerbaru);
+  }, [muatUlang]);
   return (
     <Card>
       <CardHead title="Rekening tujuan pembayaran" />
@@ -595,7 +606,10 @@ function ModalKirim({
       onSukses();
     } catch (err) {
       setGalat(galatPesan(err));
-      if (err instanceof ApiClientError && err.code === "BRANCH_BANK_ACCOUNT_UNAVAILABLE") muatRekening();
+      if (err instanceof ApiClientError && err.code === "BRANCH_BANK_ACCOUNT_UNAVAILABLE") {
+        tandaiRekeningTidakSegar();
+        muatRekening();
+      }
     } finally {
       setMengirim(false);
     }
@@ -730,7 +744,10 @@ function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
       muatUlang();
     } catch (err) {
       setGalatUnggah(galatPesan(err));
-      if (err instanceof ApiClientError && err.code === "BRANCH_BANK_ACCOUNT_UNAVAILABLE") muatRekening();
+      if (err instanceof ApiClientError && err.code === "BRANCH_BANK_ACCOUNT_UNAVAILABLE") {
+        tandaiRekeningTidakSegar();
+        muatRekening();
+      }
     } finally {
       setMengunggah(false);
     }
