@@ -63,6 +63,14 @@ func NewRouter(d Deps) http.Handler {
 		r.Use(a.authenticate)
 
 		r.Get("/meta", a.adapt(a.meta))
+		// Fixture browser hanya tersedia pada runner sintetis lokal. Password
+		// seed tidak pernah dikirim browser: handler memakainya dari environment
+		// proses untuk menempuh Login normal dan menerbitkan cookie sesi+CSRF.
+		// Guard ganda (IsLocal + flag) memastikan route tidak pernah terdaftar
+		// pada build/runtime production, bahkan bila Config dibentuk manual.
+		if d.Config.IsLocal() && d.Config.BrowserFixture.Enabled {
+			r.Get("/test/browser-session/{profile}", a.adapt(a.browserFixtureSession))
+		}
 		r.Post("/auth/login", a.adapt(a.login))
 		r.Post("/auth/logout", a.adapt(a.logout))
 		// Lupa/atur ulang kata sandi tersedia tanpa sesi: pengguna yang tidak

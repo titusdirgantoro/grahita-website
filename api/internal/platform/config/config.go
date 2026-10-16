@@ -69,6 +69,12 @@ type Config struct {
 	// CORS hanya dipakai saat pengembangan (Vite dev server di port lain).
 	AllowedOrigins []string
 
+	// BrowserFixture menyediakan pintu masuk sesi untuk uji browser sintetis
+	// lokal tanpa mengetik kata sandi ke automation tool. Handler tetap memakai
+	// Login normal dengan password yang hanya hidup di environment proses.
+	// Validate menolak fitur ini di luar APP_ENV=local.
+	BrowserFixture BrowserFixtureConfig
+
 	// Object storage S3-compatible (MinIO saat lokal).
 	S3Endpoint     string
 	S3Region       string
@@ -165,6 +171,15 @@ type Config struct {
 	OCRTimeout time.Duration
 }
 
+// BrowserFixtureConfig adalah konfigurasi pintu sesi untuk browser lokal.
+type BrowserFixtureConfig struct {
+	Enabled         bool
+	Password        string
+	SuperadminEmail string
+	ManagerEmail    string
+	BranchEmail     string
+}
+
 // Nilai OCR_PROVIDER yang dikenal.
 const (
 	// OCRProviderClaude memakai Claude vision (bawaan).
@@ -206,17 +221,24 @@ func (c Config) AdminBaseURL() string {
 // Load membaca dan memvalidasi konfigurasi.
 func Load() (Config, error) {
 	c := Config{
-		AppEnv:               env("APP_ENV", "local"),
-		HTTPAddr:             env("HTTP_ADDR", ":8080"),
-		LogLevel:             env("LOG_LEVEL", "info"),
-		DatabaseURL:          env("DATABASE_URL", ""),
-		ImportSnapshotKey:    strings.TrimSpace(env("MASTER_IMPORT_SNAPSHOT_KEY", "")),
-		CustomerHost:         env("CUSTOMER_HOST", DefaultCustomerHost),
-		AdminHost:            env("ADMIN_HOST", DefaultAdminHost),
-		PublicScheme:         env("PUBLIC_SCHEME", "https"),
-		CookieName:           env("SESSION_COOKIE_NAME", "grahita_session"),
-		CSRFEnabled:          envBool("CSRF_ENABLED", true),
-		PasswordResetPath:    env("PASSWORD_RESET_PATH", "/lupa"),
+		AppEnv:            env("APP_ENV", "local"),
+		HTTPAddr:          env("HTTP_ADDR", ":8080"),
+		LogLevel:          env("LOG_LEVEL", "info"),
+		DatabaseURL:       env("DATABASE_URL", ""),
+		ImportSnapshotKey: strings.TrimSpace(env("MASTER_IMPORT_SNAPSHOT_KEY", "")),
+		CustomerHost:      env("CUSTOMER_HOST", DefaultCustomerHost),
+		AdminHost:         env("ADMIN_HOST", DefaultAdminHost),
+		PublicScheme:      env("PUBLIC_SCHEME", "https"),
+		CookieName:        env("SESSION_COOKIE_NAME", "grahita_session"),
+		CSRFEnabled:       envBool("CSRF_ENABLED", true),
+		PasswordResetPath: env("PASSWORD_RESET_PATH", "/lupa"),
+		BrowserFixture: BrowserFixtureConfig{
+			Enabled:         envBool("BROWSER_FIXTURE_ENABLED", false),
+			Password:        strings.TrimSpace(env("BROWSER_FIXTURE_PASSWORD", "")),
+			SuperadminEmail: strings.TrimSpace(env("BROWSER_FIXTURE_SUPERADMIN_EMAIL", "rina@grahitaindonesia.com")),
+			ManagerEmail:    strings.TrimSpace(env("BROWSER_FIXTURE_MANAGER_EMAIL", "budi@grahitaindonesia.com")),
+			BranchEmail:     strings.TrimSpace(env("BROWSER_FIXTURE_BRANCH_EMAIL", "bandung@grahitaindonesia.com")),
+		},
 		S3Endpoint:           env("S3_ENDPOINT", ""),
 		S3Region:             env("S3_REGION", "us-east-1"),
 		S3Bucket:             env("S3_BUCKET", ""),
@@ -358,6 +380,22 @@ func (c Config) Validate() error {
 	}
 	if c.IsProduction() && !c.SessionSecure {
 		return errors.New("SESSION_SECURE wajib true di produksi")
+	}
+	if c.BrowserFixture.Enabled {
+		if !c.IsLocal() {
+			return errors.New("BROWSER_FIXTURE_ENABLED hanya boleh true pada APP_ENV=local")
+		}
+		if c.SessionSecure {
+			return errors.New("BROWSER_FIXTURE_ENABLED membutuhkan SESSION_SECURE=false untuk browser HTTP lokal")
+		}
+		if strings.TrimSpace(c.BrowserFixture.Password) == "" {
+			return errors.New("BROWSER_FIXTURE_PASSWORD wajib diisi saat fixture browser aktif")
+		}
+		if strings.TrimSpace(c.BrowserFixture.SuperadminEmail) == "" ||
+			strings.TrimSpace(c.BrowserFixture.ManagerEmail) == "" ||
+			strings.TrimSpace(c.BrowserFixture.BranchEmail) == "" {
+			return errors.New("email ketiga profil BROWSER_FIXTURE wajib diisi")
+		}
 	}
 	if !validImportSnapshotKey(c.AppEnv, c.ImportSnapshotKey) {
 		return errors.New("MASTER_IMPORT_SNAPSHOT_KEY wajib berupa base64 32 byte di staging")

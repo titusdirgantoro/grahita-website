@@ -100,6 +100,10 @@ func (fakeCatalogRepo) GetBranch(_ context.Context, id string) (catalog.Branch, 
 
 // newTestServer menyiapkan router lengkap dengan penyimpanan in-memory.
 func newTestServer(t *testing.T, health fakeHealth) (*httptest.Server, *auth.Memory) {
+	return newTestServerWithConfig(t, health, testConfig())
+}
+
+func newTestServerWithConfig(t *testing.T, health fakeHealth, cfg config.Config) (*httptest.Server, *auth.Memory) {
 	t.Helper()
 
 	store := auth.NewMemory()
@@ -123,7 +127,7 @@ func newTestServer(t *testing.T, health fakeHealth) (*httptest.Server, *auth.Mem
 	svc := auth.NewService(store, store, store, clock.System(), testConfig().SessionIdle, testConfig().SessionAbsolute)
 
 	router := NewRouter(Deps{
-		Config:   testConfig(),
+		Config:   cfg,
 		Version:  "test",
 		Health:   health,
 		Auth:     svc,
@@ -135,6 +139,76 @@ func newTestServer(t *testing.T, health fakeHealth) (*httptest.Server, *auth.Mem
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 	return srv, store
+}
+
+func TestBrowserFixtureMenerbitkanSesiTigaProfilLokal(t *testing.T) {
+	cfg := testConfig()
+	cfg.BrowserFixture = config.BrowserFixtureConfig{
+		Enabled: true, Password: "rahasia123",
+		SuperadminEmail: "rina@example.test", ManagerEmail: "budi@example.test", BranchEmail: "bandung@example.test",
+	}
+	srv, _ := newTestServerWithConfig(t, fakeHealth{migrasi: 1}, cfg)
+
+	kasus := []struct {
+		profil string
+		role   string
+	}{
+		{profil: "superadmin", role: string(auth.RoleSuperadmin)},
+		{profil: "manager", role: string(auth.RoleManager)},
+		{profil: "branch", role: string(auth.RoleBranch)},
+	}
+
+	for _, k := range kasus {
+		t.Run(k.profil, func(t *testing.T) {
+			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			}}
+			resp, err := client.Get(srv.URL + "/api/v1/test/browser-session/" + k.profil)
+			if err != nil {
+				t.Fatalf("buka fixture browser: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusSeeOther {
+				t.Fatalf("fixture harus redirect 303, dapat %d", resp.StatusCode)
+			}
+			if got := resp.Header.Get("Location"); got != "/" {
+				t.Fatalf("tujuan redirect harus root portal, dapat %q", got)
+			}
+
+			var punyaSesi, punyaCSRF bool
+			for _, c := range resp.Cookies() {
+				punyaSesi = punyaSesi || c.Name == cfg.CookieName && c.Value != ""
+				punyaCSRF = punyaCSRF || c.Name == httpx.CSRFCookieName && c.Value != ""
+			}
+			if !punyaSesi || !punyaCSRF {
+				t.Fatalf("fixture wajib menerbitkan cookie sesi+CSRF, sesi=%v csrf=%v", punyaSesi, punyaCSRF)
+			}
+
+			meResp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/auth/me", "", resp.Cookies(), "")
+			if meResp.StatusCode != http.StatusOK {
+				t.Fatalf("sesi fixture tidak sah: %d %v", meResp.StatusCode, body)
+			}
+			user := body["data"].(map[string]any)["user"].(map[string]any)
+			if user["role"] != k.role {
+				t.Fatalf("role sesi %v, mau %s", user["role"], k.role)
+			}
+		})
+	}
+}
+
+func TestBrowserFixtureTidakTerdaftarDiProduction(t *testing.T) {
+	cfg := testConfig()
+	cfg.AppEnv = "production"
+	cfg.SessionSecure = true
+	cfg.BrowserFixture = config.BrowserFixtureConfig{
+		Enabled: true, Password: "rahasia123", SuperadminEmail: "rina@example.test",
+	}
+	srv, _ := newTestServerWithConfig(t, fakeHealth{migrasi: 1}, cfg)
+
+	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/test/browser-session/superadmin", "", nil, "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("route fixture production harus 404, dapat %d (%v)", resp.StatusCode, body)
+	}
 }
 
 func doJSON(t *testing.T, method, url, body string, cookies []*http.Cookie, csrf string) (*http.Response, map[string]any) {

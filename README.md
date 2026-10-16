@@ -93,6 +93,17 @@ Data contoh: 7 produk, 4 cabang, matriks harga, 2 rekening, dan (bila
 `SEED_PASSWORD` diisi) akun uji `rina@grahitaindonesia.com` (Superadmin),
 `budi@grahitaindonesia.com` (Manager), dan satu akun per cabang.
 
+Untuk uji browser lokal tanpa mengetik kredensial ke tool browser, gunakan
+fixture sesi yang tetap menempuh login normal dengan password internal proses:
+
+```bash
+make build
+APP_ENV=local DATABASE_URL=<dsn-sintetis> ./scripts/browser-fixture-local.sh
+```
+
+Panduan URL Superadmin/Manager/cabang, guard production, sanitasi, storage, dan
+cleanup ada di `docs/testing/browser-fixture-local.md`.
+
 ## Memverifikasi
 
 ```bash
