@@ -18,6 +18,8 @@ Rujukan utama:
 - `docs/SystemDesign.md` §2–§6 dan §9;
 - `docs/Database.md` §1, §4.4, §4.5, §4.7, dan §8;
 - `docs/design/branch-bank-allowlist.md` sebagai kontrak D2 rekening efektif;
+- `docs/design/branch-deposit-revision-state.md` sebagai delta normatif C0 untuk
+  revisi order Done yang totalnya berubah dan gerbang LUNAS;
 - kontrak F1/F2 yang mempertahankan satu pintu transisi Done melalui
   `payment.MarkVerified`;
 - kontrak F3-30 tetap tidak berubah dan Virtual Account tetap OFF.
@@ -716,8 +718,9 @@ Keempat field `done_*` adalah **pointer settlement aktif**, bukan arsip pointer.
 Ketika revisi mengubah total dan belum mempunyai settlement pengganti, satu
 transaksi wajib mengikuti lock global branch/account/order/allocations, menjalankan
 reversal plan eksplisit bila total baru lebih kecil daripada committed deposit,
-memindahkan status dari `done` ke sub-state revisi belum lunas yang kelak disetujui
-CEO, menaikkan versi/mengubah total, dan menyetel seluruh field `done_*` ke `NULL`.
+memindahkan `status` dari `done` ke `submitted` dengan sub-state C0
+`revision_underpayment` atau `revision_overpayment_pending`, menaikkan
+versi/mengubah total, dan menyetel `done_at` serta seluruh field `done_*` ke `NULL`.
 Dengan demikian FK tidak dipaksa mencocokkan attempt lama dengan total baru,
 sementara CHECK melarang pointer aktif tersisa pada order yang tidak `done`.
 
@@ -727,10 +730,9 @@ breakdown asal; journal/alokasi lama tetap immutable; `audit_logs.before/after`
 mencatat UUID pointer yang dilepas serta alasan revisi. Query timeline histori
 berdasarkan `order_id`, bukan hanya pointer aktif pada `orders`. Setelah delta
 selesai, transaksi settlement baru membuat attempt untuk versi/total terkini dan
-mengisi keempat field `done_*` bersamaan dengan status `done`. Alternatif atomik
-tanpa periode pending tetap boleh: revisi total, attempt baru, pointer baru, dan
-status `done` harus commit dalam satu transaksi; pointer lama tidak pernah
-dipasangkan dengan total baru.
+mengisi `done_at` serta keempat field `done_*` bersamaan dengan status `done`.
+Implementasi awal memilih periode pending wajib; endpoint revisi tidak mempunyai
+shortcut langsung Done. Kontrak lengkap berada di delta C0.
 
 Backfill `verification_logs.order_version` wajib memakai snapshot versi yang
 dapat dibuktikan dari histori order/invoice. Attempt legacy yang terbukti
@@ -805,8 +807,7 @@ BEGIN
   lock deposit account FOR UPDATE
   lock order FOR UPDATE
   claim idempotency key
-  pastikan order submitted (atau berada dalam transaksi submit/sub-state revisi
-  pembayaran yang kelak disetujui CEO)
+  pastikan order submitted (termasuk sub-state revisi pembayaran C0 yang sah)
   hitung saldo dan committed_deposit order dari allocation aktif seluruh versi
   validasi amount <= balance dan <= (order total - committed_deposit)
   insert debit transaction (-amount)
@@ -1158,11 +1159,11 @@ diam-diam dianggap cocok bila total berubah.
   boleh menerbitkan invoice bertanda lunas sampai deposit tambahan/transfer baru
   diverifikasi. Semua allocation aktif versi lama di-carry-forward tanpa debit
   kedua; allocation tambahan dibuat untuk versi baru dan ikut aggregate order.
-- Karena model order sekarang hanya mempunyai `status=done`, implementasi revisi
-  yang mengubah total membutuhkan state pembayaran revisi eksplisit atau workflow
-  atomik yang menahan publikasi dokumen versi baru. Bentuk state final wajib
-  disetujui CEO sebelum implementasi; D3 tidak mengarang bahwa dokumen boleh
-  dikirim sebagai lunas ketika settlement belum cocok.
+- Bentuk final mengikuti delta C0: `orders.status='submitted'` ditambah sub-state
+  nullable `revision_underpayment` atau `revision_overpayment_pending`. Setiap
+  perubahan total wajib melewati pending; tidak ada shortcut revisi langsung
+  Done pada implementasi awal. Dokumen current version tidak boleh diterbitkan
+  atau dikirim sebagai LUNAS ketika settlement belum cocok.
 - Secara database, update `total` sambil mempertahankan `status=done` dan pointer
   lama ditolak oleh FK/CHECK. Implementasi tidak boleh menyiasatinya dengan
   menulis `done_order_version = versi` pada pointer attempt lama.
@@ -1662,8 +1663,10 @@ harus menyetujui paket keputusan ini atau memberi pengganti tertulis:
    invoice versi baru boleh ditandai/dikirim sebagai LUNAS. Allocation aktif dari
    seluruh versi di-carry-forward melalui source snapshot tanpa debit ulang. Revisi
    turun yang membuat committed deposit melebihi total baru wajib menyertakan
-   reversal plan eksplisit dan atomik; tidak ada reversal otomatis. Bentuk
-   sub-state revisi final tetap harus dipilih pada desain implementasi.
+   reversal plan eksplisit dan atomik; tidak ada reversal otomatis. Bentuk final
+   dipilih oleh delta C0: `status=submitted` dengan
+   `revision_underpayment`/`revision_overpayment_pending`, pointer aktif kosong,
+   lalu settlement versi kini kembali ke Done secara atomik.
 9. Tidak ada opening balance produksi dari D3. Saldo lama memerlukan proyek
    rekonsiliasi dan approval terpisah.
 10. Invoice menampilkan breakdown deposit/transfer, tetapi tidak menampilkan saldo
