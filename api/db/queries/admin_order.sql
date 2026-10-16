@@ -224,6 +224,8 @@ SELECT v.id,
        COALESCE(v.alasan::text, '')::text      AS alasan,
        COALESCE(v.catatan, '')                 AS catatan,
        COALESCE(a.nama, '')                    AS admin_nama,
+       v.branch_allowlist_version,
+       v.destination_results,
        v.created_at
   FROM verification_logs v
   LEFT JOIN admin_users a ON a.id = v.admin_id

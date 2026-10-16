@@ -47,6 +47,23 @@ interface TokenRegistrasi {
   expires_at: string;
 }
 
+interface RekeningAssignment {
+  id: string;
+  bank: string;
+  nama_pemilik: string;
+  display_nomor: string;
+  is_active: boolean;
+  is_allowed: boolean;
+  dormant: boolean;
+  effective: boolean;
+}
+
+interface AssignmentCabang {
+  branch_id: string;
+  version: number;
+  items: RekeningAssignment[];
+}
+
 /** TabCabang adalah tab filter daftar (prototype `S.cabF`). */
 type TabCabang = "semua" | "cnc" | "special" | "nonaktif";
 
@@ -165,6 +182,11 @@ export function CabangPage() {
   const [galatHapus, setGalatHapus] = useState<{ pesan: string; bolehNonaktif: boolean } | null>(
     null,
   );
+  const [rekeningCabang, setRekeningCabang] = useState<Cabang | null>(null);
+  const [assignment, setAssignment] = useState<AssignmentCabang | null>(null);
+  const [pilihanRekening, setPilihanRekening] = useState<Set<string>>(new Set());
+  const [galatRekening, setGalatRekening] = useState<string | null>(null);
+  const [memuatRekening, setMemuatRekening] = useState(false);
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
@@ -379,6 +401,59 @@ export function CabangPage() {
     }
   }
 
+  async function muatAssignment(cabang: Cabang) {
+    setRekeningCabang(cabang);
+    setAssignment(null);
+    setGalatRekening(null);
+    setMemuatRekening(true);
+    try {
+      const hasil = await api.get<AssignmentCabang>(`/admin/branches/${cabang.id}/bank-accounts`);
+      setAssignment(hasil);
+      setPilihanRekening(new Set(hasil.items.filter((a) => a.is_allowed).map((a) => a.id)));
+    } catch (err) {
+      setGalatRekening(pesanGalat(err));
+    } finally {
+      setMemuatRekening(false);
+    }
+  }
+
+  function ubahPilihanRekening(id: string, checked: boolean) {
+    setPilihanRekening((lama) => {
+      const baru = new Set(lama);
+      if (checked) baru.add(id);
+      else baru.delete(id);
+      return baru;
+    });
+  }
+
+  async function simpanAssignment() {
+    if (!rekeningCabang || !assignment) return;
+    if (pilihanRekening.size === 0 && !window.confirm("Tanpa rekening, transfer cabang ini akan diblokir. Lanjutkan?")) return;
+    setSibuk("rekening");
+    setGalatRekening(null);
+    try {
+      await api.put(`/admin/branches/${rekeningCabang.id}/bank-accounts`, {
+        expected_version: assignment.version,
+        bank_account_ids: Array.from(pilihanRekening),
+      });
+      tampilkan("Assignment rekening tujuan disimpan.");
+      setRekeningCabang(null);
+      setAssignment(null);
+      await muat();
+    } catch (err) {
+      if (err instanceof ApiClientError && err.code === "ALLOWLIST_VERSION_CONFLICT") {
+        setGalatRekening("Data telah berubah. Daftar dimuat ulang; periksa pilihan sebelum menyimpan lagi.");
+        const terbaru = await api.get<AssignmentCabang>(`/admin/branches/${rekeningCabang.id}/bank-accounts`);
+        setAssignment(terbaru);
+        setPilihanRekening(new Set(terbaru.items.filter((a) => a.is_allowed).map((a) => a.id)));
+      } else {
+        setGalatRekening(pesanGalat(err));
+      }
+    } finally {
+      setSibuk("");
+    }
+  }
+
   const baris = rows ?? [];
   const jumlahAkunAktif = akun
     ? Array.from(akun.values()).filter((a) => a.status === "aktif").length
@@ -445,6 +520,7 @@ export function CabangPage() {
                 <th scope="col">Email cabang</th>
                 <th scope="col">Flag</th>
                 <th scope="col">Akun</th>
+                <th scope="col">Rekening pembayaran</th>
                 <th scope="col">Status</th>
                 <th scope="col" />
               </tr>
@@ -474,6 +550,13 @@ export function CabangPage() {
                       )}
                     </td>
                     <td>
+                      {(c.effective_bank_account_count ?? 0) > 0 ? (
+                        <Badge tone="success">{`${c.effective_bank_account_count} aktif`}</Badge>
+                      ) : (
+                        <Badge tone="danger">Diblokir—belum ada rekening</Badge>
+                      )}
+                    </td>
+                    <td>
                       <Badge tone={!c.is_active ? "danger" : c.identity_status === "identity_incomplete" ? "warning" : "success"}>
                         {!c.is_active ? "Nonaktif" : c.identity_status === "identity_incomplete" ? "Identitas belum lengkap" : "Aktif"}
                       </Badge>
@@ -483,6 +566,11 @@ export function CabangPage() {
                         <Button variant="ghost" onClick={() => bukaUbah(c)}>
                           Ubah
                         </Button>
+                        {peran === "superadmin" ? (
+                          <Button variant="secondary" onClick={() => void muatAssignment(c)}>
+                            Kelola rekening tujuan
+                          </Button>
+                        ) : null}
                         <Button
                           variant="secondary"
                           disabled={sibuk === c.id}
@@ -650,6 +738,80 @@ export function CabangPage() {
               />
             </div>
           </Form>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={rekeningCabang !== null}
+        title={`Rekening tujuan · ${rekeningCabang?.nama ?? ""}`}
+        onClose={() => {
+          if (sibuk !== "rekening") setRekeningCabang(null);
+        }}
+        wide
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRekeningCabang(null)} disabled={sibuk === "rekening"}>
+              Batal
+            </Button>
+            <Button variant="primary" onClick={() => void simpanAssignment()} disabled={!assignment || sibuk === "rekening"}>
+              {sibuk === "rekening" ? "Menyimpan…" : "Simpan assignment"}
+            </Button>
+          </>
+        }
+      >
+        <Notice tone="warning">
+          Hanya rekening aktif yang efektif. Mengosongkan semua pilihan memblokir instruksi transfer dan unggah bukti cabang.
+        </Notice>
+        {galatRekening ? <Notice tone="danger">{galatRekening}</Notice> : null}
+        {memuatRekening ? <SkeletonList rows={3} /> : null}
+        {assignment ? (
+          <Table caption="Assignment rekening tujuan cabang">
+            <thead>
+              <tr>
+                <th scope="col">Pilih</th>
+                <th scope="col">Rekening</th>
+                <th scope="col">Pemilik</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assignment.items.map((r) => {
+                const dormant = r.dormant && r.is_allowed;
+                const disabled = !r.is_active && !r.is_allowed;
+                return (
+                  <tr key={r.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Pilih ${r.bank} ${r.display_nomor}`}
+                        checked={pilihanRekening.has(r.id)}
+                        disabled={disabled || dormant}
+                        onChange={(e) => ubahPilihanRekening(r.id, e.target.checked)}
+                      />
+                      {dormant ? (
+                        <Button variant="danger-ghost" onClick={() => ubahPilihanRekening(r.id, false)}>
+                          Cabut assignment
+                        </Button>
+                      ) : null}
+                    </td>
+                    <td>{`${r.bank} · ${r.display_nomor}`}</td>
+                    <td>{r.nama_pemilik}</td>
+                    <td>
+                      {dormant ? (
+                        <Badge tone="warning">Dormant</Badge>
+                      ) : r.effective ? (
+                        <Badge tone="success">Efektif</Badge>
+                      ) : r.is_active ? (
+                        <Badge tone="neutral">Tidak dipilih</Badge>
+                      ) : (
+                        <Badge tone="neutral">Nonaktif</Badge>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
         ) : null}
       </Modal>
 

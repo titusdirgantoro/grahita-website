@@ -24,6 +24,7 @@ package order
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -167,16 +168,18 @@ type Dokumen struct {
 
 // VerifikasiLog adalah satu baris log verifikasi pembayaran.
 type VerifikasiLog struct {
-	ID           string `json:"id"`
-	Metode       string `json:"metode"`
-	TotalPesanan int64  `json:"total_pesanan"`
-	TotalTerbaca int64  `json:"total_terbaca"`
-	Selisih      int64  `json:"selisih"`
-	Hasil        string `json:"hasil"`
-	Alasan       string `json:"alasan,omitempty"`
-	Catatan      string `json:"catatan,omitempty"`
-	AdminNama    string `json:"admin_nama,omitempty"`
-	CreatedAt    string `json:"created_at"`
+	ID                     string          `json:"id"`
+	Metode                 string          `json:"metode"`
+	TotalPesanan           int64           `json:"total_pesanan"`
+	TotalTerbaca           int64           `json:"total_terbaca"`
+	Selisih                int64           `json:"selisih"`
+	Hasil                  string          `json:"hasil"`
+	Alasan                 string          `json:"alasan,omitempty"`
+	Catatan                string          `json:"catatan,omitempty"`
+	AdminNama              string          `json:"admin_nama,omitempty"`
+	BranchAllowlistVersion int64           `json:"branch_allowlist_version"`
+	DestinationResults     json.RawMessage `json:"destination_results"`
+	CreatedAt              string          `json:"created_at"`
 }
 
 // AdminDetail adalah detail lengkap satu pesanan untuk admin (AP-ORD-04).

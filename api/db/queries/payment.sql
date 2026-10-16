@@ -53,7 +53,8 @@ RETURNING id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
 -- Seluruh bukti satu pesanan, terlama dulu (urutan unggah).
 SELECT id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
        uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
-       created_at
+       created_at, ocr_nominal, ocr_tanggal, ocr_bank, ocr_rek_akhir,
+       COALESCE(ocr_confidence, 0)::float8 AS ocr_confidence, ocr_at
   FROM payment_proofs
  WHERE order_id = sqlc.arg(order_id)::uuid
  ORDER BY created_at, id;

@@ -145,6 +145,7 @@ function fetchPesanan(
     daftar?: unknown[];
     detail?: unknown;
     bukti?: unknown[];
+    rekening?: unknown[];
     /** Flag cash_and_carry cabang sesi (F1-14: centang C&C di modal kirim). */
     cabangCNC?: boolean;
     /**
@@ -159,6 +160,9 @@ function fetchPesanan(
   const panggilan: Panggilan[] = [];
   const daftar = opsi.daftar ?? [draft, terkirim];
   const bukti = opsi.bukti ?? [];
+  const rekening = opsi.rekening ?? [
+    { id: "ba-1", bank: "BCA", nama_pemilik: "PT Grahita", nomor: "1234567890", display_nomor: "••••7890" },
+  ];
   const tunda = (ms: number) => new Promise((selesai) => setTimeout(selesai, ms));
   // Setelah submit berhasil, detail pesanan memuat versi yang sudah dikirim —
   // memaksa UI memuat ulang dan menampilkan nomor/serial.
@@ -169,6 +173,7 @@ function fetchPesanan(
       panggilan.push({ url: input, init });
       if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
       if (input.endsWith("/catalog")) return json({ data: katalog });
+      if (input.endsWith("/bank-accounts")) return json({ data: rekening });
       if (input.endsWith("/me/branch")) {
         return json({
           data: {
@@ -458,6 +463,19 @@ describe("Customer Portal — Sertifikat & Cash and Carry (F1-12)", () => {
 });
 
 describe("Customer Portal — kirim pesanan (F1-14)", () => {
+  it("memblokir transfer ketika cabang tidak memiliki rekening efektif", async () => {
+    const panggilan = fetchPesanan({ rekening: [] });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(await within(dialog).findByText(/Rekening tujuan untuk cabang ini belum ditetapkan/)).toBeDefined();
+    expect(within(dialog).getByRole("button", { name: "Kirim pesanan" }).hasAttribute("disabled")).toBe(true);
+    expect(panggilan.some((p) => p.url.endsWith("/submit"))).toBe(false);
+  });
+
   it("membuka modal kirim: bukti wajib untuk cabang non-C&C", async () => {
     fetchPesanan();
 
@@ -631,6 +649,15 @@ describe("Customer Portal — bukti transfer (F1-13)", () => {
     // Content-Type TIDAK disetel manual supaya boundary multipart tetap sah.
     const headers = kirim?.init?.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBeUndefined();
+  });
+
+  it("memblokir unggah bukti ketika rekening efektif tidak tersedia", async () => {
+    const panggilan = fetchPesanan({ bukti: [], rekening: [] });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+    expect(await screen.findByText(/Unggah bukti diblokir karena rekening tujuan cabang belum ditetapkan/)).toBeDefined();
+    expect(screen.getByRole("button", { name: "Unggah bukti" }).hasAttribute("disabled")).toBe(true);
+    expect(panggilan.some((p) => p.init?.method === "POST" && p.url.endsWith("/proofs"))).toBe(false);
   });
 
   it("pesanan selesai tidak menampilkan form unggah", async () => {

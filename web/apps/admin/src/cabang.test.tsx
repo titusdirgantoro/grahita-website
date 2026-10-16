@@ -148,6 +148,46 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
       expect(screen.getByRole("button", { name: label })).toBeDefined();
     }
     expect(screen.getByText(/3 cabang · 1 akun aktif/)).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Kelola rekening tujuan" })).toBeNull();
+  });
+
+  it("Superadmin menyimpan replacement assignment lengkap termasuk rekening dormant", async () => {
+    const panggilan = stubFetch((url, init) => {
+      if (url.endsWith("/auth/me")) {
+        return json({ data: { user: { id: "sa-1", kind: "admin", role: "superadmin", nama: "Sandi", email: "sa@test" } } });
+      }
+      if (url.endsWith("/admin/branches/br-a/bank-accounts") && init?.method === "PUT") {
+        return json({ data: { branch_id: "br-a", version: 5, bank_account_ids: ["ba-1", "ba-2", "ba-3"] } });
+      }
+      if (url.endsWith("/admin/branches/br-a/bank-accounts")) {
+        return json({ data: {
+          branch_id: "br-a",
+          version: 4,
+          items: [
+            { id: "ba-1", bank: "BCA", nama_pemilik: "PT A", display_nomor: "••••1111", is_active: true, is_allowed: true, dormant: false, effective: true },
+            { id: "ba-2", bank: "BRI", nama_pemilik: "PT B", display_nomor: "••••2222", is_active: false, is_allowed: true, dormant: true, effective: false },
+            { id: "ba-3", bank: "BCA", nama_pemilik: "PT C", display_nomor: "••••3333", is_active: true, is_allowed: false, dormant: false, effective: false },
+          ],
+        } });
+      }
+      return undefined;
+    });
+
+    render(<RouterProvider router={buatRouter("/cabang")} />);
+    const row = await waitFor(() => baris("Grahita Bandung"));
+    fireEvent.click(within(row).getByRole("button", { name: "Kelola rekening tujuan" }));
+    expect(await screen.findByText("Dormant")).toBeDefined();
+    expect(screen.getByLabelText("Pilih BRI ••••2222").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByLabelText("Pilih BCA ••••3333"));
+    fireEvent.click(screen.getByRole("button", { name: "Simpan assignment" }));
+
+    await waitFor(() => {
+      const put = panggilan.find((p) => p.url.endsWith("/admin/branches/br-a/bank-accounts") && p.init?.method === "PUT");
+      expect(JSON.parse(String(put?.init?.body))).toEqual({
+        expected_version: 4,
+        bank_account_ids: ["ba-1", "ba-2", "ba-3"],
+      });
+    });
   });
 
   it("tab filter dan pencarian dikirim ke server lewat query API", async () => {

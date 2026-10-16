@@ -286,8 +286,23 @@ func (r *Repo) ListByOrder(ctx context.Context, orderID string) ([]payment.Proof
 	}
 	out := make([]payment.Proof, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, toProof(row.ID, row.OrderID, row.StorageKey, row.NamaFile, row.MimeType,
-			row.UkuranByte, row.Sha256, row.UploadedByKind, row.UploadedByID, row.UploadedByNama, row.CreatedAt))
+		p := toProof(row.ID, row.OrderID, row.StorageKey, row.NamaFile, row.MimeType,
+			row.UkuranByte, row.Sha256, row.UploadedByKind, row.UploadedByID, row.UploadedByNama, row.CreatedAt)
+		if row.OcrNominal.Valid {
+			v := row.OcrNominal.Int64
+			p.OCRNominal = &v
+		}
+		if row.OcrTanggal != nil {
+			p.OCRTanggal = row.OcrTanggal.Format("2006-01-02")
+		}
+		p.OCRBank = pgtypes.TextOr(row.OcrBank)
+		p.OCRRekAkhir = pgtypes.TextOr(row.OcrRekAkhir)
+		p.OCRConfidence = row.OcrConfidence
+		if row.OcrAt != nil {
+			t := row.OcrAt.UTC()
+			p.OCRAt = &t
+		}
+		out = append(out, p)
 	}
 	return out, nil
 }

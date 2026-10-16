@@ -89,6 +89,14 @@ export interface BuktiTransfer {
   created_at: string;
 }
 
+interface RekeningPembayaran {
+  id: string;
+  bank: string;
+  nama_pemilik: string;
+  nomor: string;
+  display_nomor: string;
+}
+
 /** TautanBukti adalah presigned URL berumur pendek untuk pratinjau/unduh. */
 export interface TautanBukti {
   url: string;
@@ -454,7 +462,10 @@ export function PesananDetailPage({ id }: { id: string }) {
           </Card>
 
           {data.status !== "draft" ? (
-            <KartuBukti id={data.id} bolehUnggah={data.status === "submitted"} />
+            <>
+              <KartuRekeningPembayaran />
+              <KartuBukti id={data.id} bolehUnggah={data.status === "submitted"} />
+            </>
           ) : null}
         </div>
       </div>
@@ -503,6 +514,32 @@ interface CabangRingkas {
   is_cnc: boolean;
 }
 
+function KartuRekeningPembayaran() {
+  const { data, memuat, galat } = useApi<RekeningPembayaran[]>("/bank-accounts");
+  const rekening = data ?? [];
+  return (
+    <Card>
+      <CardHead title="Rekening tujuan pembayaran" />
+      {memuat ? <SkeletonList rows={2} /> : null}
+      {galat ? <Notice tone="danger">{galat}</Notice> : null}
+      {!memuat && !galat && rekening.length === 0 ? (
+        <Notice tone="danger">
+          Rekening tujuan untuk cabang ini belum ditetapkan. Jangan melakukan transfer; hubungi admin.
+        </Notice>
+      ) : null}
+      {rekening.length > 0 ? (
+        <ul>
+          {rekening.map((r) => (
+            <li key={r.id}>
+              <b>{r.bank}</b> · <span className="tabular">{r.nomor}</span> · {r.nama_pemilik}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </Card>
+  );
+}
+
 /**
  * ModalKirim mengirim draft menjadi pesanan resmi (F1-14): satu permintaan
  * multipart berisi berkas bukti transfer dan penanda Cash & Carry.
@@ -525,6 +562,7 @@ function ModalKirim({
   onSukses: () => void;
 }) {
   const { data: cabang } = useApi<CabangRingkas>("/me/branch", open);
+  const { data: rekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", open);
   const [cnc, setCnc] = useState(false);
   const [berkas, setBerkas] = useState<File[]>([]);
   const [galat, setGalat] = useState<string | null>(null);
@@ -532,6 +570,7 @@ function ModalKirim({
 
   const bisaCNC = cabang?.is_cnc === true;
   const wajibBukti = !(bisaCNC && cnc);
+  const transferTersedia = (rekening?.length ?? 0) > 0;
 
   function tutup() {
     if (mengirim) return;
@@ -556,6 +595,7 @@ function ModalKirim({
       onSukses();
     } catch (err) {
       setGalat(galatPesan(err));
+      if (err instanceof ApiClientError && err.code === "BRANCH_BANK_ACCOUNT_UNAVAILABLE") muatRekening();
     } finally {
       setMengirim(false);
     }
@@ -575,7 +615,7 @@ function ModalKirim({
             variant="primary"
             icon="paper-plane-tilt"
             onClick={() => void kirim()}
-            disabled={mengirim}
+            disabled={mengirim || (wajibBukti && !transferTersedia)}
           >
             {mengirim ? "Mengirim…" : "Kirim pesanan"}
           </Button>
@@ -594,6 +634,11 @@ function ModalKirim({
           cabang saat ini, dan pesanan tidak dapat diubah atau dihapus lagi dari portal cabang.
         </Notice>
         {galat ? <Notice tone="danger">{galat}</Notice> : null}
+        {wajibBukti && !transferTersedia ? (
+          <Notice tone="danger">
+            Rekening tujuan untuk cabang ini belum ditetapkan. Jangan melakukan transfer; hubungi admin.
+          </Notice>
+        ) : null}
 
         {bisaCNC ? (
           <SwitchRow
@@ -644,6 +689,7 @@ function ModalKirim({
  */
 function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
   const { data, memuat, galat, muatUlang } = useApi<BuktiTransfer[]>(`/orders/${id}/proofs`);
+  const { data: rekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", bolehUnggah);
   const [pratinjau, setPratinjau] = useState<TautanBukti | null>(null);
   const [zoom, setZoom] = useState(false);
   const [galatLihat, setGalatLihat] = useState<string | null>(null);
@@ -680,6 +726,7 @@ function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
       muatUlang();
     } catch (err) {
       setGalatUnggah(galatPesan(err));
+      if (err instanceof ApiClientError && err.code === "BRANCH_BANK_ACCOUNT_UNAVAILABLE") muatRekening();
     } finally {
       setMengunggah(false);
     }
@@ -727,6 +774,11 @@ function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
 
       {bolehUnggah ? (
         <form className={styles.unggahBukti} onSubmit={(e) => void unggah(e)}>
+          {(rekening?.length ?? 0) === 0 ? (
+            <Notice tone="danger">
+              Unggah bukti diblokir karena rekening tujuan cabang belum ditetapkan. Hubungi admin.
+            </Notice>
+          ) : null}
           <Field
             label="Tambah bukti (JPG/PNG/PDF, boleh beberapa)"
             htmlFor="berkas-bukti"

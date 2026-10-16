@@ -219,7 +219,8 @@ func (q *Queries) InsertProofOrderEvent(ctx context.Context, arg InsertProofOrde
 const listPaymentProofs = `-- name: ListPaymentProofs :many
 SELECT id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
        uploaded_by_kind::text AS uploaded_by_kind, uploaded_by_id, uploaded_by_nama,
-       created_at
+       created_at, ocr_nominal, ocr_tanggal, ocr_bank, ocr_rek_akhir,
+       COALESCE(ocr_confidence, 0)::float8 AS ocr_confidence, ocr_at
   FROM payment_proofs
  WHERE order_id = $1::uuid
  ORDER BY created_at, id
@@ -237,6 +238,12 @@ type ListPaymentProofsRow struct {
 	UploadedByID   pgtype.UUID `json:"uploaded_by_id"`
 	UploadedByNama pgtype.Text `json:"uploaded_by_nama"`
 	CreatedAt      time.Time   `json:"created_at"`
+	OcrNominal     pgtype.Int8 `json:"ocr_nominal"`
+	OcrTanggal     *time.Time  `json:"ocr_tanggal"`
+	OcrBank        pgtype.Text `json:"ocr_bank"`
+	OcrRekAkhir    pgtype.Text `json:"ocr_rek_akhir"`
+	OcrConfidence  float64     `json:"ocr_confidence"`
+	OcrAt          *time.Time  `json:"ocr_at"`
 }
 
 // Seluruh bukti satu pesanan, terlama dulu (urutan unggah).
@@ -261,6 +268,12 @@ func (q *Queries) ListPaymentProofs(ctx context.Context, orderID string) ([]List
 			&i.UploadedByID,
 			&i.UploadedByNama,
 			&i.CreatedAt,
+			&i.OcrNominal,
+			&i.OcrTanggal,
+			&i.OcrBank,
+			&i.OcrRekAkhir,
+			&i.OcrConfidence,
+			&i.OcrAt,
 		); err != nil {
 			return nil, err
 		}

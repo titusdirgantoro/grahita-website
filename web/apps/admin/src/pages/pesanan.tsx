@@ -122,6 +122,14 @@ interface LogVerifikasi {
   catatan?: string;
   admin_nama?: string;
   created_at: string;
+  branch_allowlist_version?: number;
+  destination_results?: Array<{
+    payment_proof_id: string;
+    status: string;
+    bank_snapshot?: string;
+    account_owner_snapshot?: string;
+    account_last_digits_snapshot?: string;
+  }>;
 }
 
 /** PesananDetail adalah respons GET /api/v1/admin/orders/{id} (F1-15). */
@@ -205,6 +213,24 @@ interface BuktiTransfer {
   uploaded_by_kind: string;
   uploaded_by_nama?: string;
   created_at: string;
+  ocr_nominal?: number;
+  ocr_tanggal?: string;
+  ocr_bank?: string;
+  ocr_rek_akhir?: string;
+  ocr_confidence?: number;
+  ocr_at?: string;
+}
+
+interface RekeningEfektif {
+  id: string;
+  bank: string;
+  nama_pemilik: string;
+  display_nomor: string;
+}
+
+interface RekeningOrder {
+  accounts: RekeningEfektif[];
+  allowlist_version: number;
 }
 
 /** Riwayat email pesanan (endpoint F1-16). */
@@ -716,6 +742,10 @@ export function PesananDetailAdminPage() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { data, memuat, galat, muatUlang } = useApi<PesananDetail>(`/admin/orders/${id}`);
   const { data: bukti } = useApi<BuktiTransfer[]>(`/admin/orders/${id}/proofs`);
+  const { data: rekeningOrder, muatUlang: muatRekeningOrder } = useApi<RekeningOrder>(
+    `/admin/orders/${id}/bank-accounts`,
+    data?.status === "submitted",
+  );
   const { data: emails, muatUlang: muatEmail } = useApi<EmailPesanan[]>(`/admin/orders/${id}/emails`);
 
   const [catatan, setCatatan] = useState("");
@@ -738,6 +768,21 @@ export function PesananDetailAdminPage() {
   const [catatanVerif, setCatatanVerif] = useState("");
   const [sibukVerif, setSibukVerif] = useState(false);
   const [galatVerif, setGalatVerif] = useState<string | null>(null);
+  const [tujuanBukti, setTujuanBukti] = useState<Record<string, string>>({});
+  const [sibukNilaiUlang, setSibukNilaiUlang] = useState(false);
+
+  useEffect(() => {
+    if (!verifBuka || rekeningOrder?.accounts?.length !== 1) return;
+    const accountID = rekeningOrder.accounts[0]?.id;
+    if (!accountID) return;
+    setTujuanBukti((lama) => {
+      const baru = { ...lama };
+      for (const proof of bukti ?? []) {
+        if (!baru[proof.id]) baru[proof.id] = accountID;
+      }
+      return baru;
+    });
+  }, [verifBuka, rekeningOrder, bukti]);
 
   // Keadaan modal revisi invoice Done (F2-25, PRD §4.3 AP-REV-01..05).
   const [revisiBuka, setRevisiBuka] = useState(false);
@@ -852,8 +897,24 @@ export function PesananDetailAdminPage() {
     setAlasanVerif(PILIHAN_ALASAN[0]);
     setCatatanVerif("");
     setGalatVerif(null);
+    const defaultAccount = rekeningOrder?.accounts?.length === 1 ? rekeningOrder.accounts[0]?.id ?? "" : "";
+    setTujuanBukti(Object.fromEntries((bukti ?? []).map((b) => [b.id, defaultAccount])));
     setVerifBuka(true);
-  }, []);
+  }, [bukti, rekeningOrder]);
+
+  const nilaiUlangRekening = useCallback(async () => {
+    setSibukNilaiUlang(true);
+    setGalatVerif(null);
+    try {
+      await api.post(`/admin/orders/${id}/verification/reevaluate-destination`, {});
+      tampilkan("Penilaian ulang rekening telah diantrekan dari hasil OCR tersimpan.");
+      muatUlang();
+    } catch (err) {
+      setGalatVerif(pesanVerifikasi(err));
+    } finally {
+      setSibukNilaiUlang(false);
+    }
+  }, [id, muatUlang, tampilkan]);
 
   /**
    * kirimVerifikasi mengirim keputusan verifikasi MANUAL ke
@@ -869,6 +930,17 @@ export function PesananDetailAdminPage() {
       setGalatVerif("Pilih alasan review terlebih dahulu.");
       return;
     }
+    const proofDestinations = (bukti ?? [])
+      .map((b) => ({
+        payment_proof_id: b.id,
+        bank_account_id:
+          tujuanBukti[b.id] ?? (rekeningOrder?.accounts?.length === 1 ? rekeningOrder.accounts[0]?.id ?? "" : ""),
+      }))
+      .filter((d) => d.bank_account_id !== "");
+    if (keputusanVerif === "cocok" && proofDestinations.length !== (bukti?.length ?? 0)) {
+      setGalatVerif("Pilih rekening tujuan efektif untuk setiap bukti sebelum menyetujui.");
+      return;
+    }
     setSibukVerif(true);
     setGalatVerif(null);
     const terbaca = parseNominal(nominalVerif);
@@ -878,6 +950,7 @@ export function PesananDetailAdminPage() {
         ...(terbaca !== null ? { total_terbaca: terbaca } : {}),
         ...(keputusanVerif === "perlu_review" ? { alasan: alasanVerif } : {}),
         ...(catatanVerif.trim() !== "" ? { catatan: catatanVerif.trim() } : {}),
+        proof_destinations: proofDestinations,
       });
       setVerifBuka(false);
       muatUlang();
@@ -891,10 +964,11 @@ export function PesananDetailAdminPage() {
       // Verifikasi paralel sudah menyelesaikan pesanan: segarkan supaya log
       // dan dokumen terbaru tampil di halaman ini.
       if (err instanceof ApiClientError && err.code === "ORDER_ALREADY_DONE") muatUlang();
+      if (err instanceof ApiClientError && err.code === "BANK_ACCOUNT_NOT_ALLOWED") muatRekeningOrder();
     } finally {
       setSibukVerif(false);
     }
-  }, [id, keputusanVerif, alasanVerif, nominalVerif, catatanVerif, muatUlang, tampilkan]);
+  }, [id, keputusanVerif, alasanVerif, nominalVerif, catatanVerif, bukti, tujuanBukti, rekeningOrder, muatUlang, muatRekeningOrder, tampilkan]);
 
   /** Produk yang benar-benar dijual ke cabang pesanan ini (matriks harga cabang). */
   const produkRevisi = useMemo(() => {
@@ -1067,6 +1141,16 @@ export function PesananDetailAdminPage() {
   // menghitung ulang dari kolom generated (angka klien tidak dipercaya).
   const nominalTerbaca = parseNominal(nominalVerif);
   const selisihVerif = (nominalTerbaca ?? 0) - data.total;
+  const semuaOCRTersedia = (bukti?.length ?? 0) > 0 && (bukti ?? []).every((b) => Boolean(b.ocr_at));
+  const logTerbaru = [...data.verifikasi].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  const rekeningPerluDinilaiUlang =
+    logTerbaru?.metode === "ai" &&
+    logTerbaru.branch_allowlist_version !== undefined &&
+    rekeningOrder !== null &&
+    logTerbaru.branch_allowlist_version !== rekeningOrder.allowlist_version;
+  const rekeningDefault = rekeningOrder?.accounts?.length === 1 ? rekeningOrder.accounts[0]?.id ?? "" : "";
+  const semuaTujuanTerpilih =
+    (bukti?.length ?? 0) > 0 && (bukti ?? []).every((b) => Boolean(tujuanBukti[b.id] ?? rekeningDefault));
 
   return (
     <>
@@ -1270,6 +1354,14 @@ export function PesananDetailAdminPage() {
           {data.status === "submitted" && bolehVerif ? (
             <Card>
               <CardHead title="Verifikasi pembayaran" />
+              {rekeningPerluDinilaiUlang ? (
+                <Notice tone="warning">Rekening perlu dinilai ulang karena kebijakan cabang telah berubah.</Notice>
+              ) : null}
+              {(rekeningOrder?.accounts?.length ?? 0) === 0 ? (
+                <Notice tone="danger">
+                  Cabang tidak mempunyai rekening efektif. Approval ditolak; minta Superadmin memperbaiki assignment.
+                </Notice>
+              ) : null}
               <p className="muted small" style={{ marginBottom: 8 }}>
                 Setelah disetujui, pesanan menjadi Selesai dan invoice &amp; surat jalan dibuat lalu
                 dikirim otomatis.
@@ -1288,6 +1380,18 @@ export function PesananDetailAdminPage() {
               >
                 Verifikasi
               </Button>
+              <Button
+                variant="secondary"
+                block
+                onClick={() => void nilaiUlangRekening()}
+                disabled={sibukNilaiUlang || !semuaOCRTersedia}
+              >
+                {sibukNilaiUlang ? "Mengantrekan…" : "Nilai ulang rekening"}
+              </Button>
+              {!semuaOCRTersedia ? (
+                <p className="muted small">Nilai ulang tersedia setelah seluruh bukti mempunyai hasil OCR tersimpan.</p>
+              ) : null}
+              {galatVerif && !verifBuka ? <Notice tone="danger">{galatVerif}</Notice> : null}
             </Card>
           ) : null}
 
@@ -1431,7 +1535,11 @@ export function PesananDetailAdminPage() {
             <Button
               variant={keputusanVerif === "cocok" ? "primary" : "secondary"}
               onClick={() => void kirimVerifikasi()}
-              disabled={sibukVerif}
+              disabled={
+                sibukVerif ||
+                (keputusanVerif === "cocok" &&
+                  (!semuaTujuanTerpilih || (rekeningOrder?.accounts?.length ?? 0) === 0))
+              }
               data-uji="kirim-verifikasi"
             >
               {sibukVerif
@@ -1453,6 +1561,51 @@ export function PesananDetailAdminPage() {
             {rupiah.format(data.total)}
           </strong>
         </div>
+        {(bukti?.length ?? 0) === 0 ? (
+          <Notice tone="danger">Pesanan belum mempunyai bukti pembayaran untuk dipetakan.</Notice>
+        ) : (
+          <Table caption="Tujuan rekening per bukti">
+            <thead>
+              <tr>
+                <th scope="col">Bukti / OCR</th>
+                <th scope="col">Hasil allowlist terakhir</th>
+                <th scope="col">Rekening efektif</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(bukti ?? []).map((b) => {
+                const hasil = logTerbaru?.destination_results?.find((d) => d.payment_proof_id === b.id);
+                return (
+                  <tr key={b.id}>
+                    <td>
+                      <b>{b.nama_file}</b>
+                      <div className="muted small">
+                        {b.ocr_at
+                          ? `${b.ocr_bank || "Bank tak terbaca"} · digit akhir ${b.ocr_rek_akhir || "—"} · keyakinan ${Math.round((b.ocr_confidence ?? 0) * 100)}%`
+                          : "Belum ada hasil OCR"}
+                      </div>
+                    </td>
+                    <td>{hasil?.status ?? "Tidak terbaca"}</td>
+                    <td>
+                      <Select
+                        aria-label={`Rekening tujuan ${b.nama_file}`}
+                        value={tujuanBukti[b.id] ?? rekeningDefault}
+                        onChange={(e) => setTujuanBukti((lama) => ({ ...lama, [b.id]: e.target.value }))}
+                      >
+                        <option value="">Pilih rekening</option>
+                        {(rekeningOrder?.accounts ?? []).map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {`${r.bank} · ${r.display_nomor} · ${r.nama_pemilik}`}
+                          </option>
+                        ))}
+                      </Select>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        )}
         <Field
           label="Keputusan"
           htmlFor="verif-keputusan"

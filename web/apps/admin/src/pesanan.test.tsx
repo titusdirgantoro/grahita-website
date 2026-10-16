@@ -277,6 +277,16 @@ function stubPesanan(opsi?: {
           data: { url: "https://files.test/bukti.png", expires_in: 300, nama_file: "bukti.png", mime_type: "image/png" },
         });
       }
+      if (url.endsWith(`/admin/orders/${DETAIL_ID}/bank-accounts`)) {
+        return json({
+          data: {
+            allowlist_version: 3,
+            accounts: [
+              { id: "ba-1", bank: "BCA", nama_pemilik: "PT Grahita", display_nomor: "••••1234" },
+            ],
+          },
+        });
+      }
       if (url.includes(`/admin/orders/${DETAIL_ID}/proofs`)) {
         return json({
           data: [
@@ -523,7 +533,11 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
       expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true);
     });
     const kirim = posts.find((p) => p.url === URL_VERIFY);
-    expect(kirim?.body).toEqual({ hasil: "cocok", total_terbaca: 200000 });
+    expect(kirim?.body).toEqual({
+      hasil: "cocok",
+      total_terbaca: 200000,
+      proof_destinations: [{ payment_proof_id: "p1", bank_account_id: "ba-1" }],
+    });
 
     // Modal tertutup dan detail disegarkan supaya log verifikasi + dokumen baru terlihat.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -563,6 +577,7 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
       hasil: "perlu_review",
       alasan: "rekening_beda",
       catatan: "transfer dari rekening lain",
+      proof_destinations: [{ payment_proof_id: "p1", bank_account_id: "ba-1" }],
     });
   });
 
@@ -578,7 +593,10 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
     await waitFor(() => {
       expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true);
     });
-    expect(posts.find((p) => p.url === URL_VERIFY)?.body).toEqual({ hasil: "cocok" });
+    expect(posts.find((p) => p.url === URL_VERIFY)?.body).toEqual({
+      hasil: "cocok",
+      proof_destinations: [{ payment_proof_id: "p1", bank_account_id: "ba-1" }],
+    });
   });
 
   it("tombol Verifikasi hanya muncul untuk pesanan Submitted", async () => {

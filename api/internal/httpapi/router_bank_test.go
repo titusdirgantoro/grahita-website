@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,10 +9,30 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/bank"
+	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/settings"
 )
+
+type bankOrderRepo struct{}
+
+const bankOrderID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+func (bankOrderRepo) ListAdmin(context.Context, order.AdminQuery) (order.AdminPage, error) {
+	return order.AdminPage{}, nil
+}
+
+func (bankOrderRepo) GetAdmin(_ context.Context, id string, _ []string) (order.AdminDetail, error) {
+	if id != bankOrderID {
+		return order.AdminDetail{}, order.ErrNotFound
+	}
+	return order.AdminDetail{ID: id, BranchID: "br-a", Status: order.StatusSubmitted}, nil
+}
+
+func (bankOrderRepo) SetNoteAdmin(context.Context, string, string, string, string, string) error {
+	return nil
+}
 
 // bankServer adalah router lengkap untuk menguji rekening bank lewat HTTP:
 // penyimpanan auth in-memory, penyimpanan bank in-memory (yang merekam audit),
@@ -59,6 +80,7 @@ func newBankServer(t *testing.T) *bankServer {
 		Auth:          svc,
 		Settings:      settings.NewService(setRepo),
 		Bank:          bank.NewService(repo),
+		AdminOrders:   order.NewAdminService(bankOrderRepo{}),
 		LoginLimiter:  httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),
 	}
@@ -66,6 +88,38 @@ func newBankServer(t *testing.T) *bankServer {
 	srv := httptest.NewServer(NewRouter(deps))
 	t.Cleanup(srv.Close)
 	return &bankServer{srv: srv, repo: repo, settings: setRepo}
+}
+
+func TestApiRekeningEfektifPesananUntukVerifikasi(t *testing.T) {
+	bs := newBankServer(t)
+	base := bs.srv.URL + "/api/v1/admin/orders/" + bankOrderID + "/bank-accounts"
+
+	mgrCookies, _ := login(t, bs.srv, "budi@example.test")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, base, "", mgrCookies, "")
+	if status != http.StatusOK {
+		t.Fatalf("manager harus dapat membaca rekening verifikasi: %d (%v)", status, body)
+	}
+	data := body["data"].(map[string]any)
+	accounts := data["accounts"].([]any)
+	if len(accounts) != 1 {
+		t.Fatalf("harus ada satu rekening efektif, dapat %v", accounts)
+	}
+	account := accounts[0].(map[string]any)
+	if account["display_nomor"] != "••••7890" {
+		t.Errorf("nomor harus termasking, dapat %v", account["display_nomor"])
+	}
+	if _, bocor := account["nomor"]; bocor {
+		t.Error("nomor rekening penuh tidak boleh bocor ke endpoint verifikasi")
+	}
+	if _, ada := data["allowlist_version"]; !ada {
+		t.Error("versi allowlist harus disertakan")
+	}
+
+	cabangCookies, _ := login(t, bs.srv, "a@example.test")
+	status, _, _ = apiReq(t, http.DefaultClient, http.MethodGet, base, "", cabangCookies, "")
+	if status != http.StatusForbidden {
+		t.Fatalf("akun cabang harus ditolak dari endpoint admin, dapat %d", status)
+	}
 }
 
 func TestApiBankOtorisasiSuperadmin(t *testing.T) {
