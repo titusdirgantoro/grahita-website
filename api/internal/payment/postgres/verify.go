@@ -141,6 +141,8 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 		Alasan:                 sqlc.NullReviewReason{ReviewReason: sqlc.ReviewReason(req.Alasan), Valid: req.Alasan != ""},
 		AdminID:                adminIDVerifikasi(req),
 		Catatan:                pgtypes.Text(req.Catatan),
+		OrderVersion:           row.Versi,
+		TransferAmount:         row.Total,
 		BranchAllowlistVersion: pgtype.Int8{Int64: allowlistVersion, Valid: true},
 		ProofSetFingerprint:    fingerprint,
 		DestinationResults:     destinationJSON,
@@ -158,7 +160,10 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 
 	switch req.Hasil {
 	case payment.VerifCocok:
-		changed, err := q.SetOrderDone(ctx, sqlc.SetOrderDoneParams{OrderID: req.OrderID, VerificationLogID: logRow.ID})
+		changed, err := q.SetOrderDone(ctx, sqlc.SetOrderDoneParams{
+			OrderID: req.OrderID, VerificationLogID: logRow.ID,
+			OrderVersion: row.Versi, TransferAmount: row.Total,
+		})
 		if err != nil {
 			return payment.VerifyOutcome{}, fmt.Errorf("query SetOrderDone: %w", err)
 		}

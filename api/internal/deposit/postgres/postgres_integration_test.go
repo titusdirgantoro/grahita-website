@@ -48,11 +48,15 @@ VALUES($1,'Kepala UJI',$2) RETURNING id`, "UJI-Deposit-Lain-"+s, "uji-deposit-la
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO admin_users(nama,email,role)
-VALUES('UJI-Admin',$1,'manager') RETURNING id`, "uji-admin-deposit-"+s+"@example.test").Scan(&f.adminID); err != nil {
+VALUES('UJI-Admin',$1,'superadmin') RETURNING id`, "uji-admin-deposit-"+s+"@example.test").Scan(&f.adminID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO bank_accounts(bank,nama_pemilik,nomor)
 VALUES('BCA','UJI Pemilik',$1) RETURNING id`, "UJI"+s).Scan(&f.bankID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO branch_bank_accounts(branch_id,bank_account_id,is_allowed,assigned_by)
+VALUES($1,$2,true,$3)`, f.branchID, f.bankID, f.adminID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO payment_proofs(
@@ -74,6 +78,10 @@ VALUES($1,'manual','verified',1000,1000,$2,0,'{}',$3) RETURNING id`,
 		topupID, f.bankID, f.adminID).Scan(&f.verificationID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE deposit_topups SET status='verified',verified_amount=1000,
+verified_by=$2,verified_at=now() WHERE id=$1`, topupID, f.adminID); err != nil {
+		t.Fatal(err)
+	}
 	for i, target := range []*string{&f.orderA, &f.orderB} {
 		if err := pool.QueryRow(ctx, `INSERT INTO orders(
 branch_id,nomor,versi,status,verif_status,tanggal,total,submitted_at)
@@ -91,6 +99,7 @@ branch_deposit_accounts`)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM verification_logs WHERE order_id IN ($1,$2)`, f.orderA, f.orderB)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM payment_proofs WHERE id=$1`, f.proofID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM orders WHERE id IN ($1,$2)`, f.orderA, f.orderB)
+		_, _ = pool.Exec(cleanupCtx, `DELETE FROM branch_bank_accounts WHERE branch_id=$1 AND bank_account_id=$2`, f.branchID, f.bankID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM bank_accounts WHERE id=$1`, f.bankID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM admin_users WHERE id=$1`, f.adminID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM branches WHERE id IN ($1,$2)`, f.branchID, f.otherBranchID)
@@ -102,6 +111,44 @@ func creditInput(f fixture, key string) deposit.CreditInput {
 	return deposit.CreditInput{BranchID: f.branchID, Kind: "topup_credit", Amount: 1000,
 		SourceProofID: f.proofID, DepositVerificationLogID: f.verificationID,
 		IdempotencyKey: key, RequestFingerprint: []byte("credit-1000"), ActorKind: "admin", ActorID: f.adminID}
+}
+
+func TestPGCreditMenolakSumberDanPelakuTidakMengikat(t *testing.T) {
+	t.Run("nominal berbeda", func(t *testing.T) {
+		ctx, _, repo, f := setup(t)
+		in := creditInput(f, "credit-amount-mismatch")
+		in.Amount = 999
+		if _, _, _, err := repo.Credit(ctx, in); !errors.Is(err, deposit.ErrCreditSourceInvalid) {
+			t.Fatalf("amount mismatch err=%v", err)
+		}
+	})
+	t.Run("aktor bukan pemutus", func(t *testing.T) {
+		ctx, _, repo, f := setup(t)
+		in := creditInput(f, "credit-actor-mismatch")
+		in.ActorID = "00000000-0000-0000-0000-000000000001"
+		if _, _, _, err := repo.Credit(ctx, in); !errors.Is(err, deposit.ErrCreditActorInvalid) {
+			t.Fatalf("actor mismatch err=%v", err)
+		}
+	})
+	t.Run("log bukan verified", func(t *testing.T) {
+		ctx, pool, repo, f := setup(t)
+		var topupID, logID string
+		if err := pool.QueryRow(ctx, `SELECT id FROM deposit_topups WHERE payment_proof_id=$1`, f.proofID).Scan(&topupID); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, `INSERT INTO deposit_verification_logs(
+topup_id,method,result,declared_amount,approved_amount,bank_account_id,
+branch_allowlist_version,destination_result,admin_id)
+VALUES($1,'manual','needs_review',1000,1000,$2,0,'{}',$3) RETURNING id`,
+			topupID, f.bankID, f.adminID).Scan(&logID); err != nil {
+			t.Fatal(err)
+		}
+		in := creditInput(f, "credit-review-log")
+		in.DepositVerificationLogID = logID
+		if _, _, _, err := repo.Credit(ctx, in); !errors.Is(err, deposit.ErrCreditSourceInvalid) {
+			t.Fatalf("non-verified log err=%v", err)
+		}
+	})
 }
 
 func TestPGCreditRetryAlokasiConcurrentDanReversalParsial(t *testing.T) {
@@ -284,5 +331,59 @@ VALUES($1,'manual',1000,1000,'cocok',1,400,600) RETURNING id`, f.orderA).Scan(&v
 	}
 	if account.JournalVersion != before || account.Balance != 600 {
 		t.Fatalf("snapshot mendebit ulang: %+v", account)
+	}
+}
+
+func TestPGSnapshotRetryMenolakDistribusiBerubahDenganCountDanSumSama(t *testing.T) {
+	ctx, pool, repo, f := setup(t)
+	if _, _, _, err := repo.Credit(ctx, creditInput(f, "credit-snapshot-set")); err != nil {
+		t.Fatal(err)
+	}
+	a1, err := repo.Allocate(ctx, deposit.AllocationInput{BranchID: f.branchID, OrderID: f.orderA, Amount: 200,
+		ExpectedJournalVersion: 1, ExpectedOrderVersion: 0, IdempotencyKey: "snapshot-a1", RequestFingerprint: []byte("a1"), ActorKind: "branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := repo.Allocate(ctx, deposit.AllocationInput{BranchID: f.branchID, OrderID: f.orderA, Amount: 200,
+		ExpectedJournalVersion: 2, ExpectedOrderVersion: 0, IdempotencyKey: "snapshot-a2", RequestFingerprint: []byte("a2"), ActorKind: "branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE orders SET versi=1 WHERE id=$1`, f.orderA); err != nil {
+		t.Fatal(err)
+	}
+	var verificationID string
+	if err := pool.QueryRow(ctx, `INSERT INTO verification_logs(
+order_id,metode,total_pesanan,total_terbaca,hasil,order_version,deposit_amount,transfer_amount)
+VALUES($1,'manual',1000,1000,'cocok',1,400,600) RETURNING id`, f.orderA).Scan(&verificationID); err != nil {
+		t.Fatal(err)
+	}
+	input := deposit.SnapshotInput{VerificationLogID: verificationID, BranchID: f.branchID,
+		OrderID: f.orderA, OrderVersion: 1, SettlementTotal: 1000}
+	if _, err := repo.SnapshotActiveAllocations(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deposit_allocations SET reversed_amount=CASE id WHEN $1 THEN 100 ELSE 200 END
+WHERE id IN ($1,$2)`, a1.Allocation.ID, a2.Allocation.ID); err != nil {
+		t.Fatal(err)
+	}
+	var debitID string
+	if err := pool.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
+branch_id,kind,amount,order_id,order_version,idempotency_key_hash,request_fingerprint,actor_kind)
+VALUES($1,'order_allocation_debit',-300,$2,1,digest('snapshot-a3','sha256'),digest('a3','sha256'),'system') RETURNING id`,
+		f.branchID, f.orderA).Scan(&debitID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO deposit_allocations(
+branch_id,order_id,order_version,debit_transaction_id,amount,created_by_kind)
+VALUES($1,$2,1,$3,300,'system')`, f.branchID, f.orderA, debitID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE branch_deposit_accounts
+SET balance=balance-300,journal_version=journal_version+1 WHERE branch_id=$1`, f.branchID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SnapshotActiveAllocations(ctx, input); !errors.Is(err, deposit.ErrReconciliation) {
+		t.Fatalf("retry distribusi berubah harus reconciliation, dapat %v", err)
 	}
 }

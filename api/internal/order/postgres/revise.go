@@ -120,6 +120,10 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	if row.Status != order.StatusDone {
 		return order.ReviseOutcome{}, order.ErrNotDone
 	}
+	if !row.DoneVerificationLogID.Valid || !row.DoneOrderVersion.Valid ||
+		!row.DoneDepositAmount.Valid || !row.DoneTransferAmount.Valid || row.DoneAt == nil {
+		return order.ReviseOutcome{}, fmt.Errorf("%w: snapshot settlement Done tidak lengkap", order.ErrInvalidData)
+	}
 	if row.Tanggal == nil {
 		// Pesanan Done selalu punya tanggal (constraint draft_tanpa_nomor);
 		// ketiadaannya menandakan data rusak, bukan permintaan pengguna.
@@ -175,7 +179,19 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		return order.ReviseOutcome{}, err
 	}
 
-	// 6. Ganti seluruh baris.
+	// 6. Lepas pointer settlement aktif dan naikkan versi sebelum trigger total
+	//    mengubah nilai order. State sementara valid ini tidak pernah terlihat di
+	//    luar transaksi; state final ditentukan setelah total baru dihitung.
+	changed, err := q.SetOrderVersi(ctx, req.OrderID)
+	if err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("query SetOrderVersi: %w", err)
+	}
+	if changed == 0 {
+		return order.ReviseOutcome{}, order.ErrNotDone
+	}
+	versiBaru := int(row.Versi) + 1
+
+	// 7. Ganti seluruh baris.
 	if err := q.DeleteOrderLines(ctx, req.OrderID); err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query DeleteOrderLines: %w", err)
 	}
@@ -204,37 +220,52 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 		}
 	}
 
-	// 7. Versi naik SATU langkah; nomor invoice tidak disentuh.
-	changed, err := q.SetOrderVersi(ctx, req.OrderID)
-	if err != nil {
-		return order.ReviseOutcome{}, fmt.Errorf("query SetOrderVersi: %w", err)
-	}
-	if changed == 0 {
-		// Berpindah status sesudah penguncian (seharusnya tidak terjadi selama
-		// baris terkunci); tidak ada yang ditulis.
-		return order.ReviseOutcome{}, order.ErrNotDone
-	}
-	versiBaru := int(row.Versi) + 1
-
 	// 8. Total dihitung ULANG dari barisnya (BR-10) — angka klien tidak dipakai.
 	totalBaru, err := q.SumOrderLineSubtotals(ctx, req.OrderID)
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query SumOrderLineSubtotals(revisi): %w", err)
 	}
 	delta := totalBaru - row.Total
+	transition := sqlc.RevisionPaymentTransitionTotalUnchanged
+	if delta > 0 {
+		transition = sqlc.RevisionPaymentTransitionUnderpayment
+	} else if delta < 0 {
+		transition = sqlc.RevisionPaymentTransitionOverpayment
+	}
+	finalized, err := q.FinalizeOrderRevisionSettlement(ctx, sqlc.FinalizeOrderRevisionSettlementParams{
+		PaymentTransition: transition, PreviousDoneAt: *row.DoneAt,
+		PreviousDoneVerificationLogID: pgtypes.UUIDString(row.DoneVerificationLogID),
+		PreviousDoneOrderVersion:      row.DoneOrderVersion.Int32,
+		PreviousDoneDepositAmount:     row.DoneDepositAmount.Int64,
+		PreviousDoneTransferAmount:    row.DoneTransferAmount.Int64,
+		OrderID:                       req.OrderID,
+	})
+	if err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("query FinalizeOrderRevisionSettlement: %w", err)
+	}
+	if finalized == 0 {
+		return order.ReviseOutcome{}, fmt.Errorf("%w: state revisi berubah", order.ErrInvalidData)
+	}
 
 	snapshotLama, err := json.Marshal(snapshotVersi(row, lama))
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("marshal snapshot versi lama: %w", err)
 	}
 	revisiRow, err := q.InsertInvoiceRevision(ctx, sqlc.InsertInvoiceRevisionParams{
-		OrderID:    req.OrderID,
-		VersiLama:  row.Versi,
-		VersiBaru:  int32(versiBaru),
-		Alasan:     req.Alasan,
-		Snapshot:   snapshotLama,
-		DeltaTotal: delta,
-		AdminID:    req.AdminID,
+		OrderID:                       req.OrderID,
+		VersiLama:                     row.Versi,
+		VersiBaru:                     int32(versiBaru),
+		Alasan:                        req.Alasan,
+		Snapshot:                      snapshotLama,
+		DeltaTotal:                    delta,
+		AdminID:                       req.AdminID,
+		PaymentTransition:             transition,
+		PreviousDoneVerificationLogID: pgtypes.UUIDString(row.DoneVerificationLogID),
+		PreviousDoneOrderVersion:      row.DoneOrderVersion.Int32,
+		PreviousDoneTotal:             row.Total,
+		PreviousDoneDepositAmount:     row.DoneDepositAmount.Int64,
+		PreviousDoneTransferAmount:    row.DoneTransferAmount.Int64,
+		PreviousDoneAt:                *row.DoneAt,
 	})
 	if err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("query InsertInvoiceRevision: %w", err)
@@ -273,11 +304,13 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	//     dititipkan pada transaksi yang sama. Versinya DIPATOK pada muatan job
 	//     supaya worker memastikan invoice versi INI ada — bukan invoice versi
 	//     berjalan saat worker kebetulan berjalan (temuan QA putaran 1).
-	if _, err := r.jobs.InsertTx(ctx, tx, jobs.RevisiInvoiceArgs{
-		OrderID: req.OrderID,
-		Versi:   versiBaru,
-	}, nil); err != nil {
-		return order.ReviseOutcome{}, fmt.Errorf("titipkan pekerjaan revisi invoice: %w", err)
+	if transition == sqlc.RevisionPaymentTransitionTotalUnchanged {
+		if _, err := r.jobs.InsertTx(ctx, tx, jobs.RevisiInvoiceArgs{
+			OrderID: req.OrderID,
+			Versi:   versiBaru,
+		}, nil); err != nil {
+			return order.ReviseOutcome{}, fmt.Errorf("titipkan pekerjaan revisi invoice: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

@@ -25,6 +25,64 @@ func (q *Queries) DeleteOrderLines(ctx context.Context, orderID string) error {
 	return err
 }
 
+const finalizeOrderRevisionSettlement = `-- name: FinalizeOrderRevisionSettlement :execrows
+UPDATE orders
+   SET status = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                     THEN 'done'::order_status ELSE 'submitted'::order_status END,
+       revision_payment_state = CASE $1::revision_payment_transition
+         WHEN 'underpayment' THEN 'revision_underpayment'::revision_payment_state
+         WHEN 'overpayment' THEN 'revision_overpayment_pending'::revision_payment_state
+         ELSE NULL END,
+       revision_payment_started_at = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                                          THEN NULL ELSE now() END,
+       verif_status = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                           THEN 'cocok'::verif_status ELSE 'perlu_review'::verif_status END,
+       alasan_review = CASE $1::revision_payment_transition
+         WHEN 'underpayment' THEN 'kurang_bayar'::review_reason
+         WHEN 'overpayment' THEN 'lebih_bayar'::review_reason
+         ELSE NULL END,
+       done_at = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                      THEN $2::timestamptz ELSE NULL END,
+       done_verification_log_id = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                                       THEN $3::uuid ELSE NULL END,
+       done_order_version = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                                 THEN $4::int ELSE NULL END,
+       done_deposit_amount = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                                  THEN $5::bigint ELSE NULL END,
+       done_transfer_amount = CASE WHEN $1::revision_payment_transition = 'total_unchanged'
+                                   THEN $6::bigint ELSE NULL END,
+       updated_at = now()
+ WHERE id = $7::uuid
+   AND status = 'submitted'
+   AND revision_payment_state = 'revision_underpayment'
+`
+
+type FinalizeOrderRevisionSettlementParams struct {
+	PaymentTransition             RevisionPaymentTransition `json:"payment_transition"`
+	PreviousDoneAt                time.Time                 `json:"previous_done_at"`
+	PreviousDoneVerificationLogID string                    `json:"previous_done_verification_log_id"`
+	PreviousDoneOrderVersion      int32                     `json:"previous_done_order_version"`
+	PreviousDoneDepositAmount     int64                     `json:"previous_done_deposit_amount"`
+	PreviousDoneTransferAmount    int64                     `json:"previous_done_transfer_amount"`
+	OrderID                       string                    `json:"order_id"`
+}
+
+func (q *Queries) FinalizeOrderRevisionSettlement(ctx context.Context, arg FinalizeOrderRevisionSettlementParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finalizeOrderRevisionSettlement,
+		arg.PaymentTransition,
+		arg.PreviousDoneAt,
+		arg.PreviousDoneVerificationLogID,
+		arg.PreviousDoneOrderVersion,
+		arg.PreviousDoneDepositAmount,
+		arg.PreviousDoneTransferAmount,
+		arg.OrderID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getProductForRevise = `-- name: GetProductForRevise :one
 SELECT p.id,
        p.nama,
@@ -58,21 +116,37 @@ func (q *Queries) GetProductForRevise(ctx context.Context, id string) (GetProduc
 
 const insertInvoiceRevision = `-- name: InsertInvoiceRevision :one
 INSERT INTO invoice_revisions (order_id, versi_lama, versi_baru, alasan, snapshot,
-                               delta_total, admin_id)
+                               delta_total, admin_id, payment_transition,
+                               previous_done_verification_log_id, previous_done_order_version,
+                               previous_done_total, previous_done_deposit_amount,
+                               previous_done_transfer_amount, previous_done_at)
 VALUES ($1::uuid, $2::int, $3::int,
         $4, $5::jsonb, $6::bigint,
-        $7::uuid)
+        $7::uuid, $8::revision_payment_transition,
+        $9::uuid,
+        $10::int,
+        $11::bigint,
+        $12::bigint,
+        $13::bigint,
+        $14::timestamptz)
 RETURNING id, created_at
 `
 
 type InsertInvoiceRevisionParams struct {
-	OrderID    string `json:"order_id"`
-	VersiLama  int32  `json:"versi_lama"`
-	VersiBaru  int32  `json:"versi_baru"`
-	Alasan     string `json:"alasan"`
-	Snapshot   []byte `json:"snapshot"`
-	DeltaTotal int64  `json:"delta_total"`
-	AdminID    string `json:"admin_id"`
+	OrderID                       string                    `json:"order_id"`
+	VersiLama                     int32                     `json:"versi_lama"`
+	VersiBaru                     int32                     `json:"versi_baru"`
+	Alasan                        string                    `json:"alasan"`
+	Snapshot                      []byte                    `json:"snapshot"`
+	DeltaTotal                    int64                     `json:"delta_total"`
+	AdminID                       string                    `json:"admin_id"`
+	PaymentTransition             RevisionPaymentTransition `json:"payment_transition"`
+	PreviousDoneVerificationLogID string                    `json:"previous_done_verification_log_id"`
+	PreviousDoneOrderVersion      int32                     `json:"previous_done_order_version"`
+	PreviousDoneTotal             int64                     `json:"previous_done_total"`
+	PreviousDoneDepositAmount     int64                     `json:"previous_done_deposit_amount"`
+	PreviousDoneTransferAmount    int64                     `json:"previous_done_transfer_amount"`
+	PreviousDoneAt                time.Time                 `json:"previous_done_at"`
 }
 
 type InsertInvoiceRevisionRow struct {
@@ -93,6 +167,13 @@ func (q *Queries) InsertInvoiceRevision(ctx context.Context, arg InsertInvoiceRe
 		arg.Snapshot,
 		arg.DeltaTotal,
 		arg.AdminID,
+		arg.PaymentTransition,
+		arg.PreviousDoneVerificationLogID,
+		arg.PreviousDoneOrderVersion,
+		arg.PreviousDoneTotal,
+		arg.PreviousDoneDepositAmount,
+		arg.PreviousDoneTransferAmount,
+		arg.PreviousDoneAt,
 	)
 	var i InsertInvoiceRevisionRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -260,23 +341,33 @@ SELECT o.id,
        o.tanggal,
        o.is_sertifikat,
        o.is_cnc,
-       COALESCE(o.catatan, '')::text      AS catatan
+       COALESCE(o.catatan, '')::text      AS catatan,
+       o.done_verification_log_id,
+       o.done_order_version,
+       o.done_deposit_amount,
+       o.done_transfer_amount,
+       o.done_at
   FROM orders o
  WHERE o.id = $1::uuid
  FOR UPDATE
 `
 
 type LockOrderForReviseRow struct {
-	ID           string     `json:"id"`
-	BranchID     string     `json:"branch_id"`
-	Nomor        string     `json:"nomor"`
-	Versi        int32      `json:"versi"`
-	Status       string     `json:"status"`
-	Total        int64      `json:"total"`
-	Tanggal      *time.Time `json:"tanggal"`
-	IsSertifikat bool       `json:"is_sertifikat"`
-	IsCnc        bool       `json:"is_cnc"`
-	Catatan      string     `json:"catatan"`
+	ID                    string      `json:"id"`
+	BranchID              string      `json:"branch_id"`
+	Nomor                 string      `json:"nomor"`
+	Versi                 int32       `json:"versi"`
+	Status                string      `json:"status"`
+	Total                 int64       `json:"total"`
+	Tanggal               *time.Time  `json:"tanggal"`
+	IsSertifikat          bool        `json:"is_sertifikat"`
+	IsCnc                 bool        `json:"is_cnc"`
+	Catatan               string      `json:"catatan"`
+	DoneVerificationLogID pgtype.UUID `json:"done_verification_log_id"`
+	DoneOrderVersion      pgtype.Int4 `json:"done_order_version"`
+	DoneDepositAmount     pgtype.Int8 `json:"done_deposit_amount"`
+	DoneTransferAmount    pgtype.Int8 `json:"done_transfer_amount"`
+	DoneAt                *time.Time  `json:"done_at"`
 }
 
 // Mengunci baris pesanan selama transaksi revisi sekaligus membaca keadaan
@@ -297,6 +388,11 @@ func (q *Queries) LockOrderForRevise(ctx context.Context, id string) (LockOrderF
 		&i.IsSertifikat,
 		&i.IsCnc,
 		&i.Catatan,
+		&i.DoneVerificationLogID,
+		&i.DoneOrderVersion,
+		&i.DoneDepositAmount,
+		&i.DoneTransferAmount,
+		&i.DoneAt,
 	)
 	return i, err
 }
@@ -304,6 +400,16 @@ func (q *Queries) LockOrderForRevise(ctx context.Context, id string) (LockOrderF
 const setOrderVersi = `-- name: SetOrderVersi :execrows
 UPDATE orders
    SET versi = versi + 1,
+       status = 'submitted',
+       revision_payment_state = 'revision_underpayment',
+       revision_payment_started_at = now(),
+       verif_status = 'perlu_review',
+       alasan_review = 'kurang_bayar',
+       done_at = NULL,
+       done_verification_log_id = NULL,
+       done_order_version = NULL,
+       done_deposit_amount = NULL,
+       done_transfer_amount = NULL,
        updated_at = now()
  WHERE id = $1::uuid
    AND status = 'done'

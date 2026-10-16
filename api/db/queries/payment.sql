@@ -37,9 +37,10 @@ SELECT o.id, o.branch_id, o.is_cnc FROM orders o WHERE o.id = sqlc.arg(id)::uuid
 -- Menyimpan metadata satu bukti. sha256 NOT NULL sehingga duplikat isi pada
 -- pesanan yang sama ditolak PostgreSQL (23505) — bukan hanya oleh service.
 INSERT INTO payment_proofs (
-    order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+    purpose, branch_id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
     uploaded_by_kind, uploaded_by_id, uploaded_by_nama
 ) VALUES (
+    'order_payment', (SELECT branch_id FROM orders WHERE id=sqlc.arg(order_id)::uuid),
     sqlc.arg(order_id)::uuid, sqlc.arg(storage_key), sqlc.arg(nama_file),
     sqlc.arg(mime_type), sqlc.arg(ukuran_byte), sqlc.arg(sha256),
     sqlc.arg(uploaded_by_kind)::actor_kind, sqlc.narg(uploaded_by_id)::uuid,

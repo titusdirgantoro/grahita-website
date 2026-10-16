@@ -38,12 +38,17 @@ SELECT o.id,
 -- `done_punya_waktu` menuntut status done selalu punya done_at. Klausa WHERE
 -- memeriksa ulang status sehingga transisi tidak bisa menembus dua kali.
 UPDATE orders
-   SET status        = 'done',
-       verif_status  = 'cocok',
-       alasan_review = NULL,
-       done_at       = now(),
-	   done_verification_log_id = sqlc.arg(verification_log_id)::uuid,
-       updated_at    = now()
+   SET status                   = 'done',
+       verif_status             = 'cocok',
+       alasan_review            = NULL,
+       revision_payment_state   = NULL,
+       revision_payment_started_at = NULL,
+       done_at                  = now(),
+       done_verification_log_id = sqlc.arg(verification_log_id)::uuid,
+       done_order_version       = sqlc.arg(order_version)::int,
+       done_deposit_amount      = 0,
+       done_transfer_amount     = sqlc.arg(transfer_amount)::bigint,
+       updated_at               = now()
  WHERE id = sqlc.arg(order_id)::uuid
    AND status = 'submitted';
 
@@ -64,6 +69,7 @@ UPDATE orders
 -- admin_id NULL berarti verifikasi oleh AI (Fase 2) — manual selalu mengisi.
 INSERT INTO verification_logs (order_id, metode, total_pesanan, total_terbaca,
                                hasil, alasan, admin_id, catatan,
+                               order_version, deposit_amount, transfer_amount,
                                branch_allowlist_version, proof_set_fingerprint, destination_results)
 VALUES (sqlc.arg(order_id)::uuid,
         sqlc.arg(metode)::verify_method,
@@ -73,6 +79,9 @@ VALUES (sqlc.arg(order_id)::uuid,
         sqlc.narg(alasan)::review_reason,
         sqlc.narg(admin_id)::uuid,
         sqlc.narg(catatan),
+        sqlc.arg(order_version)::int,
+        0,
+        sqlc.arg(transfer_amount)::bigint,
         sqlc.arg(branch_allowlist_version),
         sqlc.arg(proof_set_fingerprint),
         sqlc.arg(destination_results)::jsonb)

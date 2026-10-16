@@ -89,8 +89,8 @@ func (f *pgFixture) seedPesananDone(t *testing.T, branchID, nomor string, isCNC 
 	total := int64(2*100000 + 50000)
 	err := f.pool.QueryRow(ctx,
 		`INSERT INTO orders (branch_id, nomor, status, tanggal, total, is_cnc, jatuh_tempo,
-		                     submitted_at, done_at, verif_status)
-		 VALUES ($1,$2,'done',DATE '2026-10-08',$3,$4,$5, now(), now(), 'cocok')
+		                     submitted_at, verif_status)
+		 VALUES ($1,$2,'submitted',DATE '2026-10-08',$3,$4,$5, now(), 'belum')
 		 RETURNING id`,
 		branchID, nomor, total, isCNC, jatuhTempo).Scan(&id)
 	if err != nil {
@@ -140,8 +140,8 @@ func (f *pgFixture) seedVerifikasiDokumenDone(
 		if err := f.pool.QueryRow(ctx,
 			`INSERT INTO verification_logs
 			   (order_id, metode, total_pesanan, total_terbaca, hasil, admin_id, catatan,
-			    branch_allowlist_version, destination_results)
-			 VALUES ($1,'manual',$2,$2,'cocok',$3,'fixture C&C tanpa bukti',$4,'[]'::jsonb)
+			    branch_allowlist_version, destination_results,order_version,deposit_amount,transfer_amount)
+			 VALUES ($1,'manual',$2,$2,'cocok',$3,'fixture C&C tanpa bukti',$4,'[]'::jsonb,0,0,$2)
 			 RETURNING id`, orderID, total, f.adminSA, allowlistVersion).Scan(&verificationID); err != nil {
 			t.Fatalf("seed verifikasi C&C %s: %v", nomor, err)
 		}
@@ -173,16 +173,16 @@ func (f *pgFixture) seedVerifikasiDokumenDone(
 		var proofID string
 		if err := f.pool.QueryRow(ctx,
 			`INSERT INTO payment_proofs
-			   (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+			   (purpose,branch_id,order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
 			    uploaded_by_kind, uploaded_by_id)
-			 VALUES ($1,$2,'bukti-dokumen.jpg','image/jpeg',4,convert_to($3,'UTF8'),'admin',$4)
-			 RETURNING id`, orderID, "proofs/"+orderID+"/bukti-dokumen.jpg", nomor, f.adminSA).Scan(&proofID); err != nil {
+			 VALUES ('order_payment',$5,$1,$2,'bukti-dokumen.jpg','image/jpeg',4,convert_to($3,'UTF8'),'admin',$4)
+			 RETURNING id`, orderID, "proofs/"+orderID+"/bukti-dokumen.jpg", nomor, f.adminSA, branchID).Scan(&proofID); err != nil {
 			t.Fatalf("seed bukti pembayaran %s: %v", nomor, err)
 		}
 		if err := f.pool.QueryRow(ctx,
 			`INSERT INTO verification_logs
 			   (order_id, metode, total_pesanan, total_terbaca, hasil, admin_id, catatan,
-			    branch_allowlist_version, destination_results)
+			    branch_allowlist_version, destination_results,order_version,deposit_amount,transfer_amount)
 			 VALUES ($1,'manual',$2,$2,'cocok',$3,'fixture dokumen dengan snapshot tujuan',$4,
 			   jsonb_build_array(jsonb_build_object(
 			     'payment_proof_id',$5::text,
@@ -191,7 +191,7 @@ func (f *pgFixture) seedVerifikasiDokumenDone(
 			     'bank_account_id',$6::text,
 			     'bank_snapshot',$7::text,
 			     'account_owner_snapshot',$8::text,
-			     'account_last_digits_snapshot',right($9::text,4))))
+			     'account_last_digits_snapshot',right($9::text,4))),0,0,$2)
 			 RETURNING id`, orderID, total, f.adminSA, allowlistVersion, proofID, bankID,
 			bankCode, accountOwner, accountNumber).Scan(&verificationID); err != nil {
 			t.Fatalf("seed verifikasi transfer %s: %v", nomor, err)
@@ -199,7 +199,9 @@ func (f *pgFixture) seedVerifikasiDokumenDone(
 	}
 
 	if _, err := f.pool.Exec(ctx,
-		`UPDATE orders SET done_verification_log_id=$2 WHERE id=$1`, orderID, verificationID); err != nil {
+		`UPDATE orders SET status='done',verif_status='cocok',done_at=now(),
+		 done_verification_log_id=$2,done_order_version=0,done_deposit_amount=0,done_transfer_amount=$3
+		 WHERE id=$1`, orderID, verificationID, total); err != nil {
 		t.Fatalf("pasang pointer verifikasi %s: %v", nomor, err)
 	}
 }

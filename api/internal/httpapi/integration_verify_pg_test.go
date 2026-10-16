@@ -129,8 +129,8 @@ func bodyVerifikasiCocokKe(t *testing.T, f *pgFixture, orderID string, total *in
 		if !isCNC {
 			var proofID string
 			if err := f.pool.QueryRow(ctx, `INSERT INTO payment_proofs
-				(order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
-				VALUES ($1,$2,'bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$3)
+				(purpose,branch_id,order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
+				VALUES ('order_payment',(SELECT branch_id FROM orders WHERE id=$1),$1,$2,'bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$3)
 				RETURNING id`, orderID, "proofs/"+orderID, f.userA).Scan(&proofID); err != nil {
 				t.Fatalf("seed bukti verifikasi manual: %v", err)
 			}

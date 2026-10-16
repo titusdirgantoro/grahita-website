@@ -19,6 +19,8 @@ var (
 	ErrNegativeBalance     = errors.New("reversal akan membuat saldo negatif")
 	ErrReconciliation      = errors.New("saldo cache tidak sama dengan journal")
 	ErrInvalidKind         = errors.New("jenis transaksi deposit tidak sah")
+	ErrCreditSourceInvalid = errors.New("sumber kredit deposit tidak sah")
+	ErrCreditActorInvalid  = errors.New("pelaku kredit deposit tidak berwenang")
 )
 
 type Account struct {

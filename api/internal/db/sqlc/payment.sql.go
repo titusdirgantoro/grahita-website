@@ -119,9 +119,10 @@ func (q *Queries) GetPaymentProof(ctx context.Context, arg GetPaymentProofParams
 
 const insertPaymentProof = `-- name: InsertPaymentProof :one
 INSERT INTO payment_proofs (
-    order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+    purpose, branch_id, order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
     uploaded_by_kind, uploaded_by_id, uploaded_by_nama
 ) VALUES (
+    'order_payment', (SELECT branch_id FROM orders WHERE id=$1::uuid),
     $1::uuid, $2, $3,
     $4, $5, $6,
     $7::actor_kind, $8::uuid,

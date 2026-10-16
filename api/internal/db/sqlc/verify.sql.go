@@ -15,6 +15,7 @@ import (
 const insertVerificationLog = `-- name: InsertVerificationLog :one
 INSERT INTO verification_logs (order_id, metode, total_pesanan, total_terbaca,
                                hasil, alasan, admin_id, catatan,
+                               order_version, deposit_amount, transfer_amount,
                                branch_allowlist_version, proof_set_fingerprint, destination_results)
 VALUES ($1::uuid,
         $2::verify_method,
@@ -24,9 +25,12 @@ VALUES ($1::uuid,
         $6::review_reason,
         $7::uuid,
         $8,
-        $9,
-        $10,
-        $11::jsonb)
+        $9::int,
+        0,
+        $10::bigint,
+        $11,
+        $12,
+        $13::jsonb)
 RETURNING id, order_id, metode::text AS metode, total_pesanan,
           COALESCE(total_terbaca, 0)::bigint AS total_terbaca, selisih,
           hasil::text AS hasil, COALESCE(alasan::text, '')::text AS alasan,
@@ -43,6 +47,8 @@ type InsertVerificationLogParams struct {
 	Alasan                 NullReviewReason `json:"alasan"`
 	AdminID                pgtype.UUID      `json:"admin_id"`
 	Catatan                pgtype.Text      `json:"catatan"`
+	OrderVersion           int32            `json:"order_version"`
+	TransferAmount         int64            `json:"transfer_amount"`
 	BranchAllowlistVersion pgtype.Int8      `json:"branch_allowlist_version"`
 	ProofSetFingerprint    []byte           `json:"proof_set_fingerprint"`
 	DestinationResults     []byte           `json:"destination_results"`
@@ -78,6 +84,8 @@ func (q *Queries) InsertVerificationLog(ctx context.Context, arg InsertVerificat
 		arg.Alasan,
 		arg.AdminID,
 		arg.Catatan,
+		arg.OrderVersion,
+		arg.TransferAmount,
 		arg.BranchAllowlistVersion,
 		arg.ProofSetFingerprint,
 		arg.DestinationResults,
@@ -194,18 +202,25 @@ func (q *Queries) LockOrderForVerify(ctx context.Context, id string) (LockOrderF
 
 const setOrderDone = `-- name: SetOrderDone :execrows
 UPDATE orders
-   SET status        = 'done',
-       verif_status  = 'cocok',
-       alasan_review = NULL,
-       done_at       = now(),
-	   done_verification_log_id = $1::uuid,
-       updated_at    = now()
- WHERE id = $2::uuid
+   SET status                   = 'done',
+       verif_status             = 'cocok',
+       alasan_review            = NULL,
+       revision_payment_state   = NULL,
+       revision_payment_started_at = NULL,
+       done_at                  = now(),
+       done_verification_log_id = $1::uuid,
+       done_order_version       = $2::int,
+       done_deposit_amount      = 0,
+       done_transfer_amount     = $3::bigint,
+       updated_at               = now()
+ WHERE id = $4::uuid
    AND status = 'submitted'
 `
 
 type SetOrderDoneParams struct {
 	VerificationLogID string `json:"verification_log_id"`
+	OrderVersion      int32  `json:"order_version"`
+	TransferAmount    int64  `json:"transfer_amount"`
 	OrderID           string `json:"order_id"`
 }
 
@@ -214,7 +229,12 @@ type SetOrderDoneParams struct {
 // `done_punya_waktu` menuntut status done selalu punya done_at. Klausa WHERE
 // memeriksa ulang status sehingga transisi tidak bisa menembus dua kali.
 func (q *Queries) SetOrderDone(ctx context.Context, arg SetOrderDoneParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setOrderDone, arg.VerificationLogID, arg.OrderID)
+	result, err := q.db.Exec(ctx, setOrderDone,
+		arg.VerificationLogID,
+		arg.OrderVersion,
+		arg.TransferAmount,
+		arg.OrderID,
+	)
 	if err != nil {
 		return 0, err
 	}

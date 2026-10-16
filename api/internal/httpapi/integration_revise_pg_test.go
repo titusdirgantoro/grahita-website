@@ -63,13 +63,17 @@ func seedPesananDone(t *testing.T, f *pgFixture, branchID, nomor, tanggal string
 
 	var total int64
 	for _, b := range baris {
-		total += int64(b.qty) * b.harga
+		if b.packaging {
+			total += b.harga
+		} else {
+			total += int64(b.qty) * b.harga
+		}
 	}
 	var id string
 	err := f.pool.QueryRow(ctx,
 		`INSERT INTO orders (branch_id, nomor, versi, status, verif_status, tanggal, total,
-		                     done_at, submitted_at)
-		 VALUES ($1,$2,0,'done','cocok',$3::date,$4,now(),now()) RETURNING id`,
+		                     submitted_at)
+		 VALUES ($1,$2,0,'submitted','belum',$3::date,$4,now()) RETURNING id`,
 		branchID, nomor, tanggal, total).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed pesanan done %s: %v", nomor, err)
@@ -120,9 +124,9 @@ func seedPointerVerifikasiDone(t *testing.T, f *pgFixture, orderID, nomor string
 	var proofID string
 	if err := f.pool.QueryRow(ctx,
 		`INSERT INTO payment_proofs
-		   (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+		   (purpose,branch_id,order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
 		    uploaded_by_kind, uploaded_by_id)
-		 VALUES ($1,$2,'bukti-revisi.jpg','image/jpeg',4,convert_to($3,'UTF8'),'admin',$4)
+		 VALUES ('order_payment',(SELECT branch_id FROM orders WHERE id=$1),$1,$2,'bukti-revisi.jpg','image/jpeg',4,convert_to($3,'UTF8'),'admin',$4)
 		 RETURNING id`, orderID, "proofs/"+orderID+"/bukti-revisi.jpg", nomor, f.adminSA).Scan(&proofID); err != nil {
 		t.Fatalf("seed bukti pembayaran %s: %v", nomor, err)
 	}
@@ -130,7 +134,7 @@ func seedPointerVerifikasiDone(t *testing.T, f *pgFixture, orderID, nomor string
 	if err := f.pool.QueryRow(ctx,
 		`INSERT INTO verification_logs
 		   (order_id, metode, total_pesanan, total_terbaca, hasil, admin_id, catatan,
-		    destination_results)
+		    destination_results,order_version,deposit_amount,transfer_amount)
 		 VALUES ($1,'manual',$2,$2,'cocok',$3,'fixture revisi dengan snapshot tujuan',
 		   jsonb_build_array(jsonb_build_object(
 		     'payment_proof_id',$4::text,
@@ -139,13 +143,15 @@ func seedPointerVerifikasiDone(t *testing.T, f *pgFixture, orderID, nomor string
 		     'bank_account_id',$5::text,
 		     'bank_snapshot',$6::text,
 		     'account_owner_snapshot',$7::text,
-		     'account_last_digits_snapshot',$8::text)))
+		     'account_last_digits_snapshot',$8::text)),0,0,$2)
 		 RETURNING id`, orderID, total, f.adminSA, proofID, f.bankDefault,
 		bankCode, accountOwner, accountNumber).Scan(&verificationID); err != nil {
 		t.Fatalf("seed attempt verifikasi %s: %v", nomor, err)
 	}
 	if _, err := f.pool.Exec(ctx,
-		`UPDATE orders SET done_verification_log_id=$2 WHERE id=$1`, orderID, verificationID); err != nil {
+		`UPDATE orders SET status='done',verif_status='cocok',alasan_review=NULL,done_at=now(),
+		 done_verification_log_id=$2,done_order_version=0,done_deposit_amount=0,done_transfer_amount=$3
+		 WHERE id=$1`, orderID, verificationID, total); err != nil {
 		t.Fatalf("pasang pointer verifikasi %s: %v", nomor, err)
 	}
 }
@@ -380,15 +386,15 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 		t.Errorf("invoice v0 harus memakai snapshot rekening saat Done: %s", htmlInvoiceV0)
 	}
 
-	// Revisi: baris 1 dinaikkan qty-nya, harga baris 1 naik, baris 2 tetap,
-	// ditambah satu baris produk BARU.
+	// Revisi komposisi dengan total tetap: baris 1 berubah, baris 2 tetap,
+	// dan satu baris produk BARU ditambahkan.
 	produk2 := insertProduct(t, ctx, f.pool, "P-99", "Kertas HVS", 7000)
 	if _, err := f.pool.Exec(ctx,
 		`INSERT INTO branch_prices (branch_id, product_id, harga) VALUES ($1,$2,$3)`,
 		f.branchA, produk2, 7000); err != nil {
 		t.Fatalf("seed harga produk baru: %v", err)
 	}
-	body := reviseBody("harga baris 1 salah input", `{"line_no":1,"qty":3,"harga_satuan":120000},`+
+	body := reviseBody("harga baris 1 salah input", `{"line_no":1,"qty":1,"harga_satuan":172000},`+
 		`{"line_no":2,"qty":1,"harga_satuan":50000},`+
 		`{"product_id":"`+produk2+`","qty":4,"harga_satuan":7000}`)
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
@@ -402,8 +408,8 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	if data["nomor"] != "2026-10-900" {
 		t.Errorf("nomor invoice harus tetap, dapat %v", data["nomor"])
 	}
-	// Total baru = 3*120000 + 1*50000 + 4*7000 = 438000.
-	totalBaru := int64(438000)
+	// Total baru = 1*172000 + 1*50000 + 4*7000 = 250000 (tetap).
+	totalBaru := int64(250000)
 	if data["total"] != float64(totalBaru) {
 		t.Errorf("total versi baru harus %d, dapat %v", totalBaru, data["total"])
 	}
@@ -515,6 +521,50 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	}
 }
 
+func TestPGRevisiC1TotalTetapNaikTurunMenjagaSettlementTyped(t *testing.T) {
+	f := newPGFixture(t)
+	produk := produkKode(t, f, "P-01")
+	tanggal, periode := tanggalDanPeriode(3)
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	tests := []struct {
+		nama, nomor, body, status, state, transition string
+		job                                          int
+		pointer                                      bool
+	}{
+		{"tetap", "2026-10-930", reviseBody("UJI-total tetap", `{"line_no":1,"qty":2,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`), "done", "", "total_unchanged", 1, true},
+		{"naik", "2026-10-931", reviseBody("UJI-total naik", `{"line_no":1,"qty":3,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`), "submitted", "revision_underpayment", "underpayment", 0, false},
+		{"turun", "2026-10-932", reviseBody("UJI-total turun", `{"line_no":1,"qty":1,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`), "submitted", "revision_overpayment_pending", "overpayment", 0, false},
+	}
+	for i, tc := range tests {
+		t.Run(tc.nama, func(t *testing.T) {
+			id, _ := seedPesananDone(t, f, f.branchA, tc.nomor, tanggal, []barisDone{
+				{lineNo: 1, product: produk, nama: "Bio Magnetik", qty: 2, harga: 100000, serial: fmt.Sprintf("%s93%d", periode, i)},
+				{lineNo: 2, product: produk, nama: "Bio Magnetik B", qty: 1, harga: 50000, serial: fmt.Sprintf("%s94%d", periode, i)},
+			})
+			if err := jalankanPekerjaanDone(t, f, id); err != nil {
+				t.Fatalf("render prasyarat: %v", err)
+			}
+			if status, body := reviseHTTP(t, f, cookies, csrf, id, tc.body); status != http.StatusOK {
+				t.Fatalf("revisi %s harus 200, dapat %d %v", tc.nama, status, body)
+			}
+			var status, state, transition string
+			var pointer *string
+			if err := f.pool.QueryRow(context.Background(), `SELECT o.status::text,
+			 COALESCE(o.revision_payment_state::text,''),o.done_verification_log_id::text,
+			 r.payment_transition::text FROM orders o JOIN invoice_revisions r ON r.order_id=o.id
+			 WHERE o.id=$1`, id).Scan(&status, &state, &pointer, &transition); err != nil {
+				t.Fatal(err)
+			}
+			if status != tc.status || state != tc.state || transition != tc.transition || (pointer != nil) != tc.pointer {
+				t.Fatalf("state %s salah: status=%s state=%s transition=%s pointer=%v", tc.nama, status, state, transition, pointer)
+			}
+			if got := hitungJobRevisi(t, f, id); got != tc.job {
+				t.Fatalf("job revisi %s=%d, ingin %d", tc.nama, got, tc.job)
+			}
+		})
+	}
+}
+
 // TestPGRevisiUnduhVersiLamaDanBaru membuktikan kedua versi invoice dapat
 // diunduh lewat API (presigned) setelah revisi.
 func TestPGRevisiUnduhVersiLamaDanBaru(t *testing.T) {
@@ -523,7 +573,7 @@ func TestPGRevisiUnduhVersiLamaDanBaru(t *testing.T) {
 	if err := jalankanPekerjaanDone(t, f, id); err != nil {
 		t.Fatalf("pekerjaan Done: %v", err)
 	}
-	body := reviseBody("koreksi qty", `{"line_no":1,"qty":5,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+	body := reviseBody("koreksi komposisi", `{"line_no":1,"qty":1,"harga_satuan":200000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
 	if status, hasil := reviseHTTP(t, f, cookies, csrf, id, body); status != http.StatusOK {
 		t.Fatalf("revisi harus 200, dapat %d (%v)", status, hasil)
 	}
@@ -611,7 +661,7 @@ func TestPGRevisiConcurrentBerurutan(t *testing.T) {
 	if err := jalankanPekerjaanDone(t, f, id); err != nil {
 		t.Fatalf("pekerjaan Done: %v", err)
 	}
-	body := reviseBody("ganti qty", `{"line_no":1,"qty":2,"harga_satuan":110000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+	body := reviseBody("ganti komposisi", `{"line_no":1,"qty":1,"harga_satuan":200000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
 
 	const n = 2
 	var wg sync.WaitGroup
@@ -837,8 +887,9 @@ func TestPGRevisiRollbackTidakMenyisakanSerialVersiDanJob(t *testing.T) {
 	// Paksa InsertInvoiceRevision gagal: baris (order_id, versi_baru=1) sudah
 	// ada (unique constraint), padahal transaksi revisi menghitung versi_baru 1.
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO invoice_revisions (order_id, versi_lama, versi_baru, alasan, snapshot, delta_total, admin_id)
-		 VALUES ($1, 0, 1, 'pembuka', '{}'::jsonb, 0, $2)`, id, f.adminSA); err != nil {
+		`INSERT INTO invoice_revisions (order_id, versi_lama, versi_baru, alasan, snapshot, delta_total, admin_id,
+		 settlement_contract_version)
+		 VALUES ($1, 0, 1, 'pembuka', '{}'::jsonb, 0, $2, 0)`, id, f.adminSA); err != nil {
 		t.Fatalf("seed revisi pembuka: %v", err)
 	}
 
@@ -1064,9 +1115,9 @@ func TestPGRevisiPDFNyataVersiLamaDanBaru(t *testing.T) {
 		t.Fatalf("invoice v0 bukan PDF yang utuh (%d byte)", len(v0))
 	}
 
-	// Revisi: qty baris 1 naik, baris 2 tetap.
-	reqBody := reviseBody("koreksi qty versi nyata",
-		`{"line_no":1,"qty":3,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+	// Revisi total tetap agar versi baru tetap Done dan dapat dirender.
+	reqBody := reviseBody("koreksi komposisi versi nyata",
+		`{"line_no":1,"qty":1,"harga_satuan":200000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
 	st, hasil, _ := apiReq(t, http.DefaultClient, http.MethodPost,
 		srv.URL+"/api/v1/admin/orders/"+pesanan.ID+"/revise", reqBody, sa, csrfSA)
 	if st != http.StatusOK {

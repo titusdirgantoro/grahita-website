@@ -146,6 +146,9 @@ func (r *Repo) Credit(ctx context.Context, in deposit.CreditInput) (deposit.Tran
 	if in.Amount <= 0 || (in.Kind != "topup_credit" && in.Kind != "overpay_credit") {
 		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrInvalidKind
 	}
+	if in.ActorKind != "admin" || in.ActorID == "" {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return deposit.Transaction{}, deposit.Account{}, false, err
@@ -166,9 +169,26 @@ func (r *Repo) Credit(ctx context.Context, in deposit.CreditInput) (deposit.Tran
 	}
 	if in.Kind == "topup_credit" {
 		var sourceBranch, sourceProof string
-		if err := tx.QueryRow(ctx, `SELECT t.branch_id,t.payment_proof_id
-FROM deposit_verification_logs v JOIN deposit_topups t ON t.id=v.topup_id
-WHERE v.id=$1 FOR UPDATE OF t`, in.DepositVerificationLogID).Scan(&sourceBranch, &sourceProof); err != nil {
+		var sourceAmount int64
+		var sourceAdmin string
+		var valid bool
+		if err := tx.QueryRow(ctx, `SELECT t.branch_id,t.payment_proof_id,v.approved_amount,v.admin_id,
+  (v.method='manual' AND v.result='verified'
+   AND t.status='verified' AND t.verified_amount=v.approved_amount
+   AND t.verified_by=v.admin_id AND t.bank_account_id=v.bank_account_id
+   AND p.purpose='deposit_topup' AND p.branch_id=t.branch_id
+   AND b.is_active AND b.bank_allowlist_version=v.branch_allowlist_version
+   AND ba.is_active AND x.is_allowed
+   AND au.is_active AND au.role='superadmin') AS valid
+FROM deposit_verification_logs v
+JOIN deposit_topups t ON t.id=v.topup_id
+JOIN payment_proofs p ON p.id=t.payment_proof_id
+JOIN branches b ON b.id=t.branch_id
+JOIN bank_accounts ba ON ba.id=t.bank_account_id
+JOIN branch_bank_accounts x ON x.branch_id=t.branch_id AND x.bank_account_id=t.bank_account_id
+JOIN admin_users au ON au.id=v.admin_id
+WHERE v.id=$1 FOR UPDATE OF t`, in.DepositVerificationLogID).
+			Scan(&sourceBranch, &sourceProof, &sourceAmount, &sourceAdmin, &valid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrNotFound
 			}
@@ -177,12 +197,32 @@ WHERE v.id=$1 FOR UPDATE OF t`, in.DepositVerificationLogID).Scan(&sourceBranch,
 		if sourceBranch != in.BranchID || sourceProof != in.SourceProofID {
 			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrBranchMismatch
 		}
+		if sourceAdmin != in.ActorID {
+			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
+		}
+		if !valid || sourceAmount != in.Amount {
+			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
+		}
 	}
 	if in.Kind == "overpay_credit" {
-		var sourceBranch, sourceOrder string
-		if err := tx.QueryRow(ctx, `SELECT o.branch_id,v.order_id
-FROM verification_logs v JOIN orders o ON o.id=v.order_id
-WHERE v.id=$1 FOR UPDATE OF o`, in.OrderVerificationLogID).Scan(&sourceBranch, &sourceOrder); err != nil {
+		var sourceBranch, sourceOrder, sourceProof, sourceAdmin string
+		var sourceVersion int32
+		var sourceAmount int64
+		var valid bool
+		if err := tx.QueryRow(ctx, `SELECT o.branch_id,v.order_id,s.payment_proof_id,v.admin_id,
+ s.order_version,s.new_credit_to_deposit,
+ (v.metode='manual' AND v.hasil='cocok' AND au.is_active AND au.role='superadmin'
+  AND p.purpose='order_payment' AND p.order_id=o.id AND p.branch_id=o.branch_id
+  AND d.decided_by=v.admin_id AND d.approved_nominal=s.approved_nominal) AS valid
+FROM verification_proof_splits s
+JOIN verification_logs v ON v.id=s.verification_log_id
+JOIN orders o ON o.id=v.order_id
+JOIN payment_proofs p ON p.id=s.payment_proof_id
+JOIN payment_proof_economic_decisions d ON d.payment_proof_id=s.payment_proof_id
+JOIN admin_users au ON au.id=v.admin_id
+WHERE v.id=$1 AND s.payment_proof_id=$2 FOR UPDATE OF o`,
+			in.OrderVerificationLogID, in.SourceProofID).
+			Scan(&sourceBranch, &sourceOrder, &sourceProof, &sourceAdmin, &sourceVersion, &sourceAmount, &valid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrNotFound
 			}
@@ -190,6 +230,13 @@ WHERE v.id=$1 FOR UPDATE OF o`, in.OrderVerificationLogID).Scan(&sourceBranch, &
 		}
 		if sourceBranch != in.BranchID || sourceOrder != in.OrderID {
 			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrBranchMismatch
+		}
+		if sourceAdmin != in.ActorID {
+			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
+		}
+		if sourceProof != in.SourceProofID || in.OrderVersion == nil || sourceVersion != *in.OrderVersion ||
+			sourceAmount != in.Amount || !valid {
+			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
 		}
 	}
 	var out deposit.Transaction
@@ -488,14 +535,23 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
 			return nil, err
 		}
 	}
-	var storedCount int
-	var storedSum int64
-	if err := tx.QueryRow(ctx, `SELECT count(*)::int,COALESCE(sum(amount_snapshot),0)::bigint
-FROM verification_deposit_sources WHERE verification_log_id=$1`, in.VerificationLogID).
-		Scan(&storedCount, &storedSum); err != nil {
+	var mismatch bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(
+  SELECT allocation_id,allocation_order_version,amount_snapshot
+     FROM verification_deposit_sources WHERE verification_log_id=$1
+   EXCEPT
+   SELECT id,order_version,(amount-reversed_amount)::bigint
+     FROM deposit_allocations WHERE order_id=$2 AND amount>reversed_amount)
+  OR EXISTS(
+  SELECT id,order_version,(amount-reversed_amount)::bigint
+     FROM deposit_allocations WHERE order_id=$2 AND amount>reversed_amount
+   EXCEPT
+   SELECT allocation_id,allocation_order_version,amount_snapshot
+     FROM verification_deposit_sources WHERE verification_log_id=$1)`,
+		in.VerificationLogID, in.OrderID).Scan(&mismatch); err != nil {
 		return nil, err
 	}
-	if storedCount != len(out) || storedSum != sum {
+	if mismatch {
 		return nil, deposit.ErrReconciliation
 	}
 	if err := tx.Commit(ctx); err != nil {

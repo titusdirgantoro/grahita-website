@@ -53,7 +53,12 @@ SELECT o.id,
        o.tanggal,
        o.is_sertifikat,
        o.is_cnc,
-       COALESCE(o.catatan, '')::text      AS catatan
+       COALESCE(o.catatan, '')::text      AS catatan,
+       o.done_verification_log_id,
+       o.done_order_version,
+       o.done_deposit_amount,
+       o.done_transfer_amount,
+       o.done_at
   FROM orders o
  WHERE o.id = sqlc.arg(id)::uuid
  FOR UPDATE;
@@ -110,9 +115,50 @@ VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
 -- sehingga transisi tidak bisa menembus pesanan yang belum selesai.
 UPDATE orders
    SET versi = versi + 1,
+       status = 'submitted',
+       revision_payment_state = 'revision_underpayment',
+       revision_payment_started_at = now(),
+       verif_status = 'perlu_review',
+       alasan_review = 'kurang_bayar',
+       done_at = NULL,
+       done_verification_log_id = NULL,
+       done_order_version = NULL,
+       done_deposit_amount = NULL,
+       done_transfer_amount = NULL,
        updated_at = now()
  WHERE id = sqlc.arg(id)::uuid
    AND status = 'done';
+
+-- name: FinalizeOrderRevisionSettlement :execrows
+UPDATE orders
+   SET status = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                     THEN 'done'::order_status ELSE 'submitted'::order_status END,
+       revision_payment_state = CASE sqlc.arg(payment_transition)::revision_payment_transition
+         WHEN 'underpayment' THEN 'revision_underpayment'::revision_payment_state
+         WHEN 'overpayment' THEN 'revision_overpayment_pending'::revision_payment_state
+         ELSE NULL END,
+       revision_payment_started_at = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                                          THEN NULL ELSE now() END,
+       verif_status = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                           THEN 'cocok'::verif_status ELSE 'perlu_review'::verif_status END,
+       alasan_review = CASE sqlc.arg(payment_transition)::revision_payment_transition
+         WHEN 'underpayment' THEN 'kurang_bayar'::review_reason
+         WHEN 'overpayment' THEN 'lebih_bayar'::review_reason
+         ELSE NULL END,
+       done_at = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                      THEN sqlc.arg(previous_done_at)::timestamptz ELSE NULL END,
+       done_verification_log_id = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                                       THEN sqlc.arg(previous_done_verification_log_id)::uuid ELSE NULL END,
+       done_order_version = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                                 THEN sqlc.arg(previous_done_order_version)::int ELSE NULL END,
+       done_deposit_amount = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                                  THEN sqlc.arg(previous_done_deposit_amount)::bigint ELSE NULL END,
+       done_transfer_amount = CASE WHEN sqlc.arg(payment_transition)::revision_payment_transition = 'total_unchanged'
+                                   THEN sqlc.arg(previous_done_transfer_amount)::bigint ELSE NULL END,
+       updated_at = now()
+ WHERE id = sqlc.arg(order_id)::uuid
+   AND status = 'submitted'
+   AND revision_payment_state = 'revision_underpayment';
 
 -- name: InsertInvoiceRevision :one
 -- Snapshot versi LAMA (jsonb: nomor, versi, total, baris + serial) beserta
@@ -120,8 +166,17 @@ UPDATE orders
 -- agar satu versi tidak pernah tercatat dua kali; berkas versi lama sendiri
 -- tetap ada di object storage (kunci per (order, jenis, versi), F1-17).
 INSERT INTO invoice_revisions (order_id, versi_lama, versi_baru, alasan, snapshot,
-                               delta_total, admin_id)
+                               delta_total, admin_id, payment_transition,
+                               previous_done_verification_log_id, previous_done_order_version,
+                               previous_done_total, previous_done_deposit_amount,
+                               previous_done_transfer_amount, previous_done_at)
 VALUES (sqlc.arg(order_id)::uuid, sqlc.arg(versi_lama)::int, sqlc.arg(versi_baru)::int,
         sqlc.arg(alasan), sqlc.arg(snapshot)::jsonb, sqlc.arg(delta_total)::bigint,
-        sqlc.arg(admin_id)::uuid)
+        sqlc.arg(admin_id)::uuid, sqlc.arg(payment_transition)::revision_payment_transition,
+        sqlc.arg(previous_done_verification_log_id)::uuid,
+        sqlc.arg(previous_done_order_version)::int,
+        sqlc.arg(previous_done_total)::bigint,
+        sqlc.arg(previous_done_deposit_amount)::bigint,
+        sqlc.arg(previous_done_transfer_amount)::bigint,
+        sqlc.arg(previous_done_at)::timestamptz)
 RETURNING id, created_at;
