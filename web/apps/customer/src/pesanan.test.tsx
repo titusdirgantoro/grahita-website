@@ -147,7 +147,9 @@ function fetchPesanan(
     bukti?: unknown[];
     rekening?: unknown[];
     rekeningGagalSetelah?: number;
+    tundaRekeningGagalMs?: number;
     submitBankUnavailable?: boolean;
+    uploadBankUnavailable?: boolean;
     /** Flag cash_and_carry cabang sesi (F1-14: centang C&C di modal kirim). */
     cabangCNC?: boolean;
     /**
@@ -179,6 +181,7 @@ function fetchPesanan(
       if (input.endsWith("/bank-accounts")) {
         jumlahRekening += 1;
         if (opsi.rekeningGagalSetelah && jumlahRekening > opsi.rekeningGagalSetelah) {
+          if (opsi.tundaRekeningGagalMs) await tunda(opsi.tundaRekeningGagalMs);
           return json({ error: { code: "UNAVAILABLE", message: "Rekening terbaru gagal dimuat." } }, 503);
         }
         return json({ data: rekening });
@@ -226,6 +229,9 @@ function fetchPesanan(
       if (input.endsWith("/orders/o2")) return json({ data: opsi.detail ?? terkirim });
       // Bukti transfer (F1-13): daftar bukti, unggah multipart, dan tautan unduh.
       if (input.endsWith("/proofs") && init?.method === "POST") {
+        if (opsi.uploadBankUnavailable) {
+          return json({ error: { code: "BRANCH_BANK_ACCOUNT_UNAVAILABLE", message: "Rekening tujuan berubah." } }, 409);
+        }
         return json({ data: bukti }, 201);
       }
       if (input.endsWith("/proofs")) return json({ data: bukti });
@@ -686,6 +692,30 @@ describe("Customer Portal — bukti transfer (F1-13)", () => {
     expect(await screen.findByText(/Unggah bukti diblokir karena rekening tujuan cabang belum ditetapkan/)).toBeDefined();
     expect(screen.getByRole("button", { name: "Unggah bukti" }).hasAttribute("disabled")).toBe(true);
     expect(panggilan.some((p) => p.init?.method === "POST" && p.url.endsWith("/proofs"))).toBe(false);
+  });
+
+  it("menghapus nomor lama selama refetch dan tetap fail-closed ketika assignment berubah", async () => {
+    const panggilan = fetchPesanan({
+      bukti: [],
+      rekeningGagalSetelah: 2,
+      tundaRekeningGagalMs: 100,
+      uploadBankUnavailable: true,
+    });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+    expect(await screen.findByText("1234567890")).toBeDefined();
+    const berkas = new File(["data"], "transfer.jpg", { type: "image/jpeg" });
+    fireEvent.change(screen.getByLabelText(/Tambah bukti/), { target: { files: [berkas] } });
+    fireEvent.click(screen.getByRole("button", { name: "Unggah bukti" }));
+
+    expect(await screen.findByText(/Unggah bukti diblokir sampai rekening tujuan terbaru selesai diperiksa/)).toBeDefined();
+    expect(screen.queryByText("1234567890")).toBeNull();
+    expect(screen.getByRole("button", { name: "Unggah bukti" }).hasAttribute("disabled")).toBe(true);
+
+    expect(await screen.findByText("Rekening terbaru gagal dimuat.")).toBeDefined();
+    expect(screen.queryByText("1234567890")).toBeNull();
+    expect(screen.getByRole("button", { name: "Unggah bukti" }).hasAttribute("disabled")).toBe(true);
+    expect(panggilan.filter((p) => p.url.endsWith("/bank-accounts")).length).toBeGreaterThanOrEqual(4);
   });
 
   it("pesanan selesai tidak menampilkan form unggah", async () => {
