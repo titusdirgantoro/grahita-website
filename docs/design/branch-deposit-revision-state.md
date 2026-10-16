@@ -241,14 +241,121 @@ Baseline repository sampai migrasi `0011` hanya mempunyai
 `done_punya_waktu`; karena itu penggantian wajib menerima kedua lintasan secara
 deterministik:
 
-1. preflight katalog memastikan setiap constraint bernama
-   `done_punya_waktu`/`orders_done_payment_breakdown` yang ada benar-benar CHECK
-   pada `orders`; nama sama dengan jenis atau tabel yang berbeda adalah drift dan
-   migrasi berhenti;
-2. `DROP CONSTRAINT IF EXISTS` dipakai untuk keduanya. Ini bukan mengabaikan drift:
+1. sesudah kolom D3 ditambah tetapi sebelum constraint lama dihapus, preflight
+   katalog memastikan setiap constraint bernama
+   `done_punya_waktu`/`orders_done_payment_breakdown` pada `orders` adalah CHECK
+   tervalidasi, bukan `NO INHERIT`, dan mempunyai **parse tree ekspresi yang persis
+   sama** dengan definisi lama yang dipetakan untuk nama itu di bawah; nama sama
+   dengan jenis, flag, atau ekspresi berbeda adalah drift dan migrasi berhenti;
+2. pembandingan ekspresi tidak boleh memakai substring atau regex atas
+   `pg_get_constraintdef`. Migrasi membuat dua CHECK pembanding bernama reserved
+   pada tabel yang sama sebagai `NOT VALID`, lalu membandingkan hasil deparse
+   kanonik `pg_get_expr(conbin, conrelid, false)` milik constraint lama dan
+   pembanding dengan equality penuh. Keduanya diparse/deparse server PostgreSQL
+   yang sama pada relasi dan attnum yang sama, sehingga perbedaan whitespace/cast
+   input tidak menimbulkan false drift, tetapi perubahan operator/kolom/nilai tetap
+   ditolak. `conbin` mentah tidak dibandingkan karena menyimpan lokasi token parser.
+   Nama pembanding wajib belum ada; seluruh langkah berada dalam satu transaksi
+   sehingga exception mengembalikan skema utuh;
+3. hanya dua definisi berikut yang diterima:
+   - baseline `done_punya_waktu`: `status <> 'done' OR done_at IS NOT NULL`;
+   - D3 parsial `orders_done_payment_breakdown`: ekspresi normatif D3 §4.8,
+     yaitu Done wajib mempunyai pointer dan jumlah deposit+transfer sama dengan
+     total, sedangkan non-Done wajib mengosongkan keempat `done_*`;
+4. sesudah kedua signature cocok atau constraint memang absen,
+   `DROP CONSTRAINT IF EXISTS` dipakai untuk keduanya. Ini bukan mengabaikan drift:
    preflight sebelumnya sudah menolak objek bernama sama yang tidak sesuai;
-3. tambah satu-satunya pengganti `orders_settlement_state_consistent` sebagai
+5. tambah satu-satunya pengganti `orders_settlement_state_consistent` sebagai
    `NOT VALID`, lakukan rekonsiliasi, lalu `VALIDATE` sebelum aktivasi writer.
+
+Bentuk preflight normatif berikut dijalankan setelah empat kolom `done_*` tersedia.
+Nama `__c1_expected_*` dicadangkan hanya selama transaksi migrasi dan tidak boleh
+dipakai aplikasi:
+
+```sql
+LOCK TABLE orders IN ACCESS EXCLUSIVE MODE;
+
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT conname, contype, convalidated, connoinherit
+    FROM pg_constraint
+    WHERE conrelid = 'orders'::regclass
+      AND conname IN ('done_punya_waktu', 'orders_done_payment_breakdown')
+  LOOP
+    IF r.contype <> 'c' OR NOT r.convalidated OR r.connoinherit THEN
+      RAISE EXCEPTION 'constraint orders.% mempunyai tipe/flag asing', r.conname;
+    END IF;
+  END LOOP;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'orders'::regclass
+      AND conname IN (
+        '__c1_expected_done_punya_waktu',
+        '__c1_expected_done_payment_breakdown'
+      )
+  ) THEN
+    RAISE EXCEPTION 'nama constraint pembanding C1 sudah terpakai';
+  END IF;
+END $$;
+
+ALTER TABLE orders
+  ADD CONSTRAINT __c1_expected_done_punya_waktu CHECK (
+    status <> 'done' OR done_at IS NOT NULL
+  ) NOT VALID,
+  ADD CONSTRAINT __c1_expected_done_payment_breakdown CHECK (
+    (status = 'done'
+     AND done_verification_log_id IS NOT NULL
+     AND done_deposit_amount + done_transfer_amount = total)
+    OR
+    (status <> 'done'
+     AND done_verification_log_id IS NULL
+     AND done_order_version IS NULL
+     AND done_deposit_amount IS NULL
+     AND done_transfer_amount IS NULL)
+  ) NOT VALID;
+
+DO $$
+DECLARE
+  actual_bin text;
+  expected_bin text;
+  pair text[];
+BEGIN
+  FOREACH pair SLICE 1 IN ARRAY ARRAY[
+    ARRAY['done_punya_waktu', '__c1_expected_done_punya_waktu'],
+    ARRAY['orders_done_payment_breakdown',
+          '__c1_expected_done_payment_breakdown']
+  ]
+  LOOP
+    SELECT pg_get_expr(conbin, conrelid, false) INTO actual_bin
+    FROM pg_constraint
+    WHERE conrelid = 'orders'::regclass AND conname = pair[1];
+
+    IF FOUND THEN
+      SELECT pg_get_expr(conbin, conrelid, false) INTO STRICT expected_bin
+      FROM pg_constraint
+      WHERE conrelid = 'orders'::regclass AND conname = pair[2];
+
+      IF actual_bin <> expected_bin THEN
+        RAISE EXCEPTION 'constraint orders.% mempunyai ekspresi asing', pair[1];
+      END IF;
+    END IF;
+  END LOOP;
+END $$;
+
+ALTER TABLE orders
+  DROP CONSTRAINT __c1_expected_done_punya_waktu,
+  DROP CONSTRAINT __c1_expected_done_payment_breakdown;
+```
+
+Pengecekan `convalidated` di atas sengaja fail-closed: constraint lama dengan
+ekspresi benar tetapi belum tervalidasi bukan baseline `0011` atau D3 §4.8 yang
+diterima. Perbandingan signature dan seluruh DROP/ADD final harus berada dalam
+transaksi yang sama; tidak ada jendela di mana drift sudah dihapus tetapi
+constraint final belum terpasang.
 
 Bentuk SQL normatif berikut sengaja menulis setiap cabang state secara eksplisit
 sehingga evaluasi `NULL` tidak dapat berubah menjadi `UNKNOWN` dan lolos sebagai
@@ -414,6 +521,15 @@ Matriks uji migrasi C1 wajib mencakup:
 - baseline dengan hanya `done_punya_waktu`, skema tanpa kedua CHECK lama, serta
   skema dengan constraint bernama sama tetapi bukan CHECK pada `orders`: dua kasus
   pertama berhasil menuju constraint final, kasus drift terakhir ditolak;
+- untuk masing-masing nama lama, constraint dibuat sebagai CHECK tervalidasi pada
+  `orders` tetapi ekspresinya diganti (contoh
+  `orders_done_payment_breakdown CHECK (total <= 1000000)` dan
+  `done_punya_waktu CHECK (total >= 0)`): migrasi wajib gagal sebelum kedua DROP,
+  constraint asing tetap ada setelah rollback, kedua constraint pembanding tidak
+  tersisa, dan `orders_settlement_state_consistent` belum terbentuk;
+- CHECK dengan ekspresi benar tetapi `NOT VALID` atau `NO INHERIT`, serta collision
+  pada salah satu nama reserved `__c1_expected_*`: semuanya ditolak fail-closed
+  tanpa perubahan skema;
 - negative-state SQL §8 tetap menolak seluruh kombinasi pointer/state ilegal
   setelah `VALIDATE CONSTRAINT`.
 
