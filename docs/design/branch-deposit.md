@@ -590,6 +590,13 @@ approved_nominal = applied_to_order + credited_to_deposit
 Semua nilai nonnegatif. Aggregate `credited_to_deposit` harus sama dengan kredit
 journal overpay yang menunjuk attempt/bukti tersebut.
 
+Untuk reuse proof lintas versi revisi, nama `credited_to_deposit` di atas hanya
+berlaku pada attempt pertama. Delta C0 `branch-deposit-revision-state.md` §4.3.1
+menggantinya dengan split immutable bertyped, field kumulatif
+`credited_to_deposit_total`, delta terhitung `new_credit_to_deposit`, serta aggregate
+gross/net journal. Kontrak C0 tersebut wajib dipakai agar kredit atau penerapan
+proof tidak dihitung dua kali setelah revisi/reversal.
+
 ### 4.8 Snapshot settlement pada `orders`
 
 Tambahkan pointer dan aggregate untuk query cepat, tetapi histori rinci tetap

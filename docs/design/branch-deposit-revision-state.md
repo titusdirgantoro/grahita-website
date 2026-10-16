@@ -174,32 +174,117 @@ Tidak diperlukan `revision_origin_*` pada `orders`: workflow aktif diperoleh dar
 ### 3.2 CHECK pointer dan waktu Done
 
 Empat field `done_*` dan `done_at` adalah state settlement **aktif**, bukan arsip.
-Constraint harus menyatakan:
+Constraint lama `done_punya_waktu` dan `orders_done_payment_breakdown` diganti,
+bukan ditumpuk dengan aturan samar. Bentuk SQL normatif berikut sengaja menulis
+setiap cabang state secara eksplisit sehingga evaluasi `NULL` tidak dapat berubah
+menjadi `UNKNOWN` dan lolos sebagai CHECK:
 
-```text
-status = done
-  <=> revision_payment_state IS NULL
-      AND revision_payment_started_at IS NULL
-      AND done_at IS NOT NULL
-      AND semua done_* IS NOT NULL
-      AND done_deposit_amount + done_transfer_amount = total
-      AND verif_status = cocok
-      AND alasan_review IS NULL
+```sql
+ALTER TABLE orders
+  DROP CONSTRAINT done_punya_waktu,
+  DROP CONSTRAINT orders_done_payment_breakdown,
+  ADD CONSTRAINT orders_settlement_state_consistent CHECK (
+    -- Draft biasa.
+    (status = 'draft'
+     AND revision_payment_state IS NULL
+     AND revision_payment_started_at IS NULL
+     AND done_at IS NULL
+     AND done_verification_log_id IS NULL
+     AND done_order_version IS NULL
+     AND done_deposit_amount IS NULL
+     AND done_transfer_amount IS NULL
+     AND verif_status = 'belum'
+     AND alasan_review IS NULL)
+    OR
+    -- Submitted biasa: belum diperiksa, atau sedang review dengan alasan nyata.
+    (status = 'submitted'
+     AND revision_payment_state IS NULL
+     AND revision_payment_started_at IS NULL
+     AND done_at IS NULL
+     AND done_verification_log_id IS NULL
+     AND done_order_version IS NULL
+     AND done_deposit_amount IS NULL
+     AND done_transfer_amount IS NULL
+     AND (
+       (verif_status = 'belum' AND alasan_review IS NULL)
+       OR
+       (verif_status = 'perlu_review' AND alasan_review IS NOT NULL)
+     ))
+    OR
+    -- Revisi total naik.
+    (status = 'submitted'
+     AND revision_payment_state = 'revision_underpayment'
+     AND revision_payment_started_at IS NOT NULL
+     AND done_at IS NULL
+     AND done_verification_log_id IS NULL
+     AND done_order_version IS NULL
+     AND done_deposit_amount IS NULL
+     AND done_transfer_amount IS NULL
+     AND verif_status = 'perlu_review'
+     AND alasan_review = 'kurang_bayar')
+    OR
+    -- Revisi total turun.
+    (status = 'submitted'
+     AND revision_payment_state = 'revision_overpayment_pending'
+     AND revision_payment_started_at IS NOT NULL
+     AND done_at IS NULL
+     AND done_verification_log_id IS NULL
+     AND done_order_version IS NULL
+     AND done_deposit_amount IS NULL
+     AND done_transfer_amount IS NULL
+     AND verif_status = 'perlu_review'
+     AND alasan_review = 'lebih_bayar')
+    OR
+    -- Settlement aktif yang boleh dipublikasikan sebagai LUNAS.
+    (status = 'done'
+     AND revision_payment_state IS NULL
+     AND revision_payment_started_at IS NULL
+     AND done_at IS NOT NULL
+     AND done_verification_log_id IS NOT NULL
+     AND done_order_version IS NOT NULL
+     AND done_order_version BETWEEN 0 AND versi
+     AND done_deposit_amount IS NOT NULL
+     AND done_deposit_amount >= 0
+     AND done_transfer_amount IS NOT NULL
+     AND done_transfer_amount >= 0
+     AND done_deposit_amount + done_transfer_amount = total
+     AND verif_status = 'cocok'
+     AND alasan_review IS NULL)
+  ) NOT VALID;
 ```
 
-Untuk kedua sub-state revisi:
-
-```text
-status = submitted
-AND revision_payment_started_at IS NOT NULL
-AND seluruh done_* IS NULL
-AND done_at IS NULL
-AND verif_status/alasan_review cocok dengan §2.2
-```
-
-Untuk `draft` dan `submitted` biasa, `revision_payment_state`,
-`revision_payment_started_at`, seluruh `done_*`, dan `done_at` harus NULL.
 Constraint nomor/tanggal Submitted lama tetap berlaku; revisi pending bukan Draft.
+`orders_done_payment_pointer_all_or_none` boleh dipertahankan sebagai defense in
+depth, tetapi bukan pengganti CHECK lengkap di atas.
+
+FK histori revisi ditargetkan ke unique enam kolom yang sama dengan pointer aktif:
+
+```sql
+ALTER TABLE verification_logs
+  ADD CONSTRAINT verification_logs_settlement_breakdown
+  UNIQUE (id, order_id, order_version, total_pesanan,
+          deposit_amount, transfer_amount);
+
+ALTER TABLE invoice_revisions
+  ADD CONSTRAINT invoice_revisions_previous_done_fk
+  FOREIGN KEY (
+    previous_done_verification_log_id, order_id,
+    previous_done_order_version, previous_done_total,
+    previous_done_deposit_amount, previous_done_transfer_amount
+  ) REFERENCES verification_logs (
+    id, order_id, order_version, total_pesanan,
+    deposit_amount, transfer_amount
+  ) ON DELETE RESTRICT NOT VALID;
+```
+
+Urutan cutover wajib: tambah kolom nullable dan unique target; pasang FK/CHECK
+`NOT VALID` (PostgreSQL tetap memeriksa semua INSERT/UPDATE baru); matikan feature
+revisi total berubah dan semua publisher LUNAS lama; inventaris row legacy yang
+melanggar ke antrean rekonsiliasi tanpa mengubahnya menjadi Done; backfill hanya
+dari bukti typed yang deterministik; jalankan query anti-join/negative-state sampai
+nol; `VALIDATE CONSTRAINT` FK lalu CHECK; baru aktifkan writer dan publisher baru.
+Selama masih ada row legacy invalid, predikat §6.1 tetap fail-closed sehingga row
+tersebut tidak publishable walaupun constraint masih `NOT VALID`.
 
 `done_order_version` boleh lebih kecil dari `orders.versi` hanya pada Done hasil
 revisi total tetap. Setelah revisi total berubah diselesaikan, pointer baru wajib
@@ -330,6 +415,154 @@ kredit, dan revisi naik setelah overpay pernah dikreditkan harus memakai sumber
 dana baru—uang yang sudah menjadi saldo deposit tidak boleh diam-diam dipakai lagi
 sebagai transfer proof.
 
+#### 4.3.1 Sumber kebenaran split proof dan kredit lintas versi
+
+Objek JSON `credited_to_deposit` pada D3 §4.7/§6.2 adalah bentuk request untuk
+attempt pertama. Untuk proof yang pernah dipakai lintas versi, bentuk penyimpanan
+final adalah tabel immutable berikut; API baru memakai nama kumulatif C0:
+
+```sql
+ALTER TABLE payment_proofs
+  ADD CONSTRAINT payment_proofs_order_identity UNIQUE (id, order_id);
+
+ALTER TABLE orders
+  ADD CONSTRAINT orders_branch_identity UNIQUE (id, branch_id);
+
+CREATE TABLE payment_proof_economic_decisions (
+    payment_proof_id uuid PRIMARY KEY,
+    order_id         uuid NOT NULL,
+    branch_id        uuid NOT NULL,
+    approved_nominal bigint NOT NULL CHECK (approved_nominal >= 0),
+    decided_by       uuid NOT NULL REFERENCES admin_users(id) ON DELETE RESTRICT,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (payment_proof_id, order_id)
+      REFERENCES payment_proofs (id, order_id) ON DELETE RESTRICT,
+    FOREIGN KEY (order_id, branch_id)
+      REFERENCES orders (id, branch_id) ON DELETE RESTRICT,
+    UNIQUE (payment_proof_id, order_id, branch_id, approved_nominal)
+);
+
+ALTER TABLE deposit_transactions
+  ADD COLUMN order_verification_log_id uuid
+      REFERENCES verification_logs(id) ON DELETE RESTRICT,
+  ADD CONSTRAINT deposit_transactions_overpay_typed CHECK (
+    kind <> 'overpay_credit'
+    OR
+    (order_verification_log_id IS NOT NULL
+     AND source_proof_id IS NOT NULL
+     AND order_id IS NOT NULL
+     AND order_version IS NOT NULL
+     AND amount > 0)
+  ),
+  ADD CONSTRAINT deposit_transactions_overpay_typed_identity UNIQUE (
+    id, order_verification_log_id, source_proof_id,
+    order_id, branch_id, order_version, amount
+  );
+
+CREATE TABLE verification_proof_splits (
+    verification_log_id       uuid NOT NULL,
+    order_id                   uuid NOT NULL,
+    order_version              int NOT NULL,
+    settlement_total           bigint NOT NULL,
+    settlement_deposit_amount  bigint NOT NULL,
+    settlement_transfer_amount bigint NOT NULL,
+    payment_proof_id           uuid NOT NULL,
+    branch_id                  uuid NOT NULL,
+    approved_nominal           bigint NOT NULL CHECK (approved_nominal >= 0),
+    applied_to_order           bigint NOT NULL CHECK (applied_to_order >= 0),
+    credited_to_deposit_total  bigint NOT NULL
+        CHECK (credited_to_deposit_total >= 0),
+    new_credit_to_deposit      bigint NOT NULL
+        CHECK (new_credit_to_deposit >= 0),
+    new_credit_transaction_id  uuid UNIQUE,
+    created_at                 timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (verification_log_id, payment_proof_id),
+    FOREIGN KEY (
+      verification_log_id, order_id, order_version, settlement_total,
+      settlement_deposit_amount, settlement_transfer_amount
+    ) REFERENCES verification_logs (
+      id, order_id, order_version, total_pesanan,
+      deposit_amount, transfer_amount
+    ) ON DELETE RESTRICT,
+    FOREIGN KEY (payment_proof_id, order_id)
+      REFERENCES payment_proofs (id, order_id) ON DELETE RESTRICT,
+    FOREIGN KEY (order_id, branch_id)
+      REFERENCES orders (id, branch_id) ON DELETE RESTRICT,
+    FOREIGN KEY (payment_proof_id, order_id, branch_id, approved_nominal)
+      REFERENCES payment_proof_economic_decisions
+        (payment_proof_id, order_id, branch_id, approved_nominal)
+      ON DELETE RESTRICT,
+    FOREIGN KEY (
+      new_credit_transaction_id, verification_log_id, payment_proof_id,
+      order_id, branch_id, order_version, new_credit_to_deposit
+    ) REFERENCES deposit_transactions (
+      id, order_verification_log_id, source_proof_id,
+      order_id, branch_id, order_version, amount
+    ) ON DELETE RESTRICT,
+    CHECK (
+      approved_nominal = applied_to_order + credited_to_deposit_total
+    ),
+    CHECK (
+      (new_credit_to_deposit = 0 AND new_credit_transaction_id IS NULL)
+      OR
+      (new_credit_to_deposit > 0 AND new_credit_transaction_id IS NOT NULL)
+    )
+);
+
+CREATE UNIQUE INDEX deposit_transactions_overpay_split_once
+  ON deposit_transactions (order_verification_log_id, source_proof_id)
+  WHERE kind = 'overpay_credit';
+```
+
+Implementasi mengganti bentuk umum `source_verification_id` dari D3 §4.5: untuk
+kredit order dipakai kolom typed `order_verification_log_id` yang benar-benar
+mereferensikan `verification_logs(id)`, bukan UUID polymorphic tanpa FK.
+Trigger/service transaksi
+memastikan journal pada `new_credit_transaction_id` mempunyai
+`kind='overpay_credit'`, `source_proof_id`, verification, order, branch, version,
+dan amount yang sama dengan delta keputusan. Role aplikasi tidak boleh
+UPDATE/DELETE split.
+
+`payment_proof_economic_decisions` adalah sumber kebenaran nominal approved yang
+tepat satu per proof; row pertama dibuat di bawah lock proof oleh actor
+`admin.verify`. Attempt versi berikutnya wajib mereferensikan nominal yang sama dan
+tidak dapat “menaikkan” approved amount. Hak `admin.deposit_credit` baru diperlukan
+bila delta kredit positif, bukan untuk mencatat keputusan nominal tanpa kredit.
+
+`new_credit_to_deposit` disimpan sebagai snapshot immutable keputusan attempt dan
+harus sama dengan amount journal melalui FK komposit di atas; journal tetap sumber
+kebenaran ledger. Server menghitung delta ini, tidak mempercayai nilai turunan dari
+klien:
+
+```text
+proof_credit_gross = SUM(amount overpay_credit committed untuk proof)
+proof_credit_reversed = SUM(ABS(amount) overpay_reversal_debit committed
+                            yang menunjuk kredit proof tersebut)
+proof_credit_net = proof_credit_gross - proof_credit_reversed
+
+new_credit_to_deposit
+  = credited_to_deposit_total - proof_credit_gross_sebelum_attempt
+```
+
+`credited_to_deposit_total` harus sama dengan gross setelah attempt. Gross bersifat
+monotonik dan menghitung keputusan ekonomi sepanjang umur proof; reversal hanya
+mengurangi net saldo, tidak membuat nominal proof dapat dikreditkan atau diterapkan
+lagi. Karena itu `new_credit_to_deposit = 0` mewajibkan transaction FK NULL,
+sedangkan nilai positif mewajibkan tepat satu transaction dengan amount yang sama.
+Constraint lintas-row ini ditegakkan trigger/service di transaksi yang sama dan
+direkonsiliasi terhadap journal.
+
+Contoh normatif: proof Rp1.000.000 pada v1 menerapkan Rp800.000 dan mengkreditkan
+Rp200.000 (gross/net 200.000). Revisi turun v2 menerapkan Rp700.000, sehingga target
+kumulatif Rp300.000 dan hanya journal delta Rp100.000 dibuat. Revisi turun v3
+menerapkan Rp650.000, sehingga hanya delta Rp50.000 dibuat. Dua retry/paralel v3
+bertemu PK split, unique journal, dan lock proof: satu membuat Rp50.000, lainnya
+mengembalikan hasil idempoten/konflik tanpa kredit kedua. Bila Rp50.000 kemudian
+direversal, gross tetap Rp350.000 dan net menjadi Rp300.000. Revisi naik v4 tidak
+boleh menerapkan Rp750.000 dari proof yang sama karena Rp750.000 + gross Rp350.000
+melebihi approved Rp1.000.000; kekurangan Rp100.000 harus memakai proof/sumber baru,
+bukan memakai ulang kredit yang sudah pernah diputuskan.
+
 ### 4.4 Settlement state revisi ke Done
 
 Endpoint verifikasi memakai transaksi D3 §5.4 dengan tambahan:
@@ -352,6 +585,27 @@ ditangani retry job idempoten; kegagalan transaksi tidak boleh membuat dokumen
 atau email LUNAS terlihat.
 
 ## 5. Kontrak API
+
+### 5.0 Otorisasi revisi dan mutasi uang
+
+Hak `admin.revise` tetap mengendalikan semua revisi Done, termasuk total tetap,
+naik, dan turun. Manager hanya boleh memanggil revisi bila setting server
+`manager_boleh_revisi=true`; Superadmin tidak bergantung toggle tersebut. Reversal
+plan yang menjadi bagian request revisi memakai hak debit/reversal
+`admin.verify`, karena mengembalikan allocation committed dan bukan menciptakan
+kredit baru. Konsekuensinya:
+
+- Manager dengan `admin.revise`, toggle aktif, dan `admin.verify` boleh merevisi
+  total turun serta menyertakan reversal plan yang cukup;
+- Manager tanpa `admin.verify` ditolak atomik bila request memerlukan reversal;
+- Manager dengan toggle mati ditolak sebelum plan/journal apa pun diproses;
+- aksi yang membuat `overpay_credit` tetap memerlukan
+  `admin.deposit_credit` milik Superadmin, baik saat settlement revisi maupun
+  endpoint lain; `admin.revise`/`admin.verify` tidak pernah mengimplikasikan hak
+  kredit.
+
+Seluruh capability dan toggle diperiksa ulang di service dalam transaksi, bukan
+hanya melalui visibility tombol UI.
 
 ### 5.1 Revisi
 
@@ -498,11 +752,46 @@ Pada kedua sub-state:
 Order C&C pada sub-state tetap belum lunas. `jatuh_tempo` tidak dihitung ulang;
 BR-08 tetap memakai tanggal order asli + `cnc_hari`.
 
-Deduplikasi reminder harus menjadi version-aware. `cnc_reminders` menambah kolom
-`order_version INT`; primary key final adalah `(order_id, order_version, tahap)`.
-Migrasi row lama mengisi versi yang dapat dibuktikan dari event/dokumen; row ambigu
-tetap historis dan tidak boleh dianggap dedupe versi kini. Row reminder versi lama
-tidak menghalangi reminder versi revisi. Saat masuk pending:
+Deduplikasi reminder harus menjadi version-aware. Skema aktif final mempunyai
+`order_version NOT NULL` dan PK `(order_id, order_version, tahap)`. Row legacy yang
+versinya ambigu tidak boleh dipaksa ke sentinel atau versi order kini karena kedua
+pilihan dapat salah menahan reminder sah. Ia dipindah atomik ke arsip typed yang
+tidak dibaca scheduler:
+
+```sql
+CREATE TABLE cnc_reminders_legacy_archive (
+    order_id       uuid NOT NULL REFERENCES orders(id) ON DELETE RESTRICT,
+    tahap          text NOT NULL,
+    sent_at        timestamptz NOT NULL,
+    archived_at    timestamptz NOT NULL DEFAULT now(),
+    archive_reason text NOT NULL CHECK (archive_reason = 'ambiguous_order_version'),
+    PRIMARY KEY (order_id, tahap)
+);
+
+ALTER TABLE cnc_reminders ADD COLUMN order_version int;
+-- Backfill hanya mapping yang dibuktikan event/dokumen immutable.
+-- INSERT arsip <- row yang tetap NULL; verifikasi count/checksum; DELETE row itu.
+ALTER TABLE cnc_reminders DROP CONSTRAINT cnc_reminders_pkey;
+ALTER TABLE cnc_reminders ALTER COLUMN order_version SET NOT NULL;
+ALTER TABLE cnc_reminders
+  ADD PRIMARY KEY (order_id, order_version, tahap);
+CREATE INDEX cnc_reminders_current_lookup
+  ON cnc_reminders (order_id, order_version, sent_at DESC);
+```
+
+Cutover dilakukan dengan scheduler reminder dipause tetapi outbox sender tetap
+berjalan: deploy reader yang memahami payload `order_version`; pause enqueue;
+backfill row terbukti; copy row ambigu ke arsip dan cocokkan jumlah serta checksum;
+hapus hanya row yang sudah ada di arsip; ubah PK/NOT NULL; deploy scheduler baru;
+baru resume enqueue. Arsip hanya untuk audit dan tidak ikut anti-join/dedupe.
+
+Scheduler baru dalam satu transaksi melakukan `INSERT ... ON CONFLICT DO NOTHING`
+ke `cnc_reminders(order_id,order_version,tahap)` dan hanya bila insert berhasil
+menulis outbox dengan payload `order_id`, `order_version`, `tahap`, serta dedupe key
+yang sama. Unique `(order_id,order_version,tahap)` adalah otoritas enqueue; retry
+outbox tidak membuat reminder row kedua. Worker sebelum send mengunci/membaca ulang
+order dan membatalkan outbox bila version/state sudah berubah. Row reminder versi
+lama tidak menghalangi reminder versi revisi. Saat masuk pending:
 
 - notifikasi revisi belum lunas dikirim sekali melalui outbox idempoten per versi;
 - scheduler memilih `submitted` biasa dan kedua sub-state;
@@ -554,6 +843,15 @@ verification historis terakhir sebagai pointer aktif.
 5. pending dengan salah satu `done_*`/`done_at` non-NULL ditolak;
 6. pemalsuan pointer attempt order/version/total lain ditolak FK;
 7. `invoice_revisions.previous_done_*` menunjuk settlement asal yang tepat.
+8. masing-masing cabang CHECK diuji negatif: Draft dengan status verifikasi/alasan
+   selain `belum/NULL`; Submitted biasa dengan `cocok`, alasan tanpa
+   `perlu_review`, atau waktu revisi; underpayment dengan alasan selain
+   `kurang_bayar`; overpayment pending dengan alasan selain `lebih_bayar`; Done
+   dengan sub-state/waktu revisi, `done_at` NULL, pointer parsial, breakdown negatif,
+   total tidak cocok, atau `perlu_review`—semuanya ditolak;
+9. FK histori revisi enam kolom menolak attempt dari order, versi, total, deposit,
+   atau transfer yang berbeda; CHECK/FK `NOT VALID` menolak write baru sebelum
+   validasi dan legacy invalid tetap tidak publishable.
 
 ### 8.2 Race, retry, dan rollback
 
@@ -568,6 +866,10 @@ verification historis terakhir sebagai pointer aktif.
 7. settlement retry tidak menggandakan debit carry-forward, source snapshot,
    verification log, credit overpay, dokumen, atau email;
 8. settlement vs reversal paralel tidak menghasilkan Done dari source yang stale.
+9. dua settlement paralel proof yang sama hanya membuat satu split/journal kredit;
+   retry setelah commit mengembalikan delta nol/hasil idempoten;
+10. reversal overpay mengubah net tetapi tidak gross consumed proof; revisi naik
+    setelah kredit tidak dapat double-apply proof lama.
 
 ### 8.3 Penolakan
 
@@ -579,6 +881,10 @@ verification historis terakhir sebagai pointer aktif.
 5. revisi kedua, cancel terselubung, endpoint customer terhadap order Done/pending,
    dan download/resend current invoice saat pending;
 6. status/pointer invalid tidak boleh diperbaiki dengan fallback ke attempt lama.
+7. Manager: toggle revisi mati ditolak; toggle aktif tetapi reversal dibutuhkan
+   tanpa `admin.verify` ditolak; dengan kedua hak dapat merevisi turun memakai plan,
+   tetapi tetap ditolak saat mencoba membuat overpay credit tanpa
+   `admin.deposit_credit`.
 
 ### 8.4 Dokumen, email, reminder, dan kompatibilitas
 
@@ -592,6 +898,9 @@ verification historis terakhir sebagai pointer aktif.
 7. reporting tidak menggandakan order line karena banyak attempt/source/journal;
 8. browser E2E terautentikasi wajib diulang setelah fixture auth tersedia; hasil
    PG/frontend sebelumnya tidak dianggap pengganti E2E.
+9. migrasi reminder menguji row versi terbukti, row ambigu yang pindah arsip dengan
+   count/checksum sama, PK/NOT NULL final, reminder versi baru yang tidak terhalang
+   arsip, retry scheduler, dan outbox basi yang dibatalkan worker.
 
 ## 9. Keputusan final dan risiko tersisa
 
