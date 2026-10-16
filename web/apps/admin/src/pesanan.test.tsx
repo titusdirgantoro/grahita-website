@@ -618,7 +618,9 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
 
     fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
     await screen.findByRole("dialog");
-    fireEvent.click(screen.getByRole("button", { name: "Setujui & selesaikan" }));
+    const tombolSetujui = screen.getByRole("button", { name: "Setujui & selesaikan" });
+    await waitFor(() => expect((tombolSetujui as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(tombolSetujui);
 
     await waitFor(() => {
       expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true);
