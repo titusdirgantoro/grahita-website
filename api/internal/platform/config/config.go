@@ -10,7 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -175,6 +178,8 @@ type Config struct {
 type BrowserFixtureConfig struct {
 	Enabled         bool
 	Password        string
+	ProxyKey        string
+	AllowedOrigins  []string
 	SuperadminEmail string
 	ManagerEmail    string
 	BranchEmail     string
@@ -235,6 +240,8 @@ func Load() (Config, error) {
 		BrowserFixture: BrowserFixtureConfig{
 			Enabled:         envBool("BROWSER_FIXTURE_ENABLED", false),
 			Password:        strings.TrimSpace(env("BROWSER_FIXTURE_PASSWORD", "")),
+			ProxyKey:        strings.TrimSpace(env("BROWSER_FIXTURE_PROXY_KEY", "")),
+			AllowedOrigins:  splitNonEmpty(env("BROWSER_FIXTURE_ORIGINS", "")),
 			SuperadminEmail: strings.TrimSpace(env("BROWSER_FIXTURE_SUPERADMIN_EMAIL", "rina@grahitaindonesia.com")),
 			ManagerEmail:    strings.TrimSpace(env("BROWSER_FIXTURE_MANAGER_EMAIL", "budi@grahitaindonesia.com")),
 			BranchEmail:     strings.TrimSpace(env("BROWSER_FIXTURE_BRANCH_EMAIL", "bandung@grahitaindonesia.com")),
@@ -391,6 +398,18 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.BrowserFixture.Password) == "" {
 			return errors.New("BROWSER_FIXTURE_PASSWORD wajib diisi saat fixture browser aktif")
 		}
+		if len(c.BrowserFixture.ProxyKey) < 32 {
+			return errors.New("BROWSER_FIXTURE_PROXY_KEY wajib minimal 32 karakter")
+		}
+		if err := validateBrowserFixtureHTTPAddr(c.HTTPAddr); err != nil {
+			return err
+		}
+		if err := validateBrowserFixtureDatabaseURL(c.DatabaseURL); err != nil {
+			return err
+		}
+		if err := validateBrowserFixtureOrigins(c.BrowserFixture.AllowedOrigins); err != nil {
+			return err
+		}
 		if strings.TrimSpace(c.BrowserFixture.SuperadminEmail) == "" ||
 			strings.TrimSpace(c.BrowserFixture.ManagerEmail) == "" ||
 			strings.TrimSpace(c.BrowserFixture.BranchEmail) == "" {
@@ -404,6 +423,57 @@ func (c Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func splitNonEmpty(value string) []string {
+	var hasil []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			hasil = append(hasil, item)
+		}
+	}
+	return hasil
+}
+
+func validateBrowserFixtureHTTPAddr(addr string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil || port == "" || !literalLoopback(host) {
+		return errors.New("fixture browser mewajibkan HTTP_ADDR dengan IP loopback eksplisit")
+	}
+	return nil
+}
+
+func validateBrowserFixtureDatabaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.RawQuery != "" || u.Fragment != "" || !literalLoopback(u.Hostname()) {
+		return errors.New("fixture browser mewajibkan PostgreSQL pada IP loopback eksplisit")
+	}
+	databaseName := strings.TrimPrefix(path.Clean(u.EscapedPath()), "/")
+	if unescaped, unescapeErr := url.PathUnescape(databaseName); unescapeErr == nil {
+		databaseName = unescaped
+	}
+	if !strings.HasPrefix(databaseName, "grahita_browser_fixture_") {
+		return errors.New("fixture browser mewajibkan database bernama grahita_browser_fixture_*")
+	}
+	return nil
+}
+
+func validateBrowserFixtureOrigins(origins []string) error {
+	if len(origins) == 0 {
+		return errors.New("BROWSER_FIXTURE_ORIGINS wajib diisi")
+	}
+	for _, raw := range origins {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || u.Port() == "" || !literalLoopback(u.Hostname()) {
+			return fmt.Errorf("origin fixture browser tidak aman: %q", raw)
+		}
+	}
+	return nil
+}
+
+func literalLoopback(host string) bool {
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 func validImportSnapshotKey(appEnv, encoded string) bool {

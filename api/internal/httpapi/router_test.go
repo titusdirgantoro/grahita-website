@@ -144,7 +144,8 @@ func newTestServerWithConfig(t *testing.T, health fakeHealth, cfg config.Config)
 func TestBrowserFixtureMenerbitkanSesiTigaProfilLokal(t *testing.T) {
 	cfg := testConfig()
 	cfg.BrowserFixture = config.BrowserFixtureConfig{
-		Enabled: true, Password: "rahasia123",
+		Enabled: true, Password: "rahasia123", ProxyKey: strings.Repeat("k", 32),
+		AllowedOrigins:  []string{"http://127.0.0.1:5174"},
 		SuperadminEmail: "rina@example.test", ManagerEmail: "budi@example.test", BranchEmail: "bandung@example.test",
 	}
 	srv, _ := newTestServerWithConfig(t, fakeHealth{migrasi: 1}, cfg)
@@ -163,7 +164,19 @@ func TestBrowserFixtureMenerbitkanSesiTigaProfilLokal(t *testing.T) {
 			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			}}
-			resp, err := client.Get(srv.URL + "/api/v1/test/browser-session/" + k.profil)
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/test/browser-session/"+k.profil, nil)
+			if err != nil {
+				t.Fatalf("buat request fixture browser: %v", err)
+			}
+			req.Host = "127.0.0.1:5174"
+			if k.profil == "manager" {
+				req.Header.Set("Sec-Fetch-Site", "none")
+			} else {
+				req.Header.Set("Referer", "http://127.0.0.1:5174/")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+			}
+			req.Header.Set(browserFixtureProxyHeader, strings.Repeat("k", 32))
+			resp, err := client.Do(req)
 			if err != nil {
 				t.Fatalf("buka fixture browser: %v", err)
 			}
@@ -191,6 +204,55 @@ func TestBrowserFixtureMenerbitkanSesiTigaProfilLokal(t *testing.T) {
 			user := body["data"].(map[string]any)["user"].(map[string]any)
 			if user["role"] != k.role {
 				t.Fatalf("role sesi %v, mau %s", user["role"], k.role)
+			}
+		})
+	}
+}
+
+func TestBrowserFixtureMenolakRequestTanpaBuktiProxyDanSameOrigin(t *testing.T) {
+	cfg := testConfig()
+	cfg.BrowserFixture = config.BrowserFixtureConfig{
+		Enabled: true, Password: "rahasia123", ProxyKey: strings.Repeat("k", 32),
+		AllowedOrigins:  []string{"http://127.0.0.1:5174"},
+		SuperadminEmail: "rina@example.test", ManagerEmail: "budi@example.test", BranchEmail: "bandung@example.test",
+	}
+	srv, _ := newTestServerWithConfig(t, fakeHealth{migrasi: 1}, cfg)
+
+	kasus := []struct {
+		nama     string
+		host     string
+		referer  string
+		fetch    string
+		proxyKey string
+	}{
+		{"direct API tanpa kunci proxy", "127.0.0.1:5174", "", "none", ""},
+		{"cross origin", "127.0.0.1:5174", "http://evil.example/", "cross-site", strings.Repeat("k", 32)},
+		{"host tidak dipercaya", "evil.example", "http://127.0.0.1:5174/", "same-origin", strings.Repeat("k", 32)},
+		{"proxy tanpa kunci", "127.0.0.1:5174", "http://127.0.0.1:5174/", "same-origin", ""},
+		{"proxy kunci salah", "127.0.0.1:5174", "http://127.0.0.1:5174/", "same-origin", strings.Repeat("x", 32)},
+	}
+	for _, k := range kasus {
+		t.Run(k.nama, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/test/browser-session/superadmin", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = k.host
+			req.Header.Set("Referer", k.referer)
+			req.Header.Set("Sec-Fetch-Site", k.fetch)
+			req.Header.Set(browserFixtureProxyHeader, k.proxyKey)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("request fixture tidak sah harus disamarkan sebagai 404, dapat %d", resp.StatusCode)
+			}
+			for _, cookie := range resp.Cookies() {
+				if cookie.Name == cfg.CookieName {
+					t.Fatal("request fixture tidak sah tidak boleh menerima sesi")
+				}
 			}
 		})
 	}

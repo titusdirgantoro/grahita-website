@@ -1,35 +1,82 @@
 #!/bin/sh
 set -eu
 
-server=${GRAHITA_SERVER:-./bin/server}
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+server=${GRAHITA_SERVER:-$repo_dir/bin/server}
+marker='grahita-browser-fixture-v1'
 
-if [ "${APP_ENV:-local}" != "local" ]; then
-  printf '%s\n' 'GALAT: fixture browser hanya boleh dijalankan dengan APP_ENV=local.' >&2
+fail() {
+  printf 'GALAT: %s\n' "$1" >&2
   exit 2
+}
+
+[ "${APP_ENV:-local}" = "local" ] || fail 'fixture browser hanya boleh dijalankan dengan APP_ENV=local.'
+[ -n "${DATABASE_URL:-}" ] || fail 'DATABASE_URL sintetis lokal wajib diisi.'
+command -v psql >/dev/null 2>&1 || fail 'psql wajib tersedia untuk memverifikasi identitas database fixture.'
+
+identity=$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT CASE WHEN COALESCE(inet_server_addr() <<= inet '127.0.0.0/8' OR inet_server_addr() = inet '::1', FALSE) THEN 1 ELSE 0 END || '|' || CASE WHEN current_database() LIKE 'grahita_browser_fixture_%' THEN 1 ELSE 0 END")
+[ "$identity" = '1|1' ] || fail 'database fixture wajib memakai server loopback dan nama grahita_browser_fixture_*.'
+
+if [ "${1:-}" = '--prepare-database' ]; then
+  relation_count=$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','f')")
+  [ "$relation_count" = '0' ] || fail 'prepare hanya boleh menandai database yang benar-benar kosong.'
+  psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -c "CREATE TABLE public.browser_fixture_guard (id boolean PRIMARY KEY DEFAULT TRUE CHECK (id), marker text NOT NULL); INSERT INTO public.browser_fixture_guard (id, marker) VALUES (TRUE, '$marker');" >/dev/null
+  printf '%s\n' 'Database kosong telah ditandai sebagai fixture browser lokal. Lanjutkan dengan menjalankan skrip tanpa argumen.'
+  exit 0
 fi
-if [ -z "${DATABASE_URL:-}" ]; then
-  printf '%s\n' 'GALAT: DATABASE_URL sintetis lokal wajib diisi.' >&2
-  exit 2
-fi
-if [ ! -x "$server" ]; then
-  printf 'GALAT: binary server tidak ditemukan/executable: %s\n' "$server" >&2
-  printf '%s\n' 'Jalankan make build atau set GRAHITA_SERVER.' >&2
-  exit 2
-fi
+
+[ "${1:-}" = '' ] || fail 'argumen tidak dikenal.'
+[ -x "$server" ] || fail "binary server tidak ditemukan/executable: $server (jalankan make build atau set GRAHITA_SERVER)."
+command -v npm >/dev/null 2>&1 || fail 'npm wajib tersedia untuk menjalankan dua proxy Vite loopback.'
+
+stored_marker=$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT marker FROM public.browser_fixture_guard WHERE id = TRUE")
+[ "$stored_marker" = "$marker" ] || fail 'marker database fixture tidak ada atau tidak cocok; jalankan --prepare-database pada database kosong.'
 
 fixture_password=$(openssl rand -hex 24)
+proxy_key=$(openssl rand -hex 32)
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/grahita-browser-fixture.XXXXXX")
+customer_pid=''
+admin_pid=''
+api_pid=''
 
+cleanup() {
+  trap - EXIT INT TERM HUP
+  for pid in "$api_pid" "$admin_pid" "$customer_pid"; do
+    if [ -n "$pid" ]; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  wait 2>/dev/null || true
+  rm -f "$runtime_dir/customer.log" "$runtime_dir/admin.log"
+  rmdir "$runtime_dir" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM HUP
+
+psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f "$repo_dir/scripts/pg-dev-shim.sql" >/dev/null
+APP_ENV=local "$server" --mode=migrate
 APP_ENV=local SEED_PASSWORD="$fixture_password" "$server" --mode=seed
 
+VITE_HOST=127.0.0.1 VITE_PORT=5173 VITE_API_TARGET=http://127.0.0.1:8088 \
+  VITE_BROWSER_FIXTURE_PROXY_KEY="$proxy_key" npm --prefix "$repo_dir/web" run dev:customer >"$runtime_dir/customer.log" 2>&1 &
+customer_pid=$!
+VITE_HOST=127.0.0.1 VITE_PORT=5174 VITE_API_TARGET=http://127.0.0.1:8088 \
+  VITE_BROWSER_FIXTURE_PROXY_KEY="$proxy_key" npm --prefix "$repo_dir/web" run dev:admin >"$runtime_dir/admin.log" 2>&1 &
+admin_pid=$!
+
 printf '%s\n' \
-  'Fixture browser lokal aktif. Buka URL berikut lewat browser:' \
-  '  Admin Superadmin: http://localhost:5174/api/v1/test/browser-session/superadmin' \
-  '  Admin Manager:    http://localhost:5174/api/v1/test/browser-session/manager' \
-  '  Cabang sintetis:  http://localhost:5173/api/v1/test/browser-session/branch' \
-  'Password fixture dibuat sementara dan tidak dicetak.'
+  'Fixture browser lokal aktif pada loopback. Buka URL berikut lewat browser:' \
+  '  Admin Superadmin: http://127.0.0.1:5174/api/v1/test/browser-session/superadmin' \
+  '  Admin Manager:    http://127.0.0.1:5174/api/v1/test/browser-session/manager' \
+  '  Cabang sintetis:  http://127.0.0.1:5173/api/v1/test/browser-session/branch' \
+  'Password dan kunci proxy dibuat sementara dan tidak dicetak.'
 
 export APP_ENV=local
+export HTTP_ADDR=127.0.0.1:8088
 export SESSION_SECURE=false
 export BROWSER_FIXTURE_ENABLED=true
 export BROWSER_FIXTURE_PASSWORD="$fixture_password"
-exec "$server" --mode=api
+export BROWSER_FIXTURE_PROXY_KEY="$proxy_key"
+export BROWSER_FIXTURE_ORIGINS=http://127.0.0.1:5173,http://127.0.0.1:5174
+"$server" --mode=api &
+api_pid=$!
+wait "$api_pid"

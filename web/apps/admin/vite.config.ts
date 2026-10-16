@@ -18,6 +18,9 @@ export default defineConfig({
       "/api": {
         target: process.env.VITE_API_TARGET ?? "http://localhost:8088",
         changeOrigin: false,
+        headers: process.env.VITE_BROWSER_FIXTURE_PROXY_KEY
+          ? { "X-Browser-Fixture-Key": process.env.VITE_BROWSER_FIXTURE_PROXY_KEY }
+          : undefined,
       },
     },
   },

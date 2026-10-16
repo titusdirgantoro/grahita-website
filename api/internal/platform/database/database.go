@@ -26,6 +26,12 @@ type Pool = pgxpool.Pool
 // MigrateDir adalah direktori di dalam embedded FS tempat file migrasi berada.
 const MigrateDir = "."
 
+// BrowserFixtureMarker hanya dibuat oleh launcher lokal setelah memastikan
+// target adalah database loopback kosong dengan nama fixture. Ia bukan secret;
+// fungsinya sebagai identitas eksplisit agar flag fixture tidak dapat diarahkan
+// ke database aplikasi biasa hanya karena DSN-nya lolos pemeriksaan bentuk.
+const BrowserFixtureMarker = "grahita-browser-fixture-v1"
+
 // Connect membuka pool pgx dan menunggu database benar-benar siap.
 //
 // Postgres di Docker Compose kadang menerima koneksi sesaat sebelum siap
@@ -64,6 +70,20 @@ func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	}
 	pool.Close()
 	return nil, fmt.Errorf("database tidak merespons: %w", lastErr)
+}
+
+// VerifyBrowserFixture memastikan database sudah ditandai secara eksplisit
+// oleh langkah prepare launcher sebelum API boleh menerbitkan sesi fixture.
+func VerifyBrowserFixture(ctx context.Context, pool *pgxpool.Pool) error {
+	var marker string
+	err := pool.QueryRow(ctx, `SELECT marker FROM public.browser_fixture_guard WHERE id = TRUE`).Scan(&marker)
+	if err != nil {
+		return fmt.Errorf("verifikasi marker database fixture browser: %w", err)
+	}
+	if marker != BrowserFixtureMarker {
+		return fmt.Errorf("marker database fixture browser tidak cocok")
+	}
+	return nil
 }
 
 type gooseLogger struct{}

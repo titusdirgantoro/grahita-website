@@ -98,7 +98,8 @@ fixture sesi yang tetap menempuh login normal dengan password internal proses:
 
 ```bash
 make build
-APP_ENV=local DATABASE_URL=<dsn-sintetis> ./scripts/browser-fixture-local.sh
+APP_ENV=local DATABASE_URL=<dsn-loopback-baru> ./scripts/browser-fixture-local.sh --prepare-database
+APP_ENV=local DATABASE_URL=<dsn-loopback-yang-sama> ./scripts/browser-fixture-local.sh
 ```
 
 Panduan URL Superadmin/Manager/cabang, guard production, sanitasi, storage, dan

@@ -399,6 +399,11 @@ func (h health) MigrationVersion(ctx context.Context) (int64, error) {
 
 // runAPI menyusun seluruh dependensi dan menjalankan HTTP API.
 func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger *slog.Logger, metrik *observability.Metrics) error {
+	if cfg.BrowserFixture.Enabled {
+		if err := database.VerifyBrowserFixture(ctx, pool); err != nil {
+			return fmt.Errorf("fixture browser ditolak: %w", err)
+		}
+	}
 	authRepo := authpg.New(pool)
 	authSvc := auth.NewService(authRepo, authRepo, authRepo, clock.System(), cfg.SessionIdle, cfg.SessionAbsolute)
 
