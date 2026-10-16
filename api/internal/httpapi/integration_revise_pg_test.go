@@ -1050,7 +1050,6 @@ func TestPGRevisiPDFNyataVersiLamaDanBaru(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	pesanan := f.seedPesananDone(t, f.branchA, "2026-10-780", false)
-	seedPointerVerifikasiDone(t, f, pesanan.ID, pesanan.Nomor, pesanan.Total)
 	sa, csrfSA := pgLogin(t, srv, "rina@example.test", "rahasia123")
 
 	// Versi 0: render tiga dokumen (Invoice PDF nyata) lewat endpoint admin.
