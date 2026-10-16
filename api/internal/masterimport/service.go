@@ -75,9 +75,6 @@ func (s *Service) preview(ctx context.Context, actor auth.Actor, r io.Reader, si
 	if !actor.IsSuperadmin() {
 		return Preview{}, ErrForbidden
 	}
-	if strings.EqualFold(strings.TrimSpace(s.environment), "production") {
-		return Preview{}, ErrProduction
-	}
 	parsed, err := s.parser.Parse(r, size)
 	if err != nil {
 		return Preview{}, err
@@ -102,7 +99,7 @@ func (s *Service) preview(ctx context.Context, actor auth.Actor, r io.Reader, si
 		return Preview{}, err
 	}
 	saved, err := s.repo.SavePreview(ctx, SavePreviewInput{
-		Environment: s.environment, ActorID: actor.UserID, SourceHash: parsed.SourceHash,
+		Environment: previewArtifactEnvironment(s.environment), ActorID: actor.UserID, SourceHash: parsed.SourceHash,
 		PreviewHash: previewHash, Items: items, Counts: counts, Parsed: parsed,
 	})
 	if err != nil {
@@ -114,6 +111,13 @@ func (s *Service) preview(ctx context.Context, actor auth.Actor, r io.Reader, si
 		ContractVersion: ContractVersion, Sheet: SheetName, Counts: counts,
 		Items: items, CreatedAt: saved.CreatedAt,
 	}, nil
+}
+
+func previewArtifactEnvironment(environment string) string {
+	if strings.EqualFold(strings.TrimSpace(environment), "production") {
+		return ProductionPreviewEnvironment
+	}
+	return environment
 }
 
 func reconcile(parsed ParsedWorkbook, snapshot Snapshot) []PreviewItem {

@@ -1,5 +1,6 @@
 // Package masterimport menangani preview, apply idempoten, dan rollback staging
-// master Impact. Produksi selalu ditolak fail-closed.
+// master Impact. Preview boleh berjalan di production, sedangkan apply dan
+// rollback production selalu ditolak fail-closed.
 package masterimport
 
 import (
@@ -14,15 +15,18 @@ import (
 const (
 	SourceSystem    = "impact"
 	ContractVersion = "impact-master-v1"
-	SheetName       = "Master Tarif (Opsi A)"
-	ExpectedRows    = 34
-	ExpectedHash    = "eaf02f20e86b7383bf06342bd26d44e1fc4c714ab59b34657dfc9e0c3c0f91f7"
-	MaxWorkbookSize = 5 << 20
+	// ProductionPreviewEnvironment adalah provenance khusus preview production.
+	// Nilai ini tetap tidak membuka environment "production" untuk apply.
+	ProductionPreviewEnvironment = "production-preview"
+	SheetName                    = "Master Tarif (Opsi A)"
+	ExpectedRows                 = 34
+	ExpectedHash                 = "eaf02f20e86b7383bf06342bd26d44e1fc4c714ab59b34657dfc9e0c3c0f91f7"
+	MaxWorkbookSize              = 5 << 20
 )
 
 var (
 	ErrForbidden        = errors.New("master import hanya untuk superadmin")
-	ErrProduction       = errors.New("master import dilarang di production")
+	ErrProduction       = errors.New("apply dan rollback master import dilarang di production")
 	ErrInvalidWorkbook  = errors.New("workbook Impact tidak valid")
 	ErrHashMismatch     = errors.New("hash artefak tidak diotorisasi")
 	ErrStructure        = errors.New("struktur workbook berubah")

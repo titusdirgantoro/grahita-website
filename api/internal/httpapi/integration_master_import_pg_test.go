@@ -129,6 +129,79 @@ func impactJSONRequest(t *testing.T, url string, cookies []*http.Cookie, csrf st
 	return resp.StatusCode, decoded
 }
 
+func impactTableFingerprints(t *testing.T, f *pgFixture, tables []string) map[string]string {
+	t.Helper()
+	out := make(map[string]string, len(tables))
+	for _, table := range tables {
+		query := `SELECT md5(COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text, '[]')) FROM ` + table + ` AS t`
+		var fingerprint string
+		if err := f.pool.QueryRow(t.Context(), query).Scan(&fingerprint); err != nil {
+			t.Fatalf("fingerprint tabel %s: %v", table, err)
+		}
+		out[table] = fingerprint
+	}
+	return out
+}
+
+func TestPGImpactPreviewProductionHanyaMenulisAuditPrivat(t *testing.T) {
+	f := newPGFixture(t)
+	parsed := impactParsed(masterimport.SourceBranch{
+		SourceKey: "branch:production-preview-uji", Name: "Production Preview Uji", Position: "Kepala", HeadName: impactStringPtr("Kepala Uji"),
+		ReviewCells: []masterimport.ReviewCell{{Column: "AR", Fingerprint: impactTestFingerprint("production-note"), Value: "evidence privat uji"}},
+	})
+	deps := f.deps
+	deps.MasterImport = masterimport.NewService(masterimportpg.New(f.pool, impactSnapshotTestKey), fixedImpactParser{parsed: parsed}, "production")
+	srv := httptest.NewServer(NewRouter(deps))
+	t.Cleanup(srv.Close)
+
+	saCookies, saCSRF := pgLogin(t, srv, "rina@example.test", "rahasia123")
+	masterTables := []string{
+		"branches", "products", "product_variants", "branch_prices", "branch_tariff_versions",
+		"master_import_identities", "branch_users", "registration_tokens", "password_reset_tokens",
+	}
+	before := impactTableFingerprints(t, f, masterTables)
+
+	status, body := impactPreviewRequest(t, srv.URL+"/api/v1/admin/master-imports/impact/preview", saCookies, saCSRF, []byte("workbook sintetis parser uji"))
+	if status != http.StatusCreated {
+		t.Fatalf("preview production status=%d body=%v", status, body)
+	}
+	preview := body["data"].(map[string]any)
+	attemptID := preview["attempt_id"].(string)
+	previewHash := preview["preview_hash"].(string)
+
+	applyBody := map[string]any{"preview_hash": previewHash, "idempotency_key": "production-denied-uji"}
+	if status, _ := impactJSONRequest(t, srv.URL+"/api/v1/admin/master-imports/impact/"+attemptID+"/apply", saCookies, saCSRF, applyBody); status != http.StatusConflict {
+		t.Fatalf("apply production status=%d, ingin 409", status)
+	}
+	if status, _ := impactJSONRequest(t, srv.URL+"/api/v1/admin/master-imports/impact/apply-runs/"+attemptID+"/rollback", saCookies, saCSRF, map[string]any{}); status != http.StatusConflict {
+		t.Fatalf("rollback production status=%d, ingin 409", status)
+	}
+
+	after := impactTableFingerprints(t, f, masterTables)
+	for _, table := range masterTables {
+		if after[table] != before[table] {
+			t.Fatalf("preview production memutasi tabel %s", table)
+		}
+	}
+
+	var artifacts, attempts, items, evidence, applyRuns int
+	if err := f.pool.QueryRow(t.Context(), `SELECT count(*) FROM master_import_artifacts WHERE environment=$1`, masterimport.ProductionPreviewEnvironment).Scan(&artifacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(t.Context(), `SELECT count(*) FROM master_import_attempts WHERE id=$1`, attemptID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(t.Context(), `SELECT count(*), count(*) FILTER (WHERE private_evidence IS NOT NULL) FROM master_import_preview_items WHERE attempt_id=$1`, attemptID).Scan(&items, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(t.Context(), `SELECT count(*) FROM master_import_apply_runs`).Scan(&applyRuns); err != nil {
+		t.Fatal(err)
+	}
+	if artifacts != 1 || attempts != 1 || items == 0 || evidence != 1 || applyRuns != 0 {
+		t.Fatalf("audit preview production artifacts=%d attempts=%d items=%d evidence=%d apply_runs=%d", artifacts, attempts, items, evidence, applyRuns)
+	}
+}
+
 func TestPGImpactPreviewDryRunRepeatAttemptDanOtorisasi(t *testing.T) {
 	path := os.Getenv("IMPACT_WORKBOOK_PATH")
 	if path == "" {

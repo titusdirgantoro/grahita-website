@@ -99,7 +99,7 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, masterimport.ErrForbidden):
 		return apierr.Forbidden("Hanya Superadmin yang boleh membuat preview impor master.")
 	case errors.Is(err, masterimport.ErrProduction):
-		return apierr.Conflict("IMPORT_PRODUCTION_FORBIDDEN", "Preview/import master Impact tidak boleh dijalankan di production.")
+		return apierr.Conflict("IMPORT_PRODUCTION_FORBIDDEN", "Apply/rollback master Impact tidak boleh dijalankan di production.")
 	case errors.Is(err, masterimport.ErrHashMismatch):
 		return apierr.New(http.StatusUnprocessableEntity, "IMPORT_SOURCE_HASH_MISMATCH", "Workbook bukan artefak sumber Impact yang diotorisasi.")
 	case errors.Is(err, masterimport.ErrStructure):

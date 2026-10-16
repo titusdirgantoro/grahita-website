@@ -252,16 +252,27 @@ func TestPreviewKonflikAksesFailClosedDanAttemptTerpisah(t *testing.T) {
 	}
 }
 
-func TestPreviewProductionDanNonSuperadminDitolak(t *testing.T) {
+func TestPreviewProductionDiizinkanHanyaUntukSuperadmin(t *testing.T) {
 	repo := &fakeRepo{}
 	parsed := ParsedWorkbook{SourceHash: ExpectedHash}
 	manager := auth.Actor{UserID: "m1", Kind: auth.KindAdmin, Role: auth.RoleManager}
-	if _, err := NewService(repo, fakeParser{parsed}, "staging").Preview(context.Background(), manager, bytes.NewReader(nil), 0); !errors.Is(err, ErrForbidden) {
+	service := NewService(repo, fakeParser{parsed}, "production")
+	if _, err := service.Preview(context.Background(), manager, bytes.NewReader(nil), 0); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("manager err=%v", err)
 	}
 	sa := auth.Actor{UserID: "a1", Kind: auth.KindAdmin, Role: auth.RoleSuperadmin}
-	if _, err := NewService(repo, fakeParser{parsed}, "production").Preview(context.Background(), sa, bytes.NewReader(nil), 0); !errors.Is(err, ErrProduction) {
-		t.Fatalf("production err=%v", err)
+	preview, err := service.Preview(context.Background(), sa, bytes.NewReader(nil), 0)
+	if err != nil || preview.AttemptID == "" {
+		t.Fatalf("preview production=%#v err=%v", preview, err)
+	}
+	if len(repo.saves) != 1 || repo.saves[0].Environment != ProductionPreviewEnvironment {
+		t.Fatalf("save preview production=%#v", repo.saves)
+	}
+	if _, err := service.Apply(context.Background(), sa, ApplyRequest{AttemptID: preview.AttemptID, PreviewHash: preview.PreviewHash, IdempotencyKey: "unit-production"}); !errors.Is(err, ErrProduction) {
+		t.Fatalf("apply production err=%v", err)
+	}
+	if _, err := service.Rollback(context.Background(), sa, "00000000-0000-0000-0000-000000000001"); !errors.Is(err, ErrProduction) {
+		t.Fatalf("rollback production err=%v", err)
 	}
 }
 

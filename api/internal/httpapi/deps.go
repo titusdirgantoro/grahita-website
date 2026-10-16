@@ -123,7 +123,7 @@ type Deps struct {
 	Audit *audit.Service
 
 	// MasterImport membuat preview dry-run workbook Impact. Hanya Superadmin;
-	// service menolak production dan tidak pernah mengubah tabel master.
+	// preview tidak mengubah tabel master, sedangkan apply/rollback production ditolak.
 	MasterImport *masterimport.Service
 
 	Storage   storage.Store

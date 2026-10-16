@@ -3332,7 +3332,8 @@ paths:
         tarif, catatan khusus, dan state akses existing. Endpoint hanya membuat
         artifact/attempt/item preview; tabel master cabang, produk, dan tarif
         tidak diubah. Workbook mentah tidak disimpan pada repo atau log.
-        Selalu ditolak pada APP_ENV=production.
+        Preview boleh dijalankan pada APP_ENV=production oleh Superadmin;
+        apply dan rollback tetap ditolak fail-closed di production.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -3365,7 +3366,7 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
-          description: Production dilarang atau state preview tidak memenuhi kontrak
+          description: State preview tidak memenuhi kontrak
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -3467,7 +3468,8 @@ paths:
       description: |
         Mengembalikan perubahan master/tarif hanya bila optimistic fingerprint
         masih sama. Revokasi akun/token/sesi tidak pernah dibalik; respons dan
-        audit mencatat identity_revocation_not_reversed.
+        audit mencatat identity_revocation_not_reversed. Selalu ditolak pada
+        APP_ENV=production.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
         - name: id

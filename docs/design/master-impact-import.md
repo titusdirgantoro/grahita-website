@@ -267,18 +267,11 @@ Apply tidak boleh lolos hanya karena total baris 34; seluruh issue di atas harus
 
 ## 10. Proteksi lingkungan, approval, dan rollback
 
-### 10.1 Larangan produksi
+### 10.1 Preview production dan larangan mutasi
 
-Importer harus fail-closed bila `APP_ENV=production`. Tidak boleh ada flag UI tunggal untuk melewatinya. Kartu produksi terpisah kelak minimal mensyaratkan:
+Keputusan pemilik 2026-10-16 mengizinkan Superadmin menjalankan preview nyata ketika `APP_ENV=production`. Preview production tetap dry-run: penulisan hanya boleh terjadi pada provenance/artifact ber-environment `production-preview`, attempt, item preview, dan evidence audit privat. Penanda provenance khusus itu mempertahankan larangan artifact `production` yang dapat dianggap siap apply. Tabel master cabang, produk, varian, tarif, pemetaan identitas, akun, token, dan akses tidak boleh dimutasi.
 
-- preview staging sukses atas source hash yang sama;
-- QA menyetujui bukti idempotensi dan rekonsiliasi;
-- approval tertulis CEO mengikat preview hash;
-- backup dan restore drill tersedia;
-- kredensial produksi terpisah;
-- dua kontrol eksplisit pada CLI/job, termasuk environment allowlist dan approval artifact yang belum kedaluwarsa.
-
-Spesifikasi ini sendiri bukan approval produksi.
+Apply dan rollback tetap fail-closed bila `APP_ENV=production`; tidak ada flag UI atau parameter request untuk melewati guard tersebut. Pembukaan apply production memerlukan keputusan desain dan kartu terpisah. Spesifikasi ini bukan approval apply production.
 
 ### 10.2 Rollback staging
 
