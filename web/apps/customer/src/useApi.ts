@@ -29,6 +29,9 @@ export function useApi<T>(path: string, aktif = true): HasilApi<T> {
     let hidup = true;
     setMemuat(true);
     setGalat(null);
+    // Data pembayaran tidak boleh menjadi fallback saat sedang dimuat ulang
+    // atau gagal. Pemakai hook bersikap fail-closed sampai respons terbaru ada.
+    setData(null);
     api
       .get<T>(path)
       .then((v) => {

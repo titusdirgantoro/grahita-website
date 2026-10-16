@@ -527,7 +527,7 @@ function KartuRekeningPembayaran() {
           Rekening tujuan untuk cabang ini belum ditetapkan. Jangan melakukan transfer; hubungi admin.
         </Notice>
       ) : null}
-      {rekening.length > 0 ? (
+      {!memuat && !galat && rekening.length > 0 ? (
         <ul>
           {rekening.map((r) => (
             <li key={r.id}>
@@ -562,7 +562,7 @@ function ModalKirim({
   onSukses: () => void;
 }) {
   const { data: cabang } = useApi<CabangRingkas>("/me/branch", open);
-  const { data: rekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", open);
+  const { data: rekening, memuat: memuatRekening, galat: galatRekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", open);
   const [cnc, setCnc] = useState(false);
   const [berkas, setBerkas] = useState<File[]>([]);
   const [galat, setGalat] = useState<string | null>(null);
@@ -570,7 +570,7 @@ function ModalKirim({
 
   const bisaCNC = cabang?.is_cnc === true;
   const wajibBukti = !(bisaCNC && cnc);
-  const transferTersedia = (rekening?.length ?? 0) > 0;
+  const transferTersedia = !memuatRekening && !galatRekening && (rekening?.length ?? 0) > 0;
 
   function tutup() {
     if (mengirim) return;
@@ -636,7 +636,11 @@ function ModalKirim({
         {galat ? <Notice tone="danger">{galat}</Notice> : null}
         {wajibBukti && !transferTersedia ? (
           <Notice tone="danger">
-            Rekening tujuan untuk cabang ini belum ditetapkan. Jangan melakukan transfer; hubungi admin.
+            {galatRekening
+              ? "Rekening tujuan terbaru tidak dapat dimuat. Transfer diblokir; coba lagi atau hubungi admin."
+              : memuatRekening
+                ? "Rekening tujuan sedang diperiksa. Transfer diblokir sampai data terbaru tersedia."
+                : "Rekening tujuan untuk cabang ini belum ditetapkan. Jangan melakukan transfer; hubungi admin."}
           </Notice>
         ) : null}
 
@@ -689,7 +693,7 @@ function ModalKirim({
  */
 function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
   const { data, memuat, galat, muatUlang } = useApi<BuktiTransfer[]>(`/orders/${id}/proofs`);
-  const { data: rekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", bolehUnggah);
+  const { data: rekening, memuat: memuatRekening, galat: galatRekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", bolehUnggah);
   const [pratinjau, setPratinjau] = useState<TautanBukti | null>(null);
   const [zoom, setZoom] = useState(false);
   const [galatLihat, setGalatLihat] = useState<string | null>(null);
@@ -774,9 +778,13 @@ function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
 
       {bolehUnggah ? (
         <form className={styles.unggahBukti} onSubmit={(e) => void unggah(e)}>
-          {(rekening?.length ?? 0) === 0 ? (
+          {memuatRekening || galatRekening || (rekening?.length ?? 0) === 0 ? (
             <Notice tone="danger">
-              Unggah bukti diblokir karena rekening tujuan cabang belum ditetapkan. Hubungi admin.
+              {galatRekening
+                ? "Unggah bukti diblokir karena rekening tujuan terbaru tidak dapat dimuat. Coba lagi atau hubungi admin."
+                : memuatRekening
+                  ? "Unggah bukti diblokir sampai rekening tujuan terbaru selesai diperiksa."
+                  : "Unggah bukti diblokir karena rekening tujuan cabang belum ditetapkan. Hubungi admin."}
             </Notice>
           ) : null}
           <Field
@@ -796,7 +804,7 @@ function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
             variant="primary"
             type="submit"
             icon="upload-simple"
-            disabled={mengunggah || (rekening?.length ?? 0) === 0}
+            disabled={mengunggah || memuatRekening || Boolean(galatRekening) || (rekening?.length ?? 0) === 0}
           >
             {mengunggah ? "Mengunggah…" : "Unggah bukti"}
           </Button>

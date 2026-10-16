@@ -2208,7 +2208,7 @@ paths:
                 properties:
                   data:
                     type: object
-                    required: [accounts, allowlist_version]
+                    required: [accounts, allowlist_version, ai_active]
                     properties:
                       accounts:
                         type: array
@@ -2221,6 +2221,9 @@ paths:
                             nama_pemilik: { type: string }
                             display_nomor: { type: string }
                       allowlist_version: { type: integer, format: int64, minimum: 0 }
+                      ai_active:
+                        type: boolean
+                        description: Status AI/OCR aktual untuk aksi nilai ulang tanpa membuka pengaturan Superadmin.
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":

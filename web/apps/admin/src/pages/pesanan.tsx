@@ -231,6 +231,7 @@ interface RekeningEfektif {
 interface RekeningOrder {
   accounts: RekeningEfektif[];
   allowlist_version: number;
+  ai_active: boolean;
 }
 
 /** Riwayat email pesanan (endpoint F1-16). */
@@ -286,6 +287,18 @@ const LABEL_ALASAN: Record<string, string> = {
   rekening_beda: "Rekening tidak sesuai",
   lainnya: "Lainnya",
 };
+
+const LABEL_STATUS_REKENING: Record<string, string> = {
+  allowed: "Sesuai",
+  not_allowed: "Tidak diizinkan",
+  inactive: "Nonaktif",
+  ambiguous: "Ambigu",
+  unreadable: "Tidak terbaca",
+};
+
+export function labelStatusRekening(status?: string): string {
+  return status ? (LABEL_STATUS_REKENING[status] ?? "Tidak terbaca") : "Tidak terbaca";
+}
 
 /**
  * PILIHAN_ALASAN adalah daftar tertutup alasan review (PRD §4.2 AP-ORD-07,
@@ -1384,11 +1397,13 @@ export function PesananDetailAdminPage() {
                 variant="secondary"
                 block
                 onClick={() => void nilaiUlangRekening()}
-                disabled={sibukNilaiUlang || !semuaOCRTersedia}
+                disabled={sibukNilaiUlang || rekeningOrder?.ai_active !== true || !semuaOCRTersedia}
               >
                 {sibukNilaiUlang ? "Mengantrekan…" : "Nilai ulang rekening"}
               </Button>
-              {!semuaOCRTersedia ? (
+              {rekeningOrder?.ai_active === false ? (
+                <p className="muted small">Nilai ulang tidak tersedia karena AI/OCR sedang dinonaktifkan.</p>
+              ) : !semuaOCRTersedia ? (
                 <p className="muted small">Nilai ulang tersedia setelah seluruh bukti mempunyai hasil OCR tersimpan.</p>
               ) : null}
               {galatVerif && !verifBuka ? <Notice tone="danger">{galatVerif}</Notice> : null}
@@ -1585,7 +1600,7 @@ export function PesananDetailAdminPage() {
                           : "Belum ada hasil OCR"}
                       </div>
                     </td>
-                    <td>{hasil?.status ?? "Tidak terbaca"}</td>
+                    <td>{labelStatusRekening(hasil?.status)}</td>
                     <td>
                       <Select
                         aria-label={`Rekening tujuan ${b.nama_file}`}
