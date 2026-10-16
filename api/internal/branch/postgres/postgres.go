@@ -54,7 +54,9 @@ func (r *Repo) List(ctx context.Context, f branch.Filter) ([]branch.Branch, erro
 			JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
 			Telepon: row.Telepon, IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
 			PajakIn: row.PajakIn, IsActive: row.IsActive,
-			TokenPrefix: row.TokenPrefix, TokenExpiresAt: row.TokenExpiresAt,
+			BankAllowlistVersion:      row.BankAllowlistVersion,
+			EffectiveBankAccountCount: row.EffectiveBankAccountCount,
+			TokenPrefix:               row.TokenPrefix, TokenExpiresAt: row.TokenExpiresAt,
 		})
 	}
 	return out, nil
@@ -74,7 +76,9 @@ func (r *Repo) Get(ctx context.Context, id string) (branch.Branch, error) {
 		JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
 		Telepon: row.Telepon, IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
 		PajakIn: row.PajakIn, IsActive: row.IsActive,
-		TokenPrefix: row.TokenPrefix, TokenExpiresAt: row.TokenExpiresAt,
+		BankAllowlistVersion:      row.BankAllowlistVersion,
+		EffectiveBankAccountCount: row.EffectiveBankAccountCount,
+		TokenPrefix:               row.TokenPrefix, TokenExpiresAt: row.TokenExpiresAt,
 	}, nil
 }
 

@@ -68,19 +68,21 @@ var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 // registrasi yang berlaku — nilai asli tokennya sendiri tidak pernah
 // dikembalikan dari sini (hanya sekali saat generate).
 type Branch struct {
-	ID             string     `json:"id"`
-	Nama           string     `json:"nama"`
-	NamaKepala     string     `json:"nama_kepala"`
-	Email          string     `json:"email"`
-	JabatanKepala  string     `json:"jabatan_kepala,omitempty"`
-	IdentityStatus string     `json:"identity_status"`
-	Telepon        string     `json:"telepon,omitempty"`
-	IsCNC          bool       `json:"is_cnc"`
-	IsSpecial      bool       `json:"is_special"`
-	PajakIn        bool       `json:"pajak_in"`
-	IsActive       bool       `json:"is_active"`
-	TokenPrefix    string     `json:"token_prefix,omitempty"`
-	TokenExpiresAt *time.Time `json:"token_expires_at,omitempty"`
+	ID                        string     `json:"id"`
+	Nama                      string     `json:"nama"`
+	NamaKepala                string     `json:"nama_kepala"`
+	Email                     string     `json:"email"`
+	JabatanKepala             string     `json:"jabatan_kepala,omitempty"`
+	IdentityStatus            string     `json:"identity_status"`
+	Telepon                   string     `json:"telepon,omitempty"`
+	IsCNC                     bool       `json:"is_cnc"`
+	IsSpecial                 bool       `json:"is_special"`
+	PajakIn                   bool       `json:"pajak_in"`
+	IsActive                  bool       `json:"is_active"`
+	BankAllowlistVersion      int64      `json:"bank_allowlist_version"`
+	EffectiveBankAccountCount int64      `json:"effective_bank_account_count"`
+	TokenPrefix               string     `json:"token_prefix,omitempty"`
+	TokenExpiresAt            *time.Time `json:"token_expires_at,omitempty"`
 }
 
 // Filter adalah penyaring daftar cabang. Field nil berarti tidak disaring.

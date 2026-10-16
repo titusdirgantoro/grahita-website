@@ -31,6 +31,12 @@ SELECT b.id,
        b.is_special,
        b.pajak_in,
        b.is_active,
+       b.bank_allowlist_version,
+       (SELECT count(*)::bigint
+          FROM branch_bank_accounts x
+          JOIN bank_accounts ba ON ba.id = x.bank_account_id
+         WHERE x.branch_id = b.id AND x.is_allowed AND ba.is_active AND b.is_active)
+         AS effective_bank_account_count,
        COALESCE(t.token_prefix, '')  AS token_prefix,
        t.expires_at                  AS token_expires_at
   FROM branches b
@@ -59,6 +65,12 @@ SELECT b.id,
        b.is_special,
        b.pajak_in,
        b.is_active,
+       b.bank_allowlist_version,
+       (SELECT count(*)::bigint
+          FROM branch_bank_accounts x
+          JOIN bank_accounts ba ON ba.id = x.bank_account_id
+         WHERE x.branch_id = b.id AND x.is_allowed AND ba.is_active AND b.is_active)
+         AS effective_bank_account_count,
        COALESCE(t.token_prefix, '')  AS token_prefix,
        t.expires_at                  AS token_expires_at
   FROM branches b
