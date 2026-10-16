@@ -55,8 +55,9 @@ type pesananUji struct {
 }
 
 // seedPesananDone menyemai satu pesanan berstatus done lengkap dengan dua baris
-// produk berserial dan dua rekening (satu aktif, satu nonaktif). Pesanan dibuat
-// lewat SQL langsung karena transisi Done adalah kartu F1-18.
+// produk berserial dan snapshot verifikasi final yang sah. Pesanan dibuat lewat
+// SQL langsung karena transisi Done adalah kartu F1-18, tetapi tetap harus
+// memenuhi invariant Done yang sama dengan jalur service.
 func (f *pgFixture) seedPesananDone(t *testing.T, branchID, nomor string, isCNC bool) pesananUji {
 	t.Helper()
 	ctx := context.Background()
@@ -115,7 +116,92 @@ func (f *pgFixture) seedPesananDone(t *testing.T, branchID, nomor string, isCNC 
 			t.Fatalf("seed baris pesanan %s: %v", nomor, err)
 		}
 	}
+	f.seedVerifikasiDokumenDone(t, id, branchID, nomor, total, isCNC)
 	return pesananUji{ID: id, Nomor: nomor, Serials: []string{serial1, serial2}, Total: total}
+}
+
+// seedVerifikasiDokumenDone melengkapi fixture SQL dengan attempt sukses yang
+// ditunjuk orders.done_verification_log_id. Transfer membawa satu bukti dan
+// snapshot rekening tujuan; C&C tanpa bukti tetap membawa attempt sukses dengan
+// destination_results kosong sesuai kontrak dokumen historis.
+func (f *pgFixture) seedVerifikasiDokumenDone(
+	t *testing.T, orderID, branchID, nomor string, total int64, isCNC bool,
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	var allowlistVersion int64
+	var verificationID string
+	if isCNC {
+		if err := f.pool.QueryRow(ctx,
+			`SELECT bank_allowlist_version FROM branches WHERE id=$1`, branchID).Scan(&allowlistVersion); err != nil {
+			t.Fatalf("baca versi allowlist %s: %v", nomor, err)
+		}
+		if err := f.pool.QueryRow(ctx,
+			`INSERT INTO verification_logs
+			   (order_id, metode, total_pesanan, total_terbaca, hasil, admin_id, catatan,
+			    branch_allowlist_version, destination_results)
+			 VALUES ($1,'manual',$2,$2,'cocok',$3,'fixture C&C tanpa bukti',$4,'[]'::jsonb)
+			 RETURNING id`, orderID, total, f.adminSA, allowlistVersion).Scan(&verificationID); err != nil {
+			t.Fatalf("seed verifikasi C&C %s: %v", nomor, err)
+		}
+	} else {
+		var bankID, bankCode, accountOwner, accountNumber string
+		if err := f.pool.QueryRow(ctx,
+			`SELECT id::text, bank::text, nama_pemilik, nomor
+			   FROM bank_accounts WHERE bank='BCA' AND nomor='1234567890'`).Scan(
+			&bankID, &bankCode, &accountOwner, &accountNumber); err != nil {
+			t.Fatalf("baca rekening snapshot %s: %v", nomor, err)
+		}
+		tag, err := f.pool.Exec(ctx,
+			`INSERT INTO branch_bank_accounts (branch_id, bank_account_id, is_allowed, assigned_by)
+			 VALUES ($1,$2,true,$3) ON CONFLICT (branch_id, bank_account_id) DO NOTHING`,
+			branchID, bankID, f.adminSA)
+		if err != nil {
+			t.Fatalf("seed assignment rekening %s: %v", nomor, err)
+		}
+		if tag.RowsAffected() > 0 {
+			if err := f.pool.QueryRow(ctx,
+				`UPDATE branches SET bank_allowlist_version=bank_allowlist_version+1
+				  WHERE id=$1 RETURNING bank_allowlist_version`, branchID).Scan(&allowlistVersion); err != nil {
+				t.Fatalf("naikkan versi allowlist %s: %v", nomor, err)
+			}
+		} else if err := f.pool.QueryRow(ctx,
+			`SELECT bank_allowlist_version FROM branches WHERE id=$1`, branchID).Scan(&allowlistVersion); err != nil {
+			t.Fatalf("baca versi allowlist %s: %v", nomor, err)
+		}
+		var proofID string
+		if err := f.pool.QueryRow(ctx,
+			`INSERT INTO payment_proofs
+			   (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+			    uploaded_by_kind, uploaded_by_id)
+			 VALUES ($1,$2,'bukti-dokumen.jpg','image/jpeg',4,convert_to($3,'UTF8'),'admin',$4)
+			 RETURNING id`, orderID, "proofs/"+orderID+"/bukti-dokumen.jpg", nomor, f.adminSA).Scan(&proofID); err != nil {
+			t.Fatalf("seed bukti pembayaran %s: %v", nomor, err)
+		}
+		if err := f.pool.QueryRow(ctx,
+			`INSERT INTO verification_logs
+			   (order_id, metode, total_pesanan, total_terbaca, hasil, admin_id, catatan,
+			    branch_allowlist_version, destination_results)
+			 VALUES ($1,'manual',$2,$2,'cocok',$3,'fixture dokumen dengan snapshot tujuan',$4,
+			   jsonb_build_array(jsonb_build_object(
+			     'payment_proof_id',$5::text,
+			     'status','allowed',
+			     'source','manual',
+			     'bank_account_id',$6::text,
+			     'bank_snapshot',$7::text,
+			     'account_owner_snapshot',$8::text,
+			     'account_last_digits_snapshot',right($9::text,4))))
+			 RETURNING id`, orderID, total, f.adminSA, allowlistVersion, proofID, bankID,
+			bankCode, accountOwner, accountNumber).Scan(&verificationID); err != nil {
+			t.Fatalf("seed verifikasi transfer %s: %v", nomor, err)
+		}
+	}
+
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE orders SET done_verification_log_id=$2 WHERE id=$1`, orderID, verificationID); err != nil {
+		t.Fatalf("pasang pointer verifikasi %s: %v", nomor, err)
+	}
 }
 
 // barisDokumen menghitung baris `documents` satu pesanan beserta kuncinya.
