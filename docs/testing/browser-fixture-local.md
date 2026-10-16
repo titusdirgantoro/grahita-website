@@ -1,6 +1,6 @@
 # Fixture sesi browser lokal
 
-Fixture ini hanya untuk pengujian browser terhadap API dan PostgreSQL sintetis lokal. Browser memperoleh sesi Superadmin, Manager, atau cabang tanpa mengetik maupun menampilkan password, token sesi, cookie, connection string, atau kunci proxy.
+Fixture ini hanya untuk regresi terisolasi terhadap API, PostgreSQL, dan object storage sintetis lokal. Browser memperoleh sesi Superadmin, Manager, atau cabang tanpa mengetik maupun menampilkan password, token sesi, cookie, connection string, atau kunci proxy. Fixture ini **bukan** staging/development, bukan lingkungan aplikasi kedua, dan hasilnya tidak boleh disebut sebagai kelulusan E2E production. E2E nyata tetap memakai dua portal production dan data berawalan `UJI-` setelah kode lolos QA serta ter-deploy lewat prosedur production yang berizin.
 
 ## Model ancaman dan pengaman
 
@@ -14,9 +14,30 @@ Endpoint fixture dapat menerbitkan sesi berprivilege, sehingga `APP_ENV=local` s
 - Browser tidak mengirim password. Handler memakai password acak internal untuk menempuh `auth.Service.Login` normal, lalu memverifikasi role akun. Pemeriksaan akun aktif, sesi PostgreSQL, cookie host-only, dan CSRF sama dengan login biasa.
 - Route hanya didaftarkan ketika `APP_ENV=local` dan flag aktif. Konfigurasi production menolak flag, router production tetap 404, dan role/CSRF endpoint produk tidak diubah.
 
-Reverse proxy lokal tidak dipercaya hanya karena `RemoteAddr` terlihat loopback; kunci proxy dan bukti origin tetap wajib. Jangan menaruh proxy lain di depan Vite fixture atau mengekspos port 5173/5174/8088 ke jaringan.
+Reverse proxy lokal tidak dipercaya hanya karena `RemoteAddr` terlihat loopback; kunci proxy dan bukti origin tetap wajib. Jangan menaruh proxy lain di depan Vite fixture atau mengekspos port fixture ke jaringan.
 
-## Prasyarat dan persiapan database
+## Fasilitas regresi rootless yang direkomendasikan
+
+Runner dapat menyiapkan database unik, marker, dan storage S3-compatible sementara tanpa root maupun Docker menggunakan launcher fasilitas:
+
+       BROWSER_FACILITY_PG_SOCKET=<socket-PG-rootless-lokal> \
+         ./scripts/browser-test-facility.sh start
+
+Launcher memakai listener PostgreSQL loopback yang sudah dimiliki runner, membuat role/password dan database kosong `grahita_browser_fixture_<acak>`, menulis marker melalui launcher browser, membangun server storage sintetis, dan hanya bind ke `127.0.0.1`. Nilai rahasia tidak dicetak. Launcher hanya menampilkan jalur berkas environment mode `0600` di bawah direktori fasilitas milik user. Runner lain dengan user Unix yang sama dapat memuatnya tanpa menyalin nilai ke log/kartu/repo/chat:
+
+       . "$(./scripts/browser-test-facility.sh env)"
+
+Port bawaan fasilitas adalah API `18088`, portal cabang `15173`, portal admin `15174`, dan storage `19090`; semuanya diperiksa bebas, berada di atas 1024, bukan `8080`, dan dapat dioverride dengan `BROWSER_FIXTURE_API_PORT`, `BROWSER_FIXTURE_CUSTOMER_PORT`, `BROWSER_FIXTURE_ADMIN_PORT`, serta `BROWSER_FACILITY_S3_PORT`.
+
+Operasi lifecycle:
+
+       ./scripts/browser-test-facility.sh status
+       ./scripts/browser-test-facility.sh reset
+       ./scripts/browser-test-facility.sh stop
+
+`reset` menghapus database, role, proses, serta objek lama lalu membuat fixture unik baru. `stop` membersihkan semuanya. Jangan arahkan launcher ke PostgreSQL production, tunnel remote, Docker production, atau listener yang bukan milik runner.
+
+## Persiapan database manual
 
 1. Buat database PostgreSQL kosong pada listener loopback. Namanya wajib diawali `grahita_browser_fixture_`. Jangan memakai database production, salinan production, tunnel ke server remote, atau database yang sudah berisi tabel aplikasi.
 2. Bangun binary:
@@ -33,11 +54,11 @@ Reverse proxy lokal tidak dipercaya hanya karena `RemoteAddr` terlihat loopback;
 
        APP_ENV=local DATABASE_URL=<dsn-yang-sama> ./scripts/browser-fixture-local.sh
 
-Launcher memverifikasi marker sebelum migrasi dan seed, memasang shim UUID PostgreSQL lokal yang idempoten, membuat password serta kunci proxy acak, menjalankan migrasi+seed, menjalankan Vite customer/admin pada loopback, lalu menjalankan API pada `127.0.0.1:8088`. Password dan kunci tidak dicetak atau ditulis ke repo. Email profil dapat dioverride melalui `BROWSER_FIXTURE_SUPERADMIN_EMAIL`, `BROWSER_FIXTURE_MANAGER_EMAIL`, dan `BROWSER_FIXTURE_BRANCH_EMAIL`; bawaan cocok dengan akun seed.
+Launcher memverifikasi marker sebelum migrasi dan seed, memasang shim UUID PostgreSQL lokal yang idempoten, membuat password serta kunci proxy acak, menjalankan migrasi+seed, lalu menjalankan Vite customer/admin dan API pada loopback. Pemakaian manual memakai port bawaan API `8088`, customer `5173`, dan admin `5174`; environment fasilitas di atas mengoverride semuanya ke port bebas yang telah diperiksa. Password dan kunci tidak dicetak atau ditulis ke repo. Email profil dapat dioverride melalui `BROWSER_FIXTURE_SUPERADMIN_EMAIL`, `BROWSER_FIXTURE_MANAGER_EMAIL`, dan `BROWSER_FIXTURE_BRANCH_EMAIL`; bawaan cocok dengan akun seed.
 
 ## Membuka sesi
 
-Buka salah satu URL yang dicetak launcher langsung dari address bar browser:
+Buka salah satu URL yang dicetak launcher langsung dari address bar browser. Untuk pemakaian manual dengan port bawaan:
 
 - Superadmin: `http://127.0.0.1:5174/api/v1/test/browser-session/superadmin`
 - Manager: `http://127.0.0.1:5174/api/v1/test/browser-session/manager`
@@ -57,12 +78,14 @@ Verifikasi UI memanggil `/api/v1/auth/me` dan endpoint bisnis nyata melalui Vite
 
 ## Storage dan upload
 
-Fixture sesi tidak menyalakan atau memalsukan object storage. Jika object storage sintetis lokal tidak tersedia, skenario upload nyata tetap TERHALANG dan tidak boleh diklaim PASS.
+Launcher sesi tidak menyalakan object storage sendiri. Bila environment berasal dari `browser-test-facility.sh`, API memakai server S3-compatible sintetis loopback yang menyimpan objek hanya di memori proses. Server mendukung `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `HeadBucket`, `ListObjectsV2`, dan URL unduh presigned yang dipakai aplikasi. Ia tidak memverifikasi SigV4 dan tidak boleh diekspos atau dipakai sebagai storage production; isolasinya berasal dari bind loopback, bucket berprefix fixture, kredensial acak sementara, dan lifecycle proses.
+
+Jika fasilitas storage tidak aktif atau smoke upload/unduh gagal, skenario upload nyata tetap TERHALANG dan tidak boleh diklaim PASS.
 
 ## Sanitasi dan cleanup
 
-1. Hentikan launcher; trap menghentikan API serta kedua Vite dev server dan menghapus log runtime sementara.
-2. Hapus database `grahita_browser_fixture_*` yang dipakai. Jangan memakai marker database itu untuk pekerjaan lain.
+1. Hentikan launcher sesi; trap menghentikan API serta kedua Vite dev server dan menghapus log runtime sementara.
+2. Jalankan `./scripts/browser-test-facility.sh stop` untuk menghapus database, role, proses storage, objek, binary sementara, dan berkas environment. Bila database disiapkan manual, hapus database `grahita_browser_fixture_*` yang dipakai. Jangan memakai marker database itu untuk pekerjaan lain.
 3. Pastikan tidak ada `BROWSER_FIXTURE_PASSWORD`, `BROWSER_FIXTURE_PROXY_KEY`, `SEED_PASSWORD`, cookie, token, atau DSN di log, screenshot, komentar kartu, atau commit.
 4. Jalankan tes guard:
 

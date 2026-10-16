@@ -4,6 +4,9 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 server=${GRAHITA_SERVER:-$repo_dir/bin/server}
 marker='grahita-browser-fixture-v1'
+api_port=${BROWSER_FIXTURE_API_PORT:-8088}
+customer_port=${BROWSER_FIXTURE_CUSTOMER_PORT:-5173}
+admin_port=${BROWSER_FIXTURE_ADMIN_PORT:-5174}
 
 fail() {
   printf 'GALAT: %s\n' "$1" >&2
@@ -13,6 +16,13 @@ fail() {
 [ "${APP_ENV:-local}" = "local" ] || fail 'fixture browser hanya boleh dijalankan dengan APP_ENV=local.'
 [ -n "${DATABASE_URL:-}" ] || fail 'DATABASE_URL sintetis lokal wajib diisi.'
 command -v psql >/dev/null 2>&1 || fail 'psql wajib tersedia untuk memverifikasi identitas database fixture.'
+for port in "$api_port" "$customer_port" "$admin_port"; do
+  case "$port" in
+    ''|*[!0-9]*) fail 'port fixture wajib numerik.' ;;
+  esac
+  [ "$port" -gt 1024 ] || fail 'port fixture wajib di atas 1024.'
+  [ "$port" -ne 8080 ] || fail 'fixture tidak boleh memakai port 8080.'
+done
 
 identity=$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT CASE WHEN COALESCE(inet_server_addr() <<= inet '127.0.0.0/8' OR inet_server_addr() = inet '::1', FALSE) THEN 1 ELSE 0 END || '|' || CASE WHEN current_database() LIKE 'grahita_browser_fixture_%' THEN 1 ELSE 0 END")
 [ "$identity" = '1|1' ] || fail 'database fixture wajib memakai server loopback dan nama grahita_browser_fixture_*.'
@@ -56,27 +66,26 @@ psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f "$repo_dir/scripts/pg-dev-shim.
 APP_ENV=local "$server" --mode=migrate
 APP_ENV=local SEED_PASSWORD="$fixture_password" "$server" --mode=seed
 
-VITE_HOST=127.0.0.1 VITE_PORT=5173 VITE_API_TARGET=http://127.0.0.1:8088 \
+VITE_HOST=127.0.0.1 VITE_PORT="$customer_port" VITE_API_TARGET="http://127.0.0.1:$api_port" \
   VITE_BROWSER_FIXTURE_PROXY_KEY="$proxy_key" npm --prefix "$repo_dir/web" run dev:customer >"$runtime_dir/customer.log" 2>&1 &
 customer_pid=$!
-VITE_HOST=127.0.0.1 VITE_PORT=5174 VITE_API_TARGET=http://127.0.0.1:8088 \
+VITE_HOST=127.0.0.1 VITE_PORT="$admin_port" VITE_API_TARGET="http://127.0.0.1:$api_port" \
   VITE_BROWSER_FIXTURE_PROXY_KEY="$proxy_key" npm --prefix "$repo_dir/web" run dev:admin >"$runtime_dir/admin.log" 2>&1 &
 admin_pid=$!
 
-printf '%s\n' \
-  'Fixture browser lokal aktif pada loopback. Buka URL berikut lewat browser:' \
-  '  Admin Superadmin: http://127.0.0.1:5174/api/v1/test/browser-session/superadmin' \
-  '  Admin Manager:    http://127.0.0.1:5174/api/v1/test/browser-session/manager' \
-  '  Cabang sintetis:  http://127.0.0.1:5173/api/v1/test/browser-session/branch' \
-  'Password dan kunci proxy dibuat sementara dan tidak dicetak.'
+printf '%s\n' 'Fixture browser lokal aktif pada loopback. Buka URL berikut lewat browser:'
+printf '  Admin Superadmin: http://127.0.0.1:%s/api/v1/test/browser-session/superadmin\n' "$admin_port"
+printf '  Admin Manager:    http://127.0.0.1:%s/api/v1/test/browser-session/manager\n' "$admin_port"
+printf '  Cabang sintetis:  http://127.0.0.1:%s/api/v1/test/browser-session/branch\n' "$customer_port"
+printf '%s\n' 'Password dan kunci proxy dibuat sementara dan tidak dicetak.'
 
 export APP_ENV=local
-export HTTP_ADDR=127.0.0.1:8088
+export HTTP_ADDR=127.0.0.1:$api_port
 export SESSION_SECURE=false
 export BROWSER_FIXTURE_ENABLED=true
 export BROWSER_FIXTURE_PASSWORD="$fixture_password"
 export BROWSER_FIXTURE_PROXY_KEY="$proxy_key"
-export BROWSER_FIXTURE_ORIGINS=http://127.0.0.1:5173,http://127.0.0.1:5174
+export BROWSER_FIXTURE_ORIGINS=http://127.0.0.1:$customer_port,http://127.0.0.1:$admin_port
 "$server" --mode=api &
 api_pid=$!
 wait "$api_pid"
