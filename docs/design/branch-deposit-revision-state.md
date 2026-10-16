@@ -235,15 +235,29 @@ Tidak diperlukan `revision_origin_*` pada `orders`: workflow aktif diperoleh dar
 ### 3.2 CHECK pointer dan waktu Done
 
 Empat field `done_*` dan `done_at` adalah state settlement **aktif**, bukan arsip.
-Constraint lama `done_punya_waktu` dan `orders_done_payment_breakdown` diganti,
-bukan ditumpuk dengan aturan samar. Bentuk SQL normatif berikut sengaja menulis
-setiap cabang state secara eksplisit sehingga evaluasi `NULL` tidak dapat berubah
-menjadi `UNKNOWN` dan lolos sebagai CHECK:
+Constraint lama `done_punya_waktu` dan, bila D3 pernah dipasang sebagian,
+`orders_done_payment_breakdown` diganti, bukan ditumpuk dengan aturan samar.
+Baseline repository sampai migrasi `0011` hanya mempunyai
+`done_punya_waktu`; karena itu penggantian wajib menerima kedua lintasan secara
+deterministik:
+
+1. preflight katalog memastikan setiap constraint bernama
+   `done_punya_waktu`/`orders_done_payment_breakdown` yang ada benar-benar CHECK
+   pada `orders`; nama sama dengan jenis atau tabel yang berbeda adalah drift dan
+   migrasi berhenti;
+2. `DROP CONSTRAINT IF EXISTS` dipakai untuk keduanya. Ini bukan mengabaikan drift:
+   preflight sebelumnya sudah menolak objek bernama sama yang tidak sesuai;
+3. tambah satu-satunya pengganti `orders_settlement_state_consistent` sebagai
+   `NOT VALID`, lakukan rekonsiliasi, lalu `VALIDATE` sebelum aktivasi writer.
+
+Bentuk SQL normatif berikut sengaja menulis setiap cabang state secara eksplisit
+sehingga evaluasi `NULL` tidak dapat berubah menjadi `UNKNOWN` dan lolos sebagai
+CHECK:
 
 ```sql
 ALTER TABLE orders
-  DROP CONSTRAINT done_punya_waktu,
-  DROP CONSTRAINT orders_done_payment_breakdown,
+  DROP CONSTRAINT IF EXISTS done_punya_waktu,
+  DROP CONSTRAINT IF EXISTS orders_done_payment_breakdown,
   ADD CONSTRAINT orders_settlement_state_consistent CHECK ((
     -- Draft biasa.
     (status = 'draft'
@@ -319,11 +333,39 @@ Constraint nomor/tanggal Submitted lama tetap berlaku; revisi pending bukan Draf
 depth, tetapi bukan pengganti CHECK lengkap di atas.
 
 FK histori revisi ditargetkan ke unique enam kolom yang sama dengan pointer aktif.
-Constraint `verification_logs_settlement_breakdown` **sudah merupakan prasyarat
-normatif D3 §4.8** dan tidak boleh ditambahkan untuk kedua kalinya oleh migrasi
-delta ini. Migrasi C1 wajib memeriksa nama, urutan kolom, dan definisinya; bila
-tidak ada atau berbeda, migrasi berhenti fail-closed alih-alih membuat constraint
-duplikat dengan nama lain:
+`verification_logs_settlement_breakdown` adalah bagian normatif D3 §4.8, tetapi
+belum ada pada baseline migrasi repository `0001`–`0011`. C1 adalah pemasang D3,
+bukan konsumen yang boleh menganggap D3 sudah terpasang. Urutan implementable-nya:
+
+1. tambah/backfill `verification_logs.order_version`, `deposit_amount`, dan
+   `transfer_amount`, lalu jalankan pemeriksaan breakdown serta duplikat enam kolom;
+2. periksa katalog untuk nama `verification_logs_settlement_breakdown`;
+3. bila belum ada (lintasan baseline `0011`), buat UNIQUE enam kolom **tepat satu
+   kali**; bila sudah ada (lintasan D3 terpasang sebagian/retry), lanjut hanya jika
+   ia constraint UNIQUE pada `verification_logs` dengan urutan kolom persis
+   `(id, order_id, order_version, total_pesanan, deposit_amount,
+   transfer_amount)`; nama sama dengan jenis/kolom/urutan berbeda adalah drift dan
+   migrasi berhenti fail-closed;
+4. baru pasang kedua FK pemakai target itu: pointer aktif `orders` menurut D3 §4.8
+   dan histori `invoice_revisions` di bawah. Jangan membuat unique kedua dengan
+   nama lain dan jangan melakukan drop/recreate target pada retry.
+
+Preflight harus membaca `pg_constraint` (`contype = 'u'`, `conrelid` dan `conkey`
+berdasarkan `pg_attribute.attnum`), bukan sekadar mencari nama. Bentuk pemasangan
+untuk lintasan baseline adalah:
+
+```sql
+ALTER TABLE verification_logs
+  ADD CONSTRAINT verification_logs_settlement_breakdown
+  UNIQUE (
+    id, order_id, order_version, total_pesanan,
+    deposit_amount, transfer_amount
+  );
+```
+
+Pernyataan itu dijalankan hanya setelah preflight menyatakan constraint absen;
+UNIQUE tidak memakai `NOT VALID`, sehingga pemeriksaan duplicate/backfill harus
+selesai lebih dahulu. Setelah target tersedia dan telah diverifikasi, pasang FK:
 
 ```sql
 ALTER TABLE invoice_revisions
@@ -344,8 +386,9 @@ all-or-none dijamin oleh
 `invoice_revisions_settlement_snapshot_consistent`; untuk versi kontrak `1`, semua
 komponen key FK pasti non-NULL sehingga FK tidak dapat dilewati oleh semantik NULL.
 
-Urutan cutover wajib: tambah kolom nullable dan verifikasi unique target D3 yang
-sudah ada; pasang FK/CHECK `NOT VALID` (PostgreSQL tetap memeriksa semua
+Urutan cutover wajib: tambah kolom nullable; backfill dan buktikan tidak ada
+breakdown/duplicate ilegal; buat-atau-verifikasi unique target D3 sesuai lintasan
+di atas; pasang FK/CHECK `NOT VALID` (PostgreSQL tetap memeriksa semua
 INSERT/UPDATE baru); matikan feature
 revisi total berubah dan semua publisher LUNAS lama; inventaris row legacy yang
 melanggar ke antrean rekonsiliasi tanpa mengubahnya menjadi Done; backfill hanya
@@ -353,6 +396,26 @@ dari bukti typed yang deterministik; jalankan query anti-join/negative-state sam
 nol; `VALIDATE CONSTRAINT` FK lalu CHECK; baru aktifkan writer dan publisher baru.
 Selama masih ada row legacy invalid, predikat §6.1 tetap fail-closed sehingga row
 tersebut tidak publishable walaupun constraint masih `NOT VALID`.
+
+Matriks uji migrasi C1 wajib mencakup:
+
+- database bersih dari seluruh migrasi sampai `0011`: unique enam kolom dibuat
+  sekali, kedua nama CHECK lama ditangani walau
+  `orders_done_payment_breakdown` absen, dan semua FK dapat dipasang/validasi;
+- skema D3 terpasang sebagian dengan unique enam kolom dan
+  `orders_done_payment_breakdown` yang benar: unique tidak dibuat ulang, CHECK lama
+  diganti, dan hasil akhir identik dengan lintasan baseline;
+- retry migrasi setelah create target tetapi sebelum FK: tidak ada duplicate
+  unique dan proses melanjutkan dari hasil katalog;
+- constraint target bernama sama tetapi `contype`, tabel, kolom, atau urutannya
+  salah: migrasi ditolak sebelum drop/add lain;
+- data duplikat enam kolom atau breakdown/backfill ilegal: pemasangan UNIQUE
+  ditolak dan transaksi rollback utuh;
+- baseline dengan hanya `done_punya_waktu`, skema tanpa kedua CHECK lama, serta
+  skema dengan constraint bernama sama tetapi bukan CHECK pada `orders`: dua kasus
+  pertama berhasil menuju constraint final, kasus drift terakhir ditolak;
+- negative-state SQL §8 tetap menolak seluruh kombinasi pointer/state ilegal
+  setelah `VALIDATE CONSTRAINT`.
 
 `done_order_version` boleh lebih kecil dari `orders.versi` hanya pada Done hasil
 revisi total tetap. Setelah revisi total berubah diselesaikan, pointer baru wajib
