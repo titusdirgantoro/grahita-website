@@ -190,6 +190,33 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     });
   });
 
+  it("meminta konfirmasi khusus sebelum mencabut assignment dormant", async () => {
+    const konfirmasi = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const panggilan = stubFetch((url, init) => {
+      if (url.endsWith("/auth/me")) return json({ data: { user: { id: "sa-1", kind: "admin", role: "superadmin", nama: "Sandi", email: "sa@test" } } });
+      if (url.endsWith("/admin/branches/br-a/bank-accounts") && init?.method === "PUT") return json({ data: { branch_id: "br-a", version: 5, bank_account_ids: ["ba-1"] } });
+      if (url.endsWith("/admin/branches/br-a/bank-accounts")) return json({ data: { branch_id: "br-a", version: 4, items: [
+        { id: "ba-1", bank: "BCA", nama_pemilik: "PT A", display_nomor: "••••1111", is_active: true, is_allowed: true, dormant: false, effective: true },
+        { id: "ba-2", bank: "BRI", nama_pemilik: "PT B", display_nomor: "••••2222", is_active: false, is_allowed: true, dormant: true, effective: false },
+      ] } });
+      return undefined;
+    });
+    render(<RouterProvider router={buatRouter("/cabang")} />);
+    fireEvent.click(within(await waitFor(() => baris("Grahita Bandung"))).getByRole("button", { name: "Kelola rekening tujuan" }));
+    const cabut = await screen.findByRole("button", { name: "Cabut assignment" });
+    fireEvent.click(cabut);
+    expect((screen.getByLabelText("Pilih BRI ••••2222") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(cabut);
+    expect((screen.getByLabelText("Pilih BRI ••••2222") as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Simpan assignment" }));
+    await waitFor(() => {
+      const put = panggilan.find((p) => p.url.endsWith("/admin/branches/br-a/bank-accounts") && p.init?.method === "PUT");
+      expect(JSON.parse(String(put?.init?.body))).toEqual({ expected_version: 4, bank_account_ids: ["ba-1"] });
+    });
+    expect(konfirmasi).toHaveBeenCalledTimes(2);
+    konfirmasi.mockRestore();
+  });
+
   it("tab filter dan pencarian dikirim ke server lewat query API", async () => {
     const panggilan = stubFetch();
 

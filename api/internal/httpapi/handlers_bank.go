@@ -112,7 +112,7 @@ func (a *API) adminBranchBankAccountsReplace(w http.ResponseWriter, r *http.Requ
 // selector verifikasi manual. Nomor selalu masked; Manager boleh membaca lewat
 // admin.verify tetapi tidak memperoleh endpoint mutasi assignment.
 func (a *API) adminOrderBankAccounts(w http.ResponseWriter, r *http.Request) error {
-	if a.d.Bank == nil || a.d.AdminOrders == nil {
+	if a.d.Bank == nil || a.d.AdminOrders == nil || a.d.Settings == nil {
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan rekening pesanan belum tersedia.")
 	}
 	actor := auth.ActorFrom(r.Context())
@@ -121,6 +121,10 @@ func (a *API) adminOrderBankAccounts(w http.ResponseWriter, r *http.Request) err
 		return mapDomainErr(err)
 	}
 	set, err := a.d.Bank.EffectiveForBranch(r.Context(), order.BranchID)
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	ai, err := a.d.Settings.AISettings(r.Context())
 	if err != nil {
 		return mapDomainErr(err)
 	}
@@ -136,6 +140,7 @@ func (a *API) adminOrderBankAccounts(w http.ResponseWriter, r *http.Request) err
 	httpx.OK(w, data(map[string]any{
 		"accounts":          items,
 		"allowlist_version": set.Version,
+		"ai_active":         ai.Aktif,
 	}))
 	return nil
 }

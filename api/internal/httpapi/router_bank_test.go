@@ -92,6 +92,7 @@ func newBankServer(t *testing.T) *bankServer {
 
 func TestApiRekeningEfektifPesananUntukVerifikasi(t *testing.T) {
 	bs := newBankServer(t)
+	bs.settings.values[settings.AI] = `{"aktif":true,"min_keyakinan":0.9,"tol_kurang":0,"tol_lebih":0,"digit_rek":4,"mundur":1}`
 	base := bs.srv.URL + "/api/v1/admin/orders/" + bankOrderID + "/bank-accounts"
 
 	mgrCookies, _ := login(t, bs.srv, "budi@example.test")
@@ -113,6 +114,9 @@ func TestApiRekeningEfektifPesananUntukVerifikasi(t *testing.T) {
 	}
 	if _, ada := data["allowlist_version"]; !ada {
 		t.Error("versi allowlist harus disertakan")
+	}
+	if data["ai_active"] != true {
+		t.Errorf("status AI aktual harus disertakan untuk Manager, dapat %v", data["ai_active"])
 	}
 
 	cabangCookies, _ := login(t, bs.srv, "a@example.test")

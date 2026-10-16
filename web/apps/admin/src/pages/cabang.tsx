@@ -426,6 +426,13 @@ export function CabangPage() {
     });
   }
 
+  function cabutAssignmentDormant(rekening: RekeningAssignment) {
+    const lanjut = window.confirm(
+      `${rekening.bank} ${rekening.display_nomor} sedang nonaktif. Setelah dicabut, rekening ini tidak dapat dipilih kembali sampai diaktifkan. Cabut assignment?`,
+    );
+    if (lanjut) ubahPilihanRekening(rekening.id, false);
+  }
+
   async function simpanAssignment() {
     if (!rekeningCabang || !assignment) return;
     if (pilihanRekening.size === 0 && !window.confirm("Tanpa rekening, transfer cabang ini akan diblokir. Lanjutkan?")) return;
@@ -789,7 +796,7 @@ export function CabangPage() {
                         onChange={(e) => ubahPilihanRekening(r.id, e.target.checked)}
                       />
                       {dormant ? (
-                        <Button variant="danger-ghost" onClick={() => ubahPilihanRekening(r.id, false)}>
+                        <Button variant="danger-ghost" onClick={() => cabutAssignmentDormant(r)}>
                           Cabut assignment
                         </Button>
                       ) : null}

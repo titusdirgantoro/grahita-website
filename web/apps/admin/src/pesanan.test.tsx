@@ -3,7 +3,7 @@ import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { routeTree } from "./routes";
-import { bolehRevisi, uraiBilanganBulat, type FilterPesanan, type PesananDetail, type PesananHalaman } from "./pages/pesanan";
+import { bolehRevisi, labelStatusRekening, uraiBilanganBulat, type FilterPesanan, type PesananDetail, type PesananHalaman } from "./pages/pesanan";
 
 const DETAIL_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -186,6 +186,8 @@ function stubPesanan(opsi?: {
   verifyGagal?: { status: number; code: string; message: string };
   /** Ditunggu sebelum POST /verify menjawab — untuk menguji keadaan sibuk. */
   verifyTertahan?: Promise<unknown>;
+  aiAktif?: boolean;
+  proofs?: Array<Record<string, unknown>>;
   /** Jawaban berurutan POST /revise (F2-25); entri terakhir dipakai berulang. */
   revise?: JawabanRevisi[];
   /** Ditunggu sebelum POST /revise menjawab — untuk menguji klik ganda. */
@@ -281,6 +283,7 @@ function stubPesanan(opsi?: {
         return json({
           data: {
             allowlist_version: 3,
+            ai_active: opsi?.aiAktif ?? true,
             accounts: [
               { id: "ba-1", bank: "BCA", nama_pemilik: "PT Grahita", display_nomor: "••••1234" },
             ],
@@ -289,7 +292,7 @@ function stubPesanan(opsi?: {
       }
       if (url.includes(`/admin/orders/${DETAIL_ID}/proofs`)) {
         return json({
-          data: [
+          data: opsi?.proofs ?? [
             {
               id: "p1",
               order_id: DETAIL_ID,
@@ -506,6 +509,33 @@ describe("Riwayat pemesanan admin (F1-15)", () => {
 
 describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () => {
   const URL_VERIFY = `/api/v1/admin/orders/${DETAIL_ID}/verify`;
+
+  it("menerjemahkan seluruh status allowlist ke label operator", () => {
+    expect(["allowed", "not_allowed", "inactive", "ambiguous", "unreadable", undefined].map(labelStatusRekening)).toEqual([
+      "Sesuai", "Tidak diizinkan", "Nonaktif", "Ambigu", "Tidak terbaca", "Tidak terbaca",
+    ]);
+  });
+
+  it("nilai ulang hanya aktif ketika AI hidup dan seluruh bukti sudah mempunyai OCR", async () => {
+    const proofOCR = [{ id: "p1", order_id: DETAIL_ID, nama_file: "bukti.png", mime_type: "image/png", ukuran_byte: 1000, uploaded_by_kind: "branch", created_at: "2026-10-01T03:30:00Z", ocr_at: "2026-10-01T03:31:00Z", ocr_bank: "BCA", ocr_rek_akhir: "1234", ocr_confidence: 0.98 }];
+    stubPesanan({ aiAktif: true, proofs: proofOCR });
+    const tampilan = render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    const tombolAktif = await screen.findByRole("button", { name: "Nilai ulang rekening" });
+    await waitFor(() => expect((tombolAktif as HTMLButtonElement).disabled).toBe(false));
+    tampilan.unmount();
+
+    stubPesanan({ aiAktif: false, proofs: proofOCR });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    expect((await screen.findByRole("button", { name: "Nilai ulang rekening" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(await screen.findByText(/AI\/OCR sedang dinonaktifkan/)).toBeDefined();
+  });
+
+  it("nilai ulang tetap nonaktif bila hasil OCR belum tersedia", async () => {
+    stubPesanan({ aiAktif: true });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    expect((await screen.findByRole("button", { name: "Nilai ulang rekening" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(await screen.findByText(/setelah seluruh bukti mempunyai hasil OCR tersimpan/)).toBeDefined();
+  });
 
   it("menyetujui lewat modal: total, nominal terbaca + selisih, lalu POST /verify dan menyegarkan detail", async () => {
     const { posts, panggilan } = stubPesanan();

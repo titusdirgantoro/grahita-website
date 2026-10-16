@@ -146,6 +146,8 @@ function fetchPesanan(
     detail?: unknown;
     bukti?: unknown[];
     rekening?: unknown[];
+    rekeningGagalSetelah?: number;
+    submitBankUnavailable?: boolean;
     /** Flag cash_and_carry cabang sesi (F1-14: centang C&C di modal kirim). */
     cabangCNC?: boolean;
     /**
@@ -167,13 +169,20 @@ function fetchPesanan(
   // Setelah submit berhasil, detail pesanan memuat versi yang sudah dikirim —
   // memaksa UI memuat ulang dan menampilkan nomor/serial.
   let setelahKirim = false;
+  let jumlahRekening = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
       panggilan.push({ url: input, init });
       if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
       if (input.endsWith("/catalog")) return json({ data: katalog });
-      if (input.endsWith("/bank-accounts")) return json({ data: rekening });
+      if (input.endsWith("/bank-accounts")) {
+        jumlahRekening += 1;
+        if (opsi.rekeningGagalSetelah && jumlahRekening > opsi.rekeningGagalSetelah) {
+          return json({ error: { code: "UNAVAILABLE", message: "Rekening terbaru gagal dimuat." } }, 503);
+        }
+        return json({ data: rekening });
+      }
       if (input.endsWith("/me/branch")) {
         return json({
           data: {
@@ -199,6 +208,9 @@ function fetchPesanan(
       }
       // Kirim pesanan (F1-14): multipart ke /orders/{id}/submit.
       if (input.endsWith("/orders/o1/submit") && init?.method === "POST") {
+        if (opsi.submitBankUnavailable) {
+          return json({ error: { code: "BRANCH_BANK_ACCOUNT_UNAVAILABLE", message: "Rekening tujuan berubah." } }, 409);
+        }
         setelahKirim = true;
         return json({ data: terkirim });
       }
@@ -474,6 +486,22 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
     expect(await within(dialog).findByText(/Rekening tujuan untuk cabang ini belum ditetapkan/)).toBeDefined();
     expect(within(dialog).getByRole("button", { name: "Kirim pesanan" }).hasAttribute("disabled")).toBe(true);
     expect(panggilan.some((p) => p.url.endsWith("/submit"))).toBe(false);
+  });
+
+  it("membuang rekening lama dan tetap fail-closed ketika refetch setelah konflik gagal", async () => {
+    const panggilan = fetchPesanan({ rekeningGagalSetelah: 1, submitBankUnavailable: true });
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+    const berkas = new File(["data"], "transfer.jpg", { type: "image/jpeg" });
+    fireEvent.change(within(dialog).getByLabelText(/Bukti transfer \(JPG\/PNG\/PDF/), { target: { files: [berkas] } });
+    const tombol = within(dialog).getByRole("button", { name: "Kirim pesanan" });
+    await waitFor(() => expect((tombol as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(tombol);
+    expect(await within(dialog).findByText(/Rekening tujuan terbaru tidak dapat dimuat/)).toBeDefined();
+    expect((tombol as HTMLButtonElement).disabled).toBe(true);
+    expect(panggilan.filter((p) => p.url.endsWith("/bank-accounts")).length).toBeGreaterThanOrEqual(2);
   });
 
   it("membuka modal kirim: bukti wajib untuk cabang non-C&C", async () => {
