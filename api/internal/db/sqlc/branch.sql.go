@@ -251,6 +251,12 @@ SELECT b.id,
        b.is_special,
        b.pajak_in,
        b.is_active,
+       b.bank_allowlist_version,
+       (SELECT count(*)::bigint
+          FROM branch_bank_accounts x
+          JOIN bank_accounts ba ON ba.id = x.bank_account_id
+         WHERE x.branch_id = b.id AND x.is_allowed AND ba.is_active AND b.is_active)
+         AS effective_bank_account_count,
        COALESCE(t.token_prefix, '')  AS token_prefix,
        t.expires_at                  AS token_expires_at
   FROM branches b
@@ -263,19 +269,21 @@ SELECT b.id,
 `
 
 type GetBranchDetailRow struct {
-	ID             string     `json:"id"`
-	Nama           string     `json:"nama"`
-	NamaKepala     string     `json:"nama_kepala"`
-	Email          string     `json:"email"`
-	JabatanKepala  string     `json:"jabatan_kepala"`
-	IdentityStatus string     `json:"identity_status"`
-	Telepon        string     `json:"telepon"`
-	IsCnc          bool       `json:"is_cnc"`
-	IsSpecial      bool       `json:"is_special"`
-	PajakIn        bool       `json:"pajak_in"`
-	IsActive       bool       `json:"is_active"`
-	TokenPrefix    string     `json:"token_prefix"`
-	TokenExpiresAt *time.Time `json:"token_expires_at"`
+	ID                        string     `json:"id"`
+	Nama                      string     `json:"nama"`
+	NamaKepala                string     `json:"nama_kepala"`
+	Email                     string     `json:"email"`
+	JabatanKepala             string     `json:"jabatan_kepala"`
+	IdentityStatus            string     `json:"identity_status"`
+	Telepon                   string     `json:"telepon"`
+	IsCnc                     bool       `json:"is_cnc"`
+	IsSpecial                 bool       `json:"is_special"`
+	PajakIn                   bool       `json:"pajak_in"`
+	IsActive                  bool       `json:"is_active"`
+	BankAllowlistVersion      int64      `json:"bank_allowlist_version"`
+	EffectiveBankAccountCount int64      `json:"effective_bank_account_count"`
+	TokenPrefix               string     `json:"token_prefix"`
+	TokenExpiresAt            *time.Time `json:"token_expires_at"`
 }
 
 func (q *Queries) GetBranchDetail(ctx context.Context, id string) (GetBranchDetailRow, error) {
@@ -293,6 +301,8 @@ func (q *Queries) GetBranchDetail(ctx context.Context, id string) (GetBranchDeta
 		&i.IsSpecial,
 		&i.PajakIn,
 		&i.IsActive,
+		&i.BankAllowlistVersion,
+		&i.EffectiveBankAccountCount,
 		&i.TokenPrefix,
 		&i.TokenExpiresAt,
 	)
@@ -312,6 +322,12 @@ SELECT b.id,
        b.is_special,
        b.pajak_in,
        b.is_active,
+       b.bank_allowlist_version,
+       (SELECT count(*)::bigint
+          FROM branch_bank_accounts x
+          JOIN bank_accounts ba ON ba.id = x.bank_account_id
+         WHERE x.branch_id = b.id AND x.is_allowed AND ba.is_active AND b.is_active)
+         AS effective_bank_account_count,
        COALESCE(t.token_prefix, '')  AS token_prefix,
        t.expires_at                  AS token_expires_at
   FROM branches b
@@ -337,19 +353,21 @@ type ListBranchDetailsParams struct {
 }
 
 type ListBranchDetailsRow struct {
-	ID             string     `json:"id"`
-	Nama           string     `json:"nama"`
-	NamaKepala     string     `json:"nama_kepala"`
-	Email          string     `json:"email"`
-	JabatanKepala  string     `json:"jabatan_kepala"`
-	IdentityStatus string     `json:"identity_status"`
-	Telepon        string     `json:"telepon"`
-	IsCnc          bool       `json:"is_cnc"`
-	IsSpecial      bool       `json:"is_special"`
-	PajakIn        bool       `json:"pajak_in"`
-	IsActive       bool       `json:"is_active"`
-	TokenPrefix    string     `json:"token_prefix"`
-	TokenExpiresAt *time.Time `json:"token_expires_at"`
+	ID                        string     `json:"id"`
+	Nama                      string     `json:"nama"`
+	NamaKepala                string     `json:"nama_kepala"`
+	Email                     string     `json:"email"`
+	JabatanKepala             string     `json:"jabatan_kepala"`
+	IdentityStatus            string     `json:"identity_status"`
+	Telepon                   string     `json:"telepon"`
+	IsCnc                     bool       `json:"is_cnc"`
+	IsSpecial                 bool       `json:"is_special"`
+	PajakIn                   bool       `json:"pajak_in"`
+	IsActive                  bool       `json:"is_active"`
+	BankAllowlistVersion      int64      `json:"bank_allowlist_version"`
+	EffectiveBankAccountCount int64      `json:"effective_bank_account_count"`
+	TokenPrefix               string     `json:"token_prefix"`
+	TokenExpiresAt            *time.Time `json:"token_expires_at"`
 }
 
 // ---------- Master cabang: Admin Portal (F1-06) ----------
@@ -385,6 +403,8 @@ func (q *Queries) ListBranchDetails(ctx context.Context, arg ListBranchDetailsPa
 			&i.IsSpecial,
 			&i.PajakIn,
 			&i.IsActive,
+			&i.BankAllowlistVersion,
+			&i.EffectiveBankAccountCount,
 			&i.TokenPrefix,
 			&i.TokenExpiresAt,
 		); err != nil {
