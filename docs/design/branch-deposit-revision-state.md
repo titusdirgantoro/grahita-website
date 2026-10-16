@@ -146,11 +146,72 @@ previous_done_deposit_amount      BIGINT
 previous_done_transfer_amount     BIGINT
 previous_done_at                  TIMESTAMPTZ
 payment_transition                revision_payment_transition
+settlement_contract_version       SMALLINT
 ```
 
-Migrasi menambah kolom sebagai nullable untuk kompatibilitas row lama. Semua write
-revisi baru dari Done wajib mengisi ketujuh kolom. CHECK all-or-none melarang
-sebagian snapshot terisi. FK berikut wajib nyata:
+Migrasi menambah enam kolom `previous_done_*` dan `payment_transition` sebagai
+nullable. `settlement_contract_version` menjadi diskriminator yang membedakan row
+legacy secara deterministik dari write baru, bukan menebak dari `created_at` atau
+isi JSON:
+
+1. tambah `settlement_contract_version` nullable tanpa default;
+2. backfill seluruh row yang sudah ada menjadi `0` dalam transaksi migrasi;
+3. ubah default menjadi `1`, lalu `SET NOT NULL`;
+4. pasang CHECK di bawah sebagai `NOT VALID`; semua INSERT/UPDATE baru, termasuk
+   writer yang mengandalkan default `1`, langsung wajib membawa snapshot lengkap;
+5. setelah inventaris legacy selesai, `VALIDATE CONSTRAINT`. Row versi `0` tetap
+   immutable dan hanya boleh mempunyai seluruh field settlement baru NULL.
+
+Semua write revisi baru dari Done wajib memakai versi kontrak `1`, mengisi
+`payment_transition`, dan mengisi keenam kolom snapshot. CHECK all-or-none melarang
+snapshot parsial sekaligus mencegah write baru menyamar sebagai row legacy:
+
+```sql
+ALTER TABLE invoice_revisions
+  ADD COLUMN previous_done_verification_log_id uuid,
+  ADD COLUMN previous_done_order_version int,
+  ADD COLUMN previous_done_total bigint,
+  ADD COLUMN previous_done_deposit_amount bigint,
+  ADD COLUMN previous_done_transfer_amount bigint,
+  ADD COLUMN previous_done_at timestamptz,
+  ADD COLUMN payment_transition revision_payment_transition,
+  ADD COLUMN settlement_contract_version smallint;
+
+UPDATE invoice_revisions SET settlement_contract_version = 0;
+
+ALTER TABLE invoice_revisions
+  ALTER COLUMN settlement_contract_version SET DEFAULT 1,
+  ALTER COLUMN settlement_contract_version SET NOT NULL,
+  ADD CONSTRAINT invoice_revisions_settlement_snapshot_consistent CHECK ((
+    (settlement_contract_version = 0
+     AND payment_transition IS NULL
+     AND previous_done_verification_log_id IS NULL
+     AND previous_done_order_version IS NULL
+     AND previous_done_total IS NULL
+     AND previous_done_deposit_amount IS NULL
+     AND previous_done_transfer_amount IS NULL
+     AND previous_done_at IS NULL)
+    OR
+    (settlement_contract_version = 1
+     AND payment_transition IS NOT NULL
+     AND previous_done_verification_log_id IS NOT NULL
+     AND previous_done_order_version IS NOT NULL
+     AND previous_done_total IS NOT NULL
+     AND previous_done_deposit_amount IS NOT NULL
+     AND previous_done_transfer_amount IS NOT NULL
+     AND previous_done_at IS NOT NULL)
+  ) IS TRUE) NOT VALID;
+```
+
+Tidak ada writer aplikasi yang boleh mengirim
+`settlement_contract_version=0`. Setelah cutover, grant INSERT role aplikasi harus
+berupa daftar kolom yang **mengecualikan** `settlement_contract_version`, sehingga
+INSERT selalu memakai default `1`; role aplikasi juga tidak diberi hak UPDATE atas
+kolom tersebut atau atas row legacy. Hanya role migrasi memiliki akses menulis
+versi `0`. Constraint hanya mengenal versi `0` dan `1`, sehingga nilai lain maupun
+NULL ditolak oleh pembungkus `IS TRUE`.
+
+FK berikut wajib nyata:
 
 ```text
 (previous_done_verification_log_id, order_id,
@@ -183,7 +244,7 @@ menjadi `UNKNOWN` dan lolos sebagai CHECK:
 ALTER TABLE orders
   DROP CONSTRAINT done_punya_waktu,
   DROP CONSTRAINT orders_done_payment_breakdown,
-  ADD CONSTRAINT orders_settlement_state_consistent CHECK (
+  ADD CONSTRAINT orders_settlement_state_consistent CHECK ((
     -- Draft biasa.
     (status = 'draft'
      AND revision_payment_state IS NULL
@@ -250,21 +311,21 @@ ALTER TABLE orders
      AND done_deposit_amount + done_transfer_amount = total
      AND verif_status = 'cocok'
      AND alasan_review IS NULL)
-  ) NOT VALID;
+  ) IS TRUE) NOT VALID;
 ```
 
 Constraint nomor/tanggal Submitted lama tetap berlaku; revisi pending bukan Draft.
 `orders_done_payment_pointer_all_or_none` boleh dipertahankan sebagai defense in
 depth, tetapi bukan pengganti CHECK lengkap di atas.
 
-FK histori revisi ditargetkan ke unique enam kolom yang sama dengan pointer aktif:
+FK histori revisi ditargetkan ke unique enam kolom yang sama dengan pointer aktif.
+Constraint `verification_logs_settlement_breakdown` **sudah merupakan prasyarat
+normatif D3 §4.8** dan tidak boleh ditambahkan untuk kedua kalinya oleh migrasi
+delta ini. Migrasi C1 wajib memeriksa nama, urutan kolom, dan definisinya; bila
+tidak ada atau berbeda, migrasi berhenti fail-closed alih-alih membuat constraint
+duplikat dengan nama lain:
 
 ```sql
-ALTER TABLE verification_logs
-  ADD CONSTRAINT verification_logs_settlement_breakdown
-  UNIQUE (id, order_id, order_version, total_pesanan,
-          deposit_amount, transfer_amount);
-
 ALTER TABLE invoice_revisions
   ADD CONSTRAINT invoice_revisions_previous_done_fk
   FOREIGN KEY (
@@ -277,8 +338,15 @@ ALTER TABLE invoice_revisions
   ) ON DELETE RESTRICT NOT VALID;
 ```
 
-Urutan cutover wajib: tambah kolom nullable dan unique target; pasang FK/CHECK
-`NOT VALID` (PostgreSQL tetap memeriksa semua INSERT/UPDATE baru); matikan feature
+FK sengaja tetap `MATCH SIMPLE` karena `order_id` existing selalu non-NULL dan row
+legacy versi kontrak `0` mempunyai seluruh kolom snapshot NULL. Integritas
+all-or-none dijamin oleh
+`invoice_revisions_settlement_snapshot_consistent`; untuk versi kontrak `1`, semua
+komponen key FK pasti non-NULL sehingga FK tidak dapat dilewati oleh semantik NULL.
+
+Urutan cutover wajib: tambah kolom nullable dan verifikasi unique target D3 yang
+sudah ada; pasang FK/CHECK `NOT VALID` (PostgreSQL tetap memeriksa semua
+INSERT/UPDATE baru); matikan feature
 revisi total berubah dan semua publisher LUNAS lama; inventaris row legacy yang
 melanggar ke antrean rekonsiliasi tanpa mengubahnya menjadi Done; backfill hanya
 dari bukti typed yang deterministik; jalankan query anti-join/negative-state sampai
@@ -852,6 +920,64 @@ verification historis terakhir sebagai pointer aktif.
 9. FK histori revisi enam kolom menolak attempt dari order, versi, total, deposit,
    atau transfer yang berbeda; CHECK/FK `NOT VALID` menolak write baru sebelum
    validasi dan legacy invalid tetap tidak publishable.
+10. `invoice_revisions` versi kontrak `0` hanya menerima ketujuh field settlement
+    NULL; versi `1` mewajibkan transition dan keenam `previous_done_*` lengkap;
+    versi lain, snapshot parsial, atau transition tanpa snapshot ditolak.
+
+Reproduksi SQL minimum untuk celah three-valued logic wajib menjadi test migrasi.
+Fixture `:submitted_order_id` harus menunjuk tepat satu order Submitted biasa;
+statement berikut wajib gagal dengan SQLSTATE `23514`, bukan sukses karena hasil
+CHECK `UNKNOWN`:
+
+```sql
+BEGIN;
+UPDATE orders
+SET revision_payment_state = NULL,
+    revision_payment_started_at = now(),
+    done_at = NULL,
+    done_verification_log_id = NULL,
+    done_order_version = NULL,
+    done_deposit_amount = NULL,
+    done_transfer_amount = NULL,
+    verif_status = 'perlu_review',
+    alasan_review = 'kurang_bayar'
+WHERE id = :'submitted_order_id';
+-- expected: ERROR 23514, constraint orders_settlement_state_consistent
+ROLLBACK;
+```
+
+Harness repository mengulang pola yang sama untuk setiap cabang pada butir 8 dan
+menegaskan row fixture ditemukan sebelum UPDATE. Kasus pointer NULL wajib mencakup
+Done dengan keempat `done_*` NULL, Done dengan tepat satu `done_*` NULL, dan pending
+dengan tepat satu `done_*` non-NULL; semuanya harus menghasilkan `23514`.
+
+Reproduksi SQL minimum snapshot histori parsial juga wajib gagal sebelum FK dapat
+melewati NULL dengan `MATCH SIMPLE`:
+
+```sql
+BEGIN;
+INSERT INTO invoice_revisions (
+  order_id, versi_lama, versi_baru, alasan, snapshot, delta_total, admin_id,
+  settlement_contract_version, payment_transition,
+  previous_done_verification_log_id, previous_done_order_version,
+  previous_done_total, previous_done_deposit_amount,
+  previous_done_transfer_amount, previous_done_at
+) VALUES (
+  :'done_order_id', 0, 1, 'UJI-snapshot-parsial', '{}'::jsonb, 1, :'admin_id',
+  1, 'underpayment',
+  :'verification_log_id', NULL,
+  :'previous_total', :'previous_deposit',
+  :'previous_transfer', :'previous_done_at'
+);
+-- expected: ERROR 23514,
+-- constraint invoice_revisions_settlement_snapshot_consistent
+ROLLBACK;
+```
+
+Test positif pasangan constraint wajib membuktikan: row legacy hasil backfill
+`settlement_contract_version=0` dengan seluruh field baru NULL tetap valid; insert
+versi `1` dengan snapshot lengkap dan FK tepat berhasil; snapshot lengkap tetapi
+salah satu identitas order/version/total/breakdown salah gagal `23503`.
 
 ### 8.2 Race, retry, dan rollback
 
