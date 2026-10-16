@@ -242,9 +242,9 @@ func TestPGApproveTopupAtomikRetryDanRollback(t *testing.T) {
 	})
 }
 
-func TestPGCreditOverpayTypedValidInvalidDanReplay(t *testing.T) {
+func TestPGCreditOverpayStandaloneFailClosedTanpaMutasi(t *testing.T) {
 	ctx, pool, repo, f := setup(t)
-	var proofID, verificationID string
+	var proofID string
 	if err := pool.QueryRow(ctx, `INSERT INTO payment_proofs(
 purpose,branch_id,order_id,storage_key,nama_file,mime_type,ukuran_byte,sha256,uploaded_by_kind)
 VALUES('order_payment',$1,$2,'uji/overpay','UJI-overpay','image/png',1,digest('uji-overpay','sha256'),'branch') RETURNING id`,
@@ -257,44 +257,51 @@ payment_proof_id,order_id,branch_id,approved_nominal,decided_by)
 VALUES($1,$2,$3,1200,$4)`, proofID, f.orderA, f.branchID, f.adminID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO verification_logs(
+	for version := int32(0); version < 3; version++ {
+		var verificationID string
+		if err := pool.QueryRow(ctx, `INSERT INTO verification_logs(
 order_id,metode,total_pesanan,total_terbaca,hasil,admin_id,order_version,deposit_amount,transfer_amount)
-VALUES($1,'manual',1000,1200,'cocok',$2,0,0,1000) RETURNING id`, f.orderA, f.adminID).Scan(&verificationID); err != nil {
+VALUES($1,'manual',1000,1200,'cocok',$2,$3,0,1000) RETURNING id`,
+			f.orderA, f.adminID, version).Scan(&verificationID); err != nil {
+			t.Fatal(err)
+		}
+		amount := int64(200)
+		if version == 0 {
+			// Reproduksi celah QA: delta parsial tidak boleh dipercaya dari input.
+			amount = 1
+		}
+		in := deposit.CreditInput{BranchID: f.branchID, Kind: "overpay_credit", Amount: amount,
+			SourceProofID: proofID, OrderVerificationLogID: verificationID, OrderID: f.orderA,
+			OrderVersion: &version, ApprovedNominal: 1200, AppliedToOrder: 1000,
+			CreditedToDepositTotal: 200, IdempotencyKey: fmt.Sprintf("overpay-v%d", version),
+			RequestFingerprint: []byte(fmt.Sprintf("overpay-v%d-%d", version, amount)),
+			ActorKind:          "admin", ActorID: f.adminID}
+		if _, _, _, err := repo.Credit(ctx, in); !errors.Is(err, deposit.ErrOverpaySettlementRequired) {
+			t.Fatalf("overpay standalone versi=%d err=%v", version, err)
+		}
+	}
+
+	var journals, splits, reversals int
+	var balance int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM branch_deposit_transactions
+WHERE branch_id=$1 AND kind='overpay_credit'`, f.branchID).Scan(&journals); err != nil {
 		t.Fatal(err)
 	}
-	version := int32(0)
-	in := deposit.CreditInput{BranchID: f.branchID, Kind: "overpay_credit", Amount: 200,
-		SourceProofID: proofID, OrderVerificationLogID: verificationID, OrderID: f.orderA,
-		OrderVersion: &version, ApprovedNominal: 1200, AppliedToOrder: 1000,
-		CreditedToDepositTotal: 200, IdempotencyKey: "overpay-ok",
-		RequestFingerprint: []byte("overpay-200"), ActorKind: "admin", ActorID: f.adminID}
-	invalid := in
-	invalid.IdempotencyKey = "overpay-invalid"
-	invalid.RequestFingerprint = []byte("overpay-invalid")
-	invalid.ApprovedNominal = 1199
-	if _, _, _, err := repo.Credit(ctx, invalid); !errors.Is(err, deposit.ErrCreditSourceInvalid) {
-		t.Fatalf("overpay invalid err=%v", err)
-	}
-	tx, account, replay, err := repo.Credit(ctx, in)
-	if err != nil || replay || tx.Amount != 200 || account.Balance != 200 {
-		t.Fatalf("overpay valid tx=%+v account=%+v replay=%v err=%v", tx, account, replay, err)
-	}
-	_, _, replay, err = repo.Credit(ctx, in)
-	if err != nil || !replay {
-		t.Fatalf("overpay retry replay=%v err=%v", replay, err)
-	}
-	beda := in
-	beda.RequestFingerprint = []byte("overpay-payload-berbeda")
-	if _, _, _, err := repo.Credit(ctx, beda); !errors.Is(err, deposit.ErrIdempotencyReused) {
-		t.Fatalf("overpay replay berbeda err=%v", err)
-	}
-	var splitTx string
-	if err := pool.QueryRow(ctx, `SELECT new_credit_transaction_id FROM verification_proof_splits
-WHERE verification_log_id=$1 AND payment_proof_id=$2`, verificationID, proofID).Scan(&splitTx); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM verification_proof_splits
+WHERE payment_proof_id=$1`, proofID).Scan(&splits); err != nil {
 		t.Fatal(err)
 	}
-	if splitTx != tx.ID {
-		t.Fatalf("pointer split=%s ingin %s", splitTx, tx.ID)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM branch_deposit_transactions
+WHERE branch_id=$1 AND kind='overpay_reversal_debit'`, f.branchID).Scan(&reversals); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COALESCE((SELECT balance FROM branch_deposit_accounts
+WHERE branch_id=$1),0)`, f.branchID).Scan(&balance); err != nil {
+		t.Fatal(err)
+	}
+	if journals != 0 || splits != 0 || reversals != 0 || balance != 0 {
+		t.Fatalf("standalone overpay bermutasi: journal=%d split=%d reversal=%d balance=%d",
+			journals, splits, reversals, balance)
 	}
 }
 

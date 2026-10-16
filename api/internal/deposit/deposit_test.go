@@ -18,6 +18,10 @@ func TestErrorKontrakBerbeda(t *testing.T) {
 		deposit.ErrReversalExceeds,
 		deposit.ErrNegativeBalance,
 		deposit.ErrReconciliation,
+		deposit.ErrInvalidKind,
+		deposit.ErrCreditSourceInvalid,
+		deposit.ErrCreditActorInvalid,
+		deposit.ErrOverpaySettlementRequired,
 	}
 	seen := map[string]bool{}
 	for _, err := range errors {

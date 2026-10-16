@@ -143,7 +143,14 @@ WHERE branch_id=$1 AND (created_at,id) <= ($2,$3)`,
 }
 
 func (r *Repo) Credit(ctx context.Context, in deposit.CreditInput) (deposit.Transaction, deposit.Account, bool, error) {
-	if in.Amount <= 0 || (in.Kind != "topup_credit" && in.Kind != "overpay_credit") {
+	// Kredit overpay tidak boleh berdiri sendiri. Kontrak settlement mewajibkan
+	// keputusan split, journal, pointer Done, dan audit ditulis dalam transaksi
+	// yang sama. Boundary itu bukan bagian C1, jadi fail closed sampai orkestrator
+	// settlement atomik tersedia; log "cocok" atau order Done saja tidak cukup.
+	if in.Kind == "overpay_credit" {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrOverpaySettlementRequired
+	}
+	if in.Amount <= 0 || in.Kind != "topup_credit" {
 		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrInvalidKind
 	}
 	if in.ActorKind != "admin" || in.ActorID == "" {
@@ -169,6 +176,12 @@ func (r *Repo) Credit(ctx context.Context, in deposit.CreditInput) (deposit.Tran
 }
 
 func creditLocked(ctx context.Context, tx pgx.Tx, in deposit.CreditInput) (deposit.Transaction, deposit.Account, bool, error) {
+	if in.Kind == "overpay_credit" {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrOverpaySettlementRequired
+	}
+	if in.Kind != "topup_credit" {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrInvalidKind
+	}
 	if replay, ok, err := loadReplay(ctx, tx, in.BranchID, in.IdempotencyKey, in.RequestFingerprint); err != nil {
 		return deposit.Transaction{}, deposit.Account{}, false, err
 	} else if ok {
@@ -178,12 +191,11 @@ func creditLocked(ctx context.Context, tx pgx.Tx, in deposit.CreditInput) (depos
 		}
 		return replay, replayAccount, true, nil
 	}
-	if in.Kind == "topup_credit" {
-		var sourceBranch, sourceProof string
-		var sourceAmount int64
-		var sourceAdmin string
-		var valid bool
-		if err := tx.QueryRow(ctx, `SELECT t.branch_id,t.payment_proof_id,v.approved_amount,v.admin_id,
+	var sourceBranch, sourceProof string
+	var sourceAmount int64
+	var sourceAdmin string
+	var valid bool
+	if err := tx.QueryRow(ctx, `SELECT t.branch_id,t.payment_proof_id,v.approved_amount,v.admin_id,
   (v.method='manual' AND v.result='verified'
    AND t.status='verified' AND t.verified_amount=v.approved_amount
    AND t.verified_by=v.admin_id AND t.bank_account_id=v.bank_account_id
@@ -199,69 +211,23 @@ JOIN bank_accounts ba ON ba.id=t.bank_account_id
 JOIN branch_bank_accounts x ON x.branch_id=t.branch_id AND x.bank_account_id=t.bank_account_id
 JOIN admin_users au ON au.id=v.admin_id
 WHERE v.id=$1 FOR UPDATE OF t`, in.DepositVerificationLogID).
-			Scan(&sourceBranch, &sourceProof, &sourceAmount, &sourceAdmin, &valid); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrNotFound
-			}
-			return deposit.Transaction{}, deposit.Account{}, false, err
+		Scan(&sourceBranch, &sourceProof, &sourceAmount, &sourceAdmin, &valid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrNotFound
 		}
-		if sourceBranch != in.BranchID {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrBranchMismatch
-		}
-		if sourceProof != in.SourceProofID {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
-		}
-		if sourceAdmin != in.ActorID {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
-		}
-		if !valid || sourceAmount != in.Amount {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
-		}
+		return deposit.Transaction{}, deposit.Account{}, false, err
 	}
-	if in.Kind == "overpay_credit" {
-		var sourceBranch, sourceOrder, sourceAdmin string
-		var sourceVersion int32
-		var settlementTotal, depositAmount, transferAmount, approvedNominal int64
-		var valid bool
-		if err := tx.QueryRow(ctx, `SELECT o.branch_id,v.order_id,v.admin_id,v.order_version,
- v.total_pesanan,v.deposit_amount,v.transfer_amount,d.approved_nominal,
-	 (v.metode='manual' AND v.hasil='cocok' AND au.is_active AND au.role='superadmin'
-	  AND p.purpose='order_payment' AND p.order_id=o.id AND p.branch_id=o.branch_id
-	  AND d.decided_by=v.admin_id) AS valid
-FROM verification_logs v
-JOIN orders o ON o.id=v.order_id
-JOIN payment_proofs p ON p.id=$2 AND p.order_id=o.id
-JOIN payment_proof_economic_decisions d ON d.payment_proof_id=p.id
-JOIN admin_users au ON au.id=v.admin_id
-WHERE v.id=$1 FOR UPDATE OF o`,
-			in.OrderVerificationLogID, in.SourceProofID).
-			Scan(&sourceBranch, &sourceOrder, &sourceAdmin, &sourceVersion, &settlementTotal,
-				&depositAmount, &transferAmount, &approvedNominal, &valid); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrNotFound
-			}
-			return deposit.Transaction{}, deposit.Account{}, false, err
-		}
-		if sourceBranch != in.BranchID || sourceOrder != in.OrderID {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrBranchMismatch
-		}
-		if sourceAdmin != in.ActorID {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
-		}
-		if in.OrderVersion == nil || sourceVersion != *in.OrderVersion || !valid ||
-			approvedNominal != in.ApprovedNominal || in.AppliedToOrder < 0 || in.AppliedToOrder > in.ApprovedNominal ||
-			in.CreditedToDepositTotal != in.ApprovedNominal-in.AppliedToOrder || in.AppliedToOrder > settlementTotal ||
-			in.Amount <= 0 || in.Amount > in.CreditedToDepositTotal || depositAmount+transferAmount != settlementTotal {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
-		}
-		var splitExists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM verification_proof_splits
-WHERE verification_log_id=$1 AND payment_proof_id=$2)`, in.OrderVerificationLogID, in.SourceProofID).Scan(&splitExists); err != nil {
-			return deposit.Transaction{}, deposit.Account{}, false, err
-		}
-		if splitExists {
-			return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
-		}
+	if sourceBranch != in.BranchID {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrBranchMismatch
+	}
+	if sourceProof != in.SourceProofID {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
+	}
+	if sourceAdmin != in.ActorID {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditActorInvalid
+	}
+	if !valid || sourceAmount != in.Amount {
+		return deposit.Transaction{}, deposit.Account{}, false, deposit.ErrCreditSourceInvalid
 	}
 	var out deposit.Transaction
 	var orderID, depositLogID, orderLogID, proofID *string
@@ -292,20 +258,6 @@ deposit_verification_log_id,order_verification_log_id,source_proof_id,created_at
 	}
 	if proofID != nil {
 		out.SourceProofID = *proofID
-	}
-	if in.Kind == "overpay_credit" {
-		if _, err := tx.Exec(ctx, `INSERT INTO verification_proof_splits(
-verification_log_id,order_id,order_version,settlement_total,
-settlement_deposit_amount,settlement_transfer_amount,payment_proof_id,branch_id,
-approved_nominal,applied_to_order,credited_to_deposit_total,new_credit_to_deposit,
-new_credit_transaction_id)
-SELECT v.id,v.order_id,v.order_version,v.total_pesanan,v.deposit_amount,v.transfer_amount,
-$2,o.branch_id,$3,$4,$5,$6,$7
-FROM verification_logs v JOIN orders o ON o.id=v.order_id WHERE v.id=$1`,
-			in.OrderVerificationLogID, in.SourceProofID, in.ApprovedNominal, in.AppliedToOrder,
-			in.CreditedToDepositTotal, in.Amount, out.ID); err != nil {
-			return deposit.Transaction{}, deposit.Account{}, false, mapConstraint(err)
-		}
 	}
 	account, err := updateAccount(ctx, tx, in.BranchID, in.Amount)
 	if err != nil {
