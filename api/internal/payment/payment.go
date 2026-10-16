@@ -131,8 +131,14 @@ type Proof struct {
 	UploadedByID   string `json:"uploaded_by_id,omitempty"`
 	// UploadedByNama adalah penanda pengunggah admin (PRD AP-ORD-06);
 	// untuk akun cabang dikosongkan.
-	UploadedByNama string    `json:"uploaded_by_nama,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	UploadedByNama string     `json:"uploaded_by_nama,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	OCRNominal     *int64     `json:"ocr_nominal,omitempty"`
+	OCRTanggal     string     `json:"ocr_tanggal,omitempty"`
+	OCRBank        string     `json:"ocr_bank,omitempty"`
+	OCRRekAkhir    string     `json:"ocr_rek_akhir,omitempty"`
+	OCRConfidence  float64    `json:"ocr_confidence,omitempty"`
+	OCRAt          *time.Time `json:"ocr_at,omitempty"`
 	// StorageKey tidak pernah dikirim ke klien (json:"-").
 	StorageKey string `json:"-"`
 }

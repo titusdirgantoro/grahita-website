@@ -108,6 +108,38 @@ func (a *API) adminBranchBankAccountsReplace(w http.ResponseWriter, r *http.Requ
 	return nil
 }
 
+// adminOrderBankAccounts mengembalikan rekening efektif cabang pesanan untuk
+// selector verifikasi manual. Nomor selalu masked; Manager boleh membaca lewat
+// admin.verify tetapi tidak memperoleh endpoint mutasi assignment.
+func (a *API) adminOrderBankAccounts(w http.ResponseWriter, r *http.Request) error {
+	if a.d.Bank == nil || a.d.AdminOrders == nil {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan rekening pesanan belum tersedia.")
+	}
+	actor := auth.ActorFrom(r.Context())
+	order, err := a.d.AdminOrders.Get(r.Context(), actor, chi.URLParam(r, "id"))
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	set, err := a.d.Bank.EffectiveForBranch(r.Context(), order.BranchID)
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	items := make([]map[string]any, 0, len(set.Accounts))
+	for _, account := range set.Accounts {
+		items = append(items, map[string]any{
+			"id":            account.ID,
+			"bank":          account.Bank,
+			"nama_pemilik":  account.NamaPemilik,
+			"display_nomor": account.DisplayNomor(),
+		})
+	}
+	httpx.OK(w, data(map[string]any{
+		"accounts":          items,
+		"allowlist_version": set.Version,
+	}))
+	return nil
+}
+
 // adminBankAccountCreate menambahkan rekening baru (Superadmin).
 func (a *API) adminBankAccountCreate(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Bank == nil {

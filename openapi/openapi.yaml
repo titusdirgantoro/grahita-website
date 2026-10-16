@@ -2186,6 +2186,46 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/admin/orders/{id}/bank-accounts:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [admin]
+      operationId: listAdminOrderBankAccounts
+      summary: Rekening efektif cabang pesanan untuk verifikasi
+      description: |
+        Manager dan Superadmin berkapabilitas `admin.verify` dapat membaca
+        rekening efektif cabang pesanan. Nomor selalu termasking; endpoint ini
+        tidak menyediakan mutasi assignment.
+      responses:
+        "200":
+          description: Rekening efektif dan versi allowlist terkini
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [accounts, allowlist_version]
+                    properties:
+                      accounts:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, bank, nama_pemilik, display_nomor]
+                          properties:
+                            id: { type: string, format: uuid }
+                            bank: { type: string }
+                            nama_pemilik: { type: string }
+                            display_nomor: { type: string }
+                      allowlist_version: { type: integer, format: int64, minimum: 0 }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/v1/admin/orders/{id}/verify:
     parameters:
       - $ref: "#/components/parameters/OrderIdPath"

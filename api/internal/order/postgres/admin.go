@@ -257,16 +257,18 @@ func (r *Repo) GetAdmin(ctx context.Context, id string, emailGagalIDs []string) 
 	out.Verifikasi = make([]order.VerifikasiLog, 0, len(verifs))
 	for _, v := range verifs {
 		out.Verifikasi = append(out.Verifikasi, order.VerifikasiLog{
-			ID:           v.ID,
-			Metode:       v.Metode,
-			TotalPesanan: v.TotalPesanan,
-			TotalTerbaca: v.TotalTerbaca,
-			Selisih:      v.Selisih.Int64,
-			Hasil:        v.Hasil,
-			Alasan:       v.Alasan,
-			Catatan:      v.Catatan,
-			AdminNama:    v.AdminNama,
-			CreatedAt:    v.CreatedAt.UTC().Format(rfc3339),
+			ID:                     v.ID,
+			Metode:                 v.Metode,
+			TotalPesanan:           v.TotalPesanan,
+			TotalTerbaca:           v.TotalTerbaca,
+			Selisih:                v.Selisih.Int64,
+			Hasil:                  v.Hasil,
+			Alasan:                 v.Alasan,
+			Catatan:                v.Catatan,
+			AdminNama:              v.AdminNama,
+			BranchAllowlistVersion: v.BranchAllowlistVersion.Int64,
+			DestinationResults:     v.DestinationResults,
+			CreatedAt:              v.CreatedAt.UTC().Format(rfc3339),
 		})
 	}
 	return out, nil

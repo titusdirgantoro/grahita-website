@@ -557,16 +557,18 @@ SELECT v.id,
 `
 
 type ListVerificationLogsRow struct {
-	ID           string      `json:"id"`
-	Metode       string      `json:"metode"`
-	TotalPesanan int64       `json:"total_pesanan"`
-	TotalTerbaca int64       `json:"total_terbaca"`
-	Selisih      pgtype.Int8 `json:"selisih"`
-	Hasil        string      `json:"hasil"`
-	Alasan       string      `json:"alasan"`
-	Catatan      string      `json:"catatan"`
-	AdminNama    string      `json:"admin_nama"`
-	CreatedAt    time.Time   `json:"created_at"`
+	ID                     string      `json:"id"`
+	Metode                 string      `json:"metode"`
+	TotalPesanan           int64       `json:"total_pesanan"`
+	TotalTerbaca           int64       `json:"total_terbaca"`
+	Selisih                pgtype.Int8 `json:"selisih"`
+	Hasil                  string      `json:"hasil"`
+	Alasan                 string      `json:"alasan"`
+	Catatan                string      `json:"catatan"`
+	AdminNama              string      `json:"admin_nama"`
+	BranchAllowlistVersion pgtype.Int8 `json:"branch_allowlist_version"`
+	DestinationResults     []byte      `json:"destination_results"`
+	CreatedAt              time.Time   `json:"created_at"`
 }
 
 // Log verifikasi pesanan (AP-ORD-04) — ditulis domain verifikasi (F1-18).
@@ -589,6 +591,8 @@ func (q *Queries) ListVerificationLogs(ctx context.Context, orderID string) ([]L
 			&i.Alasan,
 			&i.Catatan,
 			&i.AdminNama,
+			&i.BranchAllowlistVersion,
+			&i.DestinationResults,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

@@ -165,6 +165,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminVerify))
 					r.Post("/orders/{id}/verify", a.adapt(a.adminOrderVerify))
+					r.Get("/orders/{id}/bank-accounts", a.adapt(a.adminOrderBankAccounts))
 					r.Post("/orders/{id}/verification/reevaluate-destination", a.adapt(a.adminOrderReevaluateDestination))
 				})
 				// Revisi invoice berversi (F2-25): kapabilitas sendiri

@@ -33,6 +33,8 @@ export interface Cabang {
   is_special?: boolean;
   pajak_in?: boolean;
   is_active: boolean;
+  bank_allowlist_version?: number;
+  effective_bank_account_count?: number;
   /** 8 karakter pertama token registrasi aktif (bila ada) — PRD §4.4. */
   token_prefix?: string;
   token_expires_at?: string;
