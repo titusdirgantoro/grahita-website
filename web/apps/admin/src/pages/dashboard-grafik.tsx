@@ -72,7 +72,8 @@ export function GrafikBulanan({
 }) {
   const pola = usePola();
   const { ref, lebar } = useLebar(600);
-  const kiri = 44;
+  // Label sumbu rupiah ("1,5 jt", "500 rb") lebih lebar dari angka jumlah.
+  const kiri = uang ? 56 : 44;
   const atas = 44;
   const bawah = 30;
   const tinggi = 250;
