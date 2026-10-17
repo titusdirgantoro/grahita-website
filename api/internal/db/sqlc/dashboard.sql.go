@@ -62,7 +62,8 @@ func (q *Queries) DashboardChip(ctx context.Context, arg DashboardChipParams) (D
 const dashboardHarian = `-- name: DashboardHarian :many
 SELECT to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date), 'YYYY-MM-DD') AS kunci,
        count(*)::bigint                                                 AS jumlah,
-       COALESCE(sum(o.total), 0)::bigint                                AS nilai
+       COALESCE(sum(o.total), 0)::bigint                                AS nilai,
+       count(*) FILTER (WHERE o.status = 'done')::bigint                AS terverifikasi
   FROM orders o
  WHERE ($1::uuid IS NULL OR o.branch_id = $1::uuid)
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $2::date
@@ -78,9 +79,10 @@ type DashboardHarianParams struct {
 }
 
 type DashboardHarianRow struct {
-	Kunci  string `json:"kunci"`
-	Jumlah int64  `json:"jumlah"`
-	Nilai  int64  `json:"nilai"`
+	Kunci         string `json:"kunci"`
+	Jumlah        int64  `json:"jumlah"`
+	Nilai         int64  `json:"nilai"`
+	Terverifikasi int64  `json:"terverifikasi"`
 }
 
 // Tren harian bulan bisnis berjalan (AP-DSH-04) — selalu bulan berjalan,
@@ -95,7 +97,12 @@ func (q *Queries) DashboardHarian(ctx context.Context, arg DashboardHarianParams
 	items := []DashboardHarianRow{}
 	for rows.Next() {
 		var i DashboardHarianRow
-		if err := rows.Scan(&i.Kunci, &i.Jumlah, &i.Nilai); err != nil {
+		if err := rows.Scan(
+			&i.Kunci,
+			&i.Jumlah,
+			&i.Nilai,
+			&i.Terverifikasi,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -104,6 +111,76 @@ func (q *Queries) DashboardHarian(ctx context.Context, arg DashboardHarianParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const dashboardItem = `-- name: DashboardItem :one
+SELECT COALESCE(sum(l.qty), 0)::bigint AS item
+  FROM orders o
+  JOIN order_lines l ON l.order_id = o.id AND l.jenis = 'product'
+ WHERE ($1::uuid IS NULL OR o.branch_id = $1::uuid)
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $2::date
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $3::date
+`
+
+type DashboardItemParams struct {
+	BranchID pgtype.UUID `json:"branch_id"`
+	Dari     time.Time   `json:"dari"`
+	Sampai   time.Time   `json:"sampai"`
+}
+
+// Σ qty baris produk (tanpa baris packaging) pesanan pada rentang terpilih —
+// dasar "rata-rata item per pesanan". Filter cabang & tanggal sama dengan
+// DashboardRingkasan sehingga pembaginya konsisten.
+func (q *Queries) DashboardItem(ctx context.Context, arg DashboardItemParams) (int64, error) {
+	row := q.db.QueryRow(ctx, dashboardItem, arg.BranchID, arg.Dari, arg.Sampai)
+	var item int64
+	err := row.Scan(&item)
+	return item, err
+}
+
+const dashboardKomposisi = `-- name: DashboardKomposisi :one
+SELECT count(*) FILTER (WHERE NOT o.is_cnc)::bigint                       AS reguler,
+       count(*) FILTER (WHERE o.is_cnc)::bigint                           AS cnc,
+       count(*) FILTER (WHERE o.is_sertifikat)::bigint                    AS sertifikat,
+       count(*) FILTER (WHERE o.is_cnc AND o.status <> 'done'
+                          AND o.jatuh_tempo < $1::date)::bigint AS cnc_lewat_tempo
+  FROM orders o
+ WHERE ($2::uuid IS NULL OR o.branch_id = $2::uuid)
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $3::date
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $4::date
+`
+
+type DashboardKomposisiParams struct {
+	HariIni  time.Time   `json:"hari_ini"`
+	BranchID pgtype.UUID `json:"branch_id"`
+	Dari     time.Time   `json:"dari"`
+	Sampai   time.Time   `json:"sampai"`
+}
+
+type DashboardKomposisiRow struct {
+	Reguler       int64 `json:"reguler"`
+	Cnc           int64 `json:"cnc"`
+	Sertifikat    int64 `json:"sertifikat"`
+	CncLewatTempo int64 `json:"cnc_lewat_tempo"`
+}
+
+// Komposisi pesanan periode terpilih: reguler vs Cash and Carry, Sertifikat,
+// dan C&C lewat jatuh tempo (klausa lewat tempo sama dengan DashboardChip).
+func (q *Queries) DashboardKomposisi(ctx context.Context, arg DashboardKomposisiParams) (DashboardKomposisiRow, error) {
+	row := q.db.QueryRow(ctx, dashboardKomposisi,
+		arg.HariIni,
+		arg.BranchID,
+		arg.Dari,
+		arg.Sampai,
+	)
+	var i DashboardKomposisiRow
+	err := row.Scan(
+		&i.Reguler,
+		&i.Cnc,
+		&i.Sertifikat,
+		&i.CncLewatTempo,
+	)
+	return i, err
 }
 
 const dashboardPeringkatCabang = `-- name: DashboardPeringkatCabang :many
@@ -158,6 +235,61 @@ func (q *Queries) DashboardPeringkatCabang(ctx context.Context, arg DashboardPer
 			&i.Jumlah,
 			&i.Nilai,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dashboardProdukTerlaris = `-- name: DashboardProdukTerlaris :many
+SELECT p.id::text            AS product_id,
+       p.nama                AS nama,
+       sum(l.qty)::bigint    AS qty
+  FROM orders o
+  JOIN order_lines l ON l.order_id = o.id AND l.jenis = 'product'
+  JOIN products p ON p.id = l.product_id
+ WHERE ($1::uuid IS NULL OR o.branch_id = $1::uuid)
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $2::date
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $3::date
+ GROUP BY p.id, p.nama
+ ORDER BY qty DESC, p.nama ASC
+ LIMIT $4::int
+`
+
+type DashboardProdukTerlarisParams struct {
+	BranchID pgtype.UUID `json:"branch_id"`
+	Dari     time.Time   `json:"dari"`
+	Sampai   time.Time   `json:"sampai"`
+	Batas    int32       `json:"batas"`
+}
+
+type DashboardProdukTerlarisRow struct {
+	ProductID string `json:"product_id"`
+	Nama      string `json:"nama"`
+	Qty       int64  `json:"qty"`
+}
+
+// Product terlaris periode terpilih dalam qty baris produk, terbanyak lebih
+// dahulu; urutan deterministik (qty, lalu nama A→Z).
+func (q *Queries) DashboardProdukTerlaris(ctx context.Context, arg DashboardProdukTerlarisParams) ([]DashboardProdukTerlarisRow, error) {
+	rows, err := q.db.Query(ctx, dashboardProdukTerlaris,
+		arg.BranchID,
+		arg.Dari,
+		arg.Sampai,
+		arg.Batas,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DashboardProdukTerlarisRow{}
+	for rows.Next() {
+		var i DashboardProdukTerlarisRow
+		if err := rows.Scan(&i.ProductID, &i.Nama, &i.Qty); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -244,7 +376,8 @@ func (q *Queries) DashboardRingkasan(ctx context.Context, arg DashboardRingkasan
 const dashboardTrenBulanan = `-- name: DashboardTrenBulanan :many
 SELECT to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date), 'YYYY-MM') AS kunci,
        count(*)::bigint                                                 AS jumlah,
-       COALESCE(sum(o.total), 0)::bigint                                AS nilai
+       COALESCE(sum(o.total), 0)::bigint                                AS nilai,
+       count(*) FILTER (WHERE o.status = 'done')::bigint                AS terverifikasi
   FROM orders o
  WHERE ($1::uuid IS NULL OR o.branch_id = $1::uuid)
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $2::date
@@ -260,9 +393,10 @@ type DashboardTrenBulananParams struct {
 }
 
 type DashboardTrenBulananRow struct {
-	Kunci  string `json:"kunci"`
-	Jumlah int64  `json:"jumlah"`
-	Nilai  int64  `json:"nilai"`
+	Kunci         string `json:"kunci"`
+	Jumlah        int64  `json:"jumlah"`
+	Nilai         int64  `json:"nilai"`
+	Terverifikasi int64  `json:"terverifikasi"`
 }
 
 // Tren per bulan pada tahun bisnis berjalan (AP-DSH-04). Bulan tanpa pesanan
@@ -277,7 +411,12 @@ func (q *Queries) DashboardTrenBulanan(ctx context.Context, arg DashboardTrenBul
 	items := []DashboardTrenBulananRow{}
 	for rows.Next() {
 		var i DashboardTrenBulananRow
-		if err := rows.Scan(&i.Kunci, &i.Jumlah, &i.Nilai); err != nil {
+		if err := rows.Scan(
+			&i.Kunci,
+			&i.Jumlah,
+			&i.Nilai,
+			&i.Terverifikasi,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -1,0 +1,374 @@
+/*
+ * Dashboard admin (admin_v2.html §Dashboard): sapaan + chip "perlu tindakan",
+ * grid 12 kolom berisi kartu 7/5/6, KPI tipis besar, grafik SVG berarsir.
+ * Nilai diambil dari blok CSS prototype dengan token desain bersama.
+ */
+
+.greet {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 6px 0 16px;
+}
+
+.greet h1 {
+  font-size: 40px;
+  line-height: 46px;
+  font-weight: 400;
+  max-width: 25ch;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.todo {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.todo .chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.dash {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.c7 {
+  grid-column: span 7;
+}
+
+.c5 {
+  grid-column: span 5;
+}
+
+.c6 {
+  grid-column: span 6;
+}
+
+.kpi {
+  font-size: 36px;
+  line-height: 40px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpiSm {
+  font-size: 28px;
+  line-height: 32px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.cmp {
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cmp b {
+  display: block;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pillnote {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ---------- Grafik ---------- */
+
+.grafikWrap {
+  width: 100%;
+  overflow: hidden;
+}
+
+.grafik {
+  display: block;
+  overflow: visible;
+}
+
+.arsir {
+  fill: var(--hatch);
+}
+
+.sumbu {
+  font-size: 11px;
+  fill: var(--text-subtle);
+  font-family: var(--font);
+}
+
+.sumbuKini {
+  fill: var(--ink);
+  font-weight: 600;
+}
+
+.gelembung {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--ink);
+  font-family: var(--font);
+}
+
+.labelJarum {
+  font-size: 15px;
+  font-weight: 500;
+  fill: var(--ink);
+  font-family: var(--font);
+}
+
+.batangTinggi {
+  fill: var(--brand-300);
+}
+
+.batangRendah {
+  fill: var(--accent-300);
+}
+
+.area {
+  fill: var(--brand-300);
+}
+
+.garisTinta {
+  stroke: var(--ink);
+}
+
+.titikTinta {
+  fill: var(--ink);
+}
+
+/* ---------- Status pembayaran ---------- */
+
+.gaugeWrap {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.gauge {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  margin: 0 auto;
+  overflow: visible;
+}
+
+.legend {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 10px;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.legend .sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.legend .n {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.swArsir {
+  border: 1px solid var(--line);
+}
+
+.avg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.avg .v {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* ---------- Komposisi ---------- */
+
+.pills2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.pcHead {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.pcHead .v {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pcol {
+  height: 200px;
+  border-radius: 28px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+
+.fill {
+  width: 100%;
+  border-radius: 28px;
+  min-height: 48px;
+  position: relative;
+}
+
+.flabel {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: var(--shadow-float);
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+/* ---------- Peringkat ---------- */
+
+.rank {
+  display: grid;
+  gap: 12px;
+}
+
+.rank .row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: center;
+}
+
+.rank .nm {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.rank .trk {
+  grid-column: 1 / -1;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.rank .trk span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-300);
+}
+
+/* ---------- Topbar dashboard ---------- */
+
+.cabSelect {
+  width: 220px;
+  max-width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .c7,
+  .c5,
+  .c6 {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 899px) {
+  .greet h1 {
+    font-size: 30px;
+    line-height: 36px;
+  }
+
+  .todo {
+    justify-items: start;
+  }
+
+  .todo .chips {
+    justify-content: flex-start;
+  }
+
+  .gaugeWrap {
+    grid-template-columns: 1fr;
+  }
+
+  .cabSelect {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .avg {
+    grid-template-columns: 1fr;
+  }
+
+  .kpi {
+    font-size: 32px;
+    line-height: 36px;
+  }
+}

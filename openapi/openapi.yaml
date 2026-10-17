@@ -4700,7 +4700,7 @@ components:
 
     AdminDashboardPoint:
       type: object
-      required: [kunci, label, jumlah]
+      required: [kunci, label, jumlah, terverifikasi]
       description: Satu batang grafik tren (bulan `YYYY-MM` atau hari `YYYY-MM-DD`).
       properties:
         kunci: { type: string }
@@ -4713,6 +4713,11 @@ components:
           format: int64
           minimum: 0
           description: Σ nilai pesanan pada titik itu (hanya Superadmin).
+        terverifikasi:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Jumlah pesanan berstatus `done` pada titik itu (kolom ekspor ringkasan bulanan).
 
     AdminDashboardRank:
       type: object
@@ -4730,8 +4735,8 @@ components:
 
     AdminDashboard:
       type: object
-      required: [filter, ringkasan, pembayaran, chip, tren_bulanan, harian, peringkat_cabang]
-      description: Metrik dashboard admin Pusat (PRD §4.1).
+      required: [filter, ringkasan, pembayaran, chip, tren_bulanan, harian, peringkat_cabang, item, pembanding, bulan_lalu, harian_pembanding, komposisi, produk_terlaris]
+      description: Metrik dashboard admin Pusat (PRD §4.1), sesuai kartu admin_v2.html.
       properties:
         filter: { $ref: "#/components/schemas/AdminDashboardFilter" }
         ringkasan: { $ref: "#/components/schemas/AdminDashboardMetric" }
@@ -4751,6 +4756,55 @@ components:
           type: array
           description: Maksimal 5 cabang teratas pada periode terpilih.
           items: { $ref: "#/components/schemas/AdminDashboardRank" }
+        item:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Σ qty baris produk periode terpilih (rata-rata item per pesanan = item / ringkasan.jumlah).
+        pembanding:
+          type: object
+          required: [dari, sampai, ringkasan, item]
+          description: |
+            Periode sebelumnya yang sepadan (prototype `prevRange`): kemarin,
+            minggu lalu, bulan lalu tanggal 1 sampai tanggal yang sama, atau
+            tahun lalu 1 Januari sampai tanggal yang sama. Tanggal yang tidak
+            ada di bulan pembanding dibatasi ke akhir bulannya.
+          properties:
+            dari: { type: string, format: date }
+            sampai: { type: string, format: date }
+            ringkasan: { $ref: "#/components/schemas/AdminDashboardMetric" }
+            item: { type: integer, format: int64, minimum: 0 }
+        bulan_lalu:
+          $ref: "#/components/schemas/AdminDashboardMetric"
+          description: Seluruh bulan kalender sebelumnya — dasar persentase perubahan batang bulan berjalan.
+        harian_pembanding:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Jumlah pesanan bulan lalu dari tanggal 1 sampai tanggal yang sama dengan hari ini.
+        komposisi:
+          type: object
+          required: [reguler, cnc, sertifikat, cnc_lewat_tempo]
+          description: Komposisi pesanan periode terpilih.
+          properties:
+            reguler: { type: integer, format: int64, minimum: 0 }
+            cnc: { type: integer, format: int64, minimum: 0 }
+            sertifikat: { type: integer, format: int64, minimum: 0 }
+            cnc_lewat_tempo:
+              type: integer
+              format: int64
+              minimum: 0
+              description: C&C belum done yang jatuh temponya sebelum hari ini (WIB).
+        produk_terlaris:
+          type: array
+          description: Maksimal 5 product dengan Σ qty baris produk terbesar pada periode terpilih.
+          items:
+            type: object
+            required: [product_id, nama, qty]
+            properties:
+              product_id: { type: string, format: uuid }
+              nama: { type: string }
+              qty: { type: integer, format: int64, minimum: 0 }
 
     OrderEvent:
       type: object

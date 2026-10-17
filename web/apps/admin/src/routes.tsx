@@ -15,7 +15,7 @@ import { SessionProvider, useSesi } from "./session";
 import { NAV_ADMIN } from "./nav";
 import { HalamanLupa, HalamanMasuk } from "./pages/auth";
 import { ProfilAdminPage, ReportingPage } from "./pages/shell-pages";
-import { DashboardPage, type FilterDashboard } from "./pages/dashboard";
+import { DashboardPage, FilterCabangDashboard, FilterPeriodeDashboard, type FilterDashboard } from "./pages/dashboard";
 import {
   PesananAdminPage,
   PesananDetailAdminPage,
@@ -45,9 +45,10 @@ function RouterLink({ to, className, active, children, title }: ShellLinkProps) 
  * alihkan ke /masuk bila belum masuk, lalu pasang AdminShell dengan menu
  * yang sudah disaring peran.
  *
- * Filter periode TIDAK lagi dipasang di topbar: kendali itu hanya ada di
- * dashboard (F1-20) dan disimpan di URL search param halaman itu, supaya tidak
- * ada dua pemilih periode yang salah satunya tidak berpengaruh.
+ * Topbar mengikuti admin_v2.html: pada dashboard berisi pemilih cabang (kiri)
+ * dan periode (tengah) milik halaman itu — satu-satunya pemilih, state-nya di
+ * URL search param `/`. Tombol "+" membuka form tambah cabang dan lonceng
+ * membuka pesanan yang masih menunggu penanganan.
  */
 function ShellLayout() {
   const { status, pengguna, peran, keluar } = useSesi();
@@ -76,10 +77,28 @@ function ShellLayout() {
       onLogout={() => void keluar()}
       topLeft={
         pathname === "/" || pathname === "/pesanan" ? (
-          <Button iconOnly icon="plus" aria-label="Tambah cabang" title="Tambah cabang" />
+          <>
+            {pathname === "/" ? <FilterCabangDashboard /> : null}
+            <Button
+              iconOnly
+              icon="plus"
+              aria-label="Tambah cabang"
+              title="Tambah cabang"
+              onClick={() => void navigate({ to: "/cabang", search: { tambah: true } })}
+            />
+          </>
         ) : undefined
       }
-      topRight={<Button iconOnly icon="bell" aria-label="Perlu tindakan" />}
+      topCenter={pathname === "/" ? <FilterPeriodeDashboard /> : undefined}
+      topRight={
+        <Button
+          iconOnly
+          icon="bell"
+          aria-label="Perlu tindakan"
+          title="Pesanan yang menunggu penanganan"
+          onClick={() => void navigate({ to: "/pesanan", search: { status: "submitted" } })}
+        />
+      }
     >
       <Outlet />
     </AdminShell>
@@ -175,7 +194,13 @@ const pesananDetailRoute = createRoute({
   path: "/pesanan/$id",
   component: PesananDetailAdminPage,
 });
-const cabangRoute = createRoute({ getParentRoute: () => shellRoute, path: "/cabang", component: CabangPage });
+/** /cabang?tambah=true langsung membuka form tambah cabang (tombol "+" topbar). */
+const cabangRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/cabang",
+  validateSearch: (search: Record<string, unknown>): { tambah?: boolean } => ({ tambah: boolMungkin(search.tambah) }),
+  component: CabangPage,
+});
 const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogPage });
 const imporImpactRoute = createRoute({
   getParentRoute: () => shellRoute,

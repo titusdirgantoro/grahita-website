@@ -170,6 +170,7 @@ Navigasi sesuai prototype: **Menu** (Dashboard, Riwayat pemesanan) · **Data mas
 | AP-DSH-04 | Grafik: tren 12 bulan berjalan dan tren harian bulan berjalan. | Should |
 | AP-DSH-05 | Ringkasan status pembayaran periode terpilih (terverifikasi / menunggu / perlu review). | Should |
 | AP-DSH-06 | Peringkat cabang berdasarkan nilai atau jumlah pesanan. | Could |
+| AP-DSH-07 | Tata letak mengikuti `prototype/admin_v2.html`: sapaan, pembanding periode sebelumnya (kemarin / minggu lalu / bulan lalu / tahun lalu sampai tanggal yang sama), rata-rata nilai & item per pesanan, komposisi Reguler vs Cash and Carry, dan product terlaris dalam qty; filter cabang & periode di topbar (keputusan user 2026-10-17). | Should |
 
 ### 4.2 Riwayat pemesanan
 

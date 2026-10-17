@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useNavigate, useSearch } from "@tanstack/react-router";
+
 import { ApiClientError, api } from "@grahita/api-client";
 import {
   Badge,
@@ -239,6 +241,16 @@ export function CabangPage() {
     setTokenBaru(null);
     setForm({ ...CABANG_BARU });
   }
+
+  // Tombol "+" di topbar membuka halaman ini dengan ?tambah=true: buka form
+  // sekali, lalu bersihkan parameternya supaya muat ulang tidak membukanya lagi.
+  const { tambah } = useSearch({ strict: false }) as { tambah?: boolean };
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!tambah) return;
+    bukaTambah();
+    void navigate({ to: "/cabang", search: {}, replace: true });
+  }, [tambah]);
 
   function bukaUbah(row: Cabang) {
     setGalatForm(null);

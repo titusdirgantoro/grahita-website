@@ -63,7 +63,8 @@ SELECT count(*) FILTER (WHERE o.status = 'submitted'
 -- 12 batang.
 SELECT to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date), 'YYYY-MM') AS kunci,
        count(*)::bigint                                                 AS jumlah,
-       COALESCE(sum(o.total), 0)::bigint                                AS nilai
+       COALESCE(sum(o.total), 0)::bigint                                AS nilai,
+       count(*) FILTER (WHERE o.status = 'done')::bigint                AS terverifikasi
   FROM orders o
  WHERE (sqlc.narg(branch_id)::uuid IS NULL OR o.branch_id = sqlc.narg(branch_id)::uuid)
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= sqlc.arg(dari)::date
@@ -77,7 +78,8 @@ SELECT to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::d
 -- service.
 SELECT to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date), 'YYYY-MM-DD') AS kunci,
        count(*)::bigint                                                 AS jumlah,
-       COALESCE(sum(o.total), 0)::bigint                                AS nilai
+       COALESCE(sum(o.total), 0)::bigint                                AS nilai,
+       count(*) FILTER (WHERE o.status = 'done')::bigint                AS terverifikasi
   FROM orders o
  WHERE (sqlc.narg(branch_id)::uuid IS NULL OR o.branch_id = sqlc.narg(branch_id)::uuid)
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= sqlc.arg(dari)::date
@@ -100,4 +102,44 @@ SELECT b.id::text        AS branch_id,
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= sqlc.arg(sampai)::date
  GROUP BY b.id, b.nama
  ORDER BY jumlah DESC, nilai DESC, b.nama ASC
+ LIMIT sqlc.arg(batas)::int;
+
+-- name: DashboardItem :one
+-- Σ qty baris produk (tanpa baris packaging) pesanan pada rentang terpilih —
+-- dasar "rata-rata item per pesanan". Filter cabang & tanggal sama dengan
+-- DashboardRingkasan sehingga pembaginya konsisten.
+SELECT COALESCE(sum(l.qty), 0)::bigint AS item
+  FROM orders o
+  JOIN order_lines l ON l.order_id = o.id AND l.jenis = 'product'
+ WHERE (sqlc.narg(branch_id)::uuid IS NULL OR o.branch_id = sqlc.narg(branch_id)::uuid)
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= sqlc.arg(dari)::date
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= sqlc.arg(sampai)::date;
+
+-- name: DashboardKomposisi :one
+-- Komposisi pesanan periode terpilih: reguler vs Cash and Carry, Sertifikat,
+-- dan C&C lewat jatuh tempo (klausa lewat tempo sama dengan DashboardChip).
+SELECT count(*) FILTER (WHERE NOT o.is_cnc)::bigint                       AS reguler,
+       count(*) FILTER (WHERE o.is_cnc)::bigint                           AS cnc,
+       count(*) FILTER (WHERE o.is_sertifikat)::bigint                    AS sertifikat,
+       count(*) FILTER (WHERE o.is_cnc AND o.status <> 'done'
+                          AND o.jatuh_tempo < sqlc.arg(hari_ini)::date)::bigint AS cnc_lewat_tempo
+  FROM orders o
+ WHERE (sqlc.narg(branch_id)::uuid IS NULL OR o.branch_id = sqlc.narg(branch_id)::uuid)
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= sqlc.arg(dari)::date
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= sqlc.arg(sampai)::date;
+
+-- name: DashboardProdukTerlaris :many
+-- Product terlaris periode terpilih dalam qty baris produk, terbanyak lebih
+-- dahulu; urutan deterministik (qty, lalu nama A→Z).
+SELECT p.id::text            AS product_id,
+       p.nama                AS nama,
+       sum(l.qty)::bigint    AS qty
+  FROM orders o
+  JOIN order_lines l ON l.order_id = o.id AND l.jenis = 'product'
+  JOIN products p ON p.id = l.product_id
+ WHERE (sqlc.narg(branch_id)::uuid IS NULL OR o.branch_id = sqlc.narg(branch_id)::uuid)
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= sqlc.arg(dari)::date
+   AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= sqlc.arg(sampai)::date
+ GROUP BY p.id, p.nama
+ ORDER BY qty DESC, p.nama ASC
  LIMIT sqlc.arg(batas)::int;

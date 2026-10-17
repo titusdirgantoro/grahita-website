@@ -28,12 +28,36 @@ type fakeRepo struct {
 	tren      []Titik
 	harian    []Titik
 	peringkat []BarisPeringkat
+	item      int64
+	komposisi HitunganKomposisi
+	produk    []BarisProduk
+	// rentang mencatat setiap rentang Ringkasan yang diminta, berurutan.
+	rentang [][2]string
 }
 
 func (f *fakeRepo) Ringkasan(_ context.Context, q Query) (HitunganPeriode, error) {
 	f.last = q
 	f.panggilan++
+	f.rentang = append(f.rentang, [2]string{q.Dari.Format(LayoutTanggal), q.Sampai.Format(LayoutTanggal)})
 	return f.periode, nil
+}
+
+func (f *fakeRepo) Item(_ context.Context, q Query) (int64, error) {
+	f.last = q
+	f.panggilan++
+	return f.item, nil
+}
+
+func (f *fakeRepo) Komposisi(_ context.Context, q Query) (HitunganKomposisi, error) {
+	f.last = q
+	f.panggilan++
+	return f.komposisi, nil
+}
+
+func (f *fakeRepo) ProdukTerlaris(_ context.Context, q Query) ([]BarisProduk, error) {
+	f.last = q
+	f.panggilan++
+	return f.produk, nil
 }
 
 func (f *fakeRepo) Chip(_ context.Context, q Query) (HitunganChip, error) {
@@ -395,4 +419,42 @@ func mustParse(t *testing.T, v string) time.Time {
 		t.Fatalf("tanggal %q: %v", v, err)
 	}
 	return parsed
+}
+
+// TestPembandingMengikutiPrevRangePrototype mengunci rentang pembanding tiap
+// periode (prototype `prevRange`) beserta pembanding grafik: bulan lalu penuh
+// dan bulan lalu sampai tanggal yang sama — termasuk tanggal 31 yang tidak ada
+// di bulan sebelumnya dan pergantian tahun.
+func TestPembandingMengikutiPrevRangePrototype(t *testing.T) {
+	kasus := []struct {
+		nama, hari, periode         string
+		pembanding                  [2]string
+		bulanLaluPenuh, bulanLaluSD [2]string
+	}{
+		{"hari", "2026-10-07", PeriodeHari, [2]string{"2026-10-06", "2026-10-06"}, [2]string{"2026-09-01", "2026-09-30"}, [2]string{"2026-09-01", "2026-09-07"}},
+		{"minggu", "2026-10-07", PeriodeMinggu, [2]string{"2026-09-28", "2026-09-30"}, [2]string{"2026-09-01", "2026-09-30"}, [2]string{"2026-09-01", "2026-09-07"}},
+		{"bulan 31 ke Februari", "2026-03-31", PeriodeBulan, [2]string{"2026-02-01", "2026-02-28"}, [2]string{"2026-02-01", "2026-02-28"}, [2]string{"2026-02-01", "2026-02-28"}},
+		{"tahun", "2026-10-07", PeriodeTahun, [2]string{"2025-01-01", "2025-10-07"}, [2]string{"2026-09-01", "2026-09-30"}, [2]string{"2026-09-01", "2026-09-07"}},
+		{"Januari ke Desember tahun lalu", "2026-01-15", PeriodeBulan, [2]string{"2025-12-01", "2025-12-15"}, [2]string{"2025-12-01", "2025-12-31"}, [2]string{"2025-12-01", "2025-12-15"}},
+	}
+	for _, k := range kasus {
+		hari, err := time.ParseInLocation(LayoutTanggal, k.hari, wib)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := &fakeRepo{}
+		svc := NewService(repo, WithClock(clock.Fixed(hari.Add(10*time.Hour))))
+		d, err := svc.Get(context.Background(), superadmin(), Filter{Periode: k.periode})
+		if err != nil {
+			t.Fatalf("%s: %v", k.nama, err)
+		}
+		if got := [2]string{d.Pembanding.Dari, d.Pembanding.Sampai}; got != k.pembanding {
+			t.Errorf("%s: pembanding mau %v, dapat %v", k.nama, k.pembanding, got)
+		}
+		// Urutan Ringkasan: periode terpilih, pembanding, bulan lalu penuh,
+		// bulan lalu sampai tanggal yang sama.
+		if len(repo.rentang) != 4 || repo.rentang[1] != k.pembanding || repo.rentang[2] != k.bulanLaluPenuh || repo.rentang[3] != k.bulanLaluSD {
+			t.Errorf("%s: rentang ringkasan %v", k.nama, repo.rentang)
+		}
+	}
 }

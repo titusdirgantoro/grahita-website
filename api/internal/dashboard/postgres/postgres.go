@@ -90,7 +90,7 @@ func (r *Repo) TrenBulanan(ctx context.Context, q dashboard.Query) ([]dashboard.
 	}
 	out := make([]dashboard.Titik, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, dashboard.Titik{Kunci: row.Kunci, Jumlah: row.Jumlah, Nilai: row.Nilai})
+		out = append(out, dashboard.Titik{Kunci: row.Kunci, Jumlah: row.Jumlah, Nilai: row.Nilai, Terverifikasi: row.Terverifikasi})
 	}
 	return out, nil
 }
@@ -108,7 +108,7 @@ func (r *Repo) Harian(ctx context.Context, q dashboard.Query) ([]dashboard.Titik
 	}
 	out := make([]dashboard.Titik, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, dashboard.Titik{Kunci: row.Kunci, Jumlah: row.Jumlah, Nilai: row.Nilai})
+		out = append(out, dashboard.Titik{Kunci: row.Kunci, Jumlah: row.Jumlah, Nilai: row.Nilai, Terverifikasi: row.Terverifikasi})
 	}
 	return out, nil
 }
@@ -133,6 +133,54 @@ func (r *Repo) PeringkatCabang(ctx context.Context, q dashboard.Query) ([]dashbo
 			Jumlah:   row.Jumlah,
 			Nilai:    row.Nilai,
 		})
+	}
+	return out, nil
+}
+
+// Item menjumlahkan qty baris produk pesanan pada rentang query.
+func (r *Repo) Item(ctx context.Context, q dashboard.Query) (int64, error) {
+	item, err := r.q.DashboardItem(ctx, sqlc.DashboardItemParams{
+		BranchID: pgtypes.UUID(q.BranchID),
+		Dari:     q.Dari,
+		Sampai:   q.Sampai,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("query DashboardItem: %w", err)
+	}
+	return item, nil
+}
+
+// Komposisi membaca komposisi pesanan periode terpilih.
+func (r *Repo) Komposisi(ctx context.Context, q dashboard.Query) (dashboard.HitunganKomposisi, error) {
+	row, err := r.q.DashboardKomposisi(ctx, sqlc.DashboardKomposisiParams{
+		HariIni:  q.HariIni,
+		BranchID: pgtypes.UUID(q.BranchID),
+		Dari:     q.Dari,
+		Sampai:   q.Sampai,
+	})
+	if err != nil {
+		return dashboard.HitunganKomposisi{}, fmt.Errorf("query DashboardKomposisi: %w", err)
+	}
+	return dashboard.HitunganKomposisi{
+		Reguler: row.Reguler, CNC: row.Cnc, Sertifikat: row.Sertifikat, CNCLewatTempo: row.CncLewatTempo,
+	}, nil
+}
+
+// ProdukTerlaris membaca product terlaris periode terpilih, dibatasi
+// MaxProdukTerlaris baris di database.
+func (r *Repo) ProdukTerlaris(ctx context.Context, q dashboard.Query) ([]dashboard.BarisProduk, error) {
+	rows, err := r.q.DashboardProdukTerlaris(ctx, sqlc.DashboardProdukTerlarisParams{
+		BranchID: pgtypes.UUID(q.BranchID),
+		Dari:     q.Dari,
+		Sampai:   q.Sampai,
+		Batas:    int32(dashboard.MaxProdukTerlaris),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query DashboardProdukTerlaris: %w", err)
+	}
+	out := make([]dashboard.BarisProduk, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, dashboard.BarisProduk{ProductID: row.ProductID, Nama: row.Nama, Qty: row.Qty})
 	}
 	return out, nil
 }

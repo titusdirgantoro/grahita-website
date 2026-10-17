@@ -53,6 +53,9 @@ const (
 	// MaxPeringkatCabang membatasi panjang peringkat cabang (AP-DSH-06).
 	MaxPeringkatCabang = 5
 
+	// MaxProdukTerlaris membatasi panjang daftar product terlaris.
+	MaxProdukTerlaris = 5
+
 	// ZonaBisnis adalah zona tanggal bisnis seluruh sistem (PRD §7.2).
 	ZonaBisnis = "Asia/Jakarta"
 
@@ -130,9 +133,10 @@ type HitunganChip struct {
 
 // Titik adalah satu titik deret waktu (bulan `YYYY-MM` atau hari `YYYY-MM-DD`).
 type Titik struct {
-	Kunci  string
-	Jumlah int64
-	Nilai  int64
+	Kunci         string
+	Jumlah        int64
+	Nilai         int64
+	Terverifikasi int64
 }
 
 // BarisPeringkat adalah satu baris peringkat cabang.
@@ -143,14 +147,34 @@ type BarisPeringkat struct {
 	Nilai    int64
 }
 
+// HitunganKomposisi adalah komposisi pesanan periode terpilih.
+type HitunganKomposisi struct {
+	Reguler       int64
+	CNC           int64
+	Sertifikat    int64
+	CNCLewatTempo int64
+}
+
+// BarisProduk adalah satu baris product terlaris (dalam qty baris produk).
+type BarisProduk struct {
+	ProductID string
+	Nama      string
+	Qty       int64
+}
+
 // Repository membaca metrik dashboard. Tidak ada parameter branch_id sesi di
 // sini: pembatasan cabang hanyalah pilihan filter (otorisasi ada di service).
 type Repository interface {
 	Ringkasan(ctx context.Context, q Query) (HitunganPeriode, error)
+	// Item menjumlahkan qty baris produk pesanan pada q.Dari..q.Sampai (dasar
+	// rata-rata item per pesanan).
+	Item(ctx context.Context, q Query) (int64, error)
 	Chip(ctx context.Context, q Query) (HitunganChip, error)
 	TrenBulanan(ctx context.Context, q Query) ([]Titik, error)
 	Harian(ctx context.Context, q Query) ([]Titik, error)
 	PeringkatCabang(ctx context.Context, q Query) ([]BarisPeringkat, error)
+	Komposisi(ctx context.Context, q Query) (HitunganKomposisi, error)
+	ProdukTerlaris(ctx context.Context, q Query) ([]BarisProduk, error)
 }
 
 // SumberEmailGagal menyajikan id pesanan yang punya email berstatus gagal
@@ -183,6 +207,8 @@ type TitikTren struct {
 	Label  string `json:"label"`
 	Jumlah int64  `json:"jumlah"`
 	Nilai  *int64 `json:"nilai,omitempty"`
+	// Terverifikasi adalah jumlah pesanan berstatus done pada titik ini.
+	Terverifikasi int64 `json:"terverifikasi"`
 }
 
 // PeringkatCabang adalah satu baris peringkat cabang (AP-DSH-06).
@@ -211,6 +237,32 @@ type InfoFilter struct {
 	Zona    string `json:"zona"`
 }
 
+// Pembanding adalah periode sebelumnya yang sepadan dengan periode terpilih
+// (prototype `prevRange`): kemarin, minggu lalu, bulan lalu sampai tanggal
+// yang sama, atau tahun lalu sampai tanggal yang sama.
+type Pembanding struct {
+	Dari      string `json:"dari"`
+	Sampai    string `json:"sampai"`
+	Ringkasan Metrik `json:"ringkasan"`
+	Item      int64  `json:"item"`
+}
+
+// Komposisi adalah komposisi pesanan periode terpilih: reguler vs Cash and
+// Carry, berapa yang Sertifikat, dan berapa C&C yang lewat jatuh tempo.
+type Komposisi struct {
+	Reguler       int64 `json:"reguler"`
+	CNC           int64 `json:"cnc"`
+	Sertifikat    int64 `json:"sertifikat"`
+	CNCLewatTempo int64 `json:"cnc_lewat_tempo"`
+}
+
+// ProdukTerlaris adalah satu baris product terlaris periode terpilih.
+type ProdukTerlaris struct {
+	ProductID string `json:"product_id"`
+	Nama      string `json:"nama"`
+	Qty       int64  `json:"qty"`
+}
+
 // Dashboard adalah satu respons dashboard lengkap.
 type Dashboard struct {
 	Filter          InfoFilter          `json:"filter"`
@@ -220,6 +272,18 @@ type Dashboard struct {
 	TrenBulanan     []TitikTren         `json:"tren_bulanan"`
 	Harian          []TitikTren         `json:"harian"`
 	PeringkatCabang []PeringkatCabang   `json:"peringkat_cabang"`
+	// Item adalah Σ qty baris produk periode terpilih (rata-rata item = item /
+	// ringkasan.jumlah).
+	Item       int64      `json:"item"`
+	Pembanding Pembanding `json:"pembanding"`
+	// BulanLalu adalah seluruh bulan kalender sebelum bulan berjalan — dasar
+	// persentase perubahan batang bulan berjalan pada grafik bulanan.
+	BulanLalu Metrik `json:"bulan_lalu"`
+	// HarianPembanding adalah jumlah pesanan bulan lalu dari tanggal 1 sampai
+	// tanggal yang sama dengan hari ini — pembanding grafik harian.
+	HarianPembanding int64            `json:"harian_pembanding"`
+	Komposisi        Komposisi        `json:"komposisi"`
+	ProdukTerlaris   []ProdukTerlaris `json:"produk_terlaris"`
 }
 
 // Service adalah logika bisnis dashboard admin.
@@ -276,6 +340,28 @@ func (s *Service) Get(ctx context.Context, actor auth.Actor, f Filter) (Dashboar
 	if err != nil {
 		return Dashboard{}, fmt.Errorf("ringkasan dashboard: %w", err)
 	}
+	item, err := s.repo.Item(ctx, q)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("item dashboard: %w", err)
+	}
+	qSebelum := q.denganRentang(rentangSebelumnya(q.Periode, q.HariIni))
+	agregatSebelum, err := s.repo.Ringkasan(ctx, qSebelum)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("ringkasan pembanding dashboard: %w", err)
+	}
+	itemSebelum, err := s.repo.Item(ctx, qSebelum)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("item pembanding dashboard: %w", err)
+	}
+	awalBulanLalu := q.BulanAwal.AddDate(0, -1, 0)
+	bulanLalu, err := s.repo.Ringkasan(ctx, q.denganRentang(awalBulanLalu, q.BulanAwal.AddDate(0, 0, -1)))
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("ringkasan bulan lalu dashboard: %w", err)
+	}
+	bulanLaluSampaiHariIni, err := s.repo.Ringkasan(ctx, q.denganRentang(awalBulanLalu, tanggalAman(awalBulanLalu, q.HariIni.Day())))
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("pembanding harian dashboard: %w", err)
+	}
 	chip, err := s.repo.Chip(ctx, q)
 	if err != nil {
 		return Dashboard{}, fmt.Errorf("chip dashboard: %w", err)
@@ -292,6 +378,14 @@ func (s *Service) Get(ctx context.Context, actor auth.Actor, f Filter) (Dashboar
 	if err != nil {
 		return Dashboard{}, fmt.Errorf("peringkat cabang dashboard: %w", err)
 	}
+	komposisi, err := s.repo.Komposisi(ctx, q)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("komposisi dashboard: %w", err)
+	}
+	produkRows, err := s.repo.ProdukTerlaris(ctx, q)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("product terlaris dashboard: %w", err)
+	}
 
 	// Nilai rupiah hanya untuk Superadmin (AP-DSH-02). Bila aktornya tidak
 	// berhak, pointer nilai tetap nil sehingga field tidak pernah dikirim.
@@ -305,7 +399,7 @@ func (s *Service) Get(ctx context.Context, actor auth.Actor, f Filter) (Dashboar
 		return m
 	}
 	titik := func(t Titik) TitikTren {
-		out := TitikTren{Kunci: t.Kunci, Jumlah: t.Jumlah, Label: labelTitik(t.Kunci)}
+		out := TitikTren{Kunci: t.Kunci, Jumlah: t.Jumlah, Label: labelTitik(t.Kunci), Terverifikasi: t.Terverifikasi}
 		if uang {
 			v := t.Nilai
 			out.Nilai = &v
@@ -336,6 +430,23 @@ func (s *Service) Get(ctx context.Context, actor auth.Actor, f Filter) (Dashboar
 		},
 	}
 
+	d.Item = item
+	d.Pembanding = Pembanding{
+		Dari:      qSebelum.Dari.Format(LayoutTanggal),
+		Sampai:    qSebelum.Sampai.Format(LayoutTanggal),
+		Ringkasan: metrik(agregatSebelum.Jumlah, agregatSebelum.Nilai),
+		Item:      itemSebelum,
+	}
+	d.BulanLalu = metrik(bulanLalu.Jumlah, bulanLalu.Nilai)
+	d.HarianPembanding = bulanLaluSampaiHariIni.Jumlah
+	d.Komposisi = Komposisi{
+		Reguler: komposisi.Reguler, CNC: komposisi.CNC,
+		Sertifikat: komposisi.Sertifikat, CNCLewatTempo: komposisi.CNCLewatTempo,
+	}
+	d.ProdukTerlaris = make([]ProdukTerlaris, 0, len(produkRows))
+	for _, p := range produkRows {
+		d.ProdukTerlaris = append(d.ProdukTerlaris, ProdukTerlaris{ProductID: p.ProductID, Nama: p.Nama, Qty: p.Qty})
+	}
 	d.TrenBulanan = isiBulanan(trenRows, q, titik)
 	d.Harian = isiHarian(harianRows, q, titik)
 	d.PeringkatCabang = make([]PeringkatCabang, 0, len(peringkatRows))
@@ -430,6 +541,44 @@ func rentang(periode string, hari time.Time) (time.Time, time.Time) {
 	default: // PeriodeBulan
 		return time.Date(hari.Year(), hari.Month(), 1, 0, 0, 0, 0, hari.Location()), hari
 	}
+}
+
+// denganRentang menyalin query dengan rentang tanggal lain (cabang & hari ini
+// tetap), dipakai untuk periode pembanding.
+func (q Query) denganRentang(dari, sampai time.Time) Query {
+	q.Dari, q.Sampai = dari, sampai
+	return q
+}
+
+// rentangSebelumnya adalah periode pembanding yang sepadan (prototype
+// `prevRange`): kemarin; minggu lalu Senin..hari yang sama; bulan lalu tanggal
+// 1..tanggal yang sama; tahun lalu 1 Januari..tanggal yang sama. Tanggal yang
+// tidak ada di bulan pembanding (31 → Februari) dibatasi ke akhir bulannya.
+func rentangSebelumnya(periode string, hari time.Time) (time.Time, time.Time) {
+	dari, sampai := rentang(periode, hari)
+	switch periode {
+	case PeriodeHari:
+		kemarin := hari.AddDate(0, 0, -1)
+		return kemarin, kemarin
+	case PeriodeMinggu:
+		return dari.AddDate(0, 0, -7), sampai.AddDate(0, 0, -7)
+	case PeriodeTahun:
+		awal := time.Date(hari.Year()-1, time.January, 1, 0, 0, 0, 0, hari.Location())
+		return awal, tanggalAman(time.Date(hari.Year()-1, hari.Month(), 1, 0, 0, 0, 0, hari.Location()), hari.Day())
+	default: // PeriodeBulan
+		awal := time.Date(hari.Year(), hari.Month()-1, 1, 0, 0, 0, 0, hari.Location())
+		return awal, tanggalAman(awal, hari.Day())
+	}
+}
+
+// tanggalAman mengembalikan tanggal ke-hari pada bulan awalBulan, dibatasi ke
+// akhir bulan itu (AddDate Go justru melimpah ke bulan berikutnya).
+func tanggalAman(awalBulan time.Time, hari int) time.Time {
+	akhir := time.Date(awalBulan.Year(), awalBulan.Month()+1, 0, 0, 0, 0, 0, awalBulan.Location()).Day()
+	if hari > akhir {
+		hari = akhir
+	}
+	return time.Date(awalBulan.Year(), awalBulan.Month(), hari, 0, 0, 0, 0, awalBulan.Location())
 }
 
 // isiBulanan menyusun 12 batang Januari..Desember tahun bisnis berjalan.

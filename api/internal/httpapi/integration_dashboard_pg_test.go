@@ -294,6 +294,34 @@ func TestPGDashboardMetrikChipDanRole(t *testing.T) {
 		t.Fatalf("peringkat kedua harus cabang B (seri jumlah, nilai lebih kecil): %v", kedua)
 	}
 
+	// --- Kartu prototype: item, pembanding, komposisi, product terlaris -----
+	// Lima pesanan bulan ini masing-masing satu baris produk qty 1.
+	if got := angka(t, d, "item"); got != 5 {
+		t.Fatalf("item periode harus 5 (Σ qty baris produk), dapat %v", got)
+	}
+	if got := angka(t, bulanIni, "terverifikasi"); got != 1 {
+		t.Fatalf("batang bulan berjalan harus mencatat 1 terverifikasi, dapat %v", got)
+	}
+	pembanding := d["pembanding"].(map[string]any)
+	awalBulanLalu := awalBulan.AddDate(0, -1, 0)
+	if pembanding["dari"] != awalBulanLalu.Format("2006-01-02") ||
+		angka(t, metrikMap(t, pembanding["ringkasan"]), "jumlah") != 0 || angka(t, pembanding, "item") != 0 {
+		t.Fatalf("pembanding bulan lalu salah (historis 2020 di luar rentang): %v", pembanding)
+	}
+	if angka(t, metrikMap(t, d["bulan_lalu"]), "jumlah") != 0 || angka(t, d, "harian_pembanding") != 0 {
+		t.Fatalf("bulan lalu harus kosong: bulan_lalu=%v harian_pembanding=%v", d["bulan_lalu"], d["harian_pembanding"])
+	}
+	komposisi := d["komposisi"].(map[string]any)
+	for nama, mau := range map[string]float64{"reguler": 4, "cnc": 1, "sertifikat": 0, "cnc_lewat_tempo": 1} {
+		if got := angka(t, komposisi, nama); got != mau {
+			t.Fatalf("komposisi.%s harus %v, dapat %v", nama, mau, got)
+		}
+	}
+	terlaris, _ := d["produk_terlaris"].([]any)
+	if len(terlaris) != 1 || terlaris[0].(map[string]any)["product_id"] != produk || angka(t, terlaris[0].(map[string]any), "qty") != 5 {
+		t.Fatalf("product terlaris harus Produk Dashboard qty 5, dapat %v", terlaris)
+	}
+
 	// --- Filter satu cabang -------------------------------------------------
 	_, _, bentukA := dashboardGet(t, f.srv, "/api/v1/admin/dashboard?cabang="+f.branchA, acMgr, csrfMgr)
 	dA := dashboardData(t, bentukA)
