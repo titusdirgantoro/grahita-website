@@ -7,6 +7,7 @@ package mailer
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -60,6 +61,8 @@ type SMTP struct {
 	pass    string
 	from    string
 	timeout time.Duration
+	// tlsConfig untuk STARTTLS; nil = verifikasi sertifikat terhadap host.
+	tlsConfig *tls.Config
 }
 
 // NewSMTP membuat pengirim SMTP.
@@ -135,6 +138,19 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 		return fmt.Errorf("smtp handshake: %w", err)
 	}
 	defer func() { _ = client.Close() }()
+
+	// Relay produksi (Gmail :587) menolak AUTH sebelum koneksi dienkripsi;
+	// tanpa STARTTLS net/smtp juga menolak mengirim kata sandi ke host
+	// non-lokal ("unencrypted connection").
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		cfg := s.tlsConfig
+		if cfg == nil {
+			cfg = &tls.Config{ServerName: s.host, MinVersion: tls.VersionTLS12}
+		}
+		if err := client.StartTLS(cfg); err != nil {
+			return fmt.Errorf("smtp starttls: %w", err)
+		}
+	}
 
 	if auth != nil {
 		if err := client.Auth(auth); err != nil {

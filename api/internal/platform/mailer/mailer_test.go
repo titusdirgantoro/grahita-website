@@ -4,7 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"math/big"
 	"net"
 	"strconv"
 	"strings"
@@ -250,4 +257,123 @@ func TestLogMencatatLampiran(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Log.Send: %v", err)
 	}
+}
+
+// TestSMTPStartTLSSebelumAuth memastikan pengirim meng-upgrade koneksi dengan
+// STARTTLS sebelum AUTH, seperti diwajibkan Gmail di port 587: server palsu
+// menolak AUTH dengan 530 selama koneksi belum terenkripsi.
+func TestSMTPStartTLSSebelumAuth(t *testing.T) {
+	sertifikat, pool := sertifikatUji(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	authLewatTLS := make(chan bool, 1)
+	go func() {
+		raw, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		var conn net.Conn = raw
+		defer func() { _ = conn.Close() }()
+		_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+		r := bufio.NewReader(conn)
+		tulis := func(s string) { _, _ = conn.Write([]byte(s)) }
+		terenkripsi := false
+		tulis("220 server-palsu ESMTP\r\n")
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			perintah := strings.ToUpper(strings.TrimSpace(line))
+			switch {
+			case strings.HasPrefix(perintah, "EHLO"):
+				if terenkripsi {
+					tulis("250-server-palsu\r\n250 AUTH PLAIN\r\n")
+				} else {
+					tulis("250-server-palsu\r\n250-STARTTLS\r\n250 AUTH PLAIN\r\n")
+				}
+			case perintah == "STARTTLS":
+				tulis("220 Siap TLS\r\n")
+				tlsConn := tls.Server(raw, &tls.Config{Certificates: []tls.Certificate{sertifikat}})
+				if err := tlsConn.Handshake(); err != nil {
+					return
+				}
+				conn, r, terenkripsi = tlsConn, bufio.NewReader(tlsConn), true
+				tulis = func(s string) { _, _ = conn.Write([]byte(s)) }
+			case strings.HasPrefix(perintah, "AUTH"):
+				if !terenkripsi {
+					tulis("530 5.7.0 Must issue a STARTTLS command first\r\n")
+					continue
+				}
+				authLewatTLS <- true
+				tulis("235 2.7.0 Accepted\r\n")
+			case perintah == "DATA":
+				tulis("354 Mulai\r\n")
+				for {
+					baris, err := r.ReadString('\n')
+					if err != nil || strings.TrimSpace(baris) == "." {
+						break
+					}
+				}
+				tulis("250 Diterima\r\n")
+			case perintah == "QUIT":
+				tulis("221 Bye\r\n")
+				return
+			default:
+				tulis("250 OK\r\n")
+			}
+		}
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+	s := NewSMTP(host, port, "user@example.test", "rahasia", "no-reply@grahita.id")
+	s.SetTimeout(10 * time.Second)
+	s.tlsConfig = &tls.Config{RootCAs: pool, ServerName: host, MinVersion: tls.VersionTLS12}
+
+	if err := s.Send(context.Background(), Message{To: []string{"admin@example.test"}, Subject: "Uji", Text: "isi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case <-authLewatTLS:
+	default:
+		t.Fatal("AUTH tidak terjadi di atas TLS")
+	}
+}
+
+// sertifikatUji membuat sertifikat self-signed untuk 127.0.0.1 beserta pool
+// kepercayaannya.
+func sertifikatUji(t *testing.T) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	kunci, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("kunci: %v", err)
+	}
+	templat := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "server-palsu"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, templat, templat, &kunci.PublicKey, kunci)
+	if err != nil {
+		t.Fatalf("sertifikat: %v", err)
+	}
+	daun, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(daun)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: kunci, Leaf: daun}, pool
 }
