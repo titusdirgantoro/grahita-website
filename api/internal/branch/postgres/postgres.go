@@ -297,6 +297,18 @@ func (r *Repo) Delete(ctx context.Context, id string, rec audit.Entry) error {
 	if err := q.DeleteBranchRegistrationTokens(ctx, id); err != nil {
 		return fmt.Errorf("query DeleteBranchRegistrationTokens: %w", err)
 	}
+	// Konfigurasi cabang tanpa riwayat ekonomi (HasOrders sudah menolak cabang
+	// bersejarah): assignment rekening D2 dan akun deposit kosong ikut dihapus.
+	// FK keduanya RESTRICT untuk menjaga histori, bukan untuk memblokir cabang
+	// yang belum pernah bertransaksi.
+	for _, stmt := range []string{
+		`DELETE FROM branch_bank_accounts WHERE branch_id = $1`,
+		`DELETE FROM branch_deposit_accounts WHERE branch_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, id); err != nil {
+			return fmt.Errorf("hapus konfigurasi cabang: %w", err)
+		}
+	}
 	if err := q.DeleteBranch(ctx, id); err != nil {
 		return fmt.Errorf("query DeleteBranch: %w", err)
 	}

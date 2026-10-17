@@ -40,8 +40,9 @@ var (
 	ErrEmailTaken = errors.New("email sudah dipakai")
 	// ErrInvalidData: data yang dikirim tidak lolos validasi domain.
 	ErrInvalidData = errors.New("data cabang tidak valid")
-	// ErrHasOrders: cabang sudah punya pesanan sehingga tidak boleh dihapus.
-	ErrHasOrders = errors.New("cabang sudah punya pesanan")
+	// ErrHasOrders: cabang sudah punya pesanan atau riwayat ekonomi lain (bukti
+	// bayar, deposit, tarif impor) sehingga tidak boleh dihapus.
+	ErrHasOrders = errors.New("cabang sudah punya pesanan atau riwayat transaksi")
 	// ErrHasAccount: cabang sudah punya akun sehingga tidak butuh token.
 	ErrHasAccount = errors.New("cabang sudah punya akun")
 	// ErrInactive: cabang nonaktif tidak boleh memegang token registrasi baru.

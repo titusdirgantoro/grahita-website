@@ -123,7 +123,14 @@ UPDATE branch_users
  WHERE branch_id = sqlc.arg(branch_id);
 
 -- name: BranchHasOrders :one
-SELECT EXISTS (SELECT 1 FROM orders WHERE branch_id = $1)::boolean;
+-- Riwayat yang membuat cabang tidak boleh dihapus (hanya boleh dinonaktifkan):
+-- pesanan, bukti bayar, riwayat deposit, dan tarif hasil impor Impact.
+SELECT (EXISTS (SELECT 1 FROM orders WHERE branch_id = $1)
+     OR EXISTS (SELECT 1 FROM payment_proofs WHERE branch_id = $1)
+     OR EXISTS (SELECT 1 FROM deposit_topups WHERE branch_id = $1)
+     OR EXISTS (SELECT 1 FROM branch_deposit_transactions WHERE branch_id = $1)
+     OR EXISTS (SELECT 1 FROM deposit_allocations WHERE branch_id = $1)
+     OR EXISTS (SELECT 1 FROM branch_tariff_versions WHERE branch_id = $1))::boolean;
 
 -- name: BranchHasAccount :one
 SELECT EXISTS (SELECT 1 FROM branch_users WHERE branch_id = $1)::boolean;
