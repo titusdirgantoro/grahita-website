@@ -324,14 +324,21 @@ func (r *Repo) ActiveExists(ctx context.Context, orderID, jenis string) (bool, e
 	return ada, nil
 }
 
-// PesananEmailGagal mengembalikan id pesanan DISTINCT yang punya minimal satu
-// email berstatus `failed`. Hanya id-nya (bukan isi email) yang keluar, dan
-// urutannya deterministik supaya mudah diuji.
+// PesananEmailGagal mengembalikan id pesanan DISTINCT yang punya email
+// `failed` yang belum ditindaklanjuti (chip "perlu tindakan", AP-DSH-03):
+// kegagalan yang disusul email jenis sama untuk pesanan itu yang sedang
+// antre/dikirim atau sudah terkirim tidak dihitung lagi. Hanya id-nya (bukan
+// isi email) yang keluar, dan urutannya deterministik supaya mudah diuji.
 func (r *Repo) PesananEmailGagal(ctx context.Context) ([]string, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT DISTINCT order_id::text
-		FROM email_outbox
-		WHERE status = 'failed' AND order_id IS NOT NULL
+		SELECT DISTINCT f.order_id::text
+		FROM email_outbox f
+		WHERE f.status = 'failed' AND f.order_id IS NOT NULL
+		  AND NOT EXISTS (
+		    SELECT 1 FROM email_outbox s
+		    WHERE s.order_id = f.order_id AND s.jenis = f.jenis
+		      AND s.status IN ('queued','sending','sent')
+		      AND s.created_at > f.created_at)
 		ORDER BY 1`)
 	if err != nil {
 		return nil, fmt.Errorf("daftar pesanan ber-email gagal: %w", err)

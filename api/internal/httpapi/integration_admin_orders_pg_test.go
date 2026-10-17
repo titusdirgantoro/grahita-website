@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/database"
@@ -50,24 +49,27 @@ func insertProdukAdmin(t *testing.T, ctx context.Context, pool *database.Pool, k
 // berserial. Total ditentukan trigger order_lines_recalc dari subtotal baris.
 func insertOrderAdmin(t *testing.T, ctx context.Context, pool *database.Pool, s seedOrderAdmin, productID, serial string) string {
 	t.Helper()
-	var jt, alasan, done any
+	var jt, alasan any
 	if s.jt != "" {
 		jt = s.jt
 	}
 	if s.alasan != "" {
 		alasan = s.alasan
 	}
+	// Pesanan Done wajib memiliki pointer verifikasi (orders_settlement_state_consistent):
+	// semai sebagai submitted dulu, lalu naikkan lewat pasangPointerVerifikasiDone.
+	status, verif := s.status, s.verif
 	if s.status == "done" {
-		done = time.Now().UTC()
+		status, verif = "submitted", "belum"
 	}
 	var id string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO orders (branch_id, nomor, versi, status, verif_status, alasan_review, is_cnc,
-		                    is_sertifikat, tanggal, jatuh_tempo, catatan, note_admin, total, submitted_at, done_at)
+		                    is_sertifikat, tanggal, jatuh_tempo, catatan, note_admin, total, submitted_at)
 		VALUES ($1, $2, 0, $3::order_status, $4::verif_status, $5::review_reason, $6,
-		        false, $7::date, $8::date, $9, $10, 0, now(), $11)
+		        false, $7::date, $8::date, $9, $10, 0, now())
 		RETURNING id`,
-		s.branchID, s.nomor, s.status, s.verif, alasan, s.cnc, s.tanggal, jt, s.catatan, s.note, done).Scan(&id)
+		s.branchID, s.nomor, status, verif, alasan, s.cnc, s.tanggal, jt, s.catatan, s.note).Scan(&id)
 	if err != nil {
 		t.Fatalf("semai pesanan %s: %v", s.nomor, err)
 	}
@@ -78,6 +80,17 @@ func insertOrderAdmin(t *testing.T, ctx context.Context, pool *database.Pool, s 
 			id, productID, s.harga, serial); err != nil {
 			t.Fatalf("semai baris pesanan %s: %v", s.nomor, err)
 		}
+	}
+	if s.status == "done" {
+		var adminID, bankID string
+		var total int64
+		if err := pool.QueryRow(ctx, `SELECT
+			  (SELECT id::text FROM admin_users WHERE role = 'superadmin' ORDER BY created_at LIMIT 1),
+			  (SELECT id::text FROM bank_accounts ORDER BY created_at LIMIT 1),
+			  (SELECT total FROM orders WHERE id = $1)`, id).Scan(&adminID, &bankID, &total); err != nil {
+			t.Fatalf("baca admin/rekening untuk pesanan Done %s: %v", s.nomor, err)
+		}
+		pasangPointerVerifikasiDone(t, pool, adminID, bankID, id, s.nomor, total)
 	}
 	return id
 }

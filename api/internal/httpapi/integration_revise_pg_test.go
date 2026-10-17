@@ -36,6 +36,7 @@ import (
 
 	"github.com/grahita/portal/api/internal/document"
 	"github.com/grahita/portal/api/internal/fulfillment"
+	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/jobs"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/settings"
@@ -114,24 +115,31 @@ func seedPesananDone(t *testing.T, f *pgFixture, branchID, nomor, tanggal string
 // historis bagi renderer dokumen.
 func seedPointerVerifikasiDone(t *testing.T, f *pgFixture, orderID, nomor string, total int64) {
 	t.Helper()
+	pasangPointerVerifikasiDone(t, f.pool, f.adminSA, f.bankDefault, orderID, nomor, total)
+}
+
+// pasangPointerVerifikasiDone adalah seedPointerVerifikasiDone tanpa pgFixture,
+// untuk helper semai yang hanya memegang pool.
+func pasangPointerVerifikasiDone(t *testing.T, pool *database.Pool, adminID, bankID, orderID, nomor string, total int64) {
+	t.Helper()
 	ctx := context.Background()
 	var bankCode, accountOwner, accountNumber string
-	if err := f.pool.QueryRow(ctx,
+	if err := pool.QueryRow(ctx,
 		`SELECT bank::text, nama_pemilik, nomor FROM bank_accounts WHERE id=$1`,
-		f.bankDefault).Scan(&bankCode, &accountOwner, &accountNumber); err != nil {
+		bankID).Scan(&bankCode, &accountOwner, &accountNumber); err != nil {
 		t.Fatalf("baca rekening snapshot %s: %v", nomor, err)
 	}
 	var proofID string
-	if err := f.pool.QueryRow(ctx,
+	if err := pool.QueryRow(ctx,
 		`INSERT INTO payment_proofs
 		   (purpose,branch_id,order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
 		    uploaded_by_kind, uploaded_by_id)
 		 VALUES ('order_payment',(SELECT branch_id FROM orders WHERE id=$1),$1,$2,'bukti-revisi.jpg','image/jpeg',4,convert_to($3,'UTF8'),'admin',$4)
-		 RETURNING id`, orderID, "proofs/"+orderID+"/bukti-revisi.jpg", nomor, f.adminSA).Scan(&proofID); err != nil {
+		 RETURNING id`, orderID, "proofs/"+orderID+"/bukti-revisi.jpg", nomor, adminID).Scan(&proofID); err != nil {
 		t.Fatalf("seed bukti pembayaran %s: %v", nomor, err)
 	}
 	var verificationID string
-	if err := f.pool.QueryRow(ctx,
+	if err := pool.QueryRow(ctx,
 		`INSERT INTO verification_logs
 		   (order_id, metode, total_pesanan, total_terbaca, hasil, admin_id, catatan,
 		    destination_results,order_version,deposit_amount,transfer_amount)
@@ -144,11 +152,11 @@ func seedPointerVerifikasiDone(t *testing.T, f *pgFixture, orderID, nomor string
 		     'bank_snapshot',$6::text,
 		     'account_owner_snapshot',$7::text,
 		     'account_last_digits_snapshot',$8::text)),0,0,$2)
-		 RETURNING id`, orderID, total, f.adminSA, proofID, f.bankDefault,
+		 RETURNING id`, orderID, total, adminID, proofID, bankID,
 		bankCode, accountOwner, accountNumber).Scan(&verificationID); err != nil {
 		t.Fatalf("seed attempt verifikasi %s: %v", nomor, err)
 	}
-	if _, err := f.pool.Exec(ctx,
+	if _, err := pool.Exec(ctx,
 		`UPDATE orders SET status='done',verif_status='cocok',alasan_review=NULL,done_at=now(),
 		 done_verification_log_id=$2,done_order_version=0,done_deposit_amount=0,done_transfer_amount=$3
 		 WHERE id=$1`, orderID, verificationID, total); err != nil {

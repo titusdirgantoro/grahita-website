@@ -712,3 +712,75 @@ func TestPGEmailDokumenIdBukanUUIDTidak500(t *testing.T) {
 }
 
 // dataList/dataMap sudah tersedia dari router_catalog_test.go.
+
+// chipEmailGagal membaca jumlah chip "email gagal" dari dashboard admin.
+func chipEmailGagal(t *testing.T, f *pgFixture, cookies []*http.Cookie) int {
+	t.Helper()
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/dashboard", "", cookies, "")
+	if status != http.StatusOK {
+		t.Fatalf("dashboard harus 200, dapat %d (%v)", status, body)
+	}
+	for _, c := range dataMap(t, body)["chip"].([]any) {
+		chip := c.(map[string]any)
+		if chip["kunci"] == "email_gagal" {
+			return int(chip["jumlah"].(float64))
+		}
+	}
+	t.Fatal("chip email_gagal tidak ada di dashboard")
+	return 0
+}
+
+// TestPGChipEmailGagalHilangSetelahKirimUlang: chip "perlu tindakan" email gagal
+// (AP-DSH-03) hanya memuat pesanan yang emailnya masih perlu ditindaklanjuti.
+// Kirim ulang yang sedang antre atau sudah terkirim menutup kegagalan lama;
+// kirim ulang yang gagal lagi memunculkan chip kembali.
+func TestPGChipEmailGagalHilangSetelahKirimUlang(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	f.setAdminFlag(t, f.adminSA, true, true)
+	orderID := f.seedPesanan(t, "2026-10-0003", "invoice_pdf")
+	cookiesMgr, csrfMgr := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+
+	if _, err := f.notif.EnqueueOrderEmail(ctx, notification.OrderEmailInput{
+		OrderID: orderID, Jenis: notification.JenisInvoiceAdmin}); err != nil {
+		t.Fatalf("enqueue invoice admin: %v", err)
+	}
+	gagalkan := func() {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, `UPDATE email_outbox SET status = 'failed', last_error = 'uji'
+			WHERE order_id = $1::uuid AND status IN ('queued','sending')`, orderID); err != nil {
+			t.Fatalf("tandai gagal: %v", err)
+		}
+	}
+	gagalkan()
+	if n := chipEmailGagal(t, f, cookiesMgr); n != 1 {
+		t.Fatalf("email gagal harus muncul di chip, dapat %d", n)
+	}
+
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/orders/"+orderID+"/emails/invoice_admin/resend", "", cookiesMgr, csrfMgr)
+	if status != http.StatusCreated {
+		t.Fatalf("kirim ulang harus 201, dapat %d (%v)", status, body)
+	}
+	if n := chipEmailGagal(t, f, cookiesMgr); n != 0 {
+		t.Fatalf("kirim ulang yang sedang antre sudah menindaklanjuti kegagalan, chip %d", n)
+	}
+	if hasil := f.kirimAntrean(t); hasil.Terkirim != 1 {
+		t.Fatalf("kirim ulang harus terkirim, hasil %+v", hasil)
+	}
+	if n := chipEmailGagal(t, f, cookiesMgr); n != 0 {
+		t.Fatalf("setelah kirim ulang terkirim chip harus 0, dapat %d", n)
+	}
+
+	// Kirim ulang berikutnya yang gagal lagi memunculkan chip kembali.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/orders/"+orderID+"/emails/invoice_admin/resend", "", cookiesMgr, csrfMgr)
+	if status != http.StatusCreated {
+		t.Fatalf("kirim ulang kedua harus 201, dapat %d (%v)", status, body)
+	}
+	gagalkan()
+	if n := chipEmailGagal(t, f, cookiesMgr); n != 1 {
+		t.Fatalf("kirim ulang yang gagal harus memunculkan chip lagi, dapat %d", n)
+	}
+}
