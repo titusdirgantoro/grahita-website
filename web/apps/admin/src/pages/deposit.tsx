@@ -372,7 +372,7 @@ export function PanelPembayaranAdmin({
         </div>
       </div>
       {pembayaran.allocations.length > 0 ? (
-        <Table caption="Alokasi deposit pesanan">
+        <Table stack="narrow" caption="Alokasi deposit pesanan">
           <thead>
             <tr>
               <th scope="col">Versi</th>
@@ -584,7 +584,7 @@ export function DepositAdminPage() {
           {antrean.galat ? <Notice tone="danger">{antrean.galat}</Notice> : null}
           {!antrean.memuat && terbuka.length === 0 ? <EmptyState icon="check-circle">Tidak ada top-up yang menunggu.</EmptyState> : null}
           {terbuka.length > 0 ? (
-            <Table caption="Antrean top-up deposit">
+            <Table stack="wide" caption="Antrean top-up deposit">
               <thead>
                 <tr>
                   <th scope="col">Cabang</th>
@@ -642,7 +642,7 @@ export function DepositAdminPage() {
           <CardHead title="Saldo per cabang" />
           {ikhtisar.memuat ? <SkeletonList rows={3} /> : null}
           {(ikhtisar.data ?? []).length > 0 ? (
-            <Table caption="Saldo deposit per cabang">
+            <Table stack="narrow" caption="Saldo deposit per cabang">
               <thead>
                 <tr>
                   <th scope="col">Cabang</th>

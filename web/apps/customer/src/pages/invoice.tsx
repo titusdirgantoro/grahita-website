@@ -92,8 +92,10 @@ export function sukuQuery(dari?: string, sampai?: string): string {
 
 /** labelVersi menjelaskan satu baris dokumen invoice (asli/revisi/versi lama). */
 function labelVersi(inv: Invoice): ReactElement {
+  // Tombol Dokumen di baris yang sama sudah bertuliskan "Belum tersedia",
+  // jadi kolom versi cukup tanda kosong seperti nilai kosong lain di portal.
   if (inv.versi_dokumen === null) {
-    return <span className="muted small">Belum tersedia</span>;
+    return <span className="muted">—</span>;
   }
   return (
     <>

@@ -1,13 +1,23 @@
+/* Pil tetap satu baris: bila opsi tidak muat (layar sempit), pil digeser
+   horizontal alih-alih membungkus ke baris kedua di dalam latar pil. */
 .seg {
   display: inline-flex;
   gap: 2px;
   padding: 3px;
   border-radius: 999px;
   background: var(--seg-bg);
-  flex-wrap: wrap;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.seg::-webkit-scrollbar {
+  display: none;
 }
 
 .seg button {
+  flex: none;
+  white-space: nowrap;
   height: var(--seg-h);
   padding: 0 16px;
   border-radius: 999px;
@@ -26,4 +36,19 @@
 
 .boxed {
   background: var(--surface-sunken);
+}
+
+/* Layar sempit: pil selebar baris dengan opsi berbagi ruang, huruf sedikit
+   lebih kecil agar empat opsi tetap utuh di ponsel 360px. */
+@media (max-width: 767px) {
+  .seg {
+    display: flex;
+    width: 100%;
+  }
+
+  .seg button {
+    flex: 1 0 auto;
+    padding: 0 8px;
+    font-size: 13px;
+  }
 }

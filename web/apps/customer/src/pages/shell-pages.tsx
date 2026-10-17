@@ -65,35 +65,39 @@ export function KatalogPage() {
   return (
     <>
       <PageHead title="Katalog" sub="Produk aktif dengan harga khusus cabang Anda" />
-      <Card>
-        {memuat ? (
-          <SkeletonList rows={3} />
-        ) : galat ? (
-          <Notice tone="danger">{galat}</Notice>
-        ) : !data || data.length === 0 ? (
-          <EmptyState icon="tag">
-            Belum ada produk yang tersedia untuk cabang ini. Hubungi admin Pusat.
-          </EmptyState>
-        ) : (
-          <div className={styles.catGrid}>
-            {data.map((p) => (
-              <div className={styles.prod} key={p.id}>
-                <div className={styles.row}>
-                  <span className={styles.nm}>{p.nama}</span>
-                  {p.jenis === "sertifikat" ? <Badge tone="info">Sertifikat</Badge> : null}
-                </div>
-                <span className={styles.price}>{rupiah.format(p.harga)}</span>
-                <span className={styles.desc}>
-                  {p.deskripsi ?? "Produk katalog cabang"}
-                  {p.jenis === "sertifikat" && p.biaya_packaging !== undefined
-                    ? ` Biaya packaging ${rupiah.format(p.biaya_packaging)} ditambahkan otomatis per pesanan.`
-                    : ""}
-                </span>
+      {data && data.length > 0 && !memuat && !galat ? (
+        // Satu kartu per produk seperti `article.card.prod` prototype, agar
+        // produk di layar sempit tidak menyatu tanpa pemisah.
+        <div className={styles.catGrid}>
+          {data.map((p) => (
+            <Card as="article" className={styles.prod} key={p.id}>
+              <div className={styles.row}>
+                <span className={styles.nm}>{p.nama}</span>
+                {p.jenis === "sertifikat" ? <Badge tone="info">Sertifikat</Badge> : null}
               </div>
-            ))}
-          </div>
-        )}
-      </Card>
+              <span className={styles.price}>{rupiah.format(p.harga)}</span>
+              <span className={styles.desc}>
+                {p.deskripsi ?? "Produk katalog cabang"}
+                {p.jenis === "sertifikat" && p.biaya_packaging !== undefined
+                  ? ` Biaya packaging ${rupiah.format(p.biaya_packaging)} ditambahkan otomatis per pesanan.`
+                  : ""}
+              </span>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <Card>
+          {memuat ? (
+            <SkeletonList rows={3} />
+          ) : galat ? (
+            <Notice tone="danger">{galat}</Notice>
+          ) : (
+            <EmptyState icon="tag">
+              Belum ada produk yang tersedia untuk cabang ini. Hubungi admin Pusat.
+            </EmptyState>
+          )}
+        </Card>
+      )}
     </>
   );
 }

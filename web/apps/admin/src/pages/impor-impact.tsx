@@ -413,7 +413,7 @@ export function ImporImpactPage() {
                 </Badge>
                 <Badge tone="neutral">Sheet: {preview.sheet}</Badge>
               </div>
-              <Table caption="Hitungan status preview per jenis entitas">
+              <Table stack="wide" caption="Hitungan status preview per jenis entitas">
                 <thead>
                   <tr>
                     <th>Entitas</th>
@@ -441,7 +441,7 @@ export function ImporImpactPage() {
 
             <Card>
               <CardHead title="3. Review dan keputusan per item" />
-              <Table mobileCards caption="Item preview impor Impact">
+              <Table stack="wide" caption="Item preview impor Impact">
                 <thead>
                   <tr>
                     <th>Baris</th>

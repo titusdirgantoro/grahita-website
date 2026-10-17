@@ -53,6 +53,187 @@
   border-top: 1px solid var(--line-strong);
 }
 
+/*
+ * Mode `stack`: diukur dari lebar KONTAINER tabel (kartu/panel tempatnya
+ * berada), bukan viewport, sehingga tabel lebar di kolom sempit pada desktop
+ * pun tidak terpotong. Setiap baris menjadi kartu: sel pertama sebagai judul,
+ * sel lain berlabel (`data-label` dari header, diisi Table.tsx) dalam grid
+ * yang mengisi lebar, dan sel aksi (header kosong) selebar penuh.
+ */
+.stackWrap {
+  container-type: inline-size;
+}
+
+@container (max-width: 639px) {
+  .stackNarrow thead {
+    display: none;
+  }
+
+  .stackNarrow tbody tr {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 10px 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .stackNarrow tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .stackNarrow td {
+    display: block;
+    height: auto;
+    padding: 0;
+    border: none;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+
+  /* Sel kartu hanya ±130px: angka rata kiri seperti labelnya, dan isi yang
+     biasanya satu baris (badge panjang) boleh membungkus alih-alih terpotong. */
+  .stackNarrow td:global(.num) {
+    text-align: left;
+  }
+
+  .stackNarrow td :global(*) {
+    white-space: normal;
+  }
+
+  .stackNarrow td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+  }
+
+  .stackNarrow td:first-child,
+  .stackNarrow td[data-label=""] {
+    grid-column: 1 / -1;
+  }
+
+  .stackNarrow td:first-child::before,
+  .stackNarrow td[data-label=""]::before {
+    content: none;
+  }
+
+  .stackNarrow td:first-child {
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .stackNarrow td[data-label=""] > :global(*) {
+    justify-content: flex-start;
+  }
+
+  .stackNarrow tfoot tr {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line-strong);
+  }
+
+  .stackNarrow tfoot td {
+    height: auto;
+    padding: 0;
+    border: none;
+  }
+
+  .stackNarrow tfoot td:empty {
+    display: none;
+  }
+}
+
+@container (max-width: 959px) {
+  .stackWide thead {
+    display: none;
+  }
+
+  .stackWide tbody tr {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 10px 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .stackWide tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .stackWide td {
+    display: block;
+    height: auto;
+    padding: 0;
+    border: none;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+
+  /* Sel kartu hanya ±130px: angka rata kiri seperti labelnya, dan isi yang
+     biasanya satu baris (badge panjang) boleh membungkus alih-alih terpotong. */
+  .stackWide td:global(.num) {
+    text-align: left;
+  }
+
+  .stackWide td :global(*) {
+    white-space: normal;
+  }
+
+  .stackWide td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+  }
+
+  .stackWide td:first-child,
+  .stackWide td[data-label=""] {
+    grid-column: 1 / -1;
+  }
+
+  .stackWide td:first-child::before,
+  .stackWide td[data-label=""]::before {
+    content: none;
+  }
+
+  .stackWide td:first-child {
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .stackWide td[data-label=""] > :global(*) {
+    justify-content: flex-start;
+  }
+
+  .stackWide tfoot tr {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line-strong);
+  }
+
+  .stackWide tfoot td {
+    height: auto;
+    padding: 0;
+    border: none;
+  }
+
+  .stackWide tfoot td:empty {
+    display: none;
+  }
+}
+
 /* Di mobile, tabel ringkas berubah menjadi daftar kartu (seperti prototype). */
 @media (max-width: 767px) {
   .mobileCards thead {

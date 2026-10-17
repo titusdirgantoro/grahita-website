@@ -213,8 +213,7 @@ function AuditContent() {
       <Card>
         <CardHead title="Filter" />
         <form
-          className={styles.row}
-          style={{ alignItems: "flex-end", marginBottom: 12 }}
+          className={styles.filterGrid}
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
             ubah({ aktor: aktorKetik.trim() || undefined });
@@ -268,21 +267,23 @@ function AuditContent() {
               onChange={(e) => ubah({ sampai: e.target.value || undefined })}
             />
           </Field>
-          <Button type="submit" variant="secondary" icon="magnifying-glass">
-            Terapkan
-          </Button>
-          {adaFilter ? (
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setAktorKetik("");
-                ubah({ entitas: undefined, aksi: undefined, aktor: undefined, dari: undefined, sampai: undefined });
-              }}
-            >
-              Reset filter
+          <div className={styles.filterAksi}>
+            <Button type="submit" variant="secondary" icon="magnifying-glass">
+              Terapkan
             </Button>
-          ) : null}
+            {adaFilter ? (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setAktorKetik("");
+                  ubah({ entitas: undefined, aksi: undefined, aktor: undefined, dari: undefined, sampai: undefined });
+                }}
+              >
+                Reset filter
+              </Button>
+            ) : null}
+          </div>
         </form>
 
         <Notice tone="info">
@@ -295,7 +296,7 @@ function AuditContent() {
         {memuat && items.length === 0 ? (
           <SkeletonList rows={4} />
         ) : (
-          <Table caption="Audit log aktivitas admin">
+          <Table stack="wide" caption="Audit log aktivitas admin">
             <thead>
               <tr>
                 <th>Waktu (WIB)</th>
@@ -329,7 +330,7 @@ function AuditContent() {
                       <td>
                         {labelEntitas(a.entity)}
                         {a.entity_id ? (
-                          <div className={`muted small ${styles.metaGrid}`}>{a.entity_id.slice(0, 8)}…</div>
+                          <div className="muted small tabular">{a.entity_id.slice(0, 8)}…</div>
                         ) : null}
                       </td>
                       <td className="tabular">{a.ip || "—"}</td>

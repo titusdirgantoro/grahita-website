@@ -53,6 +53,42 @@
   border-color: var(--danger);
 }
 
+/* Input berkas memakai bingkai kontrol yang sama; tombol bawaan browser
+   ("Choose File") diganti tombol sekunder bertema dan nama berkas terpotong
+   di dalam bingkai, jadi tidak pernah melebarkan halaman di layar sempit. */
+.input[type="file"] {
+  height: auto;
+  min-height: var(--h-control);
+  padding: 3px 12px 3px 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input[type="file"]::file-selector-button {
+  height: calc(var(--h-control) - 8px);
+  margin-right: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: calc(var(--radius-control) - 3px);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.input[type="file"]:hover::file-selector-button {
+  background: var(--brand-50);
+}
+
+.input[type="file"]:disabled::file-selector-button {
+  cursor: not-allowed;
+  color: var(--text-muted);
+}
+
 textarea.input {
   height: auto;
   min-height: 72px;

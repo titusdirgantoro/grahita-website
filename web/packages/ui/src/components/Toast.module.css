@@ -24,7 +24,8 @@
   }
 }
 
-@media (max-width: 767px) {
+/* Selaras dengan ambang bottom-nav Customer Portal agar toast tidak menutupinya. */
+@media (max-width: 899px) {
   .viewport {
     left: 16px;
     right: 16px;

@@ -168,7 +168,7 @@ function RekeningContent() {
         ) : !rows || rows.length === 0 ? (
           <EmptyState icon="bank">Belum ada rekening terdaftar.</EmptyState>
         ) : (
-          <Table mobileCards caption="Rekening bank">
+          <Table stack="wide" caption="Rekening bank">
             <thead>
               <tr>
                 <th scope="col">Bank</th>

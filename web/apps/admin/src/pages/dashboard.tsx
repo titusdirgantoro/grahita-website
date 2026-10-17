@@ -114,9 +114,14 @@ function teksMetrik(m: Metrik): string {
 
 /**
  * GrafikBatang adalah grafik SVG buatan sendiri (SystemDesign.md §7.2, tidak
- * ada library chart): responsif lewat `viewBox` + lebar 100%, dan aksesibel
- * lewat `role="img"`, `aria-label`, `<title>`/`<desc>`, serta `<title>` per
- * batang untuk pembaca layar dan tooltip bawaan browser.
+ * ada library chart), aksesibel lewat `role="img"`, `aria-label`,
+ * `<title>`/`<desc>`, serta `<title>` per batang untuk pembaca layar dan
+ * tooltip bawaan browser.
+ *
+ * SVG hanya memuat batang dan diregangkan horizontal pada tinggi tetap
+ * (`preserveAspectRatio="none"`); label sumbu berupa teks HTML di slot yang
+ * sama lebar. Dengan begitu tinggi grafik dan ukuran huruf label sama di
+ * kartu lebar maupun sempit — tidak membesar/mengecil ikut skala viewBox.
  */
 function GrafikBatang({
   titik,
@@ -129,47 +134,57 @@ function GrafikBatang({
   deskripsi: string;
   nilaiTeks: (t: TitikTren) => string;
 }) {
+  const slot = 30;
   const lebarBatang = 22;
-  const celah = 8;
-  const tinggi = 96;
-  const ruangLabel = 18;
+  const tinggi = 120;
   const maks = Math.max(...titik.map((t) => t.jumlah), 1);
-  const lebarTotal = Math.max(titik.length * (lebarBatang + celah) - celah, 1);
+  const lebarTotal = Math.max(titik.length * slot, 1);
+  // Label harian (28–31 slot) terlalu rapat di kartu sempit: hanya setiap
+  // kelipatan lima dan ujung-ujungnya yang tetap tampil saat kartu sempit.
+  const padat = titik.length > 12;
   return (
     <div className={styles.chartWrap}>
       <svg
         className={styles.chart}
-        viewBox={`0 0 ${lebarTotal} ${tinggi + ruangLabel}`}
+        viewBox={`0 0 ${lebarTotal} ${tinggi}`}
         width="100%"
-        height={tinggi + ruangLabel}
+        height={tinggi}
         role="img"
         aria-label={ariaLabel}
-        preserveAspectRatio="xMidYMid meet"
+        preserveAspectRatio="none"
       >
         <title>{ariaLabel}</title>
         <desc>{deskripsi}</desc>
         {titik.map((t, i) => {
           const h = t.jumlah > 0 ? Math.max(3, (tinggi * t.jumlah) / maks) : 3;
-          const x = i * (lebarBatang + celah);
           return (
-            <g key={t.kunci}>
-              <rect
-                x={x}
-                y={tinggi - h}
-                width={lebarBatang}
-                height={h}
-                rx={3}
-                className={t.jumlah > 0 ? styles.batang : styles.batangKosong}
-              >
-                <title>{`${t.label}: ${nilaiTeks(t)}`}</title>
-              </rect>
-              <text x={x + lebarBatang / 2} y={tinggi + 13} textAnchor="middle" className={styles.sumbu}>
-                {t.label}
-              </text>
-            </g>
+            <rect
+              key={t.kunci}
+              x={i * slot + (slot - lebarBatang) / 2}
+              y={tinggi - h}
+              width={lebarBatang}
+              height={h}
+              className={t.jumlah > 0 ? styles.batang : styles.batangKosong}
+            >
+              <title>{`${t.label}: ${nilaiTeks(t)}`}</title>
+            </rect>
           );
         })}
       </svg>
+      <div
+        className={styles.sumbu}
+        style={{ gridTemplateColumns: `repeat(${titik.length}, minmax(0, 1fr))` }}
+        aria-hidden="true"
+      >
+        {titik.map((t, i) => (
+          <span
+            key={t.kunci}
+            className={padat && i !== 0 && i !== titik.length - 1 && (i + 1) % 5 !== 0 ? styles.sumbuMinor : undefined}
+          >
+            {t.label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

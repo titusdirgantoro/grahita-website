@@ -519,12 +519,11 @@ export function CabangPage() {
             {terfilter ? "Tidak ada cabang yang cocok." : "Belum ada cabang terdaftar."}
           </EmptyState>
         ) : (
-          <Table mobileCards caption="Master data cabang">
+          <Table stack="wide" caption="Master data cabang">
             <thead>
               <tr>
                 <th scope="col">Nama cabang</th>
                 <th scope="col">Kepala cabang</th>
-                <th scope="col">Email cabang</th>
                 <th scope="col">Flag</th>
                 <th scope="col">Akun</th>
                 <th scope="col">Rekening pembayaran</th>
@@ -539,9 +538,9 @@ export function CabangPage() {
                   <tr key={c.id}>
                     <td>
                       <b>{c.nama}</b>
+                      <div className={`muted small ${styles.emailSel}`}>{c.email || "—"}</div>
                     </td>
                     <td>{c.nama_kepala || "—"}</td>
-                    <td className="muted">{c.email || "—"}</td>
                     <td>
                       <div className={styles.row}>
                         {c.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
@@ -569,24 +568,37 @@ export function CabangPage() {
                       </Badge>
                     </td>
                     <td className={`num ${styles.aksiSel}`}>
-                      <div className={styles.aksi}>
-                        <Button variant="ghost" onClick={() => bukaUbah(c)}>
-                          Ubah
+                      <div className={`${styles.aksi} ${styles.aksiIkon}`}>
+                        <Button variant="ghost" icon="pencil-simple" title="Ubah" onClick={() => bukaUbah(c)}>
+                          <span className={styles.aksiTeks}>Ubah</span>
                         </Button>
                         {peran === "superadmin" ? (
-                          <Button variant="secondary" onClick={() => void muatAssignment(c)}>
-                            Kelola rekening tujuan
+                          <Button
+                            variant="secondary"
+                            icon="bank"
+                            title="Kelola rekening tujuan"
+                            onClick={() => void muatAssignment(c)}
+                          >
+                            <span className={styles.aksiTeks}>Kelola rekening tujuan</span>
                           </Button>
                         ) : null}
                         <Button
                           variant="secondary"
+                          icon={c.is_active ? "prohibit" : "check-circle"}
+                          title={c.is_active ? "Nonaktifkan" : "Aktifkan"}
                           disabled={sibuk === c.id}
                           onClick={() => void ubahAktif(c, !c.is_active, c.id)}
                         >
-                          {c.is_active ? "Nonaktifkan" : "Aktifkan"}
+                          <span className={styles.aksiTeks}>{c.is_active ? "Nonaktifkan" : "Aktifkan"}</span>
                         </Button>
-                        <Button variant="danger-ghost" disabled={sibuk === c.id} onClick={() => mintaHapus(c)}>
-                          Hapus
+                        <Button
+                          variant="danger-ghost"
+                          icon="trash"
+                          title="Hapus"
+                          disabled={sibuk === c.id}
+                          onClick={() => mintaHapus(c)}
+                        >
+                          <span className={styles.aksiTeks}>Hapus</span>
                         </Button>
                       </div>
                     </td>

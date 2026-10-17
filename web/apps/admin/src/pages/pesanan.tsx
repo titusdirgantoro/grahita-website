@@ -523,8 +523,7 @@ export function PesananAdminPage() {
       <Card>
         <CardHead title="Filter" />
         <form
-          className={styles.row}
-          style={{ alignItems: "flex-end", marginBottom: 12 }}
+          className={styles.filterGrid}
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
             ubah({ cari: cariKetik.trim() || undefined });
@@ -605,14 +604,16 @@ export function PesananAdminPage() {
               onChange={(e) => ubah({ sampai: e.target.value || undefined })}
             />
           </Field>
-          <Button type="submit" variant="secondary" icon="magnifying-glass">
-            Cari
-          </Button>
-          {adaFilter ? (
-            <Button type="button" variant="ghost" onClick={() => ubah({ cari: undefined, cabang: undefined, status: undefined, verif: undefined, cnc: undefined, terlambat: undefined, email_gagal: undefined, dari: undefined, sampai: undefined })}>
-              Reset filter
+          <div className={styles.filterAksi}>
+            <Button type="submit" variant="secondary" icon="magnifying-glass">
+              Cari
             </Button>
-          ) : null}
+            {adaFilter ? (
+              <Button type="button" variant="ghost" onClick={() => ubah({ cari: undefined, cabang: undefined, status: undefined, verif: undefined, cnc: undefined, terlambat: undefined, email_gagal: undefined, dari: undefined, sampai: undefined })}>
+                Reset filter
+              </Button>
+            ) : null}
+          </div>
         </form>
 
         <div className={styles.chips}>
@@ -673,7 +674,7 @@ export function PesananAdminPage() {
         {memuat && items.length === 0 ? (
           <SkeletonList rows={4} />
         ) : (
-          <Table mobileCards caption="Riwayat pemesanan seluruh cabang">
+          <Table stack="wide" caption="Riwayat pemesanan seluruh cabang">
             <thead>
               <tr>
                 <th scope="col">Nomor</th>
@@ -1325,7 +1326,7 @@ export function PesananDetailAdminPage() {
 
           <Card>
             <CardHead title="Order line" tools={<span className="muted small">{`${data.lines.length} baris`}</span>} />
-            <Table caption="Order line pesanan">
+            <Table stack="narrow" caption="Order line pesanan">
               <thead>
                 <tr>
                   <th scope="col">Produk</th>
@@ -1409,7 +1410,7 @@ export function PesananDetailAdminPage() {
             {data.verifikasi.length === 0 ? (
               <p className="muted small">Belum ada verifikasi.</p>
             ) : (
-              <Table caption="Log verifikasi pesanan">
+              <Table stack="wide" caption="Log verifikasi pesanan">
                 <thead>
                   <tr>
                     <th scope="col">Metode</th>
@@ -1677,7 +1678,7 @@ export function PesananDetailAdminPage() {
         {(bukti?.length ?? 0) === 0 ? (
           <Notice tone="danger">Pesanan belum mempunyai bukti pembayaran untuk dipetakan.</Notice>
         ) : (
-          <Table caption="Tujuan rekening per bukti">
+          <Table stack="narrow" caption="Tujuan rekening per bukti">
             <thead>
               <tr>
                 <th scope="col">Bukti / OCR</th>
@@ -1865,7 +1866,7 @@ export function PesananDetailAdminPage() {
         {barisRevisi.length === 0 ? (
           <p className="muted small">Belum ada baris. Tambahkan minimal satu produk dari matriks harga cabang.</p>
         ) : (
-          <Table caption="Baris final revisi invoice">
+          <Table stack="narrow" caption="Baris final revisi invoice">
             <thead>
               <tr>
                 <th scope="col">Produk</th>

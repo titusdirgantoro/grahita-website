@@ -267,7 +267,10 @@ export function PesananPage({ statusAwal }: { statusAwal?: string }) {
                   <td className={styles.muted}>
                     {o.status === "draft" ? `Dibuat ${tanggalTampil(o)}` : tanggalTampil(o)}
                   </td>
-                  <td className="num">{o.jumlah_item}</td>
+                  <td className="num">
+                    {o.jumlah_item}
+                    <span className={styles.unitM}> item</span>
+                  </td>
                   <td className="num">
                     <b>{rupiah.format(o.total)}</b>
                   </td>
@@ -408,7 +411,7 @@ export function PesananDetailPage({ id }: { id: string }) {
                   <dd>{tanggalWIB(data.jatuh_tempo)}</dd>
                 </div>
               ) : null}
-              <div>
+              <div className={styles.metaPenuh}>
                 <dt>Catatan</dt>
                 <dd className={styles.muted}>{data.catatan || "—"}</dd>
               </div>
@@ -417,7 +420,7 @@ export function PesananDetailPage({ id }: { id: string }) {
 
           <Card>
             <CardHead title="Item" />
-            <Table caption="Baris pesanan">
+            <Table stack="narrow" caption="Baris pesanan">
               <thead>
                 <tr>
                   <th scope="col">Produk</th>
@@ -767,7 +770,7 @@ function KartuBukti({ id, bolehUnggah }: { id: string; bolehUnggah: boolean }) {
         </p>
       ) : null}
       {daftar.length > 0 ? (
-        <Table caption="Bukti transfer">
+        <Table stack="narrow" caption="Bukti transfer">
           <thead>
             <tr>
               <th scope="col">Berkas</th>
@@ -1021,114 +1024,116 @@ export function PesananEditorPage({ id }: { id?: string }) {
             <SkeletonList rows={2} />
           ) : (
             <>
-              <div className={styles.linesHead} aria-hidden="true">
-                <span>Produk</span>
-                <span>Qty</span>
-                <span className="num">Harga satuan</span>
-                <span className="num">Subtotal</span>
-                <span />
-              </div>
-              {baris.map((b, i) => {
-                const p = perId.get(b.productId);
-                const qty = Number(b.qty) || 0;
-                const terpakaiLain = new Set(baris.filter((x) => x.kunci !== b.kunci && x.productId).map((x) => x.productId));
-                return (
-                  <div className={styles.line} key={b.kunci}>
-                    <div className={styles.lProd}>
-                      <label className="sr-only" htmlFor={`produk-${b.kunci}`}>
-                        Produk baris {i + 1}
-                      </label>
-                      <Select
-                        id={`produk-${b.kunci}`}
-                        value={b.productId}
-                        onChange={(e) => ubahBaris(b.kunci, { productId: e.target.value })}
-                      >
-                        <option value="">Pilih produk</option>
-                        {produk.map((opt) => {
-                          const sertifikat = opt.jenis === "sertifikat";
-                          // Produk yang sama tidak boleh dipesan dua kali, dan
-                          // Sertifikat tidak boleh dicampur produk reguler.
-                          const nonaktif =
-                            terpakaiLain.has(opt.id) || (sertifikat ? adaReguler : adaSertifikat);
-                          return (
-                            <option key={opt.id} value={opt.id} disabled={nonaktif}>
-                              {opt.nama}
-                              {sertifikat ? " (dipesan terpisah)" : ""}
-                            </option>
-                          );
-                        })}
-                      </Select>
-                    </div>
-                    <div className={styles.lQty}>
-                      <span className={styles.mLbl}>Qty</span>
-                      <div className={styles.stepper}>
+              <div className={styles.lines}>
+                <div className={styles.linesHead} aria-hidden="true">
+                  <span>Produk</span>
+                  <span>Qty</span>
+                  <span className="num">Harga satuan</span>
+                  <span className="num">Subtotal</span>
+                  <span />
+                </div>
+                {baris.map((b, i) => {
+                  const p = perId.get(b.productId);
+                  const qty = Number(b.qty) || 0;
+                  const terpakaiLain = new Set(baris.filter((x) => x.kunci !== b.kunci && x.productId).map((x) => x.productId));
+                  return (
+                    <div className={styles.line} key={b.kunci}>
+                      <div className={styles.lProd}>
+                        <label className="sr" htmlFor={`produk-${b.kunci}`}>
+                          Produk baris {i + 1}
+                        </label>
+                        <Select
+                          id={`produk-${b.kunci}`}
+                          value={b.productId}
+                          onChange={(e) => ubahBaris(b.kunci, { productId: e.target.value })}
+                        >
+                          <option value="">Pilih produk</option>
+                          {produk.map((opt) => {
+                            const sertifikat = opt.jenis === "sertifikat";
+                            // Produk yang sama tidak boleh dipesan dua kali, dan
+                            // Sertifikat tidak boleh dicampur produk reguler.
+                            const nonaktif =
+                              terpakaiLain.has(opt.id) || (sertifikat ? adaReguler : adaSertifikat);
+                            return (
+                              <option key={opt.id} value={opt.id} disabled={nonaktif}>
+                                {opt.nama}
+                                {sertifikat ? " (dipesan terpisah)" : ""}
+                              </option>
+                            );
+                          })}
+                        </Select>
+                      </div>
+                      <div className={styles.lQty}>
+                        <span className={styles.mLbl}>Qty</span>
+                        <div className={styles.stepper}>
+                          <Button
+                            variant="secondary"
+                            icon="minus"
+                            iconOnly
+                            aria-label={`Kurangi qty baris ${i + 1}`}
+                            disabled={qty <= 1}
+                            onClick={() => ubahBaris(b.kunci, { qty: Math.max(1, qty - 1) })}
+                          />
+                          <Input
+                            inputMode="numeric"
+                            aria-label={`Qty baris ${i + 1}`}
+                            value={String(b.qty)}
+                            onChange={(e) => {
+                              const angka = Number(e.target.value.replace(/[^0-9]/g, ""));
+                              ubahBaris(b.kunci, { qty: Number.isNaN(angka) ? 0 : angka });
+                            }}
+                          />
+                          <Button
+                            variant="secondary"
+                            icon="plus"
+                            iconOnly
+                            aria-label={`Tambah qty baris ${i + 1}`}
+                            onClick={() => ubahBaris(b.kunci, { qty: qty + 1 })}
+                          />
+                        </div>
+                      </div>
+                      <div className={`${styles.lHarga} num`}>
+                        <span className={styles.mLbl}>Harga satuan</span>
+                        {p ? rupiah.format(p.harga) : "—"}
+                      </div>
+                      <div className={`${styles.lSub} num`}>
+                        <span className={styles.mLbl}>Subtotal</span>
+                        <b>{p ? rupiah.format(p.harga * qty) : "—"}</b>
+                      </div>
+                      <div className={styles.lDel}>
                         <Button
-                          variant="secondary"
-                          icon="minus"
+                          variant="ghost"
+                          icon="trash"
                           iconOnly
-                          aria-label={`Kurangi qty baris ${i + 1}`}
-                          disabled={qty <= 1}
-                          onClick={() => ubahBaris(b.kunci, { qty: Math.max(1, qty - 1) })}
-                        />
-                        <Input
-                          inputMode="numeric"
-                          aria-label={`Qty baris ${i + 1}`}
-                          value={String(b.qty)}
-                          onChange={(e) => {
-                            const angka = Number(e.target.value.replace(/[^0-9]/g, ""));
-                            ubahBaris(b.kunci, { qty: Number.isNaN(angka) ? 0 : angka });
-                          }}
-                        />
-                        <Button
-                          variant="secondary"
-                          icon="plus"
-                          iconOnly
-                          aria-label={`Tambah qty baris ${i + 1}`}
-                          onClick={() => ubahBaris(b.kunci, { qty: qty + 1 })}
+                          aria-label={`Hapus baris ${i + 1}`}
+                          disabled={baris.length === 1}
+                          onClick={() => hapusBaris(b.kunci)}
                         />
                       </div>
                     </div>
+                  );
+                })}
+                {adaSertifikat ? (
+                  <div className={`${styles.line} ${styles.linePack}`} data-testid="baris-packaging">
+                    <div className={styles.lProd}>
+                      <i className="ph ph-lock-simple" aria-hidden="true" />
+                      Biaya packaging
+                    </div>
+                    <div className={styles.lQty}>
+                      <span className={styles.mLbl}>Qty</span>1
+                    </div>
                     <div className={`${styles.lHarga} num`}>
                       <span className={styles.mLbl}>Harga satuan</span>
-                      {p ? rupiah.format(p.harga) : "—"}
+                      {rupiah.format(biayaPackaging)}
                     </div>
                     <div className={`${styles.lSub} num`}>
                       <span className={styles.mLbl}>Subtotal</span>
-                      <b>{p ? rupiah.format(p.harga * qty) : "—"}</b>
+                      <b>{rupiah.format(biayaPackaging)}</b>
                     </div>
-                    <div className={styles.lDel}>
-                      <Button
-                        variant="ghost"
-                        icon="trash"
-                        iconOnly
-                        aria-label={`Hapus baris ${i + 1}`}
-                        disabled={baris.length === 1}
-                        onClick={() => hapusBaris(b.kunci)}
-                      />
-                    </div>
+                    <div className={styles.lDel} />
                   </div>
-                );
-              })}
-              {adaSertifikat ? (
-                <div className={`${styles.line} ${styles.linePack}`} data-testid="baris-packaging">
-                  <div className={styles.lProd}>
-                    <i className="ph ph-lock-simple" aria-hidden="true" />
-                    Biaya packaging
-                  </div>
-                  <div className={styles.lQty}>
-                    <span className={styles.mLbl}>Qty</span>1
-                  </div>
-                  <div className={`${styles.lHarga} num`}>
-                    <span className={styles.mLbl}>Harga satuan</span>
-                    {rupiah.format(biayaPackaging)}
-                  </div>
-                  <div className={`${styles.lSub} num`}>
-                    <span className={styles.mLbl}>Subtotal</span>
-                    <b>{rupiah.format(biayaPackaging)}</b>
-                  </div>
-                  <div className={styles.lDel} />
-                </div>
-              ) : null}
+                ) : null}
+              </div>
               <div className={styles.tools}>
                 <Button variant="secondary" icon="plus" disabled={!bolehTambah} onClick={tambahBaris}>
                   Tambah produk
@@ -1163,7 +1168,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
           <div className={styles.totalBar}>
             <div>
               <span className="muted small">Total</span>
-              <b className={`${styles.totalNilai} num`} data-testid="total-draft">
+              <b className={`${styles.totalNilai} tabular`} data-testid="total-draft">
                 {rupiah.format(total)}
               </b>
               <span className="muted caption">

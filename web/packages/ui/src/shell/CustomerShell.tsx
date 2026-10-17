@@ -28,7 +28,8 @@ export interface CustomerShellProps {
 /**
  * CustomerShell memetakan tata letak customer_v2.html:
  *  - desktop : sidebar 240px (brand + menu + kartu akun), panel ber-brand-50
- *  - mobile  : topbar sticky + bottom-nav 5 kolom; sidebar disembunyikan CSS
+ *  - < 900px : topbar sticky + bottom-nav (item ber-`bottomLabel`, kolom
+ *              sama lebar); sidebar disembunyikan CSS
  * Keduanya selalu dirender; media query di CSS yang memilih tampilannya.
  */
 export function CustomerShell({

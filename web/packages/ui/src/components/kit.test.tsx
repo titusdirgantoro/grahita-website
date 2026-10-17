@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Accordion } from "../components/Accordion";
 import { Avatar, initials } from "../components/Avatar";
@@ -172,6 +172,52 @@ describe("Table", () => {
     expect(screen.getByText("Daftar pesanan cabang")).toBeDefined();
     expect(screen.getByRole("table")).toBeDefined();
     expect(screen.getByText("2026-10-01")).toBeDefined();
+  });
+
+  it("stack melabeli setiap sel dengan header kolomnya, termasuk baris yang muncul kemudian", async () => {
+    function Daftar({ produk }: { produk: string[] }) {
+      return (
+        <Table stack="narrow" caption="Baris pesanan">
+          <thead>
+            <tr>
+              <th scope="col">Produk</th>
+              <th scope="col" className="num">
+                Qty
+              </th>
+              <th scope="col" />
+            </tr>
+          </thead>
+          <tbody>
+            {produk.map((nama, i) => (
+              <tr key={nama}>
+                <td>{nama}</td>
+                <td className="num">{`${i + 7}`}</td>
+                <td>
+                  <button type="button">{`Hapus ${nama}`}</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={2}>Total</td>
+              <td>9</td>
+            </tr>
+          </tfoot>
+        </Table>
+      );
+    }
+    const label = (el: HTMLElement) => el.closest("td")?.getAttribute("data-label");
+
+    const { rerender } = render(<Daftar produk={["Bio Magnetik"]} />);
+    expect(label(screen.getByText("Bio Magnetik"))).toBe("Produk");
+    expect(label(screen.getByText("7"))).toBe("Qty");
+    // Kolom aksi (header kosong) tidak berlabel agar tampil selebar kartu.
+    expect(label(screen.getByRole("button", { name: "Hapus Bio Magnetik" }))).toBe("");
+
+    rerender(<Daftar produk={["Bio Magnetik", "Rimpang Daun"]} />);
+    await waitFor(() => expect(label(screen.getByText("8"))).toBe("Qty"));
+    expect(label(screen.getByText("Rimpang Daun"))).toBe("Produk");
   });
 });
 

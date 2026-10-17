@@ -118,7 +118,10 @@
   display: none;
 }
 
-@media (max-width: 767px) {
+/* Di bawah 900px sidebar 240px menyisakan kolom isi terlalu sempit (KPI dan
+   editor pesanan terpotong di tablet), jadi tablet memakai topbar + bottom-nav
+   seperti ponsel — ambang yang sama dengan drawer Admin Portal. */
+@media (max-width: 899px) {
   .shell {
     grid-template-columns: 1fr;
   }
@@ -162,7 +165,8 @@
 
   .bottom {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     gap: 4px;
     position: fixed;
     left: 0;

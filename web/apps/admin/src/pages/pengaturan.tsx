@@ -197,7 +197,7 @@ function TetapanBackup() {
               02:00 WIB.
             </EmptyState>
           ) : (
-            <Table caption="Riwayat cadangan">
+            <Table stack="narrow" caption="Riwayat cadangan">
               <thead>
                 <tr>
                   <th scope="col">Mulai (WIB)</th>
@@ -339,7 +339,7 @@ function PengaturanContent() {
                 {Object.entries(nilai).map(([k, v]) => (
                   <tr key={k}>
                     <td>{k}</td>
-                    <td className="tabular muted">
+                    <td className={`tabular muted ${styles.nilaiSel}`}>
                       {typeof v === "object" ? JSON.stringify(v) : String(v)}
                     </td>
                   </tr>

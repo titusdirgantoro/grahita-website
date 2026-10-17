@@ -70,7 +70,7 @@ export {
   type KekuatanKataSandi,
 } from "./password";
 export { PasswordStrength, type PasswordStrengthProps } from "./components/PasswordStrength";
-export { Table, type TableProps } from "./components/Table";
+export { Table, type TableProps, type TableStack } from "./components/Table";
 export { Modal, type ModalProps } from "./components/Modal";
 export { EmptyState, type EmptyStateProps } from "./components/EmptyState";
 export { Skeleton, SkeletonList, type SkeletonProps, type SkeletonListProps } from "./components/Skeleton";

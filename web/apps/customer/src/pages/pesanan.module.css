@@ -44,6 +44,18 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Satuan jumlah item hanya di kartu mobile, tempat header kolom "Item"
+   disembunyikan; di tabel desktop headernya sudah menjelaskan angkanya. */
+.unitM {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .unitM {
+    display: inline;
+  }
+}
+
 .nomor:hover {
   text-decoration: underline;
   color: var(--brand-primary);
@@ -169,6 +181,12 @@
   margin: 2px 0 0;
 }
 
+/* Catatan cabang bisa panjang: selebar baris agar tidak menjadi kolom sempit
+   yang tinggi di samping tanggal. */
+.metaPenuh {
+  grid-column: 1 / -1;
+}
+
 /* Unggah bukti transfer (F1-13): kolom berkas + tombol unggah. */
 .unggahBukti {
   display: flex;
@@ -205,7 +223,14 @@
   }
 }
 
-@media (max-width: 767px) {
+/* Editor diukur dari lebar kartunya: grid lima kolom butuh ±640px, jadi di
+   kolom isi yang lebih sempit (ponsel, atau tablet/desktop kecil ber-sidebar)
+   baris berubah menjadi dua kolom berlabel seperti prototype mobile. */
+.lines {
+  container-type: inline-size;
+}
+
+@container (max-width: 639px) {
   .linesHead {
     display: none;
   }
@@ -225,7 +250,7 @@
   .lDel {
     position: absolute;
     right: 0;
-    top: 12px;
+    top: 14px;
   }
 
   .mLbl {
@@ -238,7 +263,10 @@
   .lSub {
     text-align: left;
   }
+}
 
+/* Bar total menempel di atas bottom-nav selama bottom-nav tampil (< 900px). */
+@media (max-width: 899px) {
   .stickyTotal {
     position: sticky;
     bottom: calc(76px + env(safe-area-inset-bottom));

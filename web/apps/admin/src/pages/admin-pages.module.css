@@ -43,11 +43,6 @@
   flex-wrap: wrap;
 }
 
-.chartWrap {
-  width: 100%;
-  overflow-x: auto;
-}
-
 /* ---------- Matriks harga Produk × Cabang (F1-08) ---------- */
 
 .matrixWrap {
@@ -116,6 +111,43 @@
   flex-wrap: wrap;
 }
 
+/* Aksi baris bertombol banyak (tabel Cabang): saat tabel tampil sebagai tabel
+   (kontainer ≥ 960px, ambang Table stack="wide") tombol menjadi ikon ringkas
+   bertooltip; teksnya tetap ada untuk pembaca layar. Saat baris menjadi kartu,
+   teks tampil di samping ikon. */
+@container (min-width: 960px) {
+  .aksiIkon {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .aksiIkon > button {
+    width: var(--h-control);
+    padding: 0;
+    justify-content: center;
+  }
+
+  .aksiTeks {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+.emailSel {
+  font-weight: 400;
+}
+
+/* Nilai pengaturan berupa JSON tanpa spasi: dibungkus di dalam sel alih-alih
+   melebarkan tabel kunci/nilai dua kolom. */
+.nilaiSel {
+  overflow-wrap: anywhere;
+  padding-block: 10px;
+}
+
 /* Di kartu mobile (Table.mobileCards) sel aksi memakai lebar penuh agar
    ketiga tombol rata kanan, bukan tersangkut di kolom pertama grid. */
 @media (max-width: 767px) {
@@ -152,17 +184,71 @@
 }
 
 .pager {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   margin-top: 16px;
 }
 
+.pager > span {
+  text-align: center;
+}
+
+/* Layar sempit: info halaman di atas, dua tombol berbagi baris di bawahnya,
+   alih-alih info halaman terjepit menjadi tiga baris di antara tombol. */
+@media (max-width: 559px) {
+  .pager {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pager > span {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .pager > :global(*):not(span) {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* Kolom mengikuti lebar kartu (3 di kartu utama, 1–2 di kolom samping yang
+   sempit) agar nominal rupiah tidak terpecah di tengah angka. */
 .metaGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 16px;
+}
+
+.metaGrid > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Form filter: kolom sama lebar yang mengisi baris (satu kolom di ponsel),
+   jadi kontrol tidak lagi berbeda-beda lebarnya dan rata di kedua sisi. */
+.filterGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px 14px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+/* Tombol sejajar kontrol: geser setinggi label field (16px + gap 6px). */
+.filterAksi {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-top: 22px;
+}
+
+@media (max-width: 559px) {
+  .filterAksi {
+    padding-top: 0;
+  }
 }
 
 .timeline {
@@ -222,19 +308,19 @@
   text-underline-offset: 3px;
 }
 
-@media (max-width: 767px) {
-  .metaGrid {
-    grid-template-columns: 1fr 1fr;
-  }
-}
 
 /* ---------- Dashboard admin (F1-20) ---------- */
 
-/* Grafik SVG buatan sendiri: responsif lewat viewBox + lebar 100%. */
+/* Grafik SVG buatan sendiri: batang meregang horizontal pada tinggi tetap,
+   label sumbu teks HTML berukuran tetap (lihat GrafikBatang). */
+.chartWrap {
+  container-type: inline-size;
+}
+
 .chart {
   display: block;
-  max-width: 100%;
-  height: auto;
+  width: 100%;
+  height: 120px;
 }
 
 .batang {
@@ -246,8 +332,25 @@
 }
 
 .sumbu {
-  fill: var(--text-muted);
-  font-size: 10px;
+  display: grid;
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.sumbu > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+@container (max-width: 559px) {
+  .sumbuMinor {
+    visibility: hidden;
+  }
 }
 
 .peringkat {

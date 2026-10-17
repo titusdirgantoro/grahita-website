@@ -270,7 +270,7 @@ export function TabProduk() {
       ) : !rows || rows.length === 0 ? (
         <EmptyState icon="tag">Belum ada produk yang cocok dengan filter.</EmptyState>
       ) : (
-        <Table mobileCards caption="Daftar produk">
+        <Table stack="wide" caption="Daftar produk">
           <thead>
             <tr>
               <th scope="col">Produk</th>

@@ -9,6 +9,16 @@
   gap: 16px;
 }
 
+/* Nilai KPI mengikuti lebar kartunya: angka rupiah sembilan digit tetap utuh
+   di kolom isi yang sempit (desktop kecil ber-sidebar), tanpa terpotong. */
+.kpis > * {
+  container-type: inline-size;
+}
+
+.kpis .val {
+  font-size: clamp(18px, 12cqi, 28px);
+}
+
 .kpi {
   display: flex;
   justify-content: space-between;
@@ -151,7 +161,8 @@
     scroll-snap-align: start;
   }
 
-  .val {
+  .val,
+  .kpis .val {
     font-size: 24px;
     line-height: 30px;
   }

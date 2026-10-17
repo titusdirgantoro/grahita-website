@@ -81,8 +81,11 @@ describe("Customer Portal — shell & navigasi", () => {
     expect(within(nav).queryByRole("link", { name: /Profil/ })).toBeNull();
     expect(within(nav).getByRole("link", { name: /Katalog/ }).getAttribute("aria-current")).toBe("page");
 
+    // Di layar sempit sidebar tersembunyi: Deposit hanya terjangkau lewat
+    // bottom-nav, sedangkan Tutorial tetap lewat kartu panduan di Beranda.
     const bawah = screen.getByRole("navigation", { name: "Navigasi bawah" });
-    expect(within(bawah).getAllByRole("link")).toHaveLength(5);
+    expect(within(bawah).getByRole("link", { name: /Deposit/ })).toBeDefined();
+    expect(within(bawah).queryByRole("link", { name: /Tutorial/ })).toBeNull();
 
     // Harga khusus cabang diformat Rupiah, sertifikat diberi badge.
     expect(screen.getByText(/Rp\s?340\.000/)).toBeDefined();

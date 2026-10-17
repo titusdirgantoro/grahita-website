@@ -241,7 +241,7 @@ function FormTopup({ onSukses }: { onSukses: () => void }) {
             <Input id="topup-nominal" inputMode="numeric" value={nominal} onChange={(e) => setNominal(e.target.value)} aria-label="Nominal top-up" />
           </Field>
           <Field label="Bukti transfer" htmlFor="topup-bukti">
-            <input
+            <Input
               id="topup-bukti"
               type="file"
               accept="image/jpeg,image/png,application/pdf"
@@ -287,7 +287,7 @@ export function DepositPage() {
             {(topup.data ?? []).length === 0 && !topup.memuat ? (
               <EmptyState icon="wallet">Belum ada top-up.</EmptyState>
             ) : (
-              <Table caption="Riwayat top-up deposit">
+              <Table stack="narrow" caption="Riwayat top-up deposit">
                 <thead>
                   <tr>
                     <th scope="col">Tanggal</th>
@@ -322,7 +322,7 @@ export function DepositPage() {
             {(transaksi.data ?? []).length === 0 && !transaksi.memuat ? (
               <EmptyState icon="list">Belum ada mutasi saldo.</EmptyState>
             ) : (
-              <Table caption="Mutasi saldo deposit">
+              <Table stack="narrow" caption="Mutasi saldo deposit">
                 <thead>
                   <tr>
                     <th scope="col">Tanggal</th>

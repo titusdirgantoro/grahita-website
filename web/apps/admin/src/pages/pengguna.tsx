@@ -363,7 +363,7 @@ function TabelCabang({
     return <EmptyState icon="users-three">Belum ada cabang terdaftar.</EmptyState>;
   }
   return (
-    <Table mobileCards caption="Akun cabang">
+    <Table stack="wide" caption="Akun cabang">
       <thead>
         <tr>
           <th scope="col">Cabang</th>
@@ -423,7 +423,7 @@ function TabelAdmin({ baris, onUbah }: { baris: AdminUser[]; onUbah: (row: Admin
     return <EmptyState icon="users-three">Belum ada admin terdaftar.</EmptyState>;
   }
   return (
-    <Table mobileCards caption="Akun admin">
+    <Table stack="wide" caption="Akun admin">
       <thead>
         <tr>
           <th scope="col">Nama pengguna</th>

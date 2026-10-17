@@ -26,4 +26,15 @@
   gap: 6px;
   align-items: center;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Kontrol filter di head kartu (cari/pilih) selebar tetap di layar lebar agar
+   berjajar di samping judul; di layar sempit tetap selebar penuh dan menumpuk. */
+@media (min-width: 768px) {
+  .tools input:not([type="checkbox"]):not([type="radio"]),
+  .tools select {
+    width: 200px;
+  }
 }
