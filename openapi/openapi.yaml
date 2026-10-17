@@ -3498,6 +3498,416 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
+  /api/v1/deposit:
+    get:
+      tags: [customer]
+      operationId: getDepositSummary
+      summary: Saldo deposit cabang sesi
+      description: |
+        Saldo tersedia dan versi journal cabang sesi. Top-up yang belum
+        diputuskan ditampilkan terpisah dan tidak pernah dijumlahkan ke saldo
+        (D3 §6.1).
+      responses:
+        "200":
+          description: Ringkasan deposit
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositSummary" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/deposit/transactions:
+    get:
+      tags: [customer]
+      operationId: listDepositTransactions
+      summary: Journal deposit cabang sesi (terbaru dulu)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200":
+          description: Daftar journal
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DepositTransaction" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/deposit/topups:
+    get:
+      tags: [customer]
+      operationId: listMyDepositTopups
+      summary: Top-up deposit cabang sesi
+      parameters:
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Daftar top-up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DepositTopup" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+    post:
+      tags: [customer]
+      operationId: createDepositTopup
+      summary: Ajukan top-up deposit (multipart, selalu pending)
+      description: |
+        Field multipart `proof` (JPG/PNG/PDF, jenis dari magic bytes),
+        `declared_amount` (rupiah), dan `bank_account_id` (rekening efektif D2
+        cabang sesi). Header `Idempotency-Key` wajib. Bukti identik untuk
+        permintaan yang sama dijawab ulang `200`; untuk permintaan berbeda
+        `409 PAYMENT_PROOF_ALREADY_USED`. Sukses `201` selalu `pending_review`
+        dan tidak pernah menambah saldo.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [proof, declared_amount, bank_account_id]
+              properties:
+                proof: { type: string, format: binary }
+                declared_amount: { type: integer, minimum: 1 }
+                bank_account_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Top-up tercatat pending_review
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositTopup" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "409":
+          description: Konflik aturan deposit (saldo, versi, rekening, idempotensi)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+  /api/v1/deposit/topups/{id}/proof:
+    get:
+      tags: [customer]
+      operationId: getMyDepositTopupProof
+      summary: Tautan unduh bukti top-up milik cabang sesi
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Tautan berumur pendek
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositProofURL" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/orders/{id}/deposit-allocations:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [customer]
+      operationId: listOrderDepositAllocations
+      summary: Alokasi deposit pesanan cabang sesi
+      responses:
+        "200":
+          description: Daftar alokasi
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DepositAllocation" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    post:
+      tags: [customer]
+      operationId: allocateOrderDeposit
+      summary: Alokasikan saldo deposit ke pesanan Submitted milik cabang
+      description: |
+        Debit journal langsung (bukan reservasi). `expected_journal_version`
+        dan `expected_order_version` wajib cocok; saldo atau versi basi
+        ditolak tanpa mengurangi nilai diam-diam. Header `Idempotency-Key`
+        wajib; retry key yang sama dijawab `200` dengan hasil yang sama.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DepositAllocateRequest" }
+      responses:
+        "201":
+          description: Alokasi tercatat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositAllocationResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Konflik aturan deposit (saldo, versi, rekening, idempotensi)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /api/v1/admin/deposits:
+    get:
+      tags: [admin]
+      operationId: adminListDeposits
+      summary: Saldo dan antrean top-up seluruh cabang aktif
+      responses:
+        "200":
+          description: Ikhtisar deposit
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DepositBranchOverview" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/admin/deposits/{branch_id}:
+    get:
+      tags: [admin]
+      operationId: adminGetBranchDeposit
+      summary: Detail deposit satu cabang (saldo, top-up, journal, rekonsiliasi)
+      parameters:
+        - { name: branch_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Detail deposit cabang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositBranchDetail" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/admin/deposit-topups:
+    get:
+      tags: [admin]
+      operationId: adminListDepositTopups
+      summary: Antrean top-up deposit
+      parameters:
+        - { name: branch_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [pending_review, needs_review, verified, rejected, reversed] } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Daftar top-up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DepositTopup" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/admin/deposit-topups/{id}/proof:
+    get:
+      tags: [admin]
+      operationId: adminGetDepositTopupProof
+      summary: Tautan unduh bukti top-up
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Tautan berumur pendek
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositProofURL" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/admin/deposit-topups/{id}/decision:
+    post:
+      tags: [admin]
+      operationId: adminDecideDepositTopup
+      summary: Putuskan top-up (review, reject, atau verify kredit)
+      description: |
+        `review`/`reject` butuh `admin.verify` dan alasan. `verify`
+        menciptakan kredit sehingga khusus Superadmin
+        (`admin.deposit_credit`), wajib `Idempotency-Key`, dan rekening tujuan
+        divalidasi ulang terhadap D2. Nominal final yang berbeda dari yang
+        dinyatakan wajib beralasan. Hasil OCR tidak pernah menjadi otoritas.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DepositDecisionRequest" }
+      responses:
+        "200":
+          description: Keputusan tercatat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositDecisionResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Konflik aturan deposit (saldo, versi, rekening, idempotensi)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /api/v1/admin/orders/{id}/deposit-allocations:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [admin]
+      operationId: adminListOrderDepositAllocations
+      summary: Alokasi deposit satu pesanan
+      responses:
+        "200":
+          description: Daftar alokasi
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DepositAllocation" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    post:
+      tags: [admin]
+      operationId: adminAllocateOrderDeposit
+      summary: Alokasikan saldo cabang ke pesanan atas permintaan cabang
+      description: Sama dengan alokasi cabang, ditambah `reason` wajib.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DepositAllocateRequest" }
+      responses:
+        "201":
+          description: Alokasi tercatat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositAllocationResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Konflik aturan deposit (saldo, versi, rekening, idempotensi)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /api/v1/admin/orders/{id}/deposit-allocations/{allocation_id}/reverse:
+    post:
+      tags: [admin]
+      operationId: adminReverseOrderDepositAllocation
+      summary: Reversal parsial/penuh alokasi deposit (alasan wajib)
+      description: |
+        `amount` adalah nominal reversal pada panggilan ini, bukan kumulatif;
+        tidak boleh melebihi bagian alokasi yang masih aktif. Ditolak untuk
+        pesanan Done. Header `Idempotency-Key` wajib.
+      parameters:
+        - $ref: "#/components/parameters/OrderIdPath"
+        - { name: allocation_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, expected_journal_version, reason]
+              properties:
+                amount: { type: integer, minimum: 1 }
+                expected_journal_version: { type: integer }
+                reason: { type: string }
+      responses:
+        "200":
+          description: Reversal tercatat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DepositReversalResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Konflik aturan deposit (saldo, versi, rekening, idempotensi)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+
 components:
   securitySchemes:
     cookieAuth:
@@ -3515,6 +3925,12 @@ components:
       required: true
       description: Nilai cookie `grahita_csrf` (double-submit).
       schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Kunci unik per niat mutasi deposit; retry dengan kunci dan isi sama menghasilkan hasil yang sama.
+      schema: { type: string, minLength: 8, maxLength: 200 }
     OrderIdPath:
       name: id
       in: path
@@ -3631,6 +4047,128 @@ components:
                   message: Cabang sedang nonaktif; aktifkan dulu sebelum membuat token registrasi.
 
   schemas:
+    DepositSummary:
+      type: object
+      required: [branch_id, available_balance, journal_version, pending_topup_count, pending_topup_amount_declared]
+      properties:
+        branch_id: { type: string, format: uuid }
+        available_balance: { type: integer }
+        journal_version: { type: integer }
+        pending_topup_count: { type: integer }
+        pending_topup_amount_declared: { type: integer }
+    DepositTransaction:
+      type: object
+      required: [id, kind, amount, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        amount: { type: integer, description: Positif kredit, negatif debit }
+        order_id: { type: string, format: uuid }
+        order_nomor: { type: string }
+        topup_id: { type: string, format: uuid }
+        reverses_transaction_id: { type: string, format: uuid }
+        reversed_amount: { type: integer }
+        created_at: { type: string, format: date-time }
+    DepositTopup:
+      type: object
+      required: [id, branch_id, bank_account_id, status, declared_amount, payment_proof_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        branch_id: { type: string, format: uuid }
+        branch_nama: { type: string }
+        bank_account_id: { type: string, format: uuid }
+        bank: { type: string }
+        display_nomor: { type: string, description: Nomor rekening tersamar }
+        status: { type: string, enum: [pending_review, needs_review, verified, rejected, reversed] }
+        declared_amount: { type: integer }
+        verified_amount: { type: integer }
+        rejection_reason: { type: string }
+        payment_proof_id: { type: string, format: uuid }
+        proof_nama_file: { type: string }
+        proof_mime_type: { type: string }
+        ocr_nominal: { type: integer, description: Saran OCR, bukan otoritas }
+        created_at: { type: string, format: date-time }
+        verified_at: { type: string, format: date-time }
+    DepositProofURL:
+      type: object
+      required: [url, expires_in, nama_file, mime_type]
+      properties:
+        url: { type: string }
+        expires_in: { type: integer }
+        nama_file: { type: string }
+        mime_type: { type: string }
+    DepositBranchOverview:
+      type: object
+      required: [branch_id, branch_nama, available_balance, journal_version, pending_topup_count, pending_topup_amount_declared]
+      properties:
+        branch_id: { type: string, format: uuid }
+        branch_nama: { type: string }
+        available_balance: { type: integer }
+        journal_version: { type: integer }
+        pending_topup_count: { type: integer }
+        pending_topup_amount_declared: { type: integer }
+    DepositBranchDetail:
+      allOf:
+        - $ref: "#/components/schemas/DepositSummary"
+        - type: object
+          required: [branch_nama, topups, transactions, reconciled]
+          properties:
+            branch_nama: { type: string }
+            topups: { type: array, items: { $ref: "#/components/schemas/DepositTopup" } }
+            transactions: { type: array, items: { $ref: "#/components/schemas/DepositTransaction" } }
+            reconciled: { type: boolean }
+    DepositAllocation:
+      type: object
+      required: [id, order_id, order_version, amount, reversed_amount, active_amount, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        order_version: { type: integer }
+        amount: { type: integer }
+        reversed_amount: { type: integer }
+        active_amount: { type: integer }
+        created_at: { type: string, format: date-time }
+    DepositAllocateRequest:
+      type: object
+      required: [amount, expected_journal_version, expected_order_version]
+      properties:
+        amount: { type: integer, minimum: 1 }
+        expected_journal_version: { type: integer }
+        expected_order_version: { type: integer }
+        reason: { type: string, description: Wajib untuk alokasi oleh admin }
+    DepositAllocationResult:
+      type: object
+      required: [allocation, balance, remaining_due, replayed]
+      properties:
+        allocation: { $ref: "#/components/schemas/DepositAllocation" }
+        balance: { $ref: "#/components/schemas/DepositSummary" }
+        remaining_due: { type: integer }
+        replayed: { type: boolean }
+    DepositReversalResult:
+      type: object
+      required: [allocation_id, reversed_amount, active_amount, balance, replayed]
+      properties:
+        allocation_id: { type: string, format: uuid }
+        reversed_amount: { type: integer, description: Kumulatif }
+        active_amount: { type: integer }
+        balance: { $ref: "#/components/schemas/DepositSummary" }
+        replayed: { type: boolean }
+    DepositDecisionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [review, reject, verify] }
+        approved_amount: { type: integer, minimum: 1, description: Wajib untuk verify }
+        bank_account_id: { type: string, format: uuid }
+        reason: { type: string, description: Wajib untuk review/reject dan untuk nominal final yang berbeda }
+    DepositDecisionResult:
+      type: object
+      required: [topup, replayed]
+      properties:
+        topup: { $ref: "#/components/schemas/DepositTopup" }
+        balance: { $ref: "#/components/schemas/DepositSummary" }
+        replayed: { type: boolean }
+
     MasterImportPreview:
       type: object
       required: [attempt_id, artifact_id, source_hash, preview_hash, contract_version, sheet, counts, items, created_at]
@@ -4379,6 +4917,20 @@ components:
                   BRANCH_MISSING,
                   UNAVAILABLE,
                   INTERNAL,
+                  TOPUP_NOT_FOUND,
+                  ALLOCATION_NOT_FOUND,
+                  DEPOSIT_BALANCE_INSUFFICIENT,
+                  DEPOSIT_VERSION_CONFLICT,
+                  DEPOSIT_ALLOCATION_EXCEEDS_ORDER,
+                  TOPUP_ALREADY_DECIDED,
+                  PAYMENT_PROOF_ALREADY_USED,
+                  IDEMPOTENCY_KEY_REUSED,
+                  REVERSAL_EXCEEDS_AVAILABLE,
+                  REVERSAL_WOULD_NEGATIVE_BALANCE,
+                  BRANCH_BANK_ACCOUNT_UNAVAILABLE,
+                  BANK_ACCOUNT_NOT_ALLOWED,
+                  DEPOSIT_RECONCILIATION_REQUIRED,
+                  DEPOSIT_UNAVAILABLE,
                 ]
             message: { type: string }
             fields:

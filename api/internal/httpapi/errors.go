@@ -41,6 +41,9 @@ func methodNotAllowedErr() error {
 // mapDomainErr menerjemahkan sentinel error domain ke bentuk HTTP.
 // Semua sentinel dipetakan di satu tempat supaya kode status konsisten.
 func mapDomainErr(err error) error {
+	if mapped, ok := depositErr(err); ok {
+		return mapped
+	}
 	switch {
 	case err == nil:
 		return nil

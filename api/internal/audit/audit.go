@@ -33,6 +33,8 @@ const (
 	// diantre pekerjaan terjadwal (F2-23, SystemDesign.md §4.6). EntityID-nya
 	// adalah id pesanan yang diingatkan; aktornya pekerjaan latar ('system').
 	EntityCNCReminder = "cnc_reminder"
+	// EntityDepositTopup: pengajuan dan keputusan top-up deposit (D3 §4.9).
+	EntityDepositTopup = "deposit_topup"
 )
 
 // Aksi yang dicatat (kolom audit_logs.action).
@@ -62,6 +64,9 @@ const (
 	// pekerjaan terjadwal (F2-23): tahap (h-2/h-0/h+1/h+3), nomor pesanan, dan
 	// penerima ada di snapshot After.
 	ActionRemind = "remind"
+	// ActionReview / ActionReject: keputusan admin atas top-up deposit.
+	ActionReview = "review"
+	ActionReject = "reject"
 	// ActionBacaBukti mencatat pembacaan AI/OCR atas bukti transfer
 	// (F2-26, PRD §5): EntityID-nya adalah id pesanan; snapshot After memuat
 	// hasil per bukti (nominal, tanggal, bank, rekening, keyakinan) beserta

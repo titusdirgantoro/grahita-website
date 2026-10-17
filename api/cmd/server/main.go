@@ -41,6 +41,9 @@ import (
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/dashboard"
 	dashboardpg "github.com/grahita/portal/api/internal/dashboard/postgres"
+	"github.com/grahita/portal/api/internal/deposit"
+	depositpg "github.com/grahita/portal/api/internal/deposit/postgres"
+	"github.com/grahita/portal/api/internal/depositwire"
 	"github.com/grahita/portal/api/internal/document"
 	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/fulfillment"
@@ -513,6 +516,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		payment.WithAISettings(settingsSvc))
 	verifySvc := payment.NewVerificationService(paymentRepo)
 	reevaluateSvc := payment.NewReevaluateService(paymentRepo, settingsSvc)
+	depositSvc := deposit.NewService(depositpg.New(pool), depositwire.Proofs(paymentSvc), depositwire.Banks(bankSvc))
 
 	// Revisi invoice berversi (F2-25): repository pesanan dengan penjadwal
 	// River supaya transaksi revisi menitipkan pekerjaan "render invoice versi
@@ -560,6 +564,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Payments:            paymentSvc,
 		Verify:              verifySvc,
 		Reevaluate:          reevaluateSvc,
+		Deposits:            depositSvc,
 		Documents:           documentSvc,
 		Reports:             reportSvc,
 		Users:               usersSvc,

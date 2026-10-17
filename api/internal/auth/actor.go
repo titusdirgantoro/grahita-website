@@ -59,6 +59,11 @@ const (
 	CapAdminTutorial     Capability = "admin.tutorial"      // konten tutorial cabang
 	CapAdminAudit        Capability = "admin.audit"         // audit log
 	CapAdminMasterImport Capability = "admin.master_import" // preview/apply master Impact
+	// CapDepositSelf: saldo, journal, top-up, dan alokasi deposit cabang sesi
+	// (D3 §6.1). CapAdminDepositCredit: menciptakan kredit deposit dari top-up
+	// atau overpay — khusus Superadmin (D3 §2.2, keputusan CEO 6A).
+	CapDepositSelf        Capability = "deposit.self"
+	CapAdminDepositCredit Capability = "admin.deposit_credit"
 )
 
 var capabilities = map[Role]map[Capability]bool{
@@ -66,6 +71,7 @@ var capabilities = map[Role]map[Capability]bool{
 		CapCatalogSelf: true,
 		CapOrderWrite:  true,
 		CapInvoiceOwn:  true,
+		CapDepositSelf: true,
 	},
 	RoleManager: {
 		CapAdminDashboard:   true,
@@ -77,6 +83,7 @@ var capabilities = map[Role]map[Capability]bool{
 		CapAdminUsersBranch: true,
 	},
 	RoleSuperadmin: {
+		CapAdminDepositCredit:  true,
 		CapAdminDashboard:      true,
 		CapAdminDashboardValue: true,
 		CapAdminOrders:         true,

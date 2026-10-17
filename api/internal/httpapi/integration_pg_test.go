@@ -40,6 +40,9 @@ import (
 	catalogpg "github.com/grahita/portal/api/internal/catalog/postgres"
 	"github.com/grahita/portal/api/internal/dashboard"
 	dashboardpg "github.com/grahita/portal/api/internal/dashboard/postgres"
+	"github.com/grahita/portal/api/internal/deposit"
+	depositpg "github.com/grahita/portal/api/internal/deposit/postgres"
+	"github.com/grahita/portal/api/internal/depositwire"
 	"github.com/grahita/portal/api/internal/document"
 	documentpg "github.com/grahita/portal/api/internal/document/postgres"
 	"github.com/grahita/portal/api/internal/fulfillment"
@@ -404,6 +407,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Payments:            paySvc,
 		Verify:              payment.NewVerificationService(payRepo),
 		Reevaluate:          payment.NewReevaluateService(payRepo, settings.NewService(settingspg.New(pool))),
+		Deposits:            deposit.NewService(depositpg.New(pool), depositwire.Proofs(paySvc), depositwire.Banks(bankSvc)),
 		Documents:           docSvc,
 		Users:               usersSvc,
 		Branches:            branchSvc,

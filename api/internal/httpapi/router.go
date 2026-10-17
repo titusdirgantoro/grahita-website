@@ -124,6 +124,16 @@ func NewRouter(d Deps) http.Handler {
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
 			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
+			// Deposit cabang (D3 C2, §6.1): saldo dan journal cabang sesi,
+			// top-up pending (tidak pernah menambah saldo sebelum diverifikasi
+			// Superadmin), dan alokasi deposit ke order Submitted miliknya.
+			r.Get("/deposit", a.adapt(a.depositSummary))
+			r.Get("/deposit/transactions", a.adapt(a.depositTransactions))
+			r.Get("/deposit/topups", a.adapt(a.depositTopups))
+			r.Post("/deposit/topups", a.adapt(a.depositTopupCreate))
+			r.Get("/deposit/topups/{id}/proof", a.adapt(a.depositTopupProof))
+			r.Get("/orders/{id}/deposit-allocations", a.adapt(a.depositOrderAllocations))
+			r.Post("/orders/{id}/deposit-allocations", a.adapt(a.depositAllocate))
 			// Konten halaman Tutorial cabang (F2-27, PRD §3.8): dibaca dari
 			// database sehingga pembaruan Superadmin langsung terlihat di
 			// portal cabang tanpa build/deploy. Pembacaan cukup sesi yang
@@ -175,6 +185,17 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/orders/{id}/verify", a.adapt(a.adminOrderVerify))
 					r.Get("/orders/{id}/bank-accounts", a.adapt(a.adminOrderBankAccounts))
 					r.Post("/orders/{id}/verification/reevaluate-destination", a.adapt(a.adminOrderReevaluateDestination))
+					// Deposit cabang (D3 C2, §6.2): antrean dan saldo, keputusan
+					// top-up (verify kredit khusus Superadmin `admin.deposit_credit`,
+					// ditegakkan service), alokasi atas permintaan cabang, reversal.
+					r.Get("/deposits", a.adapt(a.adminDeposits))
+					r.Get("/deposits/{branch_id}", a.adapt(a.adminDepositBranch))
+					r.Get("/deposit-topups", a.adapt(a.adminDepositTopups))
+					r.Get("/deposit-topups/{id}/proof", a.adapt(a.depositTopupProof))
+					r.Post("/deposit-topups/{id}/decision", a.adapt(a.adminDepositDecision))
+					r.Get("/orders/{id}/deposit-allocations", a.adapt(a.depositOrderAllocations))
+					r.Post("/orders/{id}/deposit-allocations", a.adapt(a.depositAllocate))
+					r.Post("/orders/{id}/deposit-allocations/{allocation_id}/reverse", a.adapt(a.depositReverse))
 				})
 				// Revisi invoice berversi (F2-25): kapabilitas sendiri
 				// `admin.revise` (Superadmin selalu; Manager hanya bila setelan
