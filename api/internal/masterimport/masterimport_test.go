@@ -15,6 +15,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/catalog"
 )
 
 func fixtureWorkbook(t *testing.T) []byte {
@@ -398,4 +399,22 @@ func TestReconcileCabangBaruTetapInsertJikaSemuaMappingTerwakili(t *testing.T) {
 		}
 	}
 	t.Fatal("item cabang baru tidak ditemukan")
+}
+
+// TestSidikKomponenSamaDenganEditMatriks: versi tarif hasil edit manual matriks
+// harga harus bersidik dan bertarif identik dengan sel workbook berkomponen
+// sama, supaya impor berikutnya mengenalinya sebagai skip, bukan versi baru.
+func TestSidikKomponenSamaDenganEditMatriks(t *testing.T) {
+	impor, err := parseComponent("34100", "0.1", "2500")
+	if err != nil {
+		t.Fatalf("parse komponen: %v", err)
+	}
+	manual, err := catalog.HitungTarif(catalog.Komponen{HJM: 34100, P1: "0.10", SPV: 2500}, catalog.JenisReguler)
+	if err != nil {
+		t.Fatalf("hitung tarif manual: %v", err)
+	}
+	if impor.Fingerprint != manual.Sidik || impor.FinalItem != manual.Final {
+		t.Fatalf("sidik/tarif impor %s/%d berbeda dengan edit manual %s/%d",
+			impor.Fingerprint, impor.FinalItem, manual.Sidik, manual.Final)
+	}
 }

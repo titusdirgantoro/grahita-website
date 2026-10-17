@@ -59,14 +59,18 @@ func (q *Queries) BranchHasAccount(ctx context.Context, branchID string) (bool, 
 }
 
 const branchHasOrders = `-- name: BranchHasOrders :one
-SELECT (EXISTS (SELECT 1 FROM orders WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM payment_proofs WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM deposit_topups WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM branch_deposit_transactions WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM deposit_allocations WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM branch_tariff_versions WHERE branch_id = $1))::boolean
+SELECT (EXISTS (SELECT 1 FROM orders o WHERE o.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM payment_proofs pp WHERE pp.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM deposit_topups dt WHERE dt.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM branch_deposit_transactions bdt WHERE bdt.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM deposit_allocations da WHERE da.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM branch_tariff_versions btv WHERE btv.branch_id = $1))::boolean
 `
 
+// Riwayat yang membuat cabang tidak boleh dihapus (hanya boleh dinonaktifkan):
+// pesanan, bukti bayar, riwayat deposit, dan tarif hasil impor Impact.
+// Kolom dikualifikasi alias: tanpa alias, sqlc menganggap branch_id ambigu
+// lintas subquery EXISTS dan `sqlc generate` gagal.
 func (q *Queries) BranchHasOrders(ctx context.Context, branchID string) (bool, error) {
 	row := q.db.QueryRow(ctx, branchHasOrders, branchID)
 	var column_1 bool

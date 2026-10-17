@@ -1304,8 +1304,10 @@ paths:
       operationId: deleteProduct
       summary: Hapus produk yang belum dipakai pesanan (Manager & Superadmin)
       description: |
-        Produk yang sudah dipakai order line TIDAK bisa dihapus — dijawab
-        409 `PRODUCT_IN_USE`; nonaktifkan saja produknya (PRD AP-KAT-01).
+        Produk yang sudah dipakai order line, atau sudah punya riwayat tarif
+        berversi (impor Impact maupun edit matriks harga), TIDAK bisa dihapus
+        — dijawab 409 `PRODUCT_IN_USE`; nonaktifkan saja produknya
+        (PRD AP-KAT-01).
       parameters:
         - name: id
           in: path
@@ -1332,6 +1334,10 @@ paths:
         baris, `cabang` adalah kolom, dan `sel` hanya memuat sel yang BERISI
         harga. Sel tanpa harga berarti produk tidak dijual ke cabang itu
         (PRD AP-KAT-03) — harga default TIDAK dipakai sebagai cadangan.
+        Setiap sel memuat komponen tarif HJM, P1, dan SPV pembentuk
+        `harga` (versi tarif aktif hasil impor Impact atau edit matriks);
+        sel harga lama tanpa rincian mengembalikan komponen `null` dan
+        `sumber: legacy`.
         Filter: `q`/`jenis`/`aktif` untuk produk, `branch_q` untuk pencarian
         cabang, `branch_id` untuk membatasi sel ke satu cabang.
       parameters:
@@ -1370,11 +1376,16 @@ paths:
       operationId: updatePrices
       summary: Batch edit sel matriks harga (Manager & Superadmin)
       description: |
-        Mengubah banyak sel sekaligus; seluruh perubahan dan catatan auditnya
-        ditulis dalam satu transaksi. `harga: null` (atau field kosong)
+        Mengubah banyak sel sekaligus berupa komponen tarif; seluruh
+        perubahan dan catatan auditnya ditulis dalam satu transaksi. Harga
+        jual TIDAK diterima dari klien: server menghitung
+        `round_half_up(HJM + HJM × P1 + SPV)` (docs/design/master-impact-import.md
+        §7), menyimpannya sebagai versi tarif manual append-only, lalu
+        memproyeksikannya ke harga sel. `hjm: null` (atau field kosong)
         mengosongkan sel sehingga produk tidak lagi dijual ke cabang itu.
-        Harga negatif ditolak dan produk Sertifikat harus 0. Sel yang nilainya
-        sama dengan nilai sekarang diabaikan (tidak menulis audit baru).
+        Komponen negatif atau P1 di luar 0–1 ditolak dan produk Sertifikat
+        hanya boleh berkomponen 0. Sel yang komponennya sama dengan versi
+        aktif diabaikan (tanpa versi maupun audit baru).
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -1404,9 +1415,11 @@ paths:
       summary: Salin harga satu cabang ke cabang lain (Manager & Superadmin)
       description: |
         Aksi "salin harga" (PRD AP-KAT-04). Bersifat MENGGANTIKAN: matriks
-        cabang tujuan menjadi persis matriks cabang sumber, sehingga sel yang
-        tidak ada di cabang sumber menjadi kosong. Kirim `to_branch_ids`
-        untuk sejumlah cabang, atau `semua: true` untuk seluruh cabang lain.
+        cabang tujuan menjadi persis matriks cabang sumber — termasuk
+        komponen HJM, P1, dan SPV-nya — sehingga sel yang tidak ada di cabang
+        sumber menjadi kosong. Sel sumber tanpa rincian tersalin sebagai
+        HJM = harga, P1 = 0, SPV = 0. Kirim `to_branch_ids` untuk sejumlah
+        cabang, atau `semua: true` untuk seluruh cabang lain.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -5230,11 +5243,35 @@ components:
 
     PriceCell:
       type: object
-      required: [branch_id, product_id, harga]
+      required: [branch_id, product_id, harga, hjm, p1, spv, sumber]
       properties:
         branch_id: { type: string, format: uuid }
         product_id: { type: string, format: uuid }
-        harga: { type: integer, format: int64, minimum: 0 }
+        harga:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Tarif final satu item yang dibaca katalog cabang dan pesanan.
+        hjm:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: Harga jual dasar (Rupiah); null untuk sel tanpa rincian.
+        p1:
+          type: [string, "null"]
+          pattern: "^[0-9]+(\\.[0-9]+)?$"
+          description: Rasio P1 desimal 0–1 ("0.1" = 10%); null untuk sel tanpa rincian.
+        spv:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: Biaya SPV (Rupiah); null untuk sel tanpa rincian.
+        sumber:
+          type: string
+          enum: [import, manual, legacy]
+          description: |
+            Asal versi tarif aktif: `import` (impor master Impact), `manual`
+            (edit matriks harga), atau `legacy` (harga lama tanpa rincian).
 
     PriceBatchInput:
       type: object
@@ -5253,19 +5290,31 @@ components:
             properties:
               branch_id: { type: string, format: uuid }
               product_id: { type: string, format: uuid }
-              harga:
+              hjm:
                 type: [integer, "null"]
                 format: int64
                 minimum: 0
-                description: Kosong/null berarti sel dikosongkan (tidak dijual).
+                description: |
+                  Harga jual dasar (Rupiah). Kosong/null berarti sel
+                  dikosongkan (tidak dijual), seperti sel HJM kosong pada
+                  workbook Impact.
+              p1:
+                type: string
+                maxLength: 20
+                description: Rasio P1 desimal 0–1 ("0.1" = 10%, maksimal 6 digit desimal); kosong = 0.
+              spv:
+                type: [integer, "null"]
+                format: int64
+                minimum: 0
+                description: Biaya SPV (Rupiah); kosong/null = 0.
 
     PriceResult:
       type: object
       required: [diubah, dihapus, diabaikan]
       properties:
-        diubah: { type: integer, description: Sel baru atau berubah nilainya. }
+        diubah: { type: integer, description: Sel baru atau berubah komponennya. }
         dihapus: { type: integer, description: Sel yang dikosongkan. }
-        diabaikan: { type: integer, description: Sel yang nilainya sama dengan sekarang. }
+        diabaikan: { type: integer, description: Sel yang komponennya sama dengan versi aktif. }
 
     PriceCopyInput:
       type: object

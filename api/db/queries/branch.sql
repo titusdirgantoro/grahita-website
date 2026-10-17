@@ -125,12 +125,14 @@ UPDATE branch_users
 -- name: BranchHasOrders :one
 -- Riwayat yang membuat cabang tidak boleh dihapus (hanya boleh dinonaktifkan):
 -- pesanan, bukti bayar, riwayat deposit, dan tarif hasil impor Impact.
-SELECT (EXISTS (SELECT 1 FROM orders WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM payment_proofs WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM deposit_topups WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM branch_deposit_transactions WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM deposit_allocations WHERE branch_id = $1)
-     OR EXISTS (SELECT 1 FROM branch_tariff_versions WHERE branch_id = $1))::boolean;
+-- Kolom dikualifikasi alias: tanpa alias, sqlc menganggap branch_id ambigu
+-- lintas subquery EXISTS dan `sqlc generate` gagal.
+SELECT (EXISTS (SELECT 1 FROM orders o WHERE o.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM payment_proofs pp WHERE pp.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM deposit_topups dt WHERE dt.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM branch_deposit_transactions bdt WHERE bdt.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM deposit_allocations da WHERE da.branch_id = $1)
+     OR EXISTS (SELECT 1 FROM branch_tariff_versions btv WHERE btv.branch_id = $1))::boolean;
 
 -- name: BranchHasAccount :one
 SELECT EXISTS (SELECT 1 FROM branch_users WHERE branch_id = $1)::boolean;

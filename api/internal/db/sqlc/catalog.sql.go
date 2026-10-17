@@ -11,6 +11,47 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activeTariffVersion = `-- name: ActiveTariffVersion :one
+SELECT id, is_available
+  FROM branch_tariff_versions
+ WHERE branch_id = $1 AND variant_id = $2 AND superseded_at IS NULL
+ FOR UPDATE
+`
+
+type ActiveTariffVersionParams struct {
+	BranchID  string `json:"branch_id"`
+	VariantID string `json:"variant_id"`
+}
+
+type ActiveTariffVersionRow struct {
+	ID          string `json:"id"`
+	IsAvailable bool   `json:"is_available"`
+}
+
+func (q *Queries) ActiveTariffVersion(ctx context.Context, arg ActiveTariffVersionParams) (ActiveTariffVersionRow, error) {
+	row := q.db.QueryRow(ctx, activeTariffVersion, arg.BranchID, arg.VariantID)
+	var i ActiveTariffVersionRow
+	err := row.Scan(&i.ID, &i.IsAvailable)
+	return i, err
+}
+
+const createPrimaryVariant = `-- name: CreatePrimaryVariant :one
+INSERT INTO product_variants (product_id, code, nama)
+SELECT p.id, 'produk-' || p.id::text, p.nama
+  FROM products p
+ WHERE p.id = $1
+RETURNING id
+`
+
+// Varian utama untuk produk yang belum pernah bertarif berversi (produk buatan
+// admin, bukan hasil impor). Kode diturunkan dari id produk supaya pasti unik
+// dan tidak bertabrakan dengan kode immutable varian impor.
+func (q *Queries) CreatePrimaryVariant(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, createPrimaryVariant, id)
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createProduct = `-- name: CreateProduct :one
 INSERT INTO products (kode, nama, jenis, deskripsi, harga_default, urutan, is_active)
 VALUES (
@@ -141,6 +182,65 @@ func (q *Queries) GetProductForAdmin(ctx context.Context, id string) (GetProduct
 	return i, err
 }
 
+const insertManualTariffTombstone = `-- name: InsertManualTariffTombstone :exec
+INSERT INTO branch_tariff_versions
+       (branch_id, variant_id, is_available, source_kind, created_by, source_component_hash)
+VALUES ($1, $2, false, 'manual',
+        $3, $4)
+`
+
+type InsertManualTariffTombstoneParams struct {
+	BranchID            string      `json:"branch_id"`
+	VariantID           string      `json:"variant_id"`
+	CreatedBy           pgtype.UUID `json:"created_by"`
+	SourceComponentHash string      `json:"source_component_hash"`
+}
+
+// Penanda "tidak dijual lagi" untuk pasangan yang sebelumnya bertarif aktif.
+func (q *Queries) InsertManualTariffTombstone(ctx context.Context, arg InsertManualTariffTombstoneParams) error {
+	_, err := q.db.Exec(ctx, insertManualTariffTombstone,
+		arg.BranchID,
+		arg.VariantID,
+		arg.CreatedBy,
+		arg.SourceComponentHash,
+	)
+	return err
+}
+
+const insertManualTariffVersion = `-- name: InsertManualTariffVersion :exec
+INSERT INTO branch_tariff_versions
+       (branch_id, variant_id, hjm_rupiah, p1_ratio, spv_rupiah, final_item_rupiah,
+        is_available, source_kind, created_by, source_component_hash)
+VALUES ($1, $2, $3,
+        ($4::text)::numeric, $5, $6,
+        true, 'manual', $7, $8)
+`
+
+type InsertManualTariffVersionParams struct {
+	BranchID            string      `json:"branch_id"`
+	VariantID           string      `json:"variant_id"`
+	HjmRupiah           pgtype.Int8 `json:"hjm_rupiah"`
+	P1Ratio             string      `json:"p1_ratio"`
+	SpvRupiah           pgtype.Int8 `json:"spv_rupiah"`
+	FinalItemRupiah     pgtype.Int8 `json:"final_item_rupiah"`
+	CreatedBy           pgtype.UUID `json:"created_by"`
+	SourceComponentHash string      `json:"source_component_hash"`
+}
+
+func (q *Queries) InsertManualTariffVersion(ctx context.Context, arg InsertManualTariffVersionParams) error {
+	_, err := q.db.Exec(ctx, insertManualTariffVersion,
+		arg.BranchID,
+		arg.VariantID,
+		arg.HjmRupiah,
+		arg.P1Ratio,
+		arg.SpvRupiah,
+		arg.FinalItemRupiah,
+		arg.CreatedBy,
+		arg.SourceComponentHash,
+	)
+	return err
+}
+
 const listActiveProducts = `-- name: ListActiveProducts :many
 SELECT id, kode, nama, jenis::text AS jenis,
        COALESCE(deskripsi, '') AS deskripsi, harga_default, urutan, is_active
@@ -191,11 +291,26 @@ func (q *Queries) ListActiveProducts(ctx context.Context) ([]ListActiveProductsR
 
 const listBranchPrices = `-- name: ListBranchPrices :many
 
-SELECT branch_id, product_id, harga
-  FROM branch_prices
- WHERE ($1::uuid IS NULL OR branch_id = $1::uuid)
-   AND ($2::uuid IS NULL OR product_id = $2::uuid)
- ORDER BY branch_id, product_id
+SELECT bp.branch_id, bp.product_id, bp.harga,
+       t.hjm_rupiah, COALESCE(t.p1_ratio, '')::text AS p1_ratio, t.spv_rupiah,
+       COALESCE(t.source_kind, '')::text AS source_kind
+  FROM branch_prices bp
+  LEFT JOIN LATERAL (
+        SELECT tv.hjm_rupiah, tv.p1_ratio::text AS p1_ratio, tv.spv_rupiah, tv.source_kind
+          FROM product_variants v
+          JOIN branch_tariff_versions tv ON tv.variant_id = v.id
+         WHERE v.product_id = bp.product_id
+           AND v.tariff_parent_variant_id IS NULL
+           AND tv.branch_id = bp.branch_id
+           AND tv.superseded_at IS NULL
+           AND tv.is_available
+           AND tv.final_item_rupiah = bp.harga
+         ORDER BY v.created_at, v.id
+         LIMIT 1
+       ) t ON true
+ WHERE ($1::uuid IS NULL OR bp.branch_id = $1::uuid)
+   AND ($2::uuid IS NULL OR bp.product_id = $2::uuid)
+ ORDER BY bp.branch_id, bp.product_id
 `
 
 type ListBranchPricesParams struct {
@@ -204,14 +319,23 @@ type ListBranchPricesParams struct {
 }
 
 type ListBranchPricesRow struct {
-	BranchID  string `json:"branch_id"`
-	ProductID string `json:"product_id"`
-	Harga     int64  `json:"harga"`
+	BranchID   string      `json:"branch_id"`
+	ProductID  string      `json:"product_id"`
+	Harga      int64       `json:"harga"`
+	HjmRupiah  pgtype.Int8 `json:"hjm_rupiah"`
+	P1Ratio    string      `json:"p1_ratio"`
+	SpvRupiah  pgtype.Int8 `json:"spv_rupiah"`
+	SourceKind string      `json:"source_kind"`
 }
 
 // ---------- Matriks harga per cabang ----------
 // Sel matriks yang BERISI harga. Sel kosong tidak punya baris dan berarti
 // produk tidak dijual ke cabang tersebut (PRD AP-KAT-03).
+//
+// Komponen HJM/P1/SPV diambil dari versi tarif aktif varian utama produk,
+// hanya bila tarif finalnya sama dengan harga sel (komponen benar-benar
+// menjelaskan harga). Sel harga lama tanpa versi yang cocok mengembalikan
+// komponen NULL dan source_kind kosong.
 func (q *Queries) ListBranchPrices(ctx context.Context, arg ListBranchPricesParams) ([]ListBranchPricesRow, error) {
 	rows, err := q.db.Query(ctx, listBranchPrices, arg.BranchID, arg.ProductID)
 	if err != nil {
@@ -221,7 +345,15 @@ func (q *Queries) ListBranchPrices(ctx context.Context, arg ListBranchPricesPara
 	items := []ListBranchPricesRow{}
 	for rows.Next() {
 		var i ListBranchPricesRow
-		if err := rows.Scan(&i.BranchID, &i.ProductID, &i.Harga); err != nil {
+		if err := rows.Scan(
+			&i.BranchID,
+			&i.ProductID,
+			&i.Harga,
+			&i.HjmRupiah,
+			&i.P1Ratio,
+			&i.SpvRupiah,
+			&i.SourceKind,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -397,14 +529,38 @@ func (q *Queries) ListProductsForBranch(ctx context.Context, branchID string) ([
 	return items, nil
 }
 
-const productHasOrderLines = `-- name: ProductHasOrderLines :one
-SELECT EXISTS (SELECT 1 FROM order_lines WHERE product_id = $1)::boolean
+const primaryVariantOfProduct = `-- name: PrimaryVariantOfProduct :one
+
+SELECT id
+  FROM product_variants
+ WHERE product_id = $1 AND tariff_parent_variant_id IS NULL
+ ORDER BY created_at, id
+ LIMIT 1
 `
 
-// Produk yang sudah dipakai order line tidak boleh dihapus (order_lines
-// memakai ON DELETE RESTRICT); nonaktifkan saja produknya.
-func (q *Queries) ProductHasOrderLines(ctx context.Context, productID pgtype.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, productHasOrderLines, productID)
+// ---------- Versi tarif manual dari matriks harga ----------
+//
+// Edit matriks menulis komponen HJM/P1/SPV sebagai versi tarif append-only
+// (source_kind 'manual'), lalu memproyeksikan tarif finalnya ke branch_prices
+// yang dibaca katalog dan order (docs/design/master-impact-import.md §5.3).
+// Varian utama (bukan turunan) tempat tarif produk disimpan.
+func (q *Queries) PrimaryVariantOfProduct(ctx context.Context, productID string) (string, error) {
+	row := q.db.QueryRow(ctx, primaryVariantOfProduct, productID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const productHasHistory = `-- name: ProductHasHistory :one
+SELECT (EXISTS (SELECT 1 FROM order_lines ol WHERE ol.product_id = $1::uuid)
+     OR EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = $1::uuid))::boolean
+`
+
+// Produk yang sudah dipakai order line, atau sudah punya varian dengan riwayat
+// tarif berversi (impor maupun edit matriks), tidak boleh dihapus — keduanya
+// memakai ON DELETE RESTRICT; nonaktifkan saja produknya.
+func (q *Queries) ProductHasHistory(ctx context.Context, productID string) (bool, error) {
+	row := q.db.QueryRow(ctx, productHasHistory, productID)
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -430,6 +586,15 @@ func (q *Queries) ProductKodeTaken(ctx context.Context, arg ProductKodeTakenPara
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const supersedeTariffVersion = `-- name: SupersedeTariffVersion :exec
+UPDATE branch_tariff_versions SET superseded_at = now() WHERE id = $1
+`
+
+func (q *Queries) SupersedeTariffVersion(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, supersedeTariffVersion, id)
+	return err
 }
 
 const updateProduct = `-- name: UpdateProduct :one

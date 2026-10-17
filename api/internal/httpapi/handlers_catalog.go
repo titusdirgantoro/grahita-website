@@ -284,12 +284,17 @@ type setPricesRequest struct {
 	Items []priceItemRequest `json:"items" validate:"required,min=1,dive"`
 }
 
-// priceItemRequest adalah satu sel matriks yang diubah. Harga null/kosong
-// berarti sel dikosongkan: produk tidak dijual ke cabang itu (PRD AP-KAT-03).
+// priceItemRequest adalah satu sel matriks yang diubah, berupa komponen tarif.
+// Harga jual tidak diterima dari klien: server menghitungnya dari HJM, P1, dan
+// SPV. HJM null berarti sel dikosongkan — produk tidak dijual ke cabang itu
+// (PRD AP-KAT-03), sama seperti sel HJM kosong pada workbook Impact.
 type priceItemRequest struct {
 	BranchID  string `json:"branch_id" validate:"required"`
 	ProductID string `json:"product_id" validate:"required"`
-	Harga     *int64 `json:"harga" validate:"omitempty,gte=0"`
+	HJM       *int64 `json:"hjm" validate:"omitempty,gte=0"`
+	// P1 adalah rasio desimal 0–1 sebagai teks ("0.1" = 10%); kosong = 0.
+	P1  string `json:"p1" validate:"max=20"`
+	SPV *int64 `json:"spv" validate:"omitempty,gte=0"`
 }
 
 // adminPricesUpdate menerapkan batch edit matriks harga (PRD AP-KAT-02/03/04).
@@ -306,11 +311,18 @@ func (a *API) adminPricesUpdate(w http.ResponseWriter, r *http.Request) error {
 	items := make([]catalog.PriceInput, 0, len(req.Items))
 	ids := make([]string, 0, len(req.Items))
 	for _, it := range req.Items {
-		items = append(items, catalog.PriceInput{
+		in := catalog.PriceInput{
 			BranchID:  strings.TrimSpace(it.BranchID),
 			ProductID: strings.TrimSpace(it.ProductID),
-			Harga:     it.Harga,
-		})
+		}
+		if it.HJM != nil {
+			k := catalog.Komponen{HJM: *it.HJM, P1: strings.TrimSpace(it.P1)}
+			if it.SPV != nil {
+				k.SPV = *it.SPV
+			}
+			in.Komponen = &k
+		}
+		items = append(items, in)
 		ids = append(ids, it.BranchID)
 	}
 	// Cabang master dimiliki domain internal/branch, jadi keberadaannya

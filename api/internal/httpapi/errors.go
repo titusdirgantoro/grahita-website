@@ -129,7 +129,7 @@ func mapDomainErr(err error) error {
 		return apierr.Conflict("KODE_TAKEN", "Kode produk tersebut sudah dipakai produk lain.")
 	case errors.Is(err, catalog.ErrProductUsed):
 		return apierr.Conflict("PRODUCT_IN_USE",
-			"Produk ini sudah dipakai pada pesanan sehingga tidak bisa dihapus; nonaktifkan saja produknya.")
+			"Produk ini sudah dipakai pada pesanan atau punya riwayat tarif sehingga tidak bisa dihapus; nonaktifkan saja produknya.")
 	case errors.Is(err, catalog.ErrInvalidData):
 		return apierr.Validation("Data produk atau harga tidak valid.",
 			map[string]string{"katalog": err.Error()})

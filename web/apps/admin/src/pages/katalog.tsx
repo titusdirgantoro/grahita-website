@@ -22,6 +22,7 @@ import {
 } from "@grahita/ui";
 
 import styles from "./admin-pages.module.css";
+import { hitungTarif, persenKeRasio, rasioKePersen } from "./tarif";
 
 /** Produk pada master katalog (PRD §4.5 AP-KAT-01). */
 export interface Produk {
@@ -42,11 +43,26 @@ interface KolomCabang {
   is_active: boolean;
 }
 
-/** Satu sel matriks yang berisi harga (sel kosong = tidak dijual). */
+/**
+ * Satu sel matriks yang berisi harga (sel kosong = tidak dijual). `harga`
+ * adalah tarif final hitungan server dari HJM, P1 (rasio desimal), dan SPV;
+ * sel harga lama tanpa rincian berkomponen null dengan sumber "legacy".
+ */
 interface SelHarga {
   branch_id: string;
   product_id: string;
   harga: number;
+  hjm: number | null;
+  p1: string | null;
+  spv: number | null;
+  sumber: "import" | "manual" | "legacy";
+}
+
+/** Sel yang sedang dibuka di editor tarif. */
+interface EditSel {
+  produk: Produk;
+  cabang: KolomCabang;
+  sel: SelHarga | null;
 }
 
 interface Matriks {
@@ -80,6 +96,8 @@ const rupiah = new Intl.NumberFormat("id-ID", {
   maximumFractionDigits: 0,
 });
 
+const bilangan = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 });
+
 function pesanGalat(err: unknown): string {
   if (err instanceof ApiClientError) return err.message;
   return "Terjadi kesalahan. Coba lagi.";
@@ -99,6 +117,8 @@ function angka(raw: string): number | null {
  * Aturan yang tampak di UI tetapi ditegakkan server:
  *  - sel kosong = produk tidak dijual ke cabang itu (tidak muncul di portal
  *    cabang dan tidak bisa dipesan),
+ *  - harga sel selalu dihitung server dari HJM + HJM×P1 + SPV; admin hanya
+ *    mengisi komponennya,
  *  - produk Sertifikat selalu berharga 0 (harga default maupun harga cabang),
  *  - harga default bukan cadangan katalog: ia hanya nilai awal saat mengisi
  *    sel matriks.
@@ -421,7 +441,13 @@ export function TabProduk() {
   );
 }
 
-/** TabMatriks menampilkan grid Produk × Cabang dengan edit inline. */
+/** rincianSel meringkas komponen sel sebagai "HJM · P1 · SPV". */
+function rincianSel(sel: SelHarga): string {
+  if (sel.hjm === null || sel.p1 === null || sel.spv === null) return "Tanpa rincian";
+  return `${bilangan.format(sel.hjm)} · ${rasioKePersen(sel.p1)}% · ${bilangan.format(sel.spv)}`;
+}
+
+/** TabMatriks menampilkan grid Produk × Cabang; tiap sel dibuka di editor tarif. */
 export function TabMatriks() {
   const { tampilkan } = useToast();
   const [data, setData] = useState<Matriks | null>(null);
@@ -432,6 +458,7 @@ export function TabMatriks() {
   const [branchQ, setBranchQ] = useState("");
   const [sumber, setSumber] = useState("");
   const [tujuan, setTujuan] = useState("");
+  const [edit, setEdit] = useState<EditSel | null>(null);
 
   const query = useMemo(() => {
     const p = new URLSearchParams({ aktif: "true" });
@@ -456,33 +483,31 @@ export function TabMatriks() {
     void muat();
   }, [muat]);
 
-  /** simpanSel menerapkan satu sel lewat batch edit (harga kosong = tidak dijual). */
-  async function simpanSel(product: Produk, cabang: KolomCabang, raw: string) {
-    const nilai = angka(raw);
-    if (nilai !== null && product.jenis === "sertifikat" && nilai !== 0) {
-      setGalat("Produk Sertifikat selalu berharga 0.");
-      return;
-    }
-    const sekarang = data?.sel.find((s) => s.branch_id === cabang.id && s.product_id === product.id)?.harga ?? null;
-    if (nilai === sekarang) return;
-    setSibuk(`${cabang.id}:${product.id}`);
-    setGalat(null);
+  /**
+   * simpanSel mengirim komponen satu sel lewat batch edit (komponen null =
+   * tidak dijual), lalu memuat ulang matriks agar sel menampilkan tarif dan
+   * rincian yang dihitung server.
+   */
+  async function simpanSel(target: EditSel, komponen: { hjm: number; p1: string; spv: number } | null) {
+    setSibuk(`${target.cabang.id}:${target.produk.id}`);
     try {
-      await api.put("/admin/prices", { items: [{ branch_id: cabang.id, product_id: product.id, harga: nilai }] });
-      setData((lama) => {
-        if (!lama) return lama;
-        const sel = lama.sel.filter((s) => !(s.branch_id === cabang.id && s.product_id === product.id));
-        if (nilai !== null) sel.push({ branch_id: cabang.id, product_id: product.id, harga: nilai });
-        return { ...lama, sel };
+      await api.put("/admin/prices", {
+        items: [
+          komponen
+            ? { branch_id: target.cabang.id, product_id: target.produk.id, ...komponen }
+            : { branch_id: target.cabang.id, product_id: target.produk.id, hjm: null },
+        ],
       });
+      setEdit(null);
       tampilkan(
-        nilai === null
-          ? `${product.nama} tidak dijual ke ${cabang.nama}`
-          : `${product.nama} untuk ${cabang.nama} disimpan`,
+        komponen === null
+          ? `${target.produk.nama} tidak dijual ke ${target.cabang.nama}`
+          : `Tarif ${target.produk.nama} untuk ${target.cabang.nama} disimpan`,
       );
-    } catch (err) {
-      setGalat(pesanGalat(err));
       await muat();
+      return null;
+    } catch (err) {
+      return pesanGalat(err);
     } finally {
       setSibuk("");
     }
@@ -505,8 +530,8 @@ export function TabMatriks() {
     }
   }
 
-  const hargaSel = (cabang: string, produk: string): number | null =>
-    data?.sel.find((s) => s.branch_id === cabang && s.product_id === produk)?.harga ?? null;
+  const selDari = (cabang: string, produk: string): SelHarga | null =>
+    data?.sel.find((s) => s.branch_id === cabang && s.product_id === produk) ?? null;
 
   return (
     <Card>
@@ -534,6 +559,11 @@ export function TabMatriks() {
           <Notice tone="danger">{galat}</Notice>
         </div>
       ) : null}
+      <p className="muted small" style={{ marginBottom: 12 }}>
+        Setiap sel berisi tarif per item = <strong>HJM + (HJM × P1) + SPV</strong>, dihitung server dan
+        dibulatkan ke rupiah terdekat. Baris kecil di bawah tarif: HJM · P1 · SPV. Klik sel untuk mengubah
+        komponennya.
+      </p>
       {memuat ? (
         <SkeletonList rows={4} />
       ) : !data || data.produk.length === 0 ? (
@@ -564,22 +594,26 @@ export function TabMatriks() {
                     </div>
                   </th>
                   {data.cabang.map((c) => {
-                    const nilai = hargaSel(c.id, p.id);
+                    const sel = selDari(c.id, p.id);
                     return (
                       <td key={c.id}>
-                        <Input
-                          inputClassName={styles.cell}
-                          inputMode="numeric"
-                          aria-label={`Harga ${p.nama} untuk ${c.nama}`}
-                          placeholder="tidak dijual"
-                          defaultValue={nilai === null ? "" : String(nilai)}
-                          key={`${c.id}:${nilai === null ? "kosong" : nilai}`}
+                        <button
+                          type="button"
+                          className={sel ? styles.selTarif : `${styles.selTarif} ${styles.selKosong}`}
+                          aria-label={`Tarif ${p.nama} untuk ${c.nama}`}
+                          title={sel ? `HJM · P1 · SPV: ${rincianSel(sel)}` : "Tidak dijual ke cabang ini"}
                           disabled={sibuk === `${c.id}:${p.id}`}
-                          onBlur={(e) => void simpanSel(p, c, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") e.currentTarget.blur();
-                          }}
-                        />
+                          onClick={() => setEdit({ produk: p, cabang: c, sel })}
+                        >
+                          {sel ? (
+                            <>
+                              <span className={styles.selHarga}>{rupiah.format(sel.harga)}</span>
+                              <span className={styles.selRincian}>{rincianSel(sel)}</span>
+                            </>
+                          ) : (
+                            <span className={styles.selRincian}>Tidak dijual</span>
+                          )}
+                        </button>
                       </td>
                     );
                   })}
@@ -590,8 +624,8 @@ export function TabMatriks() {
         </div>
       )}
       <p className="muted small" style={{ marginTop: 12 }}>
-        Sel kosong berarti produk <strong>tidak dijual</strong> ke cabang itu: produk tidak tampil di
-        portal cabang dan tidak bisa dipesan. Kosongkan isian untuk menghapus harganya.
+        Sel <strong>Tidak dijual</strong> berarti produk tidak tampil di portal cabang dan tidak bisa
+        dipesan. Setiap perubahan tersimpan sebagai versi tarif baru dan tercatat di audit log.
       </p>
 
       <div className={styles.salinBar}>
@@ -621,8 +655,145 @@ export function TabMatriks() {
         </Button>
       </div>
       <p className="muted small">
-        Salin harga <strong>menggantikan</strong> matriks cabang tujuan dengan isi cabang sumber.
+        Salin harga <strong>menggantikan</strong> matriks cabang tujuan dengan isi cabang sumber, termasuk HJM,
+        P1, dan SPV-nya.
       </p>
+
+      {edit ? (
+        <EditorTarif
+          key={`${edit.cabang.id}:${edit.produk.id}`}
+          edit={edit}
+          sibuk={sibuk === `${edit.cabang.id}:${edit.produk.id}`}
+          onTutup={() => setEdit(null)}
+          onSimpan={(komponen) => simpanSel(edit, komponen)}
+        />
+      ) : null}
     </Card>
+  );
+}
+
+/**
+ * EditorTarif mengubah komponen satu sel: HJM dan SPV dalam Rupiah, P1 dalam
+ * persen. Tarif final di pratinjau dihitung dengan rumus yang sama seperti
+ * server; yang tersimpan tetap hasil hitungan server.
+ */
+function EditorTarif({
+  edit,
+  sibuk,
+  onTutup,
+  onSimpan,
+}: {
+  edit: EditSel;
+  sibuk: boolean;
+  onTutup: () => void;
+  onSimpan: (komponen: { hjm: number; p1: string; spv: number } | null) => Promise<string | null>;
+}) {
+  const { produk, cabang, sel } = edit;
+  const sertifikat = produk.jenis === "sertifikat";
+  const tanpaRincian = sel !== null && (sel.hjm === null || sel.p1 === null || sel.spv === null);
+  const [hjm, setHjm] = useState(
+    sertifikat ? "0" : sel ? String(sel.hjm ?? sel.harga) : produk.harga_default ? String(produk.harga_default) : "",
+  );
+  const [p1, setP1] = useState(sel?.p1 ? rasioKePersen(sel.p1) : "0");
+  const [spv, setSpv] = useState(sel?.spv !== null && sel?.spv !== undefined ? String(sel.spv) : "0");
+  const [galat, setGalat] = useState<string | null>(null);
+
+  const nilaiHjm = angka(hjm);
+  const nilaiSpv = angka(spv) ?? 0;
+  const rasio = persenKeRasio(p1);
+  const final = nilaiHjm !== null && rasio !== null ? hitungTarif(nilaiHjm, rasio, nilaiSpv) : null;
+
+  async function simpan() {
+    if (nilaiHjm === null) {
+      setGalat("Isi HJM. Untuk berhenti menjual produk ke cabang ini, pakai tombol Tidak dijual.");
+      return;
+    }
+    if (rasio === null) {
+      setGalat("P1 harus persen 0–100, maksimal empat angka di belakang koma.");
+      return;
+    }
+    setGalat(await onSimpan({ hjm: nilaiHjm, p1: rasio, spv: nilaiSpv }));
+  }
+
+  async function tidakDijual() {
+    setGalat(await onSimpan(null));
+  }
+
+  return (
+    <Modal
+      open
+      title={`Tarif ${produk.nama}`}
+      onClose={onTutup}
+      footer={
+        <>
+          {sel ? (
+            <Button variant="danger-ghost" disabled={sibuk} onClick={() => void tidakDijual()}>
+              Tidak dijual
+            </Button>
+          ) : null}
+          <Button variant="secondary" onClick={onTutup}>
+            Batal
+          </Button>
+          <Button variant="primary" disabled={sibuk || final === null} onClick={() => void simpan()}>
+            {sibuk ? "Menyimpan…" : "Simpan"}
+          </Button>
+        </>
+      }
+    >
+      <Form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void simpan();
+        }}
+      >
+        <p className="muted small">{cabang.nama}</p>
+        {galat ? <Notice tone="danger">{galat}</Notice> : null}
+        {sertifikat ? (
+          <Notice tone="info">Produk Sertifikat selalu berharga 0; biaya packaging ditambahkan per pesanan.</Notice>
+        ) : null}
+        {tanpaRincian ? (
+          <Notice tone="info">
+            Harga lama ini belum punya rincian. Isian awal memakai HJM = harga sekarang; sesuaikan P1 dan SPV
+            lalu simpan.
+          </Notice>
+        ) : null}
+        <div className={styles.tarifGrid}>
+          <Field label="HJM (Rp)" htmlFor="tarif-hjm" hint="Harga jual dasar per item">
+            <Input
+              id="tarif-hjm"
+              inputMode="numeric"
+              value={hjm}
+              disabled={sertifikat}
+              onChange={(e) => setHjm(e.target.value)}
+            />
+          </Field>
+          <Field label="P1 (%)" htmlFor="tarif-p1" hint="Persentase dari HJM">
+            <Input
+              id="tarif-p1"
+              inputMode="decimal"
+              value={p1}
+              disabled={sertifikat}
+              onChange={(e) => setP1(e.target.value)}
+            />
+          </Field>
+          <Field label="SPV (Rp)" htmlFor="tarif-spv" hint="Biaya supervisi per item">
+            <Input
+              id="tarif-spv"
+              inputMode="numeric"
+              value={spv}
+              disabled={sertifikat}
+              onChange={(e) => setSpv(e.target.value)}
+            />
+          </Field>
+        </div>
+        <div className={styles.tarifPratinjau} aria-live="polite">
+          <span className="muted small">Tarif per item</span>
+          <strong className="tabular" data-testid="pratinjau-tarif">
+            {final === null ? "—" : rupiah.format(final)}
+          </strong>
+          <span className="muted small">HJM + (HJM × P1) + SPV, dibulatkan ke rupiah terdekat</span>
+        </div>
+      </Form>
+    </Modal>
   );
 }

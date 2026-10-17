@@ -43,7 +43,7 @@ const MATRIKS = {
     { id: "br-a", nama: "Grahita Cabang A", is_active: true },
     { id: "br-b", nama: "Grahita Cabang B", is_active: false },
   ],
-  sel: [{ branch_id: "br-a", product_id: "pr-1", harga: 100000 }],
+  sel: [{ branch_id: "br-a", product_id: "pr-1", harga: 112500, hjm: 100000, p1: "0.1", spv: 2500, sumber: "import" }],
 };
 
 function buatRouter(path: string) {
@@ -151,48 +151,52 @@ describe("Admin Portal — /katalog (F1-08)", () => {
     expect(harga.value).toBe("0");
   });
 
-  it("Tab Matriks memuat grid dan menyimpan satu sel lewat batch edit", async () => {
+  it("Tab Matriks menampilkan tarif beserta HJM · P1 · SPV dan mengirim komponen dari editor", async () => {
     const panggilan = stubFetch();
 
     render(<RouterProvider router={buatRouter("/katalog")} />);
     expect(await screen.findByText("Bio Magnetik")).toBeDefined();
-
     fireEvent.click(screen.getByRole("button", { name: "Matriks harga" }));
 
-    const selA = (await screen.findByLabelText("Harga Bio Magnetik untuk Grahita Cabang A")) as HTMLInputElement;
-    expect(selA.value).toBe("100000");
-    // Cabang B belum dijual → sel kosong.
-    const selB = screen.getByLabelText("Harga Bio Magnetik untuk Grahita Cabang B") as HTMLInputElement;
-    expect(selB.value).toBe("");
+    const selA = await screen.findByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang A" });
+    expect(selA.textContent).toMatch(/112\.500/);
+    expect(selA.textContent).toContain("100.000 · 10% · 2.500");
+    // Cabang B belum dijual.
+    expect(screen.getByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang B" }).textContent).toBe("Tidak dijual");
 
-    fireEvent.change(selA, { target: { value: "150000" } });
-    fireEvent.blur(selA);
+    fireEvent.click(selA);
+    fireEvent.change(await screen.findByLabelText("HJM (Rp)"), { target: { value: "34100" } });
+    fireEvent.change(screen.getByLabelText("P1 (%)"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("SPV (Rp)"), { target: { value: "2500" } });
+    // Pratinjau memakai rumus server: 34.100 + 10% + 2.500 = 40.010.
+    expect(screen.getByTestId("pratinjau-tarif").textContent).toMatch(/40\.010/);
+    fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
 
     await waitFor(() => {
       const put = panggilan.find((p) => p.url.endsWith("/admin/prices") && p.init?.method === "PUT");
       expect(put).toBeDefined();
+      // Harga jual tidak dikirim: server menghitungnya dari komponen.
       expect(JSON.parse(String(put?.init?.body))).toEqual({
-        items: [{ branch_id: "br-a", product_id: "pr-1", harga: 150000 }],
+        items: [{ branch_id: "br-a", product_id: "pr-1", hjm: 34100, p1: "0.1", spv: 2500 }],
       });
     });
   });
 
-  it("Mengosongkan sel mengirim harga null (produk tidak dijual)", async () => {
+  it("Tidak dijual dari editor mengirim hjm null", async () => {
     const panggilan = stubFetch();
 
     render(<RouterProvider router={buatRouter("/katalog")} />);
     expect(await screen.findByText("Bio Magnetik")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Matriks harga" }));
 
-    const selA = (await screen.findByLabelText("Harga Bio Magnetik untuk Grahita Cabang A")) as HTMLInputElement;
-    fireEvent.change(selA, { target: { value: "" } });
-    fireEvent.blur(selA);
+    fireEvent.click(await screen.findByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang A" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Tidak dijual" }));
 
     await waitFor(() => {
       const put = panggilan.find((p) => p.url.endsWith("/admin/prices") && p.init?.method === "PUT");
       expect(put).toBeDefined();
       expect(JSON.parse(String(put?.init?.body))).toEqual({
-        items: [{ branch_id: "br-a", product_id: "pr-1", harga: null }],
+        items: [{ branch_id: "br-a", product_id: "pr-1", hjm: null }],
       });
     });
   });
@@ -203,7 +207,7 @@ describe("Admin Portal — /katalog (F1-08)", () => {
     render(<RouterProvider router={buatRouter("/katalog")} />);
     expect(await screen.findByText("Bio Magnetik")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Matriks harga" }));
-    await screen.findByLabelText("Harga Bio Magnetik untuk Grahita Cabang A");
+    await screen.findByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang A" });
 
     fireEvent.change(screen.getByLabelText("Salin harga dari"), { target: { value: "br-a" } });
     fireEvent.change(screen.getByLabelText("Ke"), { target: { value: "semua" } });

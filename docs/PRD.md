@@ -212,7 +212,7 @@ Field: Nama Cabang, Nama Kepala Cabang, Email Cabang, Telepon, **Cash & Carry** 
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
 | AP-KAT-01 | CRUD produk: nama, jenis (reguler / sertifikat), harga default, urutan tampil, aktif. Produk tidak memiliki field satuan. | Must |
-| AP-KAT-02 | Tab **Matriks harga**: grid Produk × Cabang, edit harga inline, pencarian cabang. | Must |
+| AP-KAT-02 | Tab **Matriks harga**: grid Produk × Cabang, pencarian cabang. Setiap sel diisi komponen **HJM, P1 (%), dan SPV**; harga jual sel dihitung server = HJM + (HJM × P1) + SPV dan tidak diketik langsung (keputusan user 2026-10-17, rumus `design/master-impact-import.md` §7). | Must |
 | AP-KAT-03 | Sel kosong = produk tidak dijual ke cabang itu (tidak tampil di portal cabang). | Must |
 | AP-KAT-04 | Aksi "salin harga" dari satu cabang ke cabang lain / ke semua cabang. | Should |
 | AP-KAT-05 | Perubahan harga tidak mengubah pesanan yang sudah ada (harga di-snapshot pada order line). | Must |

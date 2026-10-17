@@ -141,6 +141,8 @@ Tarif efektif adalah append-only `branch_tariff_versions` atau model ekuivalen, 
 
 `branch_prices` yang ada boleh menjadi projection kompatibilitas dari versi aktif, tetapi bukan satu-satunya rekam audit. Semua perubahan tarif tercatat di audit log.
 
+Amandemen 2026-10-17 (keputusan user, migrasi `0013_tarif_manual.sql`): versi tarif juga boleh lahir dari edit Matriks harga oleh Superadmin/Manager. Versi seperti itu memakai `source_kind='manual'` dan `created_by` admin, tanpa attempt/sel sumber; komponen HJM/P1/SPV tetap wajib dan tarif finalnya dihitung server dengan rumus §7 yang sama (paket `internal/tarif`), sehingga sidik komponennya identik dengan sel workbook bernilai sama. Akibatnya impor berikutnya mengklasifikasikan komponen manual yang sama dengan file sebagai `skip`, komponen berbeda sebagai `update`, dan rollback run impor yang versinya sudah digantikan edit manual ditolak sebagai conflict. Mengosongkan sel menulis tombstone manual. Harga jual tidak pernah diterima langsung dari klien.
+
 Versi `is_available=false` adalah tombstone append-only untuk transisi tarif aktif menjadi unavailable. Tombstone menyimpan provenance triplet sumber dan `source_component_hash` yang membedakan blank HJM dari tarif bernilai nol. Saat tombstone menjadi versi aktif, `branch_prices` untuk pasangan itu HARUS tidak ada atau berstatus nonaktif sehingga lookup katalog maupun validasi submit order sama-sama menolak penjualan. Versi tersedia sebelumnya tetap tersimpan dengan `superseded_at`; order historis tetap menunjuk snapshot/version lamanya. Triplet blank yang sudah mempunyai tombstone aktif dengan component hash sama adalah `skip`, bukan tombstone baru.
 
 ## 6. Matriks kolom

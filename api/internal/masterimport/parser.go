@@ -14,6 +14,8 @@ import (
 
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/grahita/portal/api/internal/tarif"
 )
 
 type ExcelParser struct {
@@ -64,13 +66,7 @@ func normalizeKey(v string) string {
 func NormalizeSourceName(v string) string { return normalizeKey(v) }
 
 func fingerprint(parts ...string) string {
-	h := sha256.New()
-	for _, p := range parts {
-		_, _ = io.WriteString(h, strconv.Itoa(len(p)))
-		_, _ = io.WriteString(h, ":")
-		_, _ = io.WriteString(h, p)
-	}
-	return hex.EncodeToString(h.Sum(nil))
+	return tarif.Sidik(parts...)
 }
 
 func (p *ExcelParser) Parse(r io.Reader, declaredSize int64) (ParsedWorkbook, error) {
@@ -222,26 +218,17 @@ func parseComponent(hjmText, p1Text, spvText string) (MoneyComponent, error) {
 			return MoneyComponent{}, err
 		}
 	}
-	p1 := new(big.Rat)
-	if p1Text != "" {
-		if _, ok := p1.SetString(p1Text); !ok {
-			return MoneyComponent{}, ErrInvalidValue
-		}
-	}
-	if p1.Sign() < 0 || p1.Cmp(big.NewRat(1, 1)) > 0 {
+	p1, err := tarif.ParseRasio(p1Text)
+	if err != nil {
 		return MoneyComponent{}, ErrInvalidValue
 	}
-	raw := new(big.Rat).SetInt64(hjm)
-	raw.Add(raw, new(big.Rat).Mul(new(big.Rat).SetInt64(hjm), p1))
-	raw.Add(raw, new(big.Rat).SetInt64(spv))
-	final, ok := roundHalfUpInt64(raw)
+	final, ok := tarif.Final(hjm, p1, spv)
 	if !ok {
 		return MoneyComponent{}, ErrInvalidValue
 	}
-	p1Canonical := p1.RatString()
 	return MoneyComponent{
-		Available: true, HJM: hjm, P1: p1Canonical, SPV: spv, FinalItem: final,
-		Fingerprint: fingerprint("available", strconv.FormatInt(hjm, 10), p1Canonical, strconv.FormatInt(spv, 10), strconv.FormatInt(final, 10)),
+		Available: true, HJM: hjm, P1: p1.RatString(), SPV: spv, FinalItem: final,
+		Fingerprint: tarif.SidikTersedia(hjm, p1, spv, final),
 	}, nil
 }
 
@@ -257,18 +244,6 @@ func parseRupiah(v string) (int64, error) {
 		return 0, ErrInvalidValue
 	}
 	return r.Num().Int64(), nil
-}
-
-func roundHalfUpInt64(v *big.Rat) (int64, bool) {
-	if v.Sign() < 0 {
-		return 0, false
-	}
-	q, rem := new(big.Int), new(big.Int)
-	q.QuoRem(v.Num(), v.Denom(), rem)
-	if new(big.Int).Lsh(rem, 1).Cmp(v.Denom()) >= 0 {
-		q.Add(q, big.NewInt(1))
-	}
-	return q.Int64(), q.IsInt64()
 }
 
 func maskedTextFingerprint(v string) string {

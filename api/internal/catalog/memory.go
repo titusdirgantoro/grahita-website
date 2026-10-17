@@ -16,7 +16,7 @@ import (
 type Memory struct {
 	mu       sync.Mutex
 	products []Product
-	prices   map[[2]string]int64
+	prices   map[[2]string]PriceCell
 	branches map[string]Branch
 	used     map[string]bool
 	audit    []audit.Entry
@@ -26,7 +26,7 @@ type Memory struct {
 // NewMemory membuat penyimpanan katalog in-memory kosong.
 func NewMemory() *Memory {
 	return &Memory{
-		prices:   map[[2]string]int64{},
+		prices:   map[[2]string]PriceCell{},
 		branches: map[string]Branch{},
 		used:     map[string]bool{},
 	}
@@ -47,11 +47,12 @@ func (m *Memory) PutProduct(p Product) {
 	m.products = append(m.products, p)
 }
 
-// PutPrice menetapkan harga satu sel matriks.
+// PutPrice menetapkan harga satu sel matriks tanpa rincian komponen (seperti
+// baris harga lama sebelum tarif berversi).
 func (m *Memory) PutPrice(branchID, productID string, harga int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.prices[[2]string{branchID, productID}] = harga
+	m.prices[[2]string{branchID, productID}] = PriceCell{BranchID: branchID, ProductID: productID, Harga: harga, Sumber: SumberLama}
 }
 
 // PutBranch menambahkan data cabang untuk /me/branch.
@@ -77,8 +78,16 @@ func (m *Memory) AuditEntries() []audit.Entry {
 	return out
 }
 
-// PriceOf membaca satu sel matriks (ok=false bila sel kosong).
+// PriceOf membaca harga satu sel matriks (ok=false bila sel kosong).
 func (m *Memory) PriceOf(branchID, productID string) (int64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.prices[[2]string{branchID, productID}]
+	return v.Harga, ok
+}
+
+// CellOf membaca satu sel matriks beserta komponennya (ok=false bila kosong).
+func (m *Memory) CellOf(branchID, productID string) (PriceCell, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v, ok := m.prices[[2]string{branchID, productID}]
@@ -114,13 +123,13 @@ func (m *Memory) ListProductsForBranch(_ context.Context, branchID string) ([]Br
 		if !p.IsActive {
 			continue
 		}
-		harga, ok := m.prices[[2]string{branchID, p.ID}]
+		sel, ok := m.prices[[2]string{branchID, p.ID}]
 		if !ok {
 			continue
 		}
 		out = append(out, BranchProduct{
 			ID: p.ID, Nama: p.Nama, Jenis: p.Jenis,
-			Deskripsi: p.Deskripsi, Harga: harga, Urutan: p.Urutan,
+			Deskripsi: p.Deskripsi, Harga: sel.Harga, Urutan: p.Urutan,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -252,14 +261,14 @@ func (m *Memory) ListPrices(_ context.Context, f PriceFilter) ([]PriceCell, erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]PriceCell, 0, len(m.prices))
-	for key, harga := range m.prices {
+	for key, sel := range m.prices {
 		if f.BranchID != "" && key[0] != f.BranchID {
 			continue
 		}
 		if f.ProductID != "" && key[1] != f.ProductID {
 			continue
 		}
-		out = append(out, PriceCell{BranchID: key[0], ProductID: key[1], Harga: harga})
+		out = append(out, sel)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].BranchID != out[j].BranchID {
@@ -270,44 +279,61 @@ func (m *Memory) ListPrices(_ context.Context, f PriceFilter) ([]PriceCell, erro
 	return out, nil
 }
 
-// ApplyPriceChanges menerapkan perubahan sel dan auditnya.
+// ApplyPriceChanges menerapkan perubahan sel dan auditnya. Seperti di
+// PostgreSQL, produk yang pernah bertarif berversi menjadi punya riwayat
+// sehingga tidak bisa dihapus lagi.
 func (m *Memory) ApplyPriceChanges(_ context.Context, changes []PriceChange, _ string, recs []audit.Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range changes {
-		key := [2]string{c.BranchID, c.ProductID}
-		if c.Harga == nil {
-			delete(m.prices, key)
-			continue
-		}
-		m.prices[key] = *c.Harga
+		m.terapkanSel(c.BranchID, c.ProductID, c.Tarif)
 	}
 	m.audit = append(m.audit, recs...)
 	return nil
 }
 
-// CopyPrices menggantikan matriks tiap cabang tujuan dengan matriks sumber.
+// CopyPrices menggantikan matriks tiap cabang tujuan dengan tarif sumber.
 func (m *Memory) CopyPrices(_ context.Context, fromBranchID string, toBranchIDs []string, _ string, recs []audit.Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sumber := make(map[string]int64)
-	for key, harga := range m.prices {
-		if key[0] == fromBranchID {
-			sumber[key[1]] = harga
+	sumber := make(map[string]TarifSel)
+	for key, sel := range m.prices {
+		if key[0] != fromBranchID {
+			continue
 		}
+		t, err := TarifDariSel(sel)
+		if err != nil {
+			return err
+		}
+		sumber[key[1]] = t
 	}
-	for _, t := range toBranchIDs {
+	for _, target := range toBranchIDs {
 		for key := range m.prices {
-			if key[0] == t {
-				delete(m.prices, key)
+			if _, ada := sumber[key[1]]; key[0] == target && !ada {
+				m.terapkanSel(target, key[1], nil)
 			}
 		}
-		for pid, harga := range sumber {
-			m.prices[[2]string{t, pid}] = harga
+		for pid, t := range sumber {
+			if sel, ok := m.prices[[2]string{target, pid}]; ok && sel.SamaDengan(t) {
+				continue
+			}
+			m.terapkanSel(target, pid, &t)
 		}
 	}
 	m.audit = append(m.audit, recs...)
 	return nil
+}
+
+// terapkanSel menulis atau mengosongkan satu sel; pemanggil memegang kunci.
+func (m *Memory) terapkanSel(branchID, productID string, t *TarifSel) {
+	key := [2]string{branchID, productID}
+	if t == nil {
+		delete(m.prices, key)
+		return
+	}
+	hjm, p1, spv := t.HJM, t.P1, t.SPV
+	m.prices[key] = PriceCell{BranchID: branchID, ProductID: productID, Harga: t.Final, HJM: &hjm, P1: &p1, SPV: &spv, Sumber: SumberManual}
+	m.used[productID] = true
 }
 
 // cekKode menolak kode duplikat.

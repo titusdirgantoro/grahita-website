@@ -211,7 +211,7 @@ func TestApiProdukTolakAkunCabang(t *testing.T) {
 		{http.MethodPut, "/api/v1/admin/products/p1", `{"nama":"X"}`},
 		{http.MethodDelete, "/api/v1/admin/products/p1", ""},
 		{http.MethodGet, "/api/v1/admin/prices", ""},
-		{http.MethodPut, "/api/v1/admin/prices", `{"items":[{"branch_id":"br-a","product_id":"p1","harga":1}]}`},
+		{http.MethodPut, "/api/v1/admin/prices", `{"items":[{"branch_id":"br-a","product_id":"p1","hjm":1}]}`},
 		{http.MethodPost, "/api/v1/admin/prices/copy", `{"from_branch_id":"br-a","semua":true}`},
 	}
 	for _, k := range kasus {
@@ -257,9 +257,10 @@ func TestApiMatriksHargaBatchDanFilter(t *testing.T) {
 		t.Fatalf("filter produk pada matriks salah: %d %v", status, body)
 	}
 
-	// Batch edit: ubah p1 di br-b dan isi sel baru p3 untuk br-a.
+	// Batch edit berkomponen: ubah p1 di br-b dan isi sel baru p3 untuk br-a.
+	// Harga jual dihitung server: 150.000 + 10% + 2.500 = 167.500.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, cs.srv.URL+"/api/v1/admin/prices",
-		`{"items":[{"branch_id":"br-b","product_id":"p1","harga":175000},{"branch_id":"br-a","product_id":"p3","harga":9000}]}`, cookies, csrf)
+		`{"items":[{"branch_id":"br-b","product_id":"p1","hjm":150000,"p1":"0.1","spv":2500},{"branch_id":"br-a","product_id":"p3","hjm":9000}]}`, cookies, csrf)
 	if status != http.StatusOK {
 		t.Fatalf("batch edit harus 200, dapat %d (%v)", status, body)
 	}
@@ -267,7 +268,7 @@ func TestApiMatriksHargaBatchDanFilter(t *testing.T) {
 	if hasil["diubah"] != float64(2) || hasil["diabaikan"] != float64(0) {
 		t.Fatalf("harus 2 sel berubah (1 diubah + 1 baru), dapat %v", hasil)
 	}
-	if v, ok := cs.cat.PriceOf("br-b", "p1"); !ok || v != 175000 {
+	if v, ok := cs.cat.PriceOf("br-b", "p1"); !ok || v != 167500 {
 		t.Fatalf("harga br-b tidak tersimpan: %d %v", v, ok)
 	}
 	if v, ok := cs.cat.PriceOf("br-a", "p3"); !ok || v != 9000 {
@@ -276,7 +277,7 @@ func TestApiMatriksHargaBatchDanFilter(t *testing.T) {
 
 	// Kosongkan sel = produk tidak dijual lagi ke cabang itu.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, cs.srv.URL+"/api/v1/admin/prices",
-		`{"items":[{"branch_id":"br-a","product_id":"p3","harga":null}]}`, cookies, csrf)
+		`{"items":[{"branch_id":"br-a","product_id":"p3","hjm":null}]}`, cookies, csrf)
 	if status != http.StatusOK || dataMap(t, body)["dihapus"] != float64(1) {
 		t.Fatalf("kosongkan sel harus 1 terhapus: %d %v", status, body)
 	}
@@ -286,7 +287,7 @@ func TestApiMatriksHargaBatchDanFilter(t *testing.T) {
 
 	// Cabang tidak dikenal ditolak sebelum menyentuh harga.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, cs.srv.URL+"/api/v1/admin/prices",
-		`{"items":[{"branch_id":"br-hantu","product_id":"p1","harga":1000}]}`, cookies, csrf)
+		`{"items":[{"branch_id":"br-hantu","product_id":"p1","hjm":1000}]}`, cookies, csrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("cabang tidak dikenal harus 400, dapat %d (%v)", status, body)
 	}
@@ -294,16 +295,23 @@ func TestApiMatriksHargaBatchDanFilter(t *testing.T) {
 
 	// Harga Sertifikat selain 0 ditolak.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, cs.srv.URL+"/api/v1/admin/prices",
-		`{"items":[{"branch_id":"br-a","product_id":"p2","harga":5000}]}`, cookies, csrf)
+		`{"items":[{"branch_id":"br-a","product_id":"p2","hjm":5000}]}`, cookies, csrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("harga sertifikat harus 400, dapat %d (%v)", status, body)
 	}
 
-	// Harga negatif ditolak validasi transport.
+	// HJM negatif ditolak validasi transport.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, cs.srv.URL+"/api/v1/admin/prices",
-		`{"items":[{"branch_id":"br-a","product_id":"p1","harga":-1}]}`, cookies, csrf)
+		`{"items":[{"branch_id":"br-a","product_id":"p1","hjm":-1}]}`, cookies, csrf)
 	if status != http.StatusBadRequest {
-		t.Fatalf("harga negatif harus 400, dapat %d (%v)", status, body)
+		t.Fatalf("HJM negatif harus 400, dapat %d (%v)", status, body)
+	}
+
+	// Harga jual tidak bisa dikirim langsung: selalu dihitung dari komponen.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, cs.srv.URL+"/api/v1/admin/prices",
+		`{"items":[{"branch_id":"br-a","product_id":"p1","harga":1000}]}`, cookies, csrf)
+	if status != http.StatusBadRequest {
+		t.Fatalf("field harga harus ditolak, dapat %d (%v)", status, body)
 	}
 }
 
@@ -379,7 +387,7 @@ func TestApiKatalogCabangHanyaHargaSendiri(t *testing.T) {
 	// pesanan yang sudah ada tidak tersentuh (diuji di level PostgreSQL).
 	cookiesMgr, csrfMgr := login(t, cs.srv, "budi@example.test")
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, cs.srv.URL+"/api/v1/admin/prices",
-		`{"items":[{"branch_id":"br-a","product_id":"p1","harga":111000}]}`, cookiesMgr, csrfMgr)
+		`{"items":[{"branch_id":"br-a","product_id":"p1","hjm":111000}]}`, cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("ubah harga harus 200, dapat %d", status)
 	}

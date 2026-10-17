@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/masterimport"
 	masterimportpg "github.com/grahita/portal/api/internal/masterimport/postgres"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -712,6 +714,123 @@ func TestPGImpactApplyIdempotenTombstoneRollbackDanStale(t *testing.T) {
 	}
 	if err := f.pool.QueryRow(t.Context(), `SELECT count(*) FROM branch_prices WHERE branch_id=$1 AND product_id=$2 AND harga=112500`, branchID, productID).Scan(&projection); err != nil || projection != 1 {
 		t.Fatalf("projection restored=%d err=%v", projection, err)
+	}
+}
+
+// TestPGImpactBersamaEditManualMatriks memverifikasi interaksi edit komponen
+// matriks harga dengan impor master: edit manual identik dengan sel workbook
+// tidak membuat versi dan dikenali impor sebagai skip; edit berbeda membuat
+// rollback impor lama ditolak (versi aktif bukan lagi milik run itu) dan
+// impor berikutnya menjadi update yang memulihkan nilai workbook.
+func TestPGImpactBersamaEditManualMatriks(t *testing.T) {
+	f := newPGFixture(t)
+	actor := auth.Actor{UserID: f.adminSA, Kind: auth.KindAdmin, Role: auth.RoleSuperadmin}
+	tarifWorkbook, err := catalog.HitungTarif(catalog.Komponen{HJM: 100000, P1: "0.1", SPV: 2500}, catalog.JenisReguler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := impactParsed(masterimport.SourceBranch{
+		SourceKey: "branch:impact-manual-uji", Name: "Impact Manual Uji", Position: "Kepala", HeadName: impactStringPtr("Kepala Uji"),
+		Tariffs: map[string]masterimport.MoneyComponent{"idv": {
+			Available: true, HJM: 100000, P1: "1/10", SPV: 2500, FinalItem: tarifWorkbook.Final, Fingerprint: tarifWorkbook.Sidik,
+		}},
+	})
+	service := masterimport.NewService(masterimportpg.New(f.pool, impactSnapshotTestKey), fixedImpactParser{parsed: parsed}, "staging")
+	preview := func() masterimport.Preview {
+		t.Helper()
+		got, err := service.Preview(t.Context(), actor, bytes.NewReader(nil), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	statusTarifIDV := func(p masterimport.Preview) masterimport.Status {
+		t.Helper()
+		for _, item := range p.Items {
+			if item.EntityKind == masterimport.EntityTariff && len(item.EntityCode) > 4 && item.EntityCode[len(item.EntityCode)-4:] == ":idv" {
+				return item.Status
+			}
+		}
+		t.Fatal("preview tidak memuat tarif idv")
+		return ""
+	}
+	apply := func(p masterimport.Preview, key string) masterimport.ApplyResult {
+		t.Helper()
+		res, err := service.Apply(t.Context(), actor, masterimport.ApplyRequest{AttemptID: p.AttemptID, PreviewHash: p.PreviewHash, IdempotencyKey: key})
+		if err != nil {
+			t.Fatalf("apply %s: %v", key, err)
+		}
+		return res
+	}
+	pertama := apply(preview(), "impact-manual-0001")
+
+	var branchID, productID string
+	if err := f.pool.QueryRow(t.Context(), `SELECT entity_id::text FROM master_import_identities WHERE source_system='impact' AND source_key='branch:impact-manual-uji'`).Scan(&branchID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(t.Context(), `SELECT id::text FROM products WHERE kode='idv'`).Scan(&productID); err != nil {
+		t.Fatal(err)
+	}
+	cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	putIDV := func(hjm int64, p1 string, spv int64) map[string]any {
+		t.Helper()
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
+			fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":%d,"p1":%q,"spv":%d}]}`, branchID, productID, hjm, p1, spv), cookies, csrf)
+		if status != http.StatusOK {
+			t.Fatalf("PUT harga harus 200, dapat %d (%v)", status, body)
+		}
+		return dataMap(t, body)
+	}
+	aktif := func() (string, int64) {
+		t.Helper()
+		var sumber string
+		var harga int64
+		if err := f.pool.QueryRow(t.Context(), `
+			SELECT tv.source_kind, bp.harga
+			  FROM branch_tariff_versions tv
+			  JOIN product_variants v ON v.id = tv.variant_id AND v.code = 'idv'
+			  JOIN branch_prices bp ON bp.branch_id = tv.branch_id AND bp.product_id = v.product_id
+			 WHERE tv.branch_id = $1 AND tv.superseded_at IS NULL`, branchID).Scan(&sumber, &harga); err != nil {
+			t.Fatal(err)
+		}
+		return sumber, harga
+	}
+
+	// Matriks menampilkan komponen hasil impor; menulis nilai yang sama diabaikan.
+	if hasil := putIDV(100000, "0.1", 2500); hasil["diabaikan"] != float64(1) {
+		t.Fatalf("komponen identik dengan impor harus diabaikan, dapat %v", hasil)
+	}
+	if sumber, harga := aktif(); sumber != "import" || harga != 112500 {
+		t.Fatalf("versi impor harus tetap aktif, dapat %s/%d", sumber, harga)
+	}
+
+	// Edit berbeda: versi manual aktif, rollback impor pertama ditolak.
+	putIDV(120000, "0.05", 0)
+	if sumber, harga := aktif(); sumber != "manual" || harga != 126000 {
+		t.Fatalf("edit manual harus aktif dengan tarif 126.000, dapat %s/%d", sumber, harga)
+	}
+	if _, err := service.Rollback(t.Context(), actor, pertama.ApplyRunID); !errors.Is(err, masterimport.ErrRollbackConflict) {
+		t.Fatalf("rollback impor setelah edit manual harus conflict, dapat %v", err)
+	}
+
+	// Impor berikutnya melihat perbedaan sebagai update dan memulihkan workbook.
+	kedua := preview()
+	if st := statusTarifIDV(kedua); st != masterimport.StatusUpdate {
+		t.Fatalf("tarif yang diubah manual harus update pada impor berikutnya, dapat %s", st)
+	}
+	apply(kedua, "impact-manual-0002")
+	if sumber, harga := aktif(); sumber != "import" || harga != 112500 {
+		t.Fatalf("impor harus memulihkan nilai workbook, dapat %s/%d", sumber, harga)
+	}
+
+	// Edit manual yang kembali persis ke nilai workbook dikenali sebagai skip.
+	putIDV(120000, "0.05", 0)
+	putIDV(100000, "0.10", 2500)
+	if sumber, harga := aktif(); sumber != "manual" || harga != 112500 {
+		t.Fatalf("edit manual kembali harus aktif dengan tarif 112.500, dapat %s/%d", sumber, harga)
+	}
+	if st := statusTarifIDV(preview()); st != masterimport.StatusSkip {
+		t.Fatalf("komponen manual identik dengan workbook harus skip, dapat %s", st)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/masterimport"
+	"github.com/grahita/portal/api/internal/tarif"
 )
 
 type storedPreviewItem struct {
@@ -901,7 +902,7 @@ func ratioNumeric(value string) string {
 	if _, ok := r.SetString(value); !ok {
 		return value
 	}
-	return strings.TrimRight(strings.TrimRight(r.FloatString(18), "0"), ".")
+	return tarif.Desimal(r)
 }
 
 func verifyBranchAfter(ctx context.Context, tx pgx.Tx, id, expected string) error {
@@ -946,15 +947,18 @@ func snapshotAAD(applyRunID string, sequence int) string {
 	return fmt.Sprintf("master-impact:%s:%d", applyRunID, sequence)
 }
 
+// Versi hasil edit manual matriks harga tidak punya attempt/sel sumber; kolom
+// itu dibaca sebagai nilai kosong agar reconcile dan rollback impor tetap bisa
+// membandingkan dan menolak (conflict) versi tersebut.
 func loadActiveTariffVersion(ctx context.Context, tx pgx.Tx, branchID, variantID string) (tariffVersionState, error) {
 	return loadTariffVersion(ctx, tx, `SELECT id::text,branch_id::text,variant_id::text,hjm_rupiah,p1_ratio::text,spv_rupiah,final_item_rupiah,
-		is_available,source_import_attempt_id::text,source_sheet,source_row,source_columns,source_component_hash,valid_from,superseded_at
+		is_available,COALESCE(source_import_attempt_id::text,''),COALESCE(source_sheet,''),COALESCE(source_row,0),COALESCE(source_columns,''),source_component_hash,valid_from,superseded_at
 		FROM branch_tariff_versions WHERE branch_id=$1 AND variant_id=$2 AND superseded_at IS NULL FOR UPDATE`, branchID, variantID)
 }
 
 func loadTariffVersionByID(ctx context.Context, tx pgx.Tx, id string) (tariffVersionState, error) {
 	return loadTariffVersion(ctx, tx, `SELECT id::text,branch_id::text,variant_id::text,hjm_rupiah,p1_ratio::text,spv_rupiah,final_item_rupiah,
-		is_available,source_import_attempt_id::text,source_sheet,source_row,source_columns,source_component_hash,valid_from,superseded_at
+		is_available,COALESCE(source_import_attempt_id::text,''),COALESCE(source_sheet,''),COALESCE(source_row,0),COALESCE(source_columns,''),source_component_hash,valid_from,superseded_at
 		FROM branch_tariff_versions WHERE id=$1 FOR UPDATE`, id)
 }
 

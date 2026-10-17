@@ -95,21 +95,43 @@ SELECT EXISTS (
        AND (sqlc.narg(except_id)::uuid IS NULL OR id <> sqlc.narg(except_id)::uuid)
 )::boolean;
 
--- name: ProductHasOrderLines :one
--- Produk yang sudah dipakai order line tidak boleh dihapus (order_lines
--- memakai ON DELETE RESTRICT); nonaktifkan saja produknya.
-SELECT EXISTS (SELECT 1 FROM order_lines WHERE product_id = $1)::boolean;
+-- name: ProductHasHistory :one
+-- Produk yang sudah dipakai order line, atau sudah punya varian dengan riwayat
+-- tarif berversi (impor maupun edit matriks), tidak boleh dihapus — keduanya
+-- memakai ON DELETE RESTRICT; nonaktifkan saja produknya.
+SELECT (EXISTS (SELECT 1 FROM order_lines ol WHERE ol.product_id = sqlc.arg(product_id)::uuid)
+     OR EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = sqlc.arg(product_id)::uuid))::boolean;
 
 -- ---------- Matriks harga per cabang ----------
 
 -- name: ListBranchPrices :many
 -- Sel matriks yang BERISI harga. Sel kosong tidak punya baris dan berarti
 -- produk tidak dijual ke cabang tersebut (PRD AP-KAT-03).
-SELECT branch_id, product_id, harga
-  FROM branch_prices
- WHERE (sqlc.narg(branch_id)::uuid IS NULL OR branch_id = sqlc.narg(branch_id)::uuid)
-   AND (sqlc.narg(product_id)::uuid IS NULL OR product_id = sqlc.narg(product_id)::uuid)
- ORDER BY branch_id, product_id;
+--
+-- Komponen HJM/P1/SPV diambil dari versi tarif aktif varian utama produk,
+-- hanya bila tarif finalnya sama dengan harga sel (komponen benar-benar
+-- menjelaskan harga). Sel harga lama tanpa versi yang cocok mengembalikan
+-- komponen NULL dan source_kind kosong.
+SELECT bp.branch_id, bp.product_id, bp.harga,
+       t.hjm_rupiah, COALESCE(t.p1_ratio, '')::text AS p1_ratio, t.spv_rupiah,
+       COALESCE(t.source_kind, '')::text AS source_kind
+  FROM branch_prices bp
+  LEFT JOIN LATERAL (
+        SELECT tv.hjm_rupiah, tv.p1_ratio::text AS p1_ratio, tv.spv_rupiah, tv.source_kind
+          FROM product_variants v
+          JOIN branch_tariff_versions tv ON tv.variant_id = v.id
+         WHERE v.product_id = bp.product_id
+           AND v.tariff_parent_variant_id IS NULL
+           AND tv.branch_id = bp.branch_id
+           AND tv.superseded_at IS NULL
+           AND tv.is_available
+           AND tv.final_item_rupiah = bp.harga
+         ORDER BY v.created_at, v.id
+         LIMIT 1
+       ) t ON true
+ WHERE (sqlc.narg(branch_id)::uuid IS NULL OR bp.branch_id = sqlc.narg(branch_id)::uuid)
+   AND (sqlc.narg(product_id)::uuid IS NULL OR bp.product_id = sqlc.narg(product_id)::uuid)
+ ORDER BY bp.branch_id, bp.product_id;
 
 -- name: UpsertBranchPrice :exec
 INSERT INTO branch_prices (branch_id, product_id, harga, updated_by)
@@ -127,3 +149,51 @@ DELETE FROM branch_prices WHERE branch_id = $1 AND product_id = $2;
 -- Dipakai aksi "salin harga": matriks cabang tujuan digantikan seluruhnya oleh
 -- matriks cabang sumber.
 DELETE FROM branch_prices WHERE branch_id = $1;
+
+-- ---------- Versi tarif manual dari matriks harga ----------
+--
+-- Edit matriks menulis komponen HJM/P1/SPV sebagai versi tarif append-only
+-- (source_kind 'manual'), lalu memproyeksikan tarif finalnya ke branch_prices
+-- yang dibaca katalog dan order (docs/design/master-impact-import.md §5.3).
+
+-- name: PrimaryVariantOfProduct :one
+-- Varian utama (bukan turunan) tempat tarif produk disimpan.
+SELECT id
+  FROM product_variants
+ WHERE product_id = $1 AND tariff_parent_variant_id IS NULL
+ ORDER BY created_at, id
+ LIMIT 1;
+
+-- name: CreatePrimaryVariant :one
+-- Varian utama untuk produk yang belum pernah bertarif berversi (produk buatan
+-- admin, bukan hasil impor). Kode diturunkan dari id produk supaya pasti unik
+-- dan tidak bertabrakan dengan kode immutable varian impor.
+INSERT INTO product_variants (product_id, code, nama)
+SELECT p.id, 'produk-' || p.id::text, p.nama
+  FROM products p
+ WHERE p.id = $1
+RETURNING id;
+
+-- name: ActiveTariffVersion :one
+SELECT id, is_available
+  FROM branch_tariff_versions
+ WHERE branch_id = $1 AND variant_id = $2 AND superseded_at IS NULL
+ FOR UPDATE;
+
+-- name: SupersedeTariffVersion :exec
+UPDATE branch_tariff_versions SET superseded_at = now() WHERE id = $1;
+
+-- name: InsertManualTariffVersion :exec
+INSERT INTO branch_tariff_versions
+       (branch_id, variant_id, hjm_rupiah, p1_ratio, spv_rupiah, final_item_rupiah,
+        is_available, source_kind, created_by, source_component_hash)
+VALUES (sqlc.arg(branch_id), sqlc.arg(variant_id), sqlc.arg(hjm_rupiah),
+        (sqlc.arg(p1_ratio)::text)::numeric, sqlc.arg(spv_rupiah), sqlc.arg(final_item_rupiah),
+        true, 'manual', sqlc.arg(created_by), sqlc.arg(source_component_hash));
+
+-- name: InsertManualTariffTombstone :exec
+-- Penanda "tidak dijual lagi" untuk pasangan yang sebelumnya bertarif aktif.
+INSERT INTO branch_tariff_versions
+       (branch_id, variant_id, is_available, source_kind, created_by, source_component_hash)
+VALUES (sqlc.arg(branch_id), sqlc.arg(variant_id), false, 'manual',
+        sqlc.arg(created_by), sqlc.arg(source_component_hash));

@@ -12,9 +12,13 @@
 //     dinonaktifkan (order_lines.product_id ON DELETE RESTRICT).
 //   - Setiap mutasi produk/harga dicatat ke audit_logs DI DALAM transaksi yang
 //     sama dengan perubahannya (PRD AP-KAT-06, SystemDesign.md §5.4).
+//   - Harga sel matriks SELALU dihitung server dari komponen HJM, P1, dan SPV
+//     (tarif = HJM + HJM×P1 + SPV, lihat paket tarif). Setiap perubahan sel
+//     menjadi versi tarif append-only (branch_tariff_versions) dan tarif
+//     finalnya diproyeksikan ke branch_prices yang dibaca katalog dan pesanan.
 //   - Perubahan harga TIDAK menyentuh pesanan yang sudah ada: harga pada order
-//     line adalah snapshot (PRD AP-KAT-05, BR-05). Paket ini hanya menulis
-//     branch_prices, tidak pernah order_lines.
+//     line adalah snapshot (PRD AP-KAT-05, BR-05). Paket ini tidak pernah
+//     menulis order_lines.
 //
 // Master cabang untuk Admin Portal TIDAK ada di sini: sejak F1-06 CRUD cabang
 // beserta token registrasinya dimiliki paket internal/branch. Yang tersisa di
@@ -28,10 +32,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/grahita/portal/api/internal/audit"
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/tarif"
 )
 
 // Sentinel error domain. Pemetaan ke kode HTTP ada di lapisan transport.
@@ -46,9 +52,9 @@ var (
 	ErrInvalidData = errors.New("data katalog tidak valid")
 	// ErrKodeTaken dikembalikan bila kode produk sudah dipakai produk lain.
 	ErrKodeTaken = errors.New("kode produk sudah dipakai")
-	// ErrProductUsed dikembalikan bila produk sudah dipakai order line sehingga
-	// tidak boleh dihapus.
-	ErrProductUsed = errors.New("produk sudah dipakai pesanan")
+	// ErrProductUsed dikembalikan bila produk sudah dipakai order line atau
+	// punya riwayat tarif berversi sehingga tidak boleh dihapus.
+	ErrProductUsed = errors.New("produk sudah dipakai pesanan atau punya riwayat tarif")
 )
 
 // Jenis produk (Database.md §3, tipe enum product_kind).
@@ -104,12 +110,113 @@ type Branch struct {
 	IsActive   bool   `json:"is_active"`
 }
 
-// PriceCell adalah satu sel matriks harga: harga produk untuk satu cabang.
+// Sumber rincian sel matriks harga.
+const (
+	// SumberImpor: versi tarif hasil impor master Impact.
+	SumberImpor = "import"
+	// SumberManual: versi tarif hasil edit matriks harga oleh admin.
+	SumberManual = "manual"
+	// SumberLama: harga tanpa rincian komponen (dibuat sebelum tarif
+	// berversi, atau tarif finalnya tidak lagi sama dengan harga sel).
+	SumberLama = "legacy"
+)
+
+// PriceCell adalah satu sel matriks harga: tarif produk untuk satu cabang.
 // Sel yang tidak dijual tidak punya PriceCell sama sekali.
 type PriceCell struct {
 	BranchID  string `json:"branch_id"`
 	ProductID string `json:"product_id"`
-	Harga     int64  `json:"harga"`
+	// Harga adalah tarif final satu item yang dibaca katalog cabang & pesanan.
+	Harga int64 `json:"harga"`
+	// HJM, P1 (rasio desimal 0–1, "0.1" = 10%), dan SPV pembentuk Harga; nil
+	// untuk sel tanpa rincian (Sumber SumberLama).
+	HJM    *int64  `json:"hjm"`
+	P1     *string `json:"p1"`
+	SPV    *int64  `json:"spv"`
+	Sumber string  `json:"sumber"`
+}
+
+// Komponen adalah masukan tarif satu sel: HJM dan SPV dalam Rupiah, P1 rasio
+// desimal 0–1 (kosong = 0).
+type Komponen struct {
+	HJM int64  `json:"hjm"`
+	P1  string `json:"p1"`
+	SPV int64  `json:"spv"`
+}
+
+// TarifSel adalah komponen yang sudah divalidasi beserta tarif final dan
+// sidiknya — bentuk yang disimpan sebagai versi tarif.
+type TarifSel struct {
+	Komponen
+	Final int64
+	Sidik string
+}
+
+// maxDesimalP1 membatasi P1 ke enam digit desimal rasio (0,0001%), cukup untuk
+// persentase berpecahan tanpa menyimpan pecahan berulang yang tidak eksak.
+var maxDesimalP1 = big.NewRat(1_000_000, 1)
+
+// HitungTarif memvalidasi komponen dan menghitung tarif finalnya. Produk
+// Sertifikat hanya boleh berkomponen nol (PRD CP-SER-01).
+func HitungTarif(k Komponen, jenis string) (TarifSel, error) {
+	if k.HJM < 0 || k.SPV < 0 {
+		return TarifSel{}, fmt.Errorf("%w: HJM dan SPV tidak boleh negatif", ErrInvalidData)
+	}
+	p1, err := tarif.ParseRasio(k.P1)
+	if err != nil {
+		return TarifSel{}, fmt.Errorf("%w: P1 harus 0 sampai 100%%", ErrInvalidData)
+	}
+	if !new(big.Rat).Mul(p1, maxDesimalP1).IsInt() {
+		return TarifSel{}, fmt.Errorf("%w: P1 maksimal empat angka di belakang koma persen", ErrInvalidData)
+	}
+	if jenis == JenisSertifikat && (k.HJM != 0 || k.SPV != 0 || p1.Sign() != 0) {
+		return TarifSel{}, fmt.Errorf("%w: produk Sertifikat selalu berharga 0", ErrInvalidData)
+	}
+	final, ok := tarif.Final(k.HJM, p1, k.SPV)
+	if !ok {
+		return TarifSel{}, fmt.Errorf("%w: tarif terlalu besar", ErrInvalidData)
+	}
+	return TarifSel{
+		Komponen: Komponen{HJM: k.HJM, P1: tarif.Desimal(p1), SPV: k.SPV},
+		Final:    final,
+		Sidik:    tarif.SidikTersedia(k.HJM, p1, k.SPV, final),
+	}, nil
+}
+
+// TarifDariSel membentuk tarif dari sel yang sudah ada (dipakai salin harga).
+// Sel tanpa rincian dibaca sebagai HJM = harga, P1 = 0, SPV = 0 — tarif finalnya
+// identik dengan harga lama, sehingga salinannya tetap berharga sama.
+func TarifDariSel(c PriceCell) (TarifSel, error) {
+	k := Komponen{HJM: c.Harga}
+	if c.HJM != nil && c.P1 != nil && c.SPV != nil {
+		k = Komponen{HJM: *c.HJM, P1: *c.P1, SPV: *c.SPV}
+	}
+	return HitungTarif(k, JenisReguler)
+}
+
+// SamaDengan melaporkan apakah sel sudah memuat tarif t persis (komponen dan
+// harga), sehingga menulisnya lagi tidak perlu membuat versi baru.
+func (c PriceCell) SamaDengan(t TarifSel) bool {
+	if c.Sumber == SumberLama || c.HJM == nil || c.P1 == nil || c.SPV == nil {
+		return false
+	}
+	p1Sel, err1 := tarif.ParseRasio(*c.P1)
+	p1Baru, err2 := tarif.ParseRasio(t.P1)
+	return err1 == nil && err2 == nil && p1Sel.Cmp(p1Baru) == 0 &&
+		*c.HJM == t.HJM && *c.SPV == t.SPV && c.Harga == t.Final
+}
+
+// auditSel adalah isi before/after audit untuk satu sel harga.
+func auditSel(branchID string, c *PriceCell, t *TarifSel) map[string]any {
+	switch {
+	case t != nil:
+		return map[string]any{"branch_id": branchID, "harga": t.Final, "hjm": t.HJM, "p1": t.P1, "spv": t.SPV}
+	case c != nil && c.HJM != nil && c.P1 != nil && c.SPV != nil:
+		return map[string]any{"branch_id": branchID, "harga": c.Harga, "hjm": *c.HJM, "p1": *c.P1, "spv": *c.SPV}
+	case c != nil:
+		return map[string]any{"branch_id": branchID, "harga": c.Harga}
+	}
+	return nil
 }
 
 // ProductFilter adalah penyaring daftar produk admin. Field nil/kosong berarti
@@ -152,11 +259,12 @@ type ProductPatch struct {
 }
 
 // PriceInput adalah satu sel yang dikirim pada batch edit matriks harga.
-// Harga nil berarti sel dikosongkan (produk tidak dijual ke cabang itu).
+// Komponen nil berarti sel dikosongkan (produk tidak dijual ke cabang itu).
+// Harga jual tidak pernah dikirim klien: selalu dihitung dari komponen.
 type PriceInput struct {
 	BranchID  string
 	ProductID string
-	Harga     *int64
+	Komponen  *Komponen
 }
 
 // PriceResult merangkum hasil batch edit matriks harga.
@@ -193,8 +301,9 @@ type CopyResult struct {
 type PriceChange struct {
 	BranchID  string
 	ProductID string
-	// Harga nil berarti baris dihapus (sel dikosongkan).
-	Harga *int64
+	// Tarif nil berarti sel dikosongkan: versi tarif aktifnya ditutup dan
+	// baris harganya dihapus.
+	Tarif *TarifSel
 }
 
 // Repository memuat dan mengubah data katalog.
@@ -220,11 +329,12 @@ type Repository interface {
 
 	// Matriks harga per cabang.
 	ListPrices(ctx context.Context, f PriceFilter) ([]PriceCell, error)
-	// ApplyPriceChanges menerapkan seluruh perubahan sel dan entri auditnya
-	// dalam SATU transaksi.
+	// ApplyPriceChanges menerapkan seluruh perubahan sel — versi tarif manual
+	// baru, proyeksi harganya, dan entri audit — dalam SATU transaksi.
 	ApplyPriceChanges(ctx context.Context, changes []PriceChange, actorID string, recs []audit.Entry) error
 	// CopyPrices menggantikan seluruh matriks harga setiap cabang tujuan
-	// dengan matriks cabang sumber, beserta satu entri audit per cabang.
+	// dengan komponen tarif cabang sumber (TarifDariSel), beserta satu entri
+	// audit per cabang; sel yang sudah sama tidak membuat versi baru.
 	CopyPrices(ctx context.Context, fromBranchID string, toBranchIDs []string, actorID string, recs []audit.Entry) error
 }
 
@@ -460,10 +570,11 @@ func (s *Service) Prices(ctx context.Context, actor auth.Actor, f PriceFilter) (
 
 // SetPrices menerapkan batch edit matriks harga (PRD AP-KAT-02/03).
 //
-// Aturan: harga tidak boleh negatif; produk Sertifikat selalu 0; sel dengan
-// harga sama dengan nilai sekarang diabaikan (tidak ada audit berisik); sel
-// yang dikosongkan membuat baris terhapus sehingga produk tidak lagi dijual ke
-// cabang itu.
+// Aturan: setiap sel diisi komponen HJM, P1, dan SPV; harga jualnya dihitung
+// server (HitungTarif) dan tidak pernah diterima dari klien. Produk Sertifikat
+// hanya boleh berkomponen nol. Sel yang komponennya sama dengan versi aktif
+// diabaikan (tidak ada versi/audit berisik); sel yang dikosongkan membuat
+// produk tidak lagi dijual ke cabang itu.
 func (s *Service) SetPrices(ctx context.Context, actor auth.Actor, items []PriceInput) (PriceResult, error) {
 	if !actor.Can(auth.CapAdminCatalog) {
 		return PriceResult{}, ErrForbidden
@@ -475,7 +586,7 @@ func (s *Service) SetPrices(ctx context.Context, actor auth.Actor, items []Price
 		return PriceResult{}, fmt.Errorf("%w: maksimal %d sel per permintaan", ErrInvalidData, maxPriceBatch)
 	}
 
-	// Produk dimuat sekali per id supaya harga Sertifikat bisa dipaksa 0 dan
+	// Produk dimuat sekali per id supaya aturan Sertifikat bisa ditegakkan dan
 	// produk tak dikenal ditolak dengan pesan jelas sebelum menyentuh DB.
 	products := map[string]Product{}
 	for _, it := range items {
@@ -498,9 +609,9 @@ func (s *Service) SetPrices(ctx context.Context, actor auth.Actor, items []Price
 	if err != nil {
 		return PriceResult{}, fmt.Errorf("baca matriks harga saat ini: %w", err)
 	}
-	ada := make(map[[2]string]int64, len(sekarang))
+	ada := make(map[[2]string]PriceCell, len(sekarang))
 	for _, c := range sekarang {
-		ada[[2]string{c.BranchID, c.ProductID}] = c.Harga
+		ada[[2]string{c.BranchID, c.ProductID}] = c
 	}
 
 	var (
@@ -509,43 +620,36 @@ func (s *Service) SetPrices(ctx context.Context, actor auth.Actor, items []Price
 		res     PriceResult
 	)
 	for _, it := range items {
-		p := products[it.ProductID]
-		if it.Harga != nil {
-			if *it.Harga < 0 {
-				return PriceResult{}, fmt.Errorf("%w: harga tidak boleh negatif", ErrInvalidData)
-			}
-			if p.Jenis == JenisSertifikat && *it.Harga != 0 {
-				return PriceResult{}, fmt.Errorf("%w: produk Sertifikat selalu berharga 0", ErrInvalidData)
-			}
+		lama, punyaBaris := ada[[2]string{it.BranchID, it.ProductID}]
+		var before any
+		if punyaBaris {
+			before = auditSel(it.BranchID, &lama, nil)
 		}
-		key := [2]string{it.BranchID, it.ProductID}
-		lama, punyaBaris := ada[key]
-
-		switch {
-		case it.Harga == nil:
+		if it.Komponen == nil {
 			if !punyaBaris {
 				res.Diabaikan++
 				continue
 			}
 			changes = append(changes, PriceChange{BranchID: it.BranchID, ProductID: it.ProductID})
-			recs = append(recs, audit.NewEntry(ctx, actor, audit.EntityBranchPrice, it.ProductID, audit.ActionDelete,
-				map[string]any{"branch_id": it.BranchID, "harga": lama}, nil))
+			recs = append(recs, audit.NewEntry(ctx, actor, audit.EntityBranchPrice, it.ProductID, audit.ActionDelete, before, nil))
 			res.Dihapus++
-		case punyaBaris && lama == *it.Harga:
-			res.Diabaikan++
-		default:
-			harga := *it.Harga
-			changes = append(changes, PriceChange{BranchID: it.BranchID, ProductID: it.ProductID, Harga: &harga})
-			aksi := audit.ActionCreate
-			var before any
-			if punyaBaris {
-				aksi = audit.ActionUpdate
-				before = map[string]any{"branch_id": it.BranchID, "harga": lama}
-			}
-			recs = append(recs, audit.NewEntry(ctx, actor, audit.EntityBranchPrice, it.ProductID, aksi,
-				before, map[string]any{"branch_id": it.BranchID, "harga": harga}))
-			res.Diubah++
+			continue
 		}
+		t, err := HitungTarif(*it.Komponen, products[it.ProductID].Jenis)
+		if err != nil {
+			return PriceResult{}, err
+		}
+		if punyaBaris && lama.SamaDengan(t) {
+			res.Diabaikan++
+			continue
+		}
+		changes = append(changes, PriceChange{BranchID: it.BranchID, ProductID: it.ProductID, Tarif: &t})
+		aksi := audit.ActionCreate
+		if punyaBaris {
+			aksi = audit.ActionUpdate
+		}
+		recs = append(recs, audit.NewEntry(ctx, actor, audit.EntityBranchPrice, it.ProductID, aksi, before, auditSel(it.BranchID, nil, &t)))
+		res.Diubah++
 	}
 	if len(changes) == 0 {
 		return res, nil
@@ -556,8 +660,8 @@ func (s *Service) SetPrices(ctx context.Context, actor auth.Actor, items []Price
 	return res, nil
 }
 
-// CopyPrices menggantikan matriks harga setiap cabang tujuan dengan matriks
-// cabang sumber (PRD AP-KAT-04). Bersifat replace: sel yang tidak ada di
+// CopyPrices menggantikan matriks harga setiap cabang tujuan dengan komponen
+// tarif cabang sumber (PRD AP-KAT-04). Bersifat replace: sel yang tidak ada di
 // cabang sumber menjadi kosong di cabang tujuan.
 //
 // Daftar cabang tujuan sudah diperiksa lapisan transport (katalog tidak
@@ -602,13 +706,17 @@ func (s *Service) CopyPrices(ctx context.Context, actor auth.Actor, in CopyInput
 		if err != nil {
 			return CopyResult{}, fmt.Errorf("baca harga cabang %s: %w", t, err)
 		}
-		lamaMap := make(map[string]int64, len(lama))
+		lamaMap := make(map[string]PriceCell, len(lama))
 		for _, c := range lama {
-			lamaMap[c.ProductID] = c.Harga
+			lamaMap[c.ProductID] = c
 		}
 		berubah := 0
 		for _, c := range sumber {
-			if v, ok := lamaMap[c.ProductID]; !ok || v != c.Harga {
+			t, err := TarifDariSel(c)
+			if err != nil {
+				return CopyResult{}, err
+			}
+			if v, ok := lamaMap[c.ProductID]; !ok || !v.SamaDengan(t) {
 				berubah++
 			}
 		}

@@ -156,10 +156,13 @@ func TestSertifikatSelaluNol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sertifikat harga 0 harus diterima: %v", err)
 	}
-	if _, err := s.SetPrices(ctx, actor, []PriceInput{{BranchID: "br-a", ProductID: ser.ID, Harga: ptr(int64(1000))}}); !errors.Is(err, ErrInvalidData) {
+	if _, err := s.SetPrices(ctx, actor, []PriceInput{{BranchID: "br-a", ProductID: ser.ID, Komponen: komp(1000, "", 0)}}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("harga cabang sertifikat selain 0 harus ditolak, dapat %v", err)
 	}
-	res, err := s.SetPrices(ctx, actor, []PriceInput{{BranchID: "br-a", ProductID: ser.ID, Harga: ptr(int64(0))}})
+	if _, err := s.SetPrices(ctx, actor, []PriceInput{{BranchID: "br-a", ProductID: ser.ID, Komponen: komp(0, "0.1", 2500)}}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("P1/SPV sertifikat selain 0 harus ditolak, dapat %v", err)
+	}
+	res, err := s.SetPrices(ctx, actor, []PriceInput{{BranchID: "br-a", ProductID: ser.ID, Komponen: komp(0, "", 0)}})
 	if err != nil {
 		t.Fatalf("harga cabang sertifikat 0 harus diterima: %v", err)
 	}
@@ -186,29 +189,41 @@ func TestUbahProdukJadiSertifikatMenolakHargaCabang(t *testing.T) {
 	}
 }
 
-// TestBatchEditMatriksHarga menguji batch edit: tambah, ubah, kosongkan, dan
-// pengabaian sel yang nilainya sama (PRD AP-KAT-02/03/06).
+// TestBatchEditMatriksHarga menguji batch edit berkomponen: harga jual sel
+// selalu tarif HJM + HJM×P1 + SPV hitungan server, komponen tersimpan, sel
+// yang komponennya sama diabaikan, dan sel yang dikosongkan terhapus
+// (PRD AP-KAT-02/03/06).
 func TestBatchEditMatriksHarga(t *testing.T) {
 	s, m := svc()
 	ctx := context.Background()
 	actor := adminActor()
 	m.PutProduct(Product{ID: "p1", Nama: "A", IsActive: true})
 	m.PutProduct(Product{ID: "p2", Nama: "B", IsActive: true})
-	m.PutPrice("br-a", "p1", 100000)
+	m.PutPrice("br-a", "p1", 100000) // harga lama tanpa rincian
 
 	res, err := s.SetPrices(ctx, actor, []PriceInput{
-		{BranchID: "br-a", ProductID: "p1", Harga: ptr(int64(100000))}, // sama → diabaikan
-		{BranchID: "br-a", ProductID: "p2", Harga: ptr(int64(250000))}, // baru
-		{BranchID: "br-b", ProductID: "p1", Harga: ptr(int64(120000))}, // baru
+		{BranchID: "br-a", ProductID: "p1", Komponen: komp(100000, "0.1", 2500)}, // harga lama → berkomponen
+		{BranchID: "br-a", ProductID: "p2", Komponen: komp(10005, "0.1", 0)},     // baru, dibulatkan half-up
+		{BranchID: "br-b", ProductID: "p1", Komponen: komp(120000, "", 0)},       // baru, P1/SPV kosong = 0
 	})
 	if err != nil {
 		t.Fatalf("batch edit: %v", err)
 	}
-	if res.Diubah != 2 || res.Dihapus != 0 || res.Diabaikan != 1 {
+	if res.Diubah != 3 || res.Dihapus != 0 || res.Diabaikan != 0 {
 		t.Fatalf("ringkasan tidak sesuai: %+v", res)
 	}
-	if v, ok := m.PriceOf("br-b", "p1"); !ok || v != 120000 {
-		t.Fatalf("sel baru tidak tersimpan: %d %v", v, ok)
+	sel, _ := m.CellOf("br-a", "p1")
+	if sel.Harga != 112500 || sel.HJM == nil || *sel.HJM != 100000 || *sel.P1 != "0.1" || *sel.SPV != 2500 || sel.Sumber != SumberManual {
+		t.Fatalf("sel harus menyimpan komponen dan tarif hitungan server, dapat %+v", sel)
+	}
+	if v, _ := m.PriceOf("br-a", "p2"); v != 11006 {
+		t.Fatalf("tarif 10.005 × 1,10 harus dibulatkan half-up ke 11.006, dapat %d", v)
+	}
+
+	// Komponen sama (P1 "0.10" = "0.1") → diabaikan, tanpa versi/audit baru.
+	res, err = s.SetPrices(ctx, actor, []PriceInput{{BranchID: "br-a", ProductID: "p1", Komponen: komp(100000, "0.10", 2500)}})
+	if err != nil || res.Diabaikan != 1 || res.Diubah != 0 {
+		t.Fatalf("komponen yang sama harus diabaikan: %+v %v", res, err)
 	}
 
 	// Sel dikosongkan → baris terhapus (produk tidak dijual lagi).
@@ -228,16 +243,14 @@ func TestBatchEditMatriksHarga(t *testing.T) {
 		t.Fatalf("sel kosong yang dikosongkan lagi harus diabaikan: %+v %v", res, err)
 	}
 
-	// Audit: 2 create + 1 update (ubah sel br-b? tidak) — periksa jumlah entri
-	// untuk entity branch_price.
 	priceRecs := 0
 	for _, r := range m.AuditEntries() {
 		if r.Entity == audit.EntityBranchPrice {
 			priceRecs++
 		}
 	}
-	if priceRecs != 3 {
-		t.Fatalf("harus 3 entri audit harga (2 sel baru + 1 hapus), dapat %d", priceRecs)
+	if priceRecs != 4 {
+		t.Fatalf("harus 4 entri audit harga (3 sel berubah + 1 hapus), dapat %d", priceRecs)
 	}
 }
 
@@ -253,9 +266,12 @@ func TestBatchEditMenolakMasukanTidakValid(t *testing.T) {
 		items []PriceInput
 	}{
 		{"kosong", nil},
-		{"harga negatif", []PriceInput{{BranchID: "br-a", ProductID: "p1", Harga: ptr(int64(-1))}}},
-		{"produk tidak dikenal", []PriceInput{{BranchID: "br-a", ProductID: "p9", Harga: ptr(int64(1))}}},
-		{"product_id kosong", []PriceInput{{BranchID: "br-a", Harga: ptr(int64(1))}}},
+		{"HJM negatif", []PriceInput{{BranchID: "br-a", ProductID: "p1", Komponen: komp(-1, "", 0)}}},
+		{"SPV negatif", []PriceInput{{BranchID: "br-a", ProductID: "p1", Komponen: komp(1000, "", -1)}}},
+		{"P1 di atas 100%", []PriceInput{{BranchID: "br-a", ProductID: "p1", Komponen: komp(1000, "1.5", 0)}}},
+		{"P1 bukan angka", []PriceInput{{BranchID: "br-a", ProductID: "p1", Komponen: komp(1000, "sepuluh", 0)}}},
+		{"produk tidak dikenal", []PriceInput{{BranchID: "br-a", ProductID: "p9", Komponen: komp(1, "", 0)}}},
+		{"product_id kosong", []PriceInput{{BranchID: "br-a", Komponen: komp(1, "", 0)}}},
 	}
 	for _, c := range cases {
 		if _, err := s.SetPrices(ctx, actor, c.items); !errors.Is(err, ErrInvalidData) {
@@ -297,6 +313,10 @@ func TestSalinHargaMenggantikanMatriksTujuan(t *testing.T) {
 	}
 	if _, ok := m.PriceOf("br-b", "p3"); ok {
 		t.Error("sel yang tidak ada di cabang sumber harus terhapus di cabang tujuan")
+	}
+	// Harga lama tanpa rincian tersalin sebagai HJM = harga, P1 = 0, SPV = 0.
+	if sel, _ := m.CellOf("br-c", "p2"); sel.HJM == nil || *sel.HJM != 200000 || *sel.SPV != 0 || *sel.P1 != "0" {
+		t.Errorf("salinan harus berkomponen dengan tarif sama, dapat %+v", sel)
 	}
 
 	salinRecs := 0
@@ -366,7 +386,7 @@ func TestOtorisasiKatalog(t *testing.T) {
 	if _, err := s.CreateProduct(ctx, cabang, NewProduct{Nama: "X"}); !errors.Is(err, ErrForbidden) {
 		t.Errorf("cabang tidak boleh buat produk: %v", err)
 	}
-	if _, err := s.SetPrices(ctx, cabang, []PriceInput{{BranchID: "br-a", ProductID: "p1", Harga: ptr(int64(1))}}); !errors.Is(err, ErrForbidden) {
+	if _, err := s.SetPrices(ctx, cabang, []PriceInput{{BranchID: "br-a", ProductID: "p1", Komponen: komp(1, "", 0)}}); !errors.Is(err, ErrForbidden) {
 		t.Errorf("cabang tidak boleh ubah harga: %v", err)
 	}
 	if _, err := s.CopyPrices(ctx, cabang, CopyInput{FromBranchID: "br-a", ToBranchIDs: []string{"br-b"}}); !errors.Is(err, ErrForbidden) {
@@ -376,4 +396,9 @@ func TestOtorisasiKatalog(t *testing.T) {
 	if _, err := s.Products(ctx, auth.Anonymous()); !errors.Is(err, ErrForbidden) {
 		t.Errorf("anonim harus ditolak: %v", err)
 	}
+}
+
+// komp membentuk komponen tarif satu sel untuk pengujian.
+func komp(hjm int64, p1 string, spv int64) *Komponen {
+	return &Komponen{HJM: hjm, P1: p1, SPV: spv}
 }

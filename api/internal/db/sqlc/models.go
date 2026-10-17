@@ -960,13 +960,15 @@ type BranchTariffVersion struct {
 	SpvRupiah             pgtype.Int8    `json:"spv_rupiah"`
 	FinalItemRupiah       pgtype.Int8    `json:"final_item_rupiah"`
 	IsAvailable           bool           `json:"is_available"`
-	SourceImportAttemptID string         `json:"source_import_attempt_id"`
-	SourceSheet           string         `json:"source_sheet"`
-	SourceRow             int32          `json:"source_row"`
-	SourceColumns         string         `json:"source_columns"`
+	SourceImportAttemptID pgtype.UUID    `json:"source_import_attempt_id"`
+	SourceSheet           pgtype.Text    `json:"source_sheet"`
+	SourceRow             pgtype.Int4    `json:"source_row"`
+	SourceColumns         pgtype.Text    `json:"source_columns"`
 	SourceComponentHash   string         `json:"source_component_hash"`
 	ValidFrom             time.Time      `json:"valid_from"`
 	SupersededAt          *time.Time     `json:"superseded_at"`
+	SourceKind            string         `json:"source_kind"`
+	CreatedBy             pgtype.UUID    `json:"created_by"`
 }
 
 type BranchUser struct {

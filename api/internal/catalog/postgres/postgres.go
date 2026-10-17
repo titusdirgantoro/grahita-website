@@ -19,6 +19,7 @@ import (
 	"github.com/grahita/portal/api/internal/db/sqlc"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/pgtypes"
+	"github.com/grahita/portal/api/internal/tarif"
 )
 
 // Repo adalah repository katalog berbasis sqlc.
@@ -245,18 +246,23 @@ func (r *Repo) ProductKodeTaken(ctx context.Context, kode, exceptID string) (boo
 	return ada, nil
 }
 
-// ProductUsed melaporkan apakah produk sudah dipakai order line.
+// ProductUsed melaporkan apakah produk sudah dipakai order line atau punya
+// riwayat tarif berversi.
 func (r *Repo) ProductUsed(ctx context.Context, id string) (bool, error) {
-	ada, err := r.q.ProductHasOrderLines(ctx, pgtypes.UUID(id))
+	ada, err := r.q.ProductHasHistory(ctx, id)
 	if err != nil {
-		return false, fmt.Errorf("query ProductHasOrderLines: %w", err)
+		return false, fmt.Errorf("query ProductHasHistory: %w", err)
 	}
 	return ada, nil
 }
 
-// ListPrices memuat sel matriks harga yang berisi.
+// ListPrices memuat sel matriks harga yang berisi beserta komponen tarifnya.
 func (r *Repo) ListPrices(ctx context.Context, f catalog.PriceFilter) ([]catalog.PriceCell, error) {
-	rows, err := r.q.ListBranchPrices(ctx, sqlc.ListBranchPricesParams{
+	return listPrices(ctx, r.q, f)
+}
+
+func listPrices(ctx context.Context, q *sqlc.Queries, f catalog.PriceFilter) ([]catalog.PriceCell, error) {
+	rows, err := q.ListBranchPrices(ctx, sqlc.ListBranchPricesParams{
 		BranchID:  pgtypes.UUID(f.BranchID),
 		ProductID: pgtypes.UUID(f.ProductID),
 	})
@@ -265,13 +271,88 @@ func (r *Repo) ListPrices(ctx context.Context, f catalog.PriceFilter) ([]catalog
 	}
 	out := make([]catalog.PriceCell, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, catalog.PriceCell{BranchID: row.BranchID, ProductID: row.ProductID, Harga: row.Harga})
+		cell := catalog.PriceCell{BranchID: row.BranchID, ProductID: row.ProductID, Harga: row.Harga, Sumber: catalog.SumberLama}
+		if row.SourceKind != "" && row.HjmRupiah.Valid && row.SpvRupiah.Valid && row.P1Ratio != "" {
+			hjm, p1, spv := row.HjmRupiah.Int64, row.P1Ratio, row.SpvRupiah.Int64
+			cell.HJM, cell.P1, cell.SPV, cell.Sumber = &hjm, &p1, &spv, row.SourceKind
+		}
+		out = append(out, cell)
 	}
 	return out, nil
 }
 
-// ApplyPriceChanges menerapkan seluruh perubahan sel dan entri auditnya dalam
-// satu transaksi.
+// lockTarif menyerialkan penulisan tarif terhadap edit lain maupun apply impor
+// master (yang mengunci tabel yang sama dengan mode dan urutan relatif yang
+// sama), sehingga "satu versi aktif per cabang-varian" tidak pernah balapan.
+func lockTarif(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `LOCK TABLE product_variants, branch_tariff_versions, branch_prices IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return fmt.Errorf("kunci tabel tarif: %w", err)
+	}
+	return nil
+}
+
+// terapkanSel menulis satu sel sebagai versi tarif manual (atau menutupnya
+// bila t nil) lalu memproyeksikan tarif finalnya ke branch_prices.
+func terapkanSel(ctx context.Context, q *sqlc.Queries, branchID, productID string, t *catalog.TarifSel, actorID string) error {
+	variantID, err := q.PrimaryVariantOfProduct(ctx, productID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if t == nil {
+			// Produk tanpa varian belum pernah bertarif berversi: cukup hapus
+			// baris harga lamanya.
+			return q.DeleteBranchPrice(ctx, sqlc.DeleteBranchPriceParams{BranchID: branchID, ProductID: productID})
+		}
+		variantID, err = q.CreatePrimaryVariant(ctx, productID)
+	}
+	if err != nil {
+		return fmt.Errorf("varian utama produk: %w", err)
+	}
+	aktif, err := q.ActiveTariffVersion(ctx, sqlc.ActiveTariffVersionParams{BranchID: branchID, VariantID: variantID})
+	punyaAktif := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("query ActiveTariffVersion: %w", err)
+	}
+
+	if t == nil {
+		if punyaAktif && aktif.IsAvailable {
+			if err := q.SupersedeTariffVersion(ctx, aktif.ID); err != nil {
+				return fmt.Errorf("query SupersedeTariffVersion: %w", err)
+			}
+			if err := q.InsertManualTariffTombstone(ctx, sqlc.InsertManualTariffTombstoneParams{
+				BranchID: branchID, VariantID: variantID, CreatedBy: pgtypes.UUID(actorID),
+				SourceComponentHash: tarif.Sidik("unavailable", catalog.SumberManual),
+			}); err != nil {
+				return fmt.Errorf("query InsertManualTariffTombstone: %w", err)
+			}
+		}
+		if err := q.DeleteBranchPrice(ctx, sqlc.DeleteBranchPriceParams{BranchID: branchID, ProductID: productID}); err != nil {
+			return fmt.Errorf("query DeleteBranchPrice: %w", err)
+		}
+		return nil
+	}
+
+	if punyaAktif {
+		if err := q.SupersedeTariffVersion(ctx, aktif.ID); err != nil {
+			return fmt.Errorf("query SupersedeTariffVersion: %w", err)
+		}
+	}
+	if err := q.InsertManualTariffVersion(ctx, sqlc.InsertManualTariffVersionParams{
+		BranchID: branchID, VariantID: variantID,
+		HjmRupiah: pgtypes.Int8Ptr(&t.HJM), P1Ratio: t.P1, SpvRupiah: pgtypes.Int8Ptr(&t.SPV),
+		FinalItemRupiah: pgtypes.Int8Ptr(&t.Final), CreatedBy: pgtypes.UUID(actorID),
+		SourceComponentHash: t.Sidik,
+	}); err != nil {
+		return fmt.Errorf("query InsertManualTariffVersion: %w", err)
+	}
+	if err := q.UpsertBranchPrice(ctx, sqlc.UpsertBranchPriceParams{
+		BranchID: branchID, ProductID: productID, Harga: t.Final, UpdatedBy: pgtypes.UUID(actorID),
+	}); err != nil {
+		return fmt.Errorf("query UpsertBranchPrice: %w", err)
+	}
+	return nil
+}
+
+// ApplyPriceChanges menerapkan seluruh perubahan sel — versi tarif, proyeksi
+// harga, dan entri audit — dalam satu transaksi.
 func (r *Repo) ApplyPriceChanges(ctx context.Context, changes []catalog.PriceChange, actorID string, recs []audit.Entry) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -279,23 +360,13 @@ func (r *Repo) ApplyPriceChanges(ctx context.Context, changes []catalog.PriceCha
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := lockTarif(ctx, tx); err != nil {
+		return err
+	}
 	q := r.q.WithTx(tx)
 	for _, c := range changes {
-		if c.Harga == nil {
-			if err := q.DeleteBranchPrice(ctx, sqlc.DeleteBranchPriceParams{
-				BranchID: c.BranchID, ProductID: c.ProductID,
-			}); err != nil {
-				return fmt.Errorf("query DeleteBranchPrice: %w", err)
-			}
-			continue
-		}
-		if err := q.UpsertBranchPrice(ctx, sqlc.UpsertBranchPriceParams{
-			BranchID:  c.BranchID,
-			ProductID: c.ProductID,
-			Harga:     *c.Harga,
-			UpdatedBy: pgtypes.UUID(actorID),
-		}); err != nil {
-			return fmt.Errorf("query UpsertBranchPrice: %w", err)
+		if err := terapkanSel(ctx, q, c.BranchID, c.ProductID, c.Tarif, actorID); err != nil {
+			return err
 		}
 	}
 	for _, rec := range recs {
@@ -310,10 +381,11 @@ func (r *Repo) ApplyPriceChanges(ctx context.Context, changes []catalog.PriceCha
 }
 
 // CopyPrices menggantikan seluruh matriks harga setiap cabang tujuan dengan
-// matriks cabang sumber, beserta satu entri audit per cabang tujuan.
+// komponen tarif cabang sumber, beserta satu entri audit per cabang tujuan.
 //
-// Sumber dibaca di dalam transaksi yang sama supaya hasil salinnya konsisten
-// walau ada perubahan harga bersamaan.
+// Sumber dibaca di dalam transaksi yang sama (setelah tabel tarif dikunci)
+// supaya hasil salinnya konsisten walau ada perubahan harga bersamaan. Sel
+// tujuan yang sudah sama tidak membuat versi baru.
 func (r *Repo) CopyPrices(ctx context.Context, fromBranchID string, toBranchIDs []string, actorID string, recs []audit.Entry) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -321,25 +393,43 @@ func (r *Repo) CopyPrices(ctx context.Context, fromBranchID string, toBranchIDs 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := lockTarif(ctx, tx); err != nil {
+		return err
+	}
 	q := r.q.WithTx(tx)
-	sumber, err := q.ListBranchPrices(ctx, sqlc.ListBranchPricesParams{
-		BranchID: pgtypes.UUID(fromBranchID),
-	})
+	sumber, err := listPrices(ctx, q, catalog.PriceFilter{BranchID: fromBranchID})
 	if err != nil {
-		return fmt.Errorf("query ListBranchPrices sumber: %w", err)
+		return err
+	}
+	tarifSumber := make(map[string]catalog.TarifSel, len(sumber))
+	for _, c := range sumber {
+		t, err := catalog.TarifDariSel(c)
+		if err != nil {
+			return err
+		}
+		tarifSumber[c.ProductID] = t
 	}
 	for _, target := range toBranchIDs {
-		if err := q.DeleteBranchPricesOfBranch(ctx, target); err != nil {
-			return fmt.Errorf("query DeleteBranchPricesOfBranch: %w", err)
+		lama, err := listPrices(ctx, q, catalog.PriceFilter{BranchID: target})
+		if err != nil {
+			return err
 		}
-		for _, row := range sumber {
-			if err := q.UpsertBranchPrice(ctx, sqlc.UpsertBranchPriceParams{
-				BranchID:  target,
-				ProductID: row.ProductID,
-				Harga:     row.Harga,
-				UpdatedBy: pgtypes.UUID(actorID),
-			}); err != nil {
-				return fmt.Errorf("query UpsertBranchPrice salin: %w", err)
+		selLama := make(map[string]catalog.PriceCell, len(lama))
+		for _, c := range lama {
+			selLama[c.ProductID] = c
+			if _, ada := tarifSumber[c.ProductID]; !ada {
+				if err := terapkanSel(ctx, q, target, c.ProductID, nil, actorID); err != nil {
+					return err
+				}
+			}
+		}
+		for _, c := range sumber {
+			t := tarifSumber[c.ProductID]
+			if sel, ada := selLama[c.ProductID]; ada && sel.SamaDengan(t) {
+				continue
+			}
+			if err := terapkanSel(ctx, q, target, c.ProductID, &t, actorID); err != nil {
+				return err
 			}
 		}
 	}

@@ -89,7 +89,7 @@ func TestPGKatalogHargaBerbedaDanProdukTanpaHarga(t *testing.T) {
 
 	// Isi sel lewat batch edit → katalog cabang A bertambah.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
-		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"harga":50000}]}`, f.branchA, tanpaHarga), cookiesMgr, csrfMgr)
+		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":50000}]}`, f.branchA, tanpaHarga), cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("isi sel harus 200, dapat %d (%v)", status, body)
 	}
@@ -100,7 +100,7 @@ func TestPGKatalogHargaBerbedaDanProdukTanpaHarga(t *testing.T) {
 
 	// Kosongkan sel → produk hilang lagi dari katalog cabang A.
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
-		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"harga":null}]}`, f.branchA, tanpaHarga), cookiesMgr, csrfMgr)
+		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":null}]}`, f.branchA, tanpaHarga), cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("kosongkan sel harus 200, dapat %d", status)
 	}
@@ -116,6 +116,113 @@ func TestPGKatalogHargaBerbedaDanProdukTanpaHarga(t *testing.T) {
 	if baris != 0 {
 		t.Fatalf("baris branch_prices harus terhapus, sisa %d", baris)
 	}
+}
+
+// TestPGEditKomponenTarifBerversi memverifikasi edit matriks berkomponen pada
+// PostgreSQL: harga sel selalu tarif HJM + HJM×P1 + SPV hitungan server yang
+// tersimpan sebagai versi tarif manual append-only, komponen yang sama tidak
+// membuat versi baru, mengosongkan sel menutup versi dengan tombstone, dan
+// produk yang punya riwayat tarif tidak bisa dihapus.
+func TestPGEditKomponenTarifBerversi(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	cookiesMgr, csrfMgr := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	produk := insertProdukFull(t, ctx, f.pool, "P-KMP", "Produk Berkomponen", "reguler", 0, 7)
+	put := func(body string) {
+		t.Helper()
+		status, resp, _ := apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices", body, cookiesMgr, csrfMgr)
+		if status != http.StatusOK {
+			t.Fatalf("PUT harga harus 200, dapat %d (%v)", status, resp)
+		}
+	}
+	type versi struct {
+		aktif, tersedia bool
+		hjm, spv, final *int64
+		p1              *string
+		sumber          string
+	}
+	bacaVersi := func() []versi {
+		t.Helper()
+		rows, err := f.pool.Query(ctx, `
+			SELECT tv.superseded_at IS NULL, tv.is_available, tv.hjm_rupiah, tv.p1_ratio::text, tv.spv_rupiah,
+			       tv.final_item_rupiah, tv.source_kind
+			  FROM branch_tariff_versions tv JOIN product_variants v ON v.id = tv.variant_id
+			 WHERE v.product_id = $1 AND tv.branch_id = $2 AND tv.created_by IS NOT NULL
+			 ORDER BY tv.valid_from, tv.id`, produk, f.branchA)
+		if err != nil {
+			t.Fatalf("baca versi tarif: %v", err)
+		}
+		defer rows.Close()
+		var out []versi
+		for rows.Next() {
+			var v versi
+			if err := rows.Scan(&v.aktif, &v.tersedia, &v.hjm, &v.p1, &v.spv, &v.final, &v.sumber); err != nil {
+				t.Fatalf("scan versi: %v", err)
+			}
+			out = append(out, v)
+		}
+		return out
+	}
+	hargaSel := func() (int64, bool) {
+		t.Helper()
+		var harga int64
+		err := f.pool.QueryRow(ctx, `SELECT harga FROM branch_prices WHERE branch_id = $1 AND product_id = $2`, f.branchA, produk).Scan(&harga)
+		return harga, err == nil
+	}
+
+	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":34100,"p1":"0.1","spv":2500}]}`, f.branchA, produk))
+	vs := bacaVersi()
+	if len(vs) != 1 || !vs[0].aktif || !vs[0].tersedia || vs[0].sumber != "manual" ||
+		*vs[0].hjm != 34100 || *vs[0].p1 != "0.1" || *vs[0].spv != 2500 || *vs[0].final != 40010 {
+		t.Fatalf("harus ada satu versi manual aktif 34.100 + 10%% + 2.500 = 40.010, dapat %+v", vs)
+	}
+	if harga, ok := hargaSel(); !ok || harga != 40010 {
+		t.Fatalf("branch_prices harus memproyeksikan tarif final 40.010, dapat %d %v", harga, ok)
+	}
+	// Matriks admin mengembalikan komponennya.
+	_, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/admin/prices?branch_id="+f.branchA, "", cookiesMgr, "")
+	var sel map[string]any
+	for _, c := range dataMap(t, body)["sel"].([]any) {
+		if c.(map[string]any)["product_id"] == produk {
+			sel = c.(map[string]any)
+		}
+	}
+	if sel == nil || sel["harga"] != float64(40010) || sel["hjm"] != float64(34100) || sel["p1"] != "0.1" || sel["spv"] != float64(2500) || sel["sumber"] != "manual" {
+		t.Fatalf("sel matriks harus memuat komponen, dapat %v", sel)
+	}
+
+	// Komponen yang sama (P1 ditulis "0.10") tidak membuat versi baru.
+	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":34100,"p1":"0.10","spv":2500}]}`, f.branchA, produk))
+	if got := len(bacaVersi()); got != 1 {
+		t.Fatalf("komponen sama tidak boleh menambah versi, dapat %d versi", got)
+	}
+
+	// Komponen berubah: versi lama ditutup, versi baru aktif.
+	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":39500,"p1":"0.05","spv":0}]}`, f.branchA, produk))
+	vs = bacaVersi()
+	if len(vs) != 2 || vs[0].aktif || !vs[1].aktif || *vs[1].final != 41475 {
+		t.Fatalf("perubahan harus menutup versi lama dan mengaktifkan 41.475, dapat %+v", vs)
+	}
+	if harga, _ := hargaSel(); harga != 41475 {
+		t.Fatalf("proyeksi harga harus ikut versi aktif, dapat %d", harga)
+	}
+
+	// Mengosongkan sel: tombstone aktif, baris harga hilang, riwayat tetap ada.
+	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":null}]}`, f.branchA, produk))
+	vs = bacaVersi()
+	if len(vs) != 3 || vs[1].aktif || !vs[2].aktif || vs[2].tersedia {
+		t.Fatalf("sel kosong harus menutup versi dengan tombstone, dapat %+v", vs)
+	}
+	if _, ok := hargaSel(); ok {
+		t.Fatal("sel yang dikosongkan tidak boleh punya baris branch_prices")
+	}
+
+	// Riwayat tarif membuat produk tidak bisa dihapus (bukan 500 dari FK).
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodDelete, f.srv.URL+"/api/v1/admin/products/"+produk, "", cookiesMgr, csrfMgr)
+	if status != http.StatusConflict {
+		t.Fatalf("hapus produk bertarif berversi harus 409, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "PRODUCT_IN_USE")
 }
 
 // TestPGPerubahanHargaTidakMengubahPesananLama memverifikasi PRD AP-KAT-05 /
@@ -145,7 +252,7 @@ func TestPGPerubahanHargaTidakMengubahPesananLama(t *testing.T) {
 	// Ubah harga master cabang A.
 	cookiesMgr, csrfMgr := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
-		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"harga":222000}]}`, f.branchA, produkID), cookiesMgr, csrfMgr)
+		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":222000}]}`, f.branchA, produkID), cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("ubah harga harus 200, dapat %d (%v)", status, body)
 	}
@@ -288,12 +395,12 @@ func TestPGMasterProdukValidasiDanAudit(t *testing.T) {
 
 	// Sertifikat tidak boleh diberi harga cabang selain 0.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
-		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"harga":5000}]}`, f.branchA, serID), cookiesMgr, csrfMgr)
+		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":5000}]}`, f.branchA, serID), cookiesMgr, csrfMgr)
 	if status != http.StatusBadRequest {
 		t.Fatalf("harga cabang sertifikat harus 400, dapat %d (%v)", status, body)
 	}
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
-		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"harga":0}]}`, f.branchA, serID), cookiesMgr, csrfMgr)
+		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":0}]}`, f.branchA, serID), cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("harga cabang sertifikat 0 harus 200, dapat %d", status)
 	}
@@ -311,7 +418,7 @@ func TestPGMasterProdukValidasiDanAudit(t *testing.T) {
 
 	// Ubah harga sel yang sudah ada → entri audit update dengan before/after.
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
-		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"harga":111000}]}`, f.branchA, produkA), cookiesMgr, csrfMgr)
+		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":111000}]}`, f.branchA, produkA), cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("ubah harga sel lama harus 200, dapat %d", status)
 	}

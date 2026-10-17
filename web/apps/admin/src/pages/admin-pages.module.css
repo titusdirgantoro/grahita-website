@@ -80,14 +80,85 @@
   white-space: normal;
 }
 
+/* Kolom produk tetap terlihat saat matriks puluhan cabang digeser. */
+.matrix th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.matrix thead th:first-child {
+  z-index: 2;
+}
+
 .offCol {
   color: var(--text-muted);
 }
 
-.cell {
-  max-width: 140px;
+/* Sel tarif: tarif final di atas, rincian HJM · P1 · SPV di bawahnya. */
+.selTarif {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  width: 100%;
+  min-width: 132px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
   text-align: right;
+  cursor: pointer;
+}
+
+.selTarif:hover {
+  background: var(--brand-50);
+  border-color: var(--line);
+}
+
+.selTarif:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.selKosong {
+  color: var(--text-subtle);
+}
+
+.selHarga {
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.selRincian {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Editor tarif: tiga komponen sejajar di layar lebar, menumpuk di ponsel. */
+.tarifGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.tarifPratinjau {
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-sunken);
+}
+
+.tarifPratinjau strong {
+  font-size: 22px;
+  line-height: 28px;
+  color: var(--ink);
 }
 
 .salinBar {
