@@ -39,6 +39,7 @@ import {
   type SplitBukti,
 } from "./deposit";
 import styles from "./admin-pages.module.css";
+import riwayat from "./riwayat.module.css";
 
 /**
  * FilterPesanan adalah state filter riwayat pemesanan admin yang disimpan di
@@ -516,160 +517,151 @@ export function PesananAdminPage() {
     search.cari || search.cabang || search.status || search.verif || search.cnc || search.terlambat || search.email_gagal || search.dari || search.sampai,
   );
 
+  const namaCabang = search.cabang ? cabang?.find((c) => c.id === search.cabang)?.nama : undefined;
+  const jumlahFilterLanjut = [search.status, search.verif, search.grup, search.dari, search.sampai, search.cnc, search.terlambat, search.email_gagal]
+    .filter(Boolean).length;
+  const [filterTerbuka, setFilterTerbuka] = useState(false);
+
   return (
     <>
-      <PageHead title="Riwayat pemesanan" sub="Seluruh cabang" />
+      <PageHead
+        title="Riwayat pemesanan"
+        sub={`${memuat && !data ? "…" : `${total} pesanan`} · ${namaCabang ?? "seluruh cabang"}`}
+      />
 
       <Card>
-        <CardHead title="Filter" />
         <form
-          className={styles.filterGrid}
+          className={riwayat.filter}
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
             ubah({ cari: cariKetik.trim() || undefined });
           }}
         >
-          <Field label="Cari nomor, cabang, atau serial" htmlFor="ord-cari">
-            <Input
-              id="ord-cari"
-              value={cariKetik}
-              placeholder="Contoh: 2026-10-0"
-              onChange={(e) => setCariKetik(e.target.value)}
-            />
-          </Field>
-          <Field label="Cabang" htmlFor="ord-cabang">
-            <Select
-              id="ord-cabang"
-              value={search.cabang ?? ""}
-              onChange={(e) => ubah({ cabang: e.target.value || undefined })}
-            >
-              <option value="">Semua cabang</option>
-              {(cabang ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.nama}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Status" htmlFor="ord-status">
-            <Select
-              id="ord-status"
-              value={search.status ?? "semua"}
-              onChange={(e) => ubah({ status: e.target.value === "semua" ? undefined : e.target.value })}
-            >
-              <option value="semua">Semua status</option>
-              <option value="draft">Draft</option>
-              <option value="submitted">Submitted</option>
-              <option value="done">Selesai</option>
-            </Select>
-          </Field>
-          <Field label="Verifikasi" htmlFor="ord-verif">
-            <Select
-              id="ord-verif"
-              value={search.verif ?? "semua"}
-              onChange={(e) => ubah({ verif: e.target.value === "semua" ? undefined : e.target.value })}
-            >
-              <option value="semua">Semua</option>
-              <option value="belum">Menunggu verifikasi</option>
-              <option value="cocok">Terverifikasi</option>
-              <option value="perlu_review">Perlu review</option>
-            </Select>
-          </Field>
-          <Field label="Kelompokkan" htmlFor="ord-grup">
-            <Select
-              id="ord-grup"
-              value={search.grup ?? "tanpa"}
-              onChange={(e) => ubah({ grup: e.target.value === "tanpa" ? undefined : e.target.value })}
-            >
-              {GRUP.map((g) => (
-                <option key={g.value} value={g.value}>
-                  {g.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Dari tanggal" htmlFor="ord-dari">
-            <Input
-              id="ord-dari"
-              type="date"
-              value={search.dari ?? ""}
-              onChange={(e) => ubah({ dari: e.target.value || undefined })}
-            />
-          </Field>
-          <Field label="Sampai tanggal" htmlFor="ord-sampai">
-            <Input
-              id="ord-sampai"
-              type="date"
-              value={search.sampai ?? ""}
-              onChange={(e) => ubah({ sampai: e.target.value || undefined })}
-            />
-          </Field>
-          <div className={styles.filterAksi}>
-            <Button type="submit" variant="secondary" icon="magnifying-glass">
+          <div className={riwayat.baris1}>
+            <Field label="Cari nomor, cabang, atau serial" htmlFor="ord-cari" className={riwayat.cari}>
+              <Input
+                id="ord-cari"
+                value={cariKetik}
+                placeholder="Contoh: 2026-10-0"
+                onChange={(e) => setCariKetik(e.target.value)}
+              />
+            </Field>
+            <Button type="submit" variant="secondary" icon="magnifying-glass" className={riwayat.tombolCari}>
               Cari
             </Button>
-            {adaFilter ? (
-              <Button type="button" variant="ghost" onClick={() => ubah({ cari: undefined, cabang: undefined, status: undefined, verif: undefined, cnc: undefined, terlambat: undefined, email_gagal: undefined, dari: undefined, sampai: undefined })}>
-                Reset filter
-              </Button>
-            ) : null}
+            <Button
+              type="button"
+              variant="secondary"
+              icon="sliders-horizontal"
+              className={riwayat.tombolFilter}
+              aria-expanded={filterTerbuka}
+              aria-controls="ord-filter-lanjut"
+              onClick={() => setFilterTerbuka((v) => !v)}
+            >
+              {jumlahFilterLanjut ? `Filter (${jumlahFilterLanjut})` : "Filter"}
+            </Button>
+          </div>
+          <div id="ord-filter-lanjut" className={riwayat.lanjut} data-terbuka={filterTerbuka || undefined}>
+            <Field label="Status" htmlFor="ord-status">
+              <Select
+                id="ord-status"
+                value={search.status ?? "semua"}
+                onChange={(e) => ubah({ status: e.target.value === "semua" ? undefined : e.target.value })}
+              >
+                <option value="semua">Semua status</option>
+                <option value="draft">Draft</option>
+                <option value="submitted">Submitted</option>
+                <option value="done">Selesai</option>
+              </Select>
+            </Field>
+            <Field label="Verifikasi" htmlFor="ord-verif">
+              <Select
+                id="ord-verif"
+                value={search.verif ?? "semua"}
+                onChange={(e) => ubah({ verif: e.target.value === "semua" ? undefined : e.target.value })}
+              >
+                <option value="semua">Semua</option>
+                <option value="belum">Menunggu verifikasi</option>
+                <option value="cocok">Terverifikasi</option>
+                <option value="perlu_review">Perlu review</option>
+              </Select>
+            </Field>
+            <Field label="Kelompokkan" htmlFor="ord-grup">
+              <Select
+                id="ord-grup"
+                value={search.grup ?? "tanpa"}
+                onChange={(e) => ubah({ grup: e.target.value === "tanpa" ? undefined : e.target.value })}
+              >
+                {GRUP.map((g) => (
+                  <option key={g.value} value={g.value}>
+                    {g.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Dari tanggal" htmlFor="ord-dari">
+              <Input
+                id="ord-dari"
+                type="date"
+                value={search.dari ?? ""}
+                onChange={(e) => ubah({ dari: e.target.value || undefined })}
+              />
+            </Field>
+            <Field label="Sampai tanggal" htmlFor="ord-sampai">
+              <Input
+                id="ord-sampai"
+                type="date"
+                value={search.sampai ?? ""}
+                onChange={(e) => ubah({ sampai: e.target.value || undefined })}
+              />
+            </Field>
+            <div className={riwayat.tanda} role="group" aria-label="Penanda pesanan">
+              <Chip pressed={Boolean(search.cnc)} onToggle={(v) => ubah({ cnc: v || undefined })}>
+                C&amp;C
+              </Chip>
+              <Chip pressed={Boolean(search.terlambat)} onToggle={(v) => ubah({ terlambat: v || undefined })}>
+                Lewat jatuh tempo
+              </Chip>
+              <Chip pressed={Boolean(search.email_gagal)} onToggle={(v) => ubah({ email_gagal: v || undefined })}>
+                Email gagal
+              </Chip>
+              {adaFilter ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  icon="x"
+                  onClick={() => {
+                    setCariKetik("");
+                    ubah({ cari: undefined, cabang: undefined, status: undefined, verif: undefined, cnc: undefined, terlambat: undefined, email_gagal: undefined, dari: undefined, sampai: undefined });
+                  }}
+                >
+                  Reset filter
+                </Button>
+              ) : null}
+            </div>
           </div>
         </form>
 
-        <div className={styles.chips}>
-          <Chip
-            pressed={Boolean(search.cnc)}
-            onToggle={(v) => ubah({ cnc: v || undefined })}
-            onRemove={() => ubah({ cnc: undefined })}
-            removeLabel="Sembunyikan filter C&C"
-          >
-            C&amp;C
-          </Chip>
-          <Chip
-            pressed={Boolean(search.terlambat)}
-            onToggle={(v) => ubah({ terlambat: v || undefined })}
-            onRemove={() => ubah({ terlambat: undefined })}
-            removeLabel="Sembunyikan filter lewat jatuh tempo"
-          >
-            Lewat jatuh tempo
-          </Chip>
-          <Chip
-            pressed={Boolean(search.email_gagal)}
-            onToggle={(v) => ubah({ email_gagal: v || undefined })}
-            onRemove={() => ubah({ email_gagal: undefined })}
-            removeLabel="Sembunyikan filter email gagal"
-          >
-            Email gagal
-          </Chip>
-        </div>
-      </Card>
-
-      {grup ? (
-        <Card>
-          <CardHead title="Ringkasan grup" tools={<Badge tone="neutral">{`${ringkasan.length} grup`}</Badge>} />
-          <div className={styles.chips}>
-            {ringkasan.map((g) => (
-              <span key={g.kunci} className={styles.grupRingkas}>
-                <strong>{g.label || g.kunci}</strong>
-                <span className="muted small">
-                  {g.jumlah} pesanan · <span className="tabular">{rupiah.format(g.total)}</span>
+        {grup ? (
+          <div className={riwayat.grup}>
+            <div className={styles.row} style={{ justifyContent: "space-between" }}>
+              <span className="caption">Ringkasan grup</span>
+              <Badge tone="neutral">{`${ringkasan.length} grup`}</Badge>
+            </div>
+            <div className={styles.chips}>
+              {ringkasan.map((g) => (
+                <span key={g.kunci} className={styles.grupRingkas}>
+                  <strong>{g.label || g.kunci}</strong>
+                  <span className="muted small">
+                    {g.jumlah} pesanan · <span className="tabular">{rupiah.format(g.total)}</span>
+                  </span>
                 </span>
-              </span>
-            ))}
-            {ringkasan.length === 0 ? <span className="muted small">Tidak ada data pada filter ini.</span> : null}
+              ))}
+              {ringkasan.length === 0 ? <span className="muted small">Tidak ada data pada filter ini.</span> : null}
+            </div>
           </div>
-        </Card>
-      ) : null}
+        ) : null}
 
-      <Card>
-        <CardHead
-          title="Daftar pesanan"
-          tools={
-            <span className="muted small">
-              {`${total} pesanan · halaman ${halaman} dari ${totalHalaman}`}
-            </span>
-          }
-        />
         {galat ? <Notice tone="danger">{galat}</Notice> : null}
         {memuat && items.length === 0 ? (
           <SkeletonList rows={4} />
@@ -678,8 +670,8 @@ export function PesananAdminPage() {
             <thead>
               <tr>
                 <th scope="col">Nomor</th>
-                <th scope="col">Cabang</th>
                 <th scope="col">Tanggal</th>
+                <th scope="col">Cabang</th>
                 <th scope="col" className="num">
                   Item
                 </th>
@@ -687,41 +679,45 @@ export function PesananAdminPage() {
                   Total
                 </th>
                 <th scope="col">Status</th>
-                <th scope="col">Verifikasi</th>
               </tr>
             </thead>
             <tbody>
               {items.map((p) => (
-                <tr key={p.id} data-uji="baris-pesanan">
+                <tr
+                  key={p.id}
+                  data-uji="baris-pesanan"
+                  className={riwayat.baris}
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest("a")) return;
+                    void navigate({ to: "/pesanan/$id", params: { id: p.id } });
+                  }}
+                >
                   <td>
-                    <Link to="/pesanan/$id" params={{ id: p.id }} className={styles.tautanNomor}>
+                    <Link to="/pesanan/$id" params={{ id: p.id }} className={riwayat.nomor}>
                       {p.nomor || "Draft"}
-                      {p.versi > 0 ? <Badge tone="rev">{`R${p.versi}`}</Badge> : null}
                     </Link>
-                    <div className={styles.chips} style={{ marginTop: 4 }}>
-                      {p.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
-                      {p.terlambat ? <Badge tone="danger">Lewat tempo</Badge> : null}
-                      {p.email_gagal ? <Badge tone="danger">Email gagal</Badge> : null}
-                      {p.is_sertifikat ? <Badge tone="neutral">Sertifikat</Badge> : null}
-                    </div>
                   </td>
+                  <td className="tabular muted">{tanggalSingkat(p.tanggal ?? p.created_at)}</td>
                   <td>{p.branch_nama}</td>
-                  <td className="tabular">{tanggalSingkat(p.tanggal ?? p.created_at)}</td>
                   <td className="num tabular">{p.jumlah_item}</td>
-                  <td className="num tabular">{rupiah.format(p.total)}</td>
-                  <td>
-                    <Badge tone={TONE_STATUS[p.status] ?? "neutral"}>{LABEL_STATUS[p.status] ?? p.status}</Badge>
+                  <td className="num tabular">
+                    <b>{rupiah.format(p.total)}</b>
                   </td>
                   <td>
-                    <Badge tone={TONE_VERIF[p.verif_status] ?? "neutral"}>
-                      {LABEL_VERIF[p.verif_status] ?? p.verif_status}
-                    </Badge>
+                    <span className={riwayat.status}>
+                      <Badge tone={statusPesanan(p).tone}>{statusPesanan(p).label}</Badge>
+                      {p.terlambat ? <Badge tone="danger">Lewat jatuh tempo</Badge> : null}
+                      {p.email_gagal ? <Badge tone="danger">Email gagal</Badge> : null}
+                      {p.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
+                      {p.is_sertifikat ? <Badge tone="neutral">Sertifikat</Badge> : null}
+                      {p.versi > 0 ? <Badge tone="rev">{`R${p.versi}`}</Badge> : null}
+                    </span>
                   </td>
                 </tr>
               ))}
               {items.length === 0 && !memuat ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={6}>
                     <EmptyState icon="receipt">Belum ada pesanan untuk filter ini.</EmptyState>
                   </td>
                 </tr>
@@ -730,29 +726,43 @@ export function PesananAdminPage() {
           </Table>
         )}
 
-        <div className={styles.pager}>
-          <Button
-            variant="secondary"
-            icon="caret-left"
-            disabled={halaman <= 1}
-            onClick={() => ubah({ halaman: Math.max(1, halaman - 1) }, false)}
-          >
-            Sebelumnya
-          </Button>
+        <div className={riwayat.pager}>
           <span className="muted small" data-uji="info-halaman">
-            {`Halaman ${halaman} dari ${totalHalaman}`}
+            {`Halaman ${halaman} dari ${totalHalaman} · ${total} pesanan`}
           </span>
-          <Button
-            variant="secondary"
-            disabled={halaman >= totalHalaman}
-            onClick={() => ubah({ halaman: halaman + 1 }, false)}
-          >
-            Berikutnya
-          </Button>
+          <div className={riwayat.pagerTombol}>
+            <Button
+              variant="secondary"
+              icon="caret-left"
+              disabled={halaman <= 1}
+              onClick={() => ubah({ halaman: Math.max(1, halaman - 1) }, false)}
+            >
+              Sebelumnya
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={halaman >= totalHalaman}
+              onClick={() => ubah({ halaman: halaman + 1 }, false)}
+            >
+              Berikutnya
+            </Button>
+          </div>
         </div>
       </Card>
     </>
   );
+}
+
+/**
+ * statusPesanan meringkas status + verifikasi menjadi satu label operator,
+ * seperti kolom Status admin_v2.html: Draft, Menunggu verifikasi, Perlu
+ * review, atau Selesai.
+ */
+export function statusPesanan(p: Pick<PesananAdmin, "status" | "verif_status">): { label: string; tone: BadgeTone } {
+  if (p.status === "draft") return { label: "Draft", tone: "draft" };
+  if (p.status === "done") return { label: "Selesai", tone: "success" };
+  if (p.verif_status === "perlu_review") return { label: "Perlu review", tone: "danger" };
+  return { label: "Menunggu verifikasi", tone: "warning" };
 }
 
 /**

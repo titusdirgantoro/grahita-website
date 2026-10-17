@@ -369,8 +369,9 @@ describe("Riwayat pemesanan admin (F1-15)", () => {
 
     expect(await screen.findByText("2026-10-01")).toBeDefined();
     expect(within(screen.getByRole("table")).getByText("Grahita Bandung")).toBeDefined();
-    expect(within(screen.getByRole("table")).getByText("Submitted")).toBeDefined();
-    expect(screen.getByText("1 pesanan · halaman 1 dari 1")).toBeDefined();
+    // Kolom status menggabungkan status pesanan dan verifikasi (admin_v2.html).
+    expect(within(screen.getByRole("table")).getByText("Menunggu verifikasi")).toBeDefined();
+    expect(screen.getByText("Halaman 1 dari 1 · 1 pesanan")).toBeDefined();
 
     const daftar = panggilan.find((u) => u.includes("/admin/orders?"));
     expect(daftar).toBeDefined();

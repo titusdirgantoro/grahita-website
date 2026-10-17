@@ -15,7 +15,8 @@ import { SessionProvider, useSesi } from "./session";
 import { NAV_ADMIN } from "./nav";
 import { HalamanLupa, HalamanMasuk } from "./pages/auth";
 import { ProfilAdminPage, ReportingPage } from "./pages/shell-pages";
-import { DashboardPage, FilterCabangDashboard, FilterPeriodeDashboard, type FilterDashboard } from "./pages/dashboard";
+import { DashboardPage, FilterPeriodeDashboard, type FilterDashboard } from "./pages/dashboard";
+import { FilterCabangTopbar } from "./pages/filter-cabang";
 import {
   PesananAdminPage,
   PesananDetailAdminPage,
@@ -29,7 +30,6 @@ import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
 import { AuditPage, type FilterAudit } from "./pages/audit";
-import { ImporImpactPage } from "./pages/impor-impact";
 
 /** RouterLink menyambungkan shell (yang lepas router) ke <Link> TanStack. */
 function RouterLink({ to, className, active, children, title }: ShellLinkProps) {
@@ -45,9 +45,9 @@ function RouterLink({ to, className, active, children, title }: ShellLinkProps) 
  * alihkan ke /masuk bila belum masuk, lalu pasang AdminShell dengan menu
  * yang sudah disaring peran.
  *
- * Topbar mengikuti admin_v2.html: pada dashboard berisi pemilih cabang (kiri)
- * dan periode (tengah) milik halaman itu — satu-satunya pemilih, state-nya di
- * URL search param `/`. Tombol "+" membuka form tambah cabang dan lonceng
+ * Topbar mengikuti admin_v2.html: pada dashboard & riwayat pemesanan berisi
+ * pemilih cabang (kiri), dan pada dashboard juga periode (tengah) — satu-
+ * satunya pemilih halaman itu, state-nya di URL search param rutenya. Tombol "+" membuka form tambah cabang dan lonceng
  * membuka pesanan yang masih menunggu penanganan.
  */
 function ShellLayout() {
@@ -78,7 +78,7 @@ function ShellLayout() {
       topLeft={
         pathname === "/" || pathname === "/pesanan" ? (
           <>
-            {pathname === "/" ? <FilterCabangDashboard /> : null}
+            <FilterCabangTopbar ke={pathname === "/" ? "/" : "/pesanan"} />
             <Button
               iconOnly
               icon="plus"
@@ -202,11 +202,6 @@ const cabangRoute = createRoute({
   component: CabangPage,
 });
 const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogPage });
-const imporImpactRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: "/impor-impact",
-  component: ImporImpactPage,
-});
 const depositRoute = createRoute({ getParentRoute: () => shellRoute, path: "/deposit", component: DepositAdminPage });
 const rekeningRoute = createRoute({ getParentRoute: () => shellRoute, path: "/rekening", component: RekeningPage });
 const reportingRoute = createRoute({ getParentRoute: () => shellRoute, path: "/reporting", component: ReportingPage });
@@ -243,7 +238,6 @@ const routeTree = rootRoute.addChildren([
     depositRoute,
     cabangRoute,
     katalogRoute,
-    imporImpactRoute,
     rekeningRoute,
     reportingRoute,
     penggunaRoute,

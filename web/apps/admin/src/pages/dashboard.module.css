@@ -322,13 +322,6 @@
   background: var(--brand-300);
 }
 
-/* ---------- Topbar dashboard ---------- */
-
-.cabSelect {
-  width: 220px;
-  max-width: 100%;
-}
-
 @media (max-width: 1180px) {
   .c7,
   .c5,
@@ -353,12 +346,6 @@
 
   .gaugeWrap {
     grid-template-columns: 1fr;
-  }
-
-  .cabSelect {
-    width: auto;
-    flex: 1;
-    min-width: 0;
   }
 }
 

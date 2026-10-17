@@ -106,11 +106,11 @@ function stubFetch(
   return panggilan;
 }
 
-/** baris mengambil <tr> yang memuat nama cabang. */
-function baris(nama: string): HTMLElement {
-  const sel = screen.getByText(nama).closest("tr");
-  if (!sel) throw new Error(`baris ${nama} tidak ditemukan`);
-  return sel;
+/** bukaDetail mengklik kartu cabang lalu mengembalikan dialog form detailnya. */
+async function bukaDetail(nama: string): Promise<HTMLElement> {
+  const kartu = await screen.findByRole("button", { name: new RegExp(`^${nama}`) });
+  fireEvent.click(kartu);
+  return screen.findByRole("dialog", { name: "Detail cabang" });
 }
 
 beforeEach(() => {
@@ -139,9 +139,9 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     expect(screen.getAllByText("Special").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("PI").length).toBeGreaterThanOrEqual(1);
 
-    // Kolom Akun: satu cabang sudah berakun, dua belum registrasi.
-    expect(screen.getAllByText("Aktif").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Belum registrasi").length).toBe(2);
+    // Status akun per kartu: satu cabang sudah berakun, dua belum registrasi.
+    expect(screen.getAllByText("Akun: Aktif").length).toBe(1);
+    expect(screen.getAllByText("Akun: Belum registrasi").length).toBe(2);
 
     // Tab filter tersedia; ringkasan header menyebut jumlah cabang + akun aktif.
     for (const label of ["Semua", "C&C", "Special", "Nonaktif"]) {
@@ -174,8 +174,8 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     });
 
     render(<RouterProvider router={buatRouter("/cabang")} />);
-    const row = await waitFor(() => baris("Grahita Bandung"));
-    fireEvent.click(within(row).getByRole("button", { name: "Kelola rekening tujuan" }));
+    const detail = await bukaDetail("Grahita Bandung");
+    fireEvent.click(within(detail).getByRole("button", { name: "Kelola rekening tujuan" }));
     expect(await screen.findByText("Dormant")).toBeDefined();
     expect(screen.getByLabelText("Pilih BRI ••••2222").hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByLabelText("Pilih BCA ••••3333"));
@@ -202,7 +202,7 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
       return undefined;
     });
     render(<RouterProvider router={buatRouter("/cabang")} />);
-    fireEvent.click(within(await waitFor(() => baris("Grahita Bandung"))).getByRole("button", { name: "Kelola rekening tujuan" }));
+    fireEvent.click(within(await bukaDetail("Grahita Bandung")).getByRole("button", { name: "Kelola rekening tujuan" }));
     const cabut = await screen.findByRole("button", { name: "Cabut assignment" });
     fireEvent.click(cabut);
     expect((screen.getByLabelText("Pilih BRI ••••2222") as HTMLInputElement).checked).toBe(true);
@@ -361,8 +361,8 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     render(<RouterProvider router={buatRouter("/cabang")} />);
     expect(await screen.findByText("Grahita Bekasi")).toBeDefined();
 
-    fireEvent.click(within(baris("Grahita Bekasi")).getByRole("button", { name: "Ubah" }));
-    expect(await screen.findByLabelText("Nama cabang")).toBeDefined();
+    await bukaDetail("Grahita Bekasi");
+    expect(screen.getByLabelText("Nama cabang")).toBeDefined();
     // Server menyimpan token sebagai hash: hanya prefix yang bisa ditampilkan ulang.
     expect(screen.getByText(/Token aktif/)).toBeDefined();
     expect(screen.getByText(/GRH-7K4Q…/)).toBeDefined();
@@ -387,8 +387,8 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     render(<RouterProvider router={buatRouter("/cabang")} />);
     expect(await screen.findByText("Grahita Bandung")).toBeDefined();
 
-    fireEvent.click(within(baris("Grahita Bandung")).getByRole("button", { name: "Ubah" }));
-    expect(await screen.findByLabelText("Nama cabang")).toBeDefined();
+    await bukaDetail("Grahita Bandung");
+    expect(screen.getByLabelText("Nama cabang")).toBeDefined();
 
     expect(screen.getByText(/sudah punya akun, jadi token tidak diperlukan/)).toBeDefined();
     expect(screen.queryByRole("button", { name: /Buat token/ })).toBeNull();
@@ -400,8 +400,8 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     render(<RouterProvider router={buatRouter("/cabang")} />);
     expect(await screen.findByText("Grahita Cimahi")).toBeDefined();
 
-    fireEvent.click(within(baris("Grahita Cimahi")).getByRole("button", { name: "Ubah" }));
-    expect(await screen.findByLabelText("Nama cabang")).toBeDefined();
+    await bukaDetail("Grahita Cimahi");
+    expect(screen.getByLabelText("Nama cabang")).toBeDefined();
 
     expect(screen.getByText(/Cabang sedang nonaktif; aktifkan dulu/)).toBeDefined();
     expect(screen.queryByRole("button", { name: /Buat token/ })).toBeNull();
@@ -430,7 +430,7 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     render(<RouterProvider router={buatRouter("/cabang")} />);
     expect(await screen.findByText("Grahita Bandung")).toBeDefined();
 
-    fireEvent.click(within(baris("Grahita Bandung")).getByRole("button", { name: "Hapus" }));
+    fireEvent.click(within(await bukaDetail("Grahita Bandung")).getByRole("button", { name: "Hapus" }));
     expect(await screen.findByRole("heading", { name: "Hapus cabang" })).toBeDefined();
     expect(screen.getByText(/tidak bisa dikembalikan/)).toBeDefined();
 
@@ -456,8 +456,8 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     render(<RouterProvider router={buatRouter("/cabang")} />);
     expect(await screen.findByText("Grahita Bandung")).toBeDefined();
 
-    fireEvent.click(within(baris("Grahita Bandung")).getByRole("button", { name: "Ubah" }));
-    fireEvent.change(await screen.findByLabelText("Email cabang"), {
+    await bukaDetail("Grahita Bandung");
+    fireEvent.change(screen.getByLabelText("Email cabang"), {
       target: { value: "bandung-baru@example.test" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Simpan" }));

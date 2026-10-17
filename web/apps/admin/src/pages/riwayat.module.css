@@ -1,0 +1,141 @@
+/*
+ * Riwayat pemesanan admin (admin_v2.html §Riwayat pemesanan): satu kartu
+ * berisi filter ringkas di atas tabel, chip penanda tanpa tombol silang,
+ * kolom status gabungan, dan pager di kaki kartu.
+ */
+
+.filter {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.baris1 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.cari {
+  min-width: 0;
+}
+
+/* Tombol Filter hanya untuk layar sempit; di layar lebar semua kontrol tampil. */
+.tombolFilter {
+  display: none;
+}
+
+.lanjut {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) repeat(2, minmax(150px, 0.8fr));
+  gap: 12px 14px;
+  align-items: end;
+}
+
+.tanda {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.grup {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.baris {
+  cursor: pointer;
+}
+
+.baris:hover {
+  background: var(--brand-50);
+}
+
+.nomor {
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.nomor:hover,
+.nomor:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.pagerTombol {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 1180px) {
+  .lanjut {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  /* Kolom cari selebar layar; Cari dan Filter berbagi baris di bawahnya. */
+  .baris1 {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cari {
+    grid-column: 1 / -1;
+  }
+
+  .tombolFilter {
+    display: inline-flex;
+  }
+
+  .tombolCari,
+  .tombolFilter {
+    justify-content: center;
+  }
+
+  .lanjut {
+    display: none;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .lanjut[data-terbuka] {
+    display: grid;
+  }
+
+  .pager {
+    justify-content: center;
+  }
+
+  .pagerTombol {
+    width: 100%;
+  }
+
+  .pagerTombol > * {
+    flex: 1;
+    justify-content: center;
+  }
+}

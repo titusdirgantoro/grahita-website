@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 
 describe("Admin Portal — /rekening (F1-09)", () => {
-  it("Superadmin melihat rekening dan menonaktifkannya lewat PUT is_active", async () => {
+  it("Superadmin melihat rekening sebagai kartu; klik kartu membuka form detail yang menonaktifkan lewat PUT", async () => {
     const panggilan = stubFetch("superadmin");
 
     render(<RouterProvider router={buatRouter("/rekening")} />);
@@ -80,12 +80,22 @@ describe("Admin Portal — /rekening (F1-09)", () => {
     expect(screen.getByText("0987654321")).toBeDefined();
     expect(screen.getByText("Nonaktif")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Nonaktifkan" }));
+    fireEvent.click(screen.getByRole("button", { name: /^BCA/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Detail rekening" });
+    expect((within(dialog).getByLabelText("Nomor rekening") as HTMLInputElement).value).toBe("1234567890");
+
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Aktif" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan" }));
 
     await waitFor(() => {
       const put = panggilan.find((p) => p.url.endsWith("/admin/bank-accounts/bk-1") && p.init?.method === "PUT");
       expect(put).toBeDefined();
-      expect(JSON.parse(String(put?.init?.body))).toEqual({ is_active: false });
+      expect(JSON.parse(String(put?.init?.body))).toEqual({
+        bank: "BCA",
+        nama_pemilik: "PT Grahita Indonesia",
+        nomor: "1234567890",
+        is_active: false,
+      });
       const header = put?.init?.headers as Record<string, string>;
       expect(header["X-CSRF-Token"]).toBe("token-uji");
     });

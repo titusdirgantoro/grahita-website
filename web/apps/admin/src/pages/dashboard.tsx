@@ -2,12 +2,11 @@ import { useState } from "react";
 
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
-import { Button, Card, CardHead, Chip, EmptyState, Notice, Segmented, Select, SkeletonList } from "@grahita/ui";
+import { Button, Card, CardHead, Chip, EmptyState, Notice, Segmented, SkeletonList } from "@grahita/ui";
 
 import { useSesi } from "../session";
 import { useApi } from "../useApi";
 import type { FilterPesanan } from "./pesanan";
-import type { Cabang } from "./shell-pages";
 import { bilangan, desimal1, persenPerubahan, rpRingkas, rupiah } from "./dashboard-format";
 import { GaugeStatus, GrafikBulanan, GrafikHarian, type BatangBulan } from "./dashboard-grafik";
 import styles from "./dashboard.module.css";
@@ -122,27 +121,6 @@ function useFilterDashboard() {
   return { cabang, periode, ubah };
 }
 
-/** FilterCabangDashboard adalah pemilih cabang di topbar dashboard (kiri). */
-export function FilterCabangDashboard() {
-  const { cabang, ubah } = useFilterDashboard();
-  const { data } = useApi<Cabang[]>("/admin/branches");
-  return (
-    <Select
-      aria-label="Filter cabang"
-      inputClassName={styles.cabSelect}
-      value={cabang}
-      onChange={(e) => ubah({ cabang: e.target.value || undefined })}
-    >
-      <option value="">Semua cabang</option>
-      {(data ?? []).map((c) => (
-        <option key={c.id} value={c.id}>
-          {c.nama}
-        </option>
-      ))}
-    </Select>
-  );
-}
-
 /** FilterPeriodeDashboard adalah pemilih periode di topbar dashboard (tengah). */
 export function FilterPeriodeDashboard() {
   const { periode, ubah } = useFilterDashboard();
@@ -168,7 +146,7 @@ function unduhCsv(data: DashboardData, uang: boolean) {
  * pDashboard admin — `/` (admin_v2.html §Dashboard): sapaan + chip "perlu
  * tindakan", penjualan/pesanan per bulan, status pembayaran, pesanan harian,
  * komposisi, cabang teraktif, dan product terlaris (PRD §4.1 AP-DSH-01..06).
- * Filter cabang & periode ada di topbar (FilterCabangDashboard,
+ * Filter cabang & periode ada di topbar (FilterCabangTopbar,
  * FilterPeriodeDashboard) dan disimpan di URL.
  *
  * Nilai rupiah TIDAK dihitung di UI: server hanya mengiriminya kepada

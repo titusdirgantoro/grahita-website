@@ -17,11 +17,11 @@ import {
   Select,
   SkeletonList,
   SwitchRow,
-  Table,
   useToast,
 } from "@grahita/ui";
 
 import styles from "./admin-pages.module.css";
+import { BarAlat, GridKartu, KartuMaster, kartuMasterStyles } from "./kartu-master";
 import { hitungTarif, persenKeRasio, rasioKePersen } from "./tarif";
 
 /** Produk pada master katalog (PRD §4.5 AP-KAT-01). */
@@ -218,19 +218,6 @@ export function TabProduk() {
     }
   }
 
-  async function ubahAktif(row: Produk) {
-    setSibuk(row.id);
-    try {
-      const hasil = await api.put<Produk>(`/admin/products/${row.id}`, { is_active: !row.is_active });
-      setRows((lama) => (lama ?? []).map((r) => (r.id === hasil.id ? hasil : r)));
-      tampilkan(`Produk ${hasil.nama} ${hasil.is_active ? "diaktifkan" : "dinonaktifkan"}`);
-    } catch (err) {
-      setGalat(pesanGalat(err));
-    } finally {
-      setSibuk("");
-    }
-  }
-
   async function hapus(row: Produk) {
     setSibuk(row.id);
     try {
@@ -244,128 +231,118 @@ export function TabProduk() {
     }
   }
 
+  function bukaDetail(p: Produk) {
+    setGalatForm(null);
+    setErrorFields({});
+    setForm({
+      id: p.id,
+      kode: p.kode ?? "",
+      nama: p.nama,
+      jenis: p.jenis,
+      harga_default: String(p.harga_default),
+      urutan: String(p.urutan),
+      is_active: p.is_active,
+    });
+  }
+
+  const formRow = form?.id ? (rows ?? []).find((r) => r.id === form.id) ?? null : null;
+
   return (
-    <Card>
-      <CardHead
-        title="Daftar produk"
-        tools={
-          <div className={styles.row}>
-            <Input
-              aria-label="Cari produk"
-              placeholder="Cari nama atau kode"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-            <Select aria-label="Jenis produk" value={jenis} onChange={(e) => setJenis(e.target.value)}>
-              <option value="">Semua jenis</option>
-              <option value="reguler">Reguler</option>
-              <option value="sertifikat">Sertifikat</option>
-            </Select>
-            <Select aria-label="Status produk" value={aktif} onChange={(e) => setAktif(e.target.value)}>
-              <option value="">Semua status</option>
-              <option value="true">Aktif</option>
-              <option value="false">Nonaktif</option>
-            </Select>
-            <Button
-              variant="primary"
-              icon="plus"
-              onClick={() => {
-                setGalatForm(null);
-                setErrorFields({});
-                setForm({ ...PRODUK_BARU });
-              }}
-            >
-              Tambah produk
-            </Button>
-          </div>
-        }
-      />
+    <>
+      <BarAlat info={rows ? `${rows.length} produk ditampilkan` : undefined}>
+        <Input
+          aria-label="Cari produk"
+          placeholder="Cari nama atau kode"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <Select aria-label="Jenis produk" value={jenis} onChange={(e) => setJenis(e.target.value)}>
+          <option value="">Semua jenis</option>
+          <option value="reguler">Reguler</option>
+          <option value="sertifikat">Sertifikat</option>
+        </Select>
+        <Select aria-label="Status produk" value={aktif} onChange={(e) => setAktif(e.target.value)}>
+          <option value="">Semua status</option>
+          <option value="true">Aktif</option>
+          <option value="false">Nonaktif</option>
+        </Select>
+        <Button
+          variant="primary"
+          icon="plus"
+          onClick={() => {
+            setGalatForm(null);
+            setErrorFields({});
+            setForm({ ...PRODUK_BARU });
+          }}
+        >
+          Tambah produk
+        </Button>
+      </BarAlat>
       {galat ? (
         <div style={{ marginBottom: 12 }}>
           <Notice tone="danger">{galat}</Notice>
         </div>
       ) : null}
       {memuat ? (
-        <SkeletonList rows={3} />
+        <Card>
+          <SkeletonList rows={3} />
+        </Card>
       ) : !rows || rows.length === 0 ? (
-        <EmptyState icon="tag">Belum ada produk yang cocok dengan filter.</EmptyState>
+        <Card>
+          <EmptyState icon="tag">Belum ada produk yang cocok dengan filter.</EmptyState>
+        </Card>
       ) : (
-        <Table stack="wide" caption="Daftar produk">
-          <thead>
-            <tr>
-              <th scope="col">Produk</th>
-              <th scope="col">Jenis</th>
-              <th scope="col" className="num">
-                Harga default
-              </th>
-              <th scope="col">Status</th>
-              <th scope="col" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((p) => (
-              <tr key={p.id}>
-                <td>
-                  <div className={styles.row}>
-                    <span>{p.nama}</span>
-                    {p.kode ? <span className="muted small">{p.kode}</span> : null}
-                  </div>
-                </td>
-                <td>
-                  {p.jenis === "sertifikat" ? (
-                    <Badge tone="info">Sertifikat</Badge>
-                  ) : (
-                    <span className="muted">Reguler</span>
-                  )}
-                </td>
-                <td className="num">{p.jenis === "sertifikat" ? "Rp0" : rupiah.format(p.harga_default)}</td>
-                <td>
-                  <Badge tone={p.is_active ? "success" : "draft"}>{p.is_active ? "Aktif" : "Nonaktif"}</Badge>
-                </td>
-                <td className="num">
-                  <div className={styles.row}>
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setGalatForm(null);
-                        setErrorFields({});
-                        setForm({
-                          id: p.id,
-                          kode: p.kode ?? "",
-                          nama: p.nama,
-                          jenis: p.jenis,
-                          harga_default: String(p.harga_default),
-                          urutan: String(p.urutan),
-                          is_active: p.is_active,
-                        });
-                      }}
-                    >
-                      Ubah
-                    </Button>
-                    <Button variant="secondary" disabled={sibuk === p.id} onClick={() => void ubahAktif(p)}>
-                      {p.is_active ? "Nonaktifkan" : "Aktifkan"}
-                    </Button>
-                    <Button variant="ghost" disabled={sibuk === p.id} onClick={() => void hapus(p)}>
-                      Hapus
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
+        <GridKartu label="Daftar produk">
+          {rows.map((p) => (
+            <KartuMaster
+              key={p.id}
+              judul={p.nama}
+              redup={!p.is_active}
+              onBuka={() => bukaDetail(p)}
+              status={<Badge tone={p.is_active ? "success" : "neutral"}>{p.is_active ? "Aktif" : "Nonaktif"}</Badge>}
+              sub={p.kode ? `Kode ${p.kode}` : "Tanpa kode"}
+              kaki={
+                <>
+                  {p.jenis === "sertifikat" ? <Badge tone="info">Sertifikat</Badge> : <Badge tone="neutral">Reguler</Badge>}
+                  <span className="muted small">{`Urutan ${p.urutan}`}</span>
+                </>
+              }
+            >
+              <span className={kartuMasterStyles.angka}>{rupiah.format(p.jenis === "sertifikat" ? 0 : p.harga_default)}</span>
+              <span className="muted small">{p.jenis === "sertifikat" ? "Tanpa harga jual" : "Harga default"}</span>
+              {p.deskripsi ? <span className={kartuMasterStyles.klip}>{p.deskripsi}</span> : null}
+            </KartuMaster>
+          ))}
+        </GridKartu>
       )}
       <p className="muted small" style={{ marginTop: 12 }}>
-        Produk nonaktif tidak muncul di portal cabang. Produk yang sudah dipakai pesanan tidak bisa
-        dihapus &mdash; nonaktifkan saja.
+        Klik kartu untuk melihat dan mengubah detail produk. Harga jual per cabang diatur di tab Matriks
+        harga. Produk nonaktif tidak muncul di portal cabang. Produk yang sudah dipakai pesanan atau punya
+        riwayat tarif tidak bisa dihapus &mdash; nonaktifkan saja.
       </p>
 
       <Modal
         open={form !== null}
-        title={form?.id ? "Ubah produk" : "Tambah produk"}
+        title={form?.id ? "Detail produk" : "Tambah produk"}
         onClose={() => setForm(null)}
         footer={
           <>
+            {formRow ? (
+              <div className={kartuMasterStyles.footKiri}>
+                <Button
+                  variant="danger-ghost"
+                  icon="trash"
+                  disabled={sibuk === formRow.id}
+                  onClick={() => {
+                    if (!window.confirm(`Hapus produk ${formRow.nama}? Tindakan ini tidak bisa dibatalkan.`)) return;
+                    setForm(null);
+                    void hapus(formRow);
+                  }}
+                >
+                  Hapus
+                </Button>
+              </div>
+            ) : null}
             <Button variant="secondary" onClick={() => setForm(null)}>
               Batal
             </Button>
@@ -437,7 +414,7 @@ export function TabProduk() {
           </Form>
         ) : null}
       </Modal>
-    </Card>
+    </>
   );
 }
 

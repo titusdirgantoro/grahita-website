@@ -15,12 +15,11 @@ import {
   Select,
   SkeletonList,
   SwitchRow,
-  Table,
   useToast,
 } from "@grahita/ui";
 
 import { PenjagaSuperadmin } from "./shell-pages";
-import styles from "./admin-pages.module.css";
+import { GridKartu, KartuMaster, kartuMasterStyles } from "./kartu-master";
 
 /** Rekening adalah satu rekening bank tujuan transfer (PRD §4.6). */
 export interface Rekening {
@@ -123,19 +122,10 @@ function RekeningContent() {
     }
   }
 
-  async function ubahAktif(row: Rekening) {
-    setSibuk(row.id);
-    try {
-      const hasil = await api.put<Rekening>(`/admin/bank-accounts/${row.id}`, {
-        is_active: !row.is_active,
-      });
-      setRows((lama) => (lama ?? []).map((r) => (r.id === hasil.id ? hasil : r)));
-      tampilkan(`Rekening ${row.bank} ${hasil.is_active ? "diaktifkan" : "dinonaktifkan"}`);
-    } catch (err) {
-      setGalat(pesanGalat(err));
-    } finally {
-      setSibuk("");
-    }
+  function bukaDetail(row: Rekening) {
+    setGalatForm(null);
+    setErrorFields({});
+    setForm({ id: row.id, bank: row.bank, nama_pemilik: row.nama_pemilik, nomor: row.nomor, is_active: row.is_active });
   }
 
   return (
@@ -157,78 +147,43 @@ function RekeningContent() {
           </Button>
         }
       />
-      <Card>
-        {galat ? (
-          <div style={{ marginBottom: 12 }}>
-            <Notice tone="danger">{galat}</Notice>
-          </div>
-        ) : null}
-        {memuat ? (
+      {galat ? (
+        <div style={{ marginBottom: 12 }}>
+          <Notice tone="danger">{galat}</Notice>
+        </div>
+      ) : null}
+      {memuat ? (
+        <Card>
           <SkeletonList rows={3} />
-        ) : !rows || rows.length === 0 ? (
+        </Card>
+      ) : !rows || rows.length === 0 ? (
+        <Card>
           <EmptyState icon="bank">Belum ada rekening terdaftar.</EmptyState>
-        ) : (
-          <Table stack="wide" caption="Rekening bank">
-            <thead>
-              <tr>
-                <th scope="col">Bank</th>
-                <th scope="col">Nama di rekening</th>
-                <th scope="col">Nomor rekening</th>
-                <th scope="col">Status</th>
-                <th scope="col" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.bank}</td>
-                  <td>{row.nama_pemilik}</td>
-                  <td className="tabular">{row.nomor}</td>
-                  <td>
-                    <Badge tone={row.is_active ? "success" : "neutral"}>
-                      {row.is_active ? "Aktif" : "Nonaktif"}
-                    </Badge>
-                  </td>
-                  <td className="num">
-                    <div className={styles.row}>
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          setGalatForm(null);
-                          setErrorFields({});
-                          setForm({
-                            id: row.id,
-                            bank: row.bank,
-                            nama_pemilik: row.nama_pemilik,
-                            nomor: row.nomor,
-                            is_active: row.is_active,
-                          });
-                        }}
-                      >
-                        Ubah
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        disabled={sibuk === row.id}
-                        onClick={() => void ubahAktif(row)}
-                      >
-                        {row.is_active ? "Nonaktifkan" : "Aktifkan"}
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        )}
-        <p className="muted small" style={{ marginTop: 12 }}>
-          Rekening nonaktif tidak ditampilkan pada instruksi pembayaran Customer Portal.
-        </p>
-      </Card>
+        </Card>
+      ) : (
+        <GridKartu label="Rekening bank">
+          {rows.map((row) => (
+            <KartuMaster
+              key={row.id}
+              judul={row.bank}
+              redup={!row.is_active}
+              onBuka={() => bukaDetail(row)}
+              status={<Badge tone={row.is_active ? "success" : "neutral"}>{row.is_active ? "Aktif" : "Nonaktif"}</Badge>}
+            >
+              <span className={kartuMasterStyles.angka}>{row.nomor}</span>
+              <span className="muted small">{`a.n. ${row.nama_pemilik}`}</span>
+            </KartuMaster>
+          ))}
+        </GridKartu>
+      )}
+      <p className="muted small" style={{ marginTop: 12 }}>
+        Klik kartu untuk melihat dan mengubah detail rekening. Rekening nonaktif tidak ditampilkan pada
+        instruksi pembayaran Customer Portal.
+      </p>
 
       <Modal
         open={form !== null}
-        title={form?.id ? "Ubah rekening" : "Tambah rekening"}
+        title={form?.id ? "Detail rekening" : "Tambah rekening"}
         onClose={() => setForm(null)}
         footer={
           <>
@@ -290,3 +245,4 @@ function RekeningContent() {
     </>
   );
 }
+

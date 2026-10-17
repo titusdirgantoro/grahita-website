@@ -7,7 +7,6 @@ import {
   Badge,
   Button,
   Card,
-  CardHead,
   EmptyState,
   Field,
   Form,
@@ -27,6 +26,7 @@ import { formatWaktu } from "./pengguna";
 import type { Cabang } from "./shell-pages";
 import { useSesi } from "../session";
 import styles from "./admin-pages.module.css";
+import { BarAlat, GridKartu, KartuMaster, kartuMasterStyles } from "./kartu-master";
 
 /**
  * AkunCabang adalah satu baris GET /admin/users/branch (F1-05).
@@ -474,6 +474,7 @@ export function CabangPage() {
   }
 
   const baris = rows ?? [];
+  const formRow = form?.id ? baris.find((c) => c.id === form.id) ?? null : null;
   const jumlahAkunAktif = akun
     ? Array.from(akun.values()).filter((a) => a.status === "aktif").length
     : null;
@@ -496,135 +497,79 @@ export function CabangPage() {
           </Button>
         }
       />
-      <Card>
-        <CardHead
-          title="Daftar cabang"
-          tools={
-            <div className={styles.row}>
-              <Segmented label="Filter cabang" options={TAB} value={tab} onChange={setTab} />
-              <Input
-                aria-label="Cari cabang"
-                placeholder="Cari nama atau email"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
-            </div>
-          }
+      <BarAlat info={rows === null ? undefined : `${baris.length} cabang ditampilkan`}>
+        <Segmented label="Filter cabang" options={TAB} value={tab} onChange={setTab} />
+        <Input
+          aria-label="Cari cabang"
+          placeholder="Cari nama atau email"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
         />
-        {galat ? (
-          <div style={{ marginBottom: 12 }}>
-            <Notice tone="danger">{galat}</Notice>
-          </div>
-        ) : null}
-        {galatAkun ? (
-          <div style={{ marginBottom: 12 }}>
-            <Notice tone="warning">
-              Status akun cabang tidak bisa dimuat: {galatAkun} Blok token tetap memakai jawaban
-              server saat token dibuat.
-            </Notice>
-          </div>
-        ) : null}
-        {memuat ? (
+      </BarAlat>
+      {galat ? (
+        <div style={{ marginBottom: 12 }}>
+          <Notice tone="danger">{galat}</Notice>
+        </div>
+      ) : null}
+      {galatAkun ? (
+        <div style={{ marginBottom: 12 }}>
+          <Notice tone="warning">
+            Status akun cabang tidak bisa dimuat: {galatAkun} Blok token tetap memakai jawaban
+            server saat token dibuat.
+          </Notice>
+        </div>
+      ) : null}
+      {memuat ? (
+        <Card>
           <SkeletonList rows={3} />
-        ) : baris.length === 0 ? (
+        </Card>
+      ) : baris.length === 0 ? (
+        <Card>
           <EmptyState icon="storefront">
             {terfilter ? "Tidak ada cabang yang cocok." : "Belum ada cabang terdaftar."}
           </EmptyState>
-        ) : (
-          <Table stack="wide" caption="Master data cabang">
-            <thead>
-              <tr>
-                <th scope="col">Nama cabang</th>
-                <th scope="col">Kepala cabang</th>
-                <th scope="col">Flag</th>
-                <th scope="col">Akun</th>
-                <th scope="col">Rekening pembayaran</th>
-                <th scope="col">Status</th>
-                <th scope="col" />
-              </tr>
-            </thead>
-            <tbody>
-              {baris.map((c) => {
-                const akunRow = akun?.get(c.id);
-                return (
-                  <tr key={c.id}>
-                    <td>
-                      <b>{c.nama}</b>
-                      <div className={`muted small ${styles.emailSel}`}>{c.email || "—"}</div>
-                    </td>
-                    <td>{c.nama_kepala || "—"}</td>
-                    <td>
-                      <div className={styles.row}>
-                        {c.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
-                        {c.is_special ? <Badge tone="info">Special</Badge> : null}
-                        {c.pajak_in ? <Badge tone="neutral">PI</Badge> : null}
-                      </div>
-                    </td>
-                    <td>
-                      {akunRow ? (
-                        <Badge tone={TONE_AKUN[akunRow.status]}>{LABEL_AKUN[akunRow.status]}</Badge>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>
-                      {(c.effective_bank_account_count ?? 0) > 0 ? (
-                        <Badge tone="success">{`${c.effective_bank_account_count} aktif`}</Badge>
-                      ) : (
-                        <Badge tone="danger">Diblokir—belum ada rekening</Badge>
-                      )}
-                    </td>
-                    <td>
-                      <Badge tone={!c.is_active ? "danger" : c.identity_status === "identity_incomplete" ? "warning" : "success"}>
-                        {!c.is_active ? "Nonaktif" : c.identity_status === "identity_incomplete" ? "Identitas belum lengkap" : "Aktif"}
-                      </Badge>
-                    </td>
-                    <td className={`num ${styles.aksiSel}`}>
-                      <div className={`${styles.aksi} ${styles.aksiIkon}`}>
-                        <Button variant="ghost" icon="pencil-simple" title="Ubah" onClick={() => bukaUbah(c)}>
-                          <span className={styles.aksiTeks}>Ubah</span>
-                        </Button>
-                        {peran === "superadmin" ? (
-                          <Button
-                            variant="secondary"
-                            icon="bank"
-                            title="Kelola rekening tujuan"
-                            onClick={() => void muatAssignment(c)}
-                          >
-                            <span className={styles.aksiTeks}>Kelola rekening tujuan</span>
-                          </Button>
-                        ) : null}
-                        <Button
-                          variant="secondary"
-                          icon={c.is_active ? "prohibit" : "check-circle"}
-                          title={c.is_active ? "Nonaktifkan" : "Aktifkan"}
-                          disabled={sibuk === c.id}
-                          onClick={() => void ubahAktif(c, !c.is_active, c.id)}
-                        >
-                          <span className={styles.aksiTeks}>{c.is_active ? "Nonaktifkan" : "Aktifkan"}</span>
-                        </Button>
-                        <Button
-                          variant="danger-ghost"
-                          icon="trash"
-                          title="Hapus"
-                          disabled={sibuk === c.id}
-                          onClick={() => mintaHapus(c)}
-                        >
-                          <span className={styles.aksiTeks}>Hapus</span>
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        )}
-        <p className="muted small" style={{ marginTop: 12 }}>
-          Cabang yang sudah punya pesanan tidak bisa dihapus &mdash; nonaktifkan saja (PRD
-          AP-CAB-04). Token registrasi hanya berlaku untuk cabang yang belum punya akun.
-        </p>
-      </Card>
+        </Card>
+      ) : (
+        <GridKartu label="Daftar cabang">
+          {baris.map((c) => {
+            const akunRow = akun?.get(c.id);
+            const rekening = c.effective_bank_account_count ?? 0;
+            return (
+              <KartuMaster
+                key={c.id}
+                judul={c.nama}
+                redup={!c.is_active}
+                onBuka={() => bukaUbah(c)}
+                status={
+                  <Badge tone={!c.is_active ? "neutral" : c.identity_status === "identity_incomplete" ? "warning" : "success"}>
+                    {!c.is_active ? "Nonaktif" : c.identity_status === "identity_incomplete" ? "Identitas belum lengkap" : "Aktif"}
+                  </Badge>
+                }
+                sub={c.nama_kepala ? `${c.nama_kepala}${c.jabatan_kepala ? ` · ${c.jabatan_kepala}` : ""}` : "Kepala cabang belum diisi"}
+                kaki={
+                  <>
+                    {akunRow ? <Badge tone={TONE_AKUN[akunRow.status]}>{`Akun: ${LABEL_AKUN[akunRow.status]}`}</Badge> : null}
+                    <Badge tone={rekening > 0 ? "success" : "danger"}>
+                      {rekening > 0 ? `${rekening} rekening tujuan` : "Belum ada rekening"}
+                    </Badge>
+                    {c.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
+                    {c.is_special ? <Badge tone="info">Special</Badge> : null}
+                    {c.pajak_in ? <Badge tone="neutral">PI</Badge> : null}
+                  </>
+                }
+              >
+                <span className="muted small">{c.email || "Email belum diisi"}</span>
+                {c.telepon ? <span className="muted small">{c.telepon}</span> : null}
+              </KartuMaster>
+            );
+          })}
+        </GridKartu>
+      )}
+      <p className="muted small" style={{ marginTop: 12 }}>
+        Klik kartu untuk melihat dan mengubah detail cabang. Cabang yang sudah punya pesanan tidak bisa
+        dihapus &mdash; nonaktifkan saja (PRD AP-CAB-04). Token registrasi hanya berlaku untuk cabang yang
+        belum punya akun.
+      </p>
 
       <Modal
         open={form !== null}
@@ -637,6 +582,32 @@ export function CabangPage() {
         wide
         footer={
           <>
+            {formRow ? (
+              <div className={kartuMasterStyles.footKiri}>
+                <Button
+                  variant="danger-ghost"
+                  icon="trash"
+                  onClick={() => {
+                    setForm(null);
+                    mintaHapus(formRow);
+                  }}
+                >
+                  Hapus
+                </Button>
+                {peran === "superadmin" ? (
+                  <Button
+                    variant="secondary"
+                    icon="bank"
+                    onClick={() => {
+                      setForm(null);
+                      void muatAssignment(formRow);
+                    }}
+                  >
+                    Kelola rekening tujuan
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             <Button
               variant="secondary"
               onClick={() => {

@@ -208,6 +208,8 @@ Order line saat submit wajib menyimpan snapshot minimal: varian terpilih, varian
 8. `apply`: satu transaksi atomik; verifikasi ulang hash dan optimistic lock.
 9. `verify`: baca ulang jumlah/master hash tanpa memaparkan PII.
 
+Amandemen 2026-10-17 (keputusan user): Admin Portal tidak lagi menyediakan menu maupun halaman Impor Impact. Master cabang, produk, dan tarif dikelola langsung lewat halaman Cabang, Katalog product, dan Matriks harga. Endpoint `/api/v1/admin/master-imports/impact/*` tetap ada dengan guard §10 yang sama untuk pemakaian terkontrol di luar UI.
+
 ### 8.2 Status preview
 
 | Status | Makna |

@@ -356,3 +356,17 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* Pemilih cabang di topbar (dashboard & riwayat pemesanan). */
+.cabSelect {
+  width: 220px;
+  max-width: 100%;
+}
+
+@media (max-width: 899px) {
+  .cabSelect {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+  }
+}
