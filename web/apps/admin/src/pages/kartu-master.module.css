@@ -46,20 +46,27 @@
   color: var(--text-muted);
 }
 
+/*
+ * Judul hanya terputus di antara kata (min-content = kata terpanjang); bila
+ * kata terpanjang + badge status tidak muat, badge turun ke baris berikutnya
+ * alih-alih memotong nama seperti "INDRAMAY|U".
+ */
 .kepala {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 10px;
+  gap: 4px 10px;
 }
 
 .judul {
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: min-content;
   font-size: 15px;
   line-height: 22px;
   font-weight: 600;
   color: var(--ink);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .sub {
