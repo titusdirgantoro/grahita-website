@@ -3,6 +3,7 @@ import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { routeTree } from "./routes";
+import type { PembayaranPesanan } from "./pages/deposit";
 import { bolehRevisi, labelStatusRekening, uraiBilanganBulat, type FilterPesanan, type PesananDetail, type PesananHalaman } from "./pages/pesanan";
 
 const DETAIL_ID = "11111111-1111-4111-8111-111111111111";
@@ -192,6 +193,8 @@ function stubPesanan(opsi?: {
   revise?: JawabanRevisi[];
   /** Ditunggu sebelum POST /revise menjawab — untuk menguji klik ganda. */
   reviseTertahan?: Promise<unknown>;
+  /** Rincian GET /admin/orders/{id}/payment (C4); bawaan transfer saja. */
+  pembayaran?: PembayaranPesanan;
 }): StubUji {
   const panggilan: string[] = [];
   const posts: { url: string; body: unknown; headers: Record<string, string> }[] = [];
@@ -287,6 +290,22 @@ function stubPesanan(opsi?: {
             accounts: [
               { id: "ba-1", bank: "BCA", nama_pemilik: "PT Grahita", display_nomor: "••••1234" },
             ],
+          },
+        });
+      }
+      if (url.endsWith(`/admin/orders/${DETAIL_ID}/payment`)) {
+        const detail = opsi?.detail ?? DETAIL_UJI;
+        return json({
+          data: opsi?.pembayaran ?? {
+            order_id: DETAIL_ID,
+            status: detail.status,
+            versi: detail.versi,
+            current_total: detail.total,
+            committed_deposit: 0,
+            remaining_due: detail.status === "done" ? 0 : detail.total,
+            is_lunas: detail.status === "done",
+            allocations: [],
+            balance: { branch_id: "b1", available_balance: 0, journal_version: 0, pending_topup_count: 0, pending_topup_amount_declared: 0 },
           },
         });
       }
@@ -574,6 +593,73 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
     await waitFor(() => {
       expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
     });
+  });
+
+  it("pesanan berdeposit wajib rincian settlement: alokasi aktif + split per bukti + Idempotency-Key", async () => {
+    const { posts } = stubPesanan({
+      pembayaran: {
+        order_id: DETAIL_ID,
+        status: "submitted",
+        versi: 0,
+        current_total: 200000,
+        committed_deposit: 50000,
+        remaining_due: 150000,
+        is_lunas: false,
+        allocations: [
+          { id: "al-1", order_version: 0, amount: 50000, reversed_amount: 0, active_amount: 50000, created_at: "2026-10-01T03:10:00Z" },
+          { id: "al-0", order_version: 0, amount: 10000, reversed_amount: 10000, active_amount: 0, created_at: "2026-10-01T03:05:00Z" },
+        ],
+        balance: { branch_id: "b1", available_balance: 10000, journal_version: 7, pending_topup_count: 0, pending_topup_amount_declared: 0 },
+      },
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.querySelector('[data-uji="rincian-settlement"]')).not.toBeNull();
+
+    fireEvent.change(within(dialog).getByLabelText(/Disetujui/), { target: { value: "170000" } });
+    fireEvent.change(within(dialog).getByLabelText("Untuk pesanan"), { target: { value: "170000" } });
+    expect(within(dialog).getByText(/Lebih .* dari total pesanan/)).toBeDefined();
+    fireEvent.change(within(dialog).getByLabelText("Untuk pesanan"), { target: { value: "150000" } });
+    expect(within(dialog).getByText(/hanya Superadmin/)).toBeDefined();
+    fireEvent.change(within(dialog).getByLabelText(/Disetujui/), { target: { value: "150000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Setujui & selesaikan" }));
+
+    await waitFor(() => expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true));
+    const kirim = posts.find((p) => p.url === URL_VERIFY);
+    expect(kirim?.body).toEqual({
+      hasil: "cocok",
+      expected_order_version: 0,
+      deposit_allocation_ids: ["al-1"],
+      proof_splits: [
+        { payment_proof_id: "p1", bank_account_id: "ba-1", approved_nominal: 150000, applied_to_order: 150000, credited_to_deposit_total: 0 },
+      ],
+    });
+    expect(kirim?.headers["Idempotency-Key"]).toBeTruthy();
+  });
+
+  it("panel pembayaran Done menampilkan rincian deposit/transfer dari snapshot settlement", async () => {
+    stubPesanan({
+      detail: { ...DETAIL_UJI, status: "done", verif_status: "cocok", alasan_review: undefined },
+      pembayaran: {
+        order_id: DETAIL_ID,
+        status: "done",
+        versi: 1,
+        current_total: 200000,
+        committed_deposit: 80000,
+        remaining_due: 0,
+        is_lunas: true,
+        settlement: { order_version: 1, deposit_amount: 80000, transfer_amount: 120000 },
+        allocations: [],
+        balance: { branch_id: "b1", available_balance: 0, journal_version: 3, pending_topup_count: 0, pending_topup_amount_declared: 0 },
+      },
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+    const norm = (t: string | null) => (t ?? "").replace(/\u00a0/g, " ");
+    await waitFor(() => expect(norm(document.body.textContent)).toContain("Rp 120.000"));
+    expect(norm(document.body.textContent)).toContain("Rp 80.000");
   });
 
   it("menandai perlu review mengirim alasan tertutup + catatan (pesanan tidak diselesaikan)", async () => {

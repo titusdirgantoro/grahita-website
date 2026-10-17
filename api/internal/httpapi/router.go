@@ -134,6 +134,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/deposit/topups/{id}/proof", a.adapt(a.depositTopupProof))
 			r.Get("/orders/{id}/deposit-allocations", a.adapt(a.depositOrderAllocations))
 			r.Post("/orders/{id}/deposit-allocations", a.adapt(a.depositAllocate))
+			r.Get("/orders/{id}/payment", a.adapt(a.depositOrderPayment))
 			// Konten halaman Tutorial cabang (F2-27, PRD §3.8): dibaca dari
 			// database sehingga pembaruan Superadmin langsung terlihat di
 			// portal cabang tanpa build/deploy. Pembacaan cukup sesi yang
@@ -194,6 +195,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/deposit-topups/{id}/proof", a.adapt(a.depositTopupProof))
 					r.Post("/deposit-topups/{id}/decision", a.adapt(a.adminDepositDecision))
 					r.Get("/orders/{id}/deposit-allocations", a.adapt(a.depositOrderAllocations))
+					r.Get("/orders/{id}/payment", a.adapt(a.depositOrderPayment))
 					r.Post("/orders/{id}/deposit-allocations", a.adapt(a.depositAllocate))
 					r.Post("/orders/{id}/deposit-allocations/{allocation_id}/reverse", a.adapt(a.depositReverse))
 				})

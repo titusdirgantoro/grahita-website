@@ -24,6 +24,7 @@ import {
 import { CabangPage } from "./pages/cabang";
 import { KatalogPage } from "./pages/katalog";
 import { RekeningPage } from "./pages/rekening";
+import { DepositAdminPage } from "./pages/deposit";
 import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
@@ -181,6 +182,7 @@ const imporImpactRoute = createRoute({
   path: "/impor-impact",
   component: ImporImpactPage,
 });
+const depositRoute = createRoute({ getParentRoute: () => shellRoute, path: "/deposit", component: DepositAdminPage });
 const rekeningRoute = createRoute({ getParentRoute: () => shellRoute, path: "/rekening", component: RekeningPage });
 const reportingRoute = createRoute({ getParentRoute: () => shellRoute, path: "/reporting", component: ReportingPage });
 const penggunaRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pengguna", component: PenggunaPage });
@@ -213,6 +215,7 @@ const routeTree = rootRoute.addChildren([
     dashboardRoute,
     pesananRoute,
     pesananDetailRoute,
+    depositRoute,
     cabangRoute,
     katalogRoute,
     imporImpactRoute,

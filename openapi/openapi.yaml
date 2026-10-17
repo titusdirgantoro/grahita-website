@@ -2259,6 +2259,7 @@ paths:
         pesanan.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKeyOptional"
       requestBody:
         required: true
         content:
@@ -2292,8 +2293,27 @@ paths:
                   description: Catatan bebas pemeriksa.
                 proof_destinations:
                   type: array
-                  description: Wajib lengkap dan tepat satu per bukti saat hasil=cocok.
+                  description: |
+                    Wajib lengkap dan tepat satu per bukti saat hasil=cocok pada
+                    jalur transfer saja. Pada jalur settlement rekening tujuan
+                    dikirim lewat `proof_splits`.
                   items: { $ref: "#/components/schemas/ProofDestination" }
+                expected_order_version:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Settlement campuran (D3 §6.2, C0 §5.2). Kehadiran field ini,
+                    `deposit_allocation_ids`, atau `proof_splits` memilih jalur
+                    settlement; wajib untuk pesanan yang memiliki alokasi deposit
+                    aktif atau berada di sub-state revisi.
+                deposit_allocation_ids:
+                  type: array
+                  description: Harus sama persis dengan seluruh alokasi aktif lintas versi.
+                  items: { type: string, format: uuid }
+                proof_splits:
+                  type: array
+                  description: Tepat satu per bukti order.
+                  items: { $ref: "#/components/schemas/ProofSplit" }
       responses:
         "200":
           description: Verifikasi tersimpan
@@ -2313,7 +2333,10 @@ paths:
         "409":
           description: |
             Pesanan sudah selesai diverifikasi (`ORDER_ALREADY_DONE`) atau belum
-            dikirim (`ORDER_NOT_SUBMITTED`). Tidak ada perubahan yang dilakukan.
+            dikirim (`ORDER_NOT_SUBMITTED`), versi basi (`ORDER_VERSION_CONFLICT`),
+            lebih bayar belum diputuskan (`OVERPAY_DECISION_REQUIRED`), atau key
+            dipakai untuk keputusan lain (`IDEMPOTENCY_KEY_REUSED`). Tidak ada
+            perubahan yang dilakukan.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -2328,6 +2351,14 @@ paths:
                     error:
                       code: ORDER_NOT_SUBMITTED
                       message: Verifikasi hanya untuk pesanan yang sudah dikirim.
+        "422":
+          description: |
+            `PAYMENT_BREAKDOWN_MISMATCH` — deposit + transfer untuk order tidak
+            tepat total, daftar alokasi tidak sama dengan alokasi aktif, atau
+            keputusan bukti bertentangan dengan keputusan sebelumnya.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
         "503":
           $ref: "#/components/responses/Unavailable"
 
@@ -2423,6 +2454,7 @@ paths:
         worker kebetulan berjalan.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKeyOptional"
       requestBody:
         required: true
         content:
@@ -2446,6 +2478,19 @@ paths:
                   maxItems: 100
                   description: Daftar baris FINAL versi baru.
                   items: { $ref: "#/components/schemas/ReviseLineInput" }
+                deposit_reversals:
+                  type: array
+                  description: |
+                    Reversal plan eksplisit (C0 §3.4, §5.1) — hanya untuk revisi
+                    yang menurunkan total; wajib cukup bila deposit committed
+                    melebihi total baru. Butuh `admin.verify` dan Idempotency-Key.
+                  items:
+                    type: object
+                    required: [allocation_id, amount, reason]
+                    properties:
+                      allocation_id: { type: string, format: uuid }
+                      amount: { type: integer, minimum: 1 }
+                      reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         "200":
           description: Revisi tersimpan (versi naik, nomor tetap)
@@ -2476,6 +2521,9 @@ paths:
             * `INVOICE_NOT_READY` — invoice VERSI BERJALAN pesanan belum
               dirender (pekerjaan dokumen belum selesai), sehingga revisi baru
               belum boleh menaikkan versi. Ulangi setelah dokumennya siap.
+            * `REVISION_REVERSAL_PLAN_REQUIRED` / `REVISION_REVERSAL_PLAN_INVALID`
+              — total turun di bawah deposit committed tanpa reversal plan yang
+              cukup, atau item plan tidak sah; seluruh revisi dibatalkan.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -3627,6 +3675,32 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/orders/{id}/payment:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [customer]
+      operationId: getOrderPayment
+      summary: Rincian pembayaran pesanan cabang sesi
+      description: |
+        Rincian pembayaran order (C3/C4; C0 §5.1): total kini, deposit committed
+        lintas versi, sisa tagihan, sub-state revisi, pointer settlement Done,
+        alokasi, dan saldo cabang (journal_version untuk alokasi/reversal).
+        Bukti transfer yang belum diverifikasi tidak dihitung sebagai bayar.
+      responses:
+        "200":
+          description: Rincian pembayaran
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/OrderPayment" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/orders/{id}/deposit-allocations:
     parameters:
       - $ref: "#/components/parameters/OrderIdPath"
@@ -3808,6 +3882,32 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
+  /api/v1/admin/orders/{id}/payment:
+    parameters:
+      - $ref: "#/components/parameters/OrderIdPath"
+    get:
+      tags: [admin]
+      operationId: adminGetOrderPayment
+      summary: Rincian pembayaran satu pesanan
+      description: |
+        Rincian pembayaran order (C3/C4; C0 §5.1): total kini, deposit committed
+        lintas versi, sisa tagihan, sub-state revisi, pointer settlement Done,
+        alokasi, dan saldo cabang (journal_version untuk alokasi/reversal).
+        Bukti transfer yang belum diverifikasi tidak dihitung sebagai bayar.
+      responses:
+        "200":
+          description: Rincian pembayaran
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/OrderPayment" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/admin/orders/{id}/deposit-allocations:
     parameters:
       - $ref: "#/components/parameters/OrderIdPath"
@@ -3925,6 +4025,12 @@ components:
       required: true
       description: Nilai cookie `grahita_csrf` (double-submit).
       schema: { type: string }
+    IdempotencyKeyOptional:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Wajib bila keputusan menciptakan kredit deposit (settlement) atau membawa reversal plan (revisi).
+      schema: { type: string, minLength: 8, maxLength: 200 }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -4117,6 +4223,29 @@ components:
             topups: { type: array, items: { $ref: "#/components/schemas/DepositTopup" } }
             transactions: { type: array, items: { $ref: "#/components/schemas/DepositTransaction" } }
             reconciled: { type: boolean }
+    OrderPayment:
+      type: object
+      required: [order_id, status, versi, current_total, committed_deposit, remaining_due, is_lunas, allocations, balance]
+      properties:
+        order_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, submitted, done] }
+        versi: { type: integer, minimum: 0 }
+        current_total: { type: integer, minimum: 0 }
+        revision_payment_state: { type: string, enum: [revision_underpayment, revision_overpayment_pending] }
+        committed_deposit: { type: integer, minimum: 0 }
+        remaining_due: { type: integer, minimum: 0 }
+        is_lunas: { type: boolean }
+        settlement:
+          type: object
+          required: [verification_log_id, order_version, deposit_amount, transfer_amount]
+          properties:
+            verification_log_id: { type: string, format: uuid }
+            order_version: { type: integer, minimum: 0 }
+            deposit_amount: { type: integer, minimum: 0 }
+            transfer_amount: { type: integer, minimum: 0 }
+        allocations: { type: array, items: { $ref: "#/components/schemas/DepositAllocation" } }
+        balance: { $ref: "#/components/schemas/DepositSummary" }
+
     DepositAllocation:
       type: object
       required: [id, order_id, order_version, amount, reversed_amount, active_amount, created_at]
@@ -4736,6 +4865,53 @@ components:
       properties:
         order: { $ref: "#/components/schemas/VerifiedOrder" }
         verifikasi: { $ref: "#/components/schemas/VerificationLog" }
+        settlement: { $ref: "#/components/schemas/SettlementResult" }
+
+    ProofSplit:
+      type: object
+      required: [payment_proof_id, bank_account_id, approved_nominal, applied_to_order]
+      additionalProperties: false
+      description: |
+        Keputusan ekonomi satu bukti: `approved_nominal = applied_to_order +
+        credited_to_deposit_total`. Nilai kredit kumulatif (C0 §4.3.1);
+        `credited_to_deposit` diterima sebagai alias attempt pertama. Kredit
+        baru > 0 hanya untuk Superadmin dan membutuhkan Idempotency-Key.
+      properties:
+        payment_proof_id: { type: string, format: uuid }
+        bank_account_id: { type: string, format: uuid }
+        approved_nominal: { type: integer, minimum: 0 }
+        applied_to_order: { type: integer, minimum: 0 }
+        credited_to_deposit: { type: integer, minimum: 0 }
+        credited_to_deposit_total: { type: integer, minimum: 0 }
+
+    SettlementResult:
+      type: object
+      required: [deposit_amount, transfer_amount, new_credit_to_deposit, deposit_sources, proof_splits, replayed]
+      properties:
+        deposit_amount: { type: integer, minimum: 0 }
+        transfer_amount: { type: integer, minimum: 0 }
+        new_credit_to_deposit: { type: integer, minimum: 0 }
+        replayed: { type: boolean }
+        deposit_sources:
+          type: array
+          items:
+            type: object
+            required: [allocation_id, allocation_order_version, amount]
+            properties:
+              allocation_id: { type: string, format: uuid }
+              allocation_order_version: { type: integer, minimum: 0 }
+              amount: { type: integer, minimum: 1 }
+        proof_splits:
+          type: array
+          items:
+            type: object
+            required: [payment_proof_id, approved_nominal, applied_to_order, credited_to_deposit_total, new_credit_to_deposit]
+            properties:
+              payment_proof_id: { type: string, format: uuid }
+              approved_nominal: { type: integer, minimum: 0 }
+              applied_to_order: { type: integer, minimum: 0 }
+              credited_to_deposit_total: { type: integer, minimum: 0 }
+              new_credit_to_deposit: { type: integer, minimum: 0 }
 
     VerifiedOrder:
       type: object
@@ -4931,6 +5107,11 @@ components:
                   BANK_ACCOUNT_NOT_ALLOWED,
                   DEPOSIT_RECONCILIATION_REQUIRED,
                   DEPOSIT_UNAVAILABLE,
+                  ORDER_VERSION_CONFLICT,
+                  PAYMENT_BREAKDOWN_MISMATCH,
+                  OVERPAY_DECISION_REQUIRED,
+                  REVISION_REVERSAL_PLAN_REQUIRED,
+                  REVISION_REVERSAL_PLAN_INVALID,
                 ]
             message: { type: string }
             fields:

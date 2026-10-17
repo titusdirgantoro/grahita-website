@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiClient, ApiClientError, CSRF_COOKIE, CSRF_HEADER } from "./index";
+import { ApiClient, ApiClientError, CSRF_COOKIE, CSRF_HEADER, IDEMPOTENCY_HEADER } from "./index";
 
 /** respon membuat Response JSON; 204 tidak boleh membawa body. */
 function respon(body: string | null, status = 200): Response {
@@ -72,6 +72,20 @@ describe("ApiClient", () => {
 
     const headers = fetchImpl.mock.calls[0]?.[1]?.headers as Record<string, string>;
     expect(headers[CSRF_HEADER]).toBe("token-uji");
+  });
+
+  it("mengirim Idempotency-Key yang sama untuk retry satu niat mutasi", async () => {
+    const fetchImpl = mockFetch(async () => respon(JSON.stringify({ data: {} })));
+    const client = new ApiClient({ fetchImpl, cookieReader: () => null });
+
+    await client.post("/deposit/topups", {}, { idempotencyKey: "niat-1" });
+    await client.post("/deposit/topups", {}, { idempotencyKey: "niat-1" });
+    await client.post("/deposit/topups", {});
+
+    const header = (i: number) => (fetchImpl.mock.calls[i]?.[1]?.headers as Record<string, string>)[IDEMPOTENCY_HEADER];
+    expect(header(0)).toBe("niat-1");
+    expect(header(1)).toBe(header(0));
+    expect(header(2)).toBeUndefined();
   });
 
   it("tidak mengirim header CSRF untuk GET", async () => {

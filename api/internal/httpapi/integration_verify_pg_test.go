@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -159,9 +160,13 @@ func verifyHTTP(t *testing.T, f *pgFixture, cookies []*http.Cookie, csrf, id, bo
 	return status, decoded
 }
 
+// seedAlokasiDepositAktif menyemai alokasi aktif lewat SQL dengan ledger yang
+// tetap konsisten: saldo dikreditkan dulu (seedSaldoDeposit), lalu debit +
+// alokasi + cache akun, supaya rekonsiliasi journal==cache tetap benar.
 func seedAlokasiDepositAktif(t *testing.T, f *pgFixture, orderID, branchID string, amount int64) {
 	t.Helper()
 	ctx := context.Background()
+	seedSaldoDeposit(t, f, branchID, amount)
 	var transactionID string
 	if err := f.pool.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
 branch_id,kind,amount,order_id,order_version,idempotency_key_hash,request_fingerprint,actor_kind)
@@ -173,6 +178,49 @@ VALUES($1,'order_allocation_debit',$2,$3,0,digest($4,'sha256'),digest($4,'sha256
 branch_id,order_id,order_version,debit_transaction_id,amount,created_by_kind)
 VALUES($1,$2,0,$3,$4,'system')`, branchID, orderID, transactionID, amount); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE branch_deposit_accounts
+SET balance=balance-$2, journal_version=journal_version+1 WHERE branch_id=$1`, branchID, amount); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedSaldoDeposit menyemai satu top-up terverifikasi Superadmin lengkap
+// (bukti, top-up, log verifikasi, kredit journal, cache akun).
+func seedSaldoDeposit(t *testing.T, f *pgFixture, branchID string, amount int64) {
+	t.Helper()
+	ctx := context.Background()
+	tag := fmt.Sprintf("UJI-saldo-%s-%d", branchID, time.Now().UnixNano())
+	var proofID, topupID, logID string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO payment_proofs
+(purpose,branch_id,storage_key,nama_file,mime_type,ukuran_byte,sha256,uploaded_by_kind,uploaded_by_id)
+VALUES('deposit_topup',$1,$2,'topup.jpg','image/jpeg',4,digest($2,'sha256'),'admin',$3) RETURNING id`,
+		branchID, "proofs/"+tag, f.adminSA).Scan(&proofID); err != nil {
+		t.Fatalf("seed bukti top-up: %v", err)
+	}
+	if err := f.pool.QueryRow(ctx, `INSERT INTO deposit_topups
+(branch_id,bank_account_id,status,declared_amount,verified_amount,payment_proof_id,verified_by,verified_at,created_by_kind)
+VALUES($1,$2,'verified',$3,$3,$4,$5,now(),'admin') RETURNING id`,
+		branchID, f.bankDefault, amount, proofID, f.adminSA).Scan(&topupID); err != nil {
+		t.Fatalf("seed top-up: %v", err)
+	}
+	if err := f.pool.QueryRow(ctx, `INSERT INTO deposit_verification_logs
+(topup_id,method,result,declared_amount,approved_amount,bank_account_id,branch_allowlist_version,destination_result,admin_id)
+VALUES($1,'manual','verified',$2,$2,$3,1,'{}'::jsonb,$4) RETURNING id`,
+		topupID, amount, f.bankDefault, f.adminSA).Scan(&logID); err != nil {
+		t.Fatalf("seed log top-up: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO branch_deposit_transactions
+(branch_id,kind,amount,source_proof_id,deposit_verification_log_id,idempotency_key_hash,request_fingerprint,actor_kind,actor_id)
+VALUES($1,'topup_credit',$2,$3,$4,digest($5,'sha256'),digest($5,'sha256'),'admin',$6)`,
+		branchID, amount, proofID, logID, tag, f.adminSA); err != nil {
+		t.Fatalf("seed kredit top-up: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO branch_deposit_accounts(branch_id,balance,journal_version)
+VALUES($1,$2,1) ON CONFLICT(branch_id) DO UPDATE
+SET balance=branch_deposit_accounts.balance+$2, journal_version=branch_deposit_accounts.journal_version+1`,
+		branchID, amount); err != nil {
+		t.Fatalf("seed akun deposit: %v", err)
 	}
 }
 
@@ -847,8 +895,8 @@ func TestPGVerifikasiTransferOnlyMenolakAlokasiDepositAktifManualDanAI(t *testin
 		seedAlokasiDepositAktif(t, f, id, f.branchA, 400)
 		cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 		status, body := verifyHTTP(t, f, cookies, csrf, id, bodyVerifikasiCocok(t, f, id, &total, ""))
-		if status != http.StatusBadRequest || kodeErrorVerifikasi(body) != "VALIDATION_FAILED" {
-			t.Fatalf("manual harus fail-closed 400, dapat %d %v", status, body)
+		if status != http.StatusUnprocessableEntity || kodeErrorVerifikasi(body) != "PAYMENT_BREAKDOWN_MISMATCH" {
+			t.Fatalf("manual tanpa rincian settlement harus 422, dapat %d %v", status, body)
 		}
 		st, verif, _, _ := statusPesanan(t, f, id)
 		if st != "submitted" || verif != "belum" || hitungBaris(t, f, "verification_logs", "order_id", id) != 0 {

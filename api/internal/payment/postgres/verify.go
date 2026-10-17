@@ -42,6 +42,7 @@ import (
 	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/db/sqlc"
+	depositpg "github.com/grahita/portal/api/internal/deposit/postgres"
 	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/jobs"
 	"github.com/grahita/portal/api/internal/platform/pgtypes"
@@ -93,6 +94,13 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 	if err := tx.QueryRow(ctx, `SELECT bank_allowlist_version FROM branches WHERE id=$1 FOR SHARE`, branchID).Scan(&allowlistVersion); err != nil {
 		return payment.VerifyOutcome{}, fmt.Errorf("kunci allowlist cabang: %w", err)
 	}
+	if req.Hasil == payment.VerifCocok {
+		// Urutan kunci global D3 §5.1: akun deposit sebelum order, supaya
+		// settlement tidak berebut kunci terbalik dengan alokasi/reversal.
+		if _, err := depositpg.LockAccount(ctx, tx, branchID); err != nil {
+			return payment.VerifyOutcome{}, err
+		}
+	}
 
 	// 1. Kunci baris pesanan: hanya satu verifikasi per pesanan dalam satu
 	//    waktu, dan seluruh keputusan di bawah dibaca dari baris terkunci.
@@ -107,6 +115,12 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 	// 2. Keadaan yang menentukan boleh-tidaknya transisi.
 	switch row.Status {
 	case payment.StatusDone:
+		if out, ok, err := r.settlementReplay(ctx, tx, row, req); err != nil || ok {
+			if err != nil {
+				return payment.VerifyOutcome{}, err
+			}
+			return out, tx.Commit(ctx)
+		}
 		return payment.VerifyOutcome{}, payment.ErrAlreadyDone
 	case payment.StatusSubmitted:
 		// lanjut
@@ -121,8 +135,11 @@ EXISTS(SELECT 1 FROM deposit_allocations a
 FROM orders WHERE id=$1`, req.OrderID).Scan(&revisionPending, &hasActiveAllocation); err != nil {
 			return payment.VerifyOutcome{}, fmt.Errorf("periksa settlement deposit: %w", err)
 		}
-		if revisionPending || hasActiveAllocation {
-			return payment.VerifyOutcome{}, fmt.Errorf("%w: settlement deposit harus diorkestrasi atomik", payment.ErrInvalidData)
+		if (revisionPending || hasActiveAllocation) && req.Settlement == nil {
+			if req.Metode == payment.MetodeAI {
+				return payment.VerifyOutcome{}, fmt.Errorf("%w: settlement deposit harus diorkestrasi atomik", payment.ErrInvalidData)
+			}
+			return payment.VerifyOutcome{}, fmt.Errorf("%w: pesanan memakai deposit atau revisi; kirim rincian settlement", payment.ErrBreakdownMismatch)
 		}
 	}
 	destinationResults, fingerprint, finalHasil, finalAlasan, err := r.validateDestinations(ctx, tx, req, row.BranchID)
@@ -144,54 +161,64 @@ FROM orders WHERE id=$1`, req.OrderID).Scan(&revisionPending, &hasActiveAllocati
 		return payment.VerifyOutcome{}, err
 	}
 	//    dari angka yang dikirim klien) supaya selisih selalu benar.
-	logRow, err := q.InsertVerificationLog(ctx, sqlc.InsertVerificationLogParams{
-		OrderID:                req.OrderID,
-		Metode:                 sqlc.VerifyMethod(req.Metode),
-		TotalPesanan:           row.Total,
-		TotalTerbaca:           pgtypes.Int8Ptr(req.TotalTerbaca),
-		Hasil:                  sqlc.VerifStatus(req.Hasil),
-		Alasan:                 sqlc.NullReviewReason{ReviewReason: sqlc.ReviewReason(req.Alasan), Valid: req.Alasan != ""},
-		AdminID:                adminIDVerifikasi(req),
-		Catatan:                pgtypes.Text(req.Catatan),
-		OrderVersion:           row.Versi,
-		TransferAmount:         row.Total,
-		BranchAllowlistVersion: pgtype.Int8{Int64: allowlistVersion, Valid: true},
-		ProofSetFingerprint:    fingerprint,
-		DestinationResults:     destinationJSON,
-	})
-	if err != nil {
-		if req.Metode == payment.MetodeAI && isDuplicate(err) {
-			// Dua worker review dapat sama-sama melewati precheck. Unique index
-			// menjadi arbiter akhir; transaksi pecundang dibatalkan lalu membaca
-			// outcome immutable yang sudah dikomit worker pemenang.
-			_ = tx.Rollback(ctx)
-			return r.existingAIOutcome(ctx, req.OrderID, allowlistVersion, fingerprint)
+	var logRow sqlc.InsertVerificationLogRow
+	var settlement *payment.SettlementResult
+	if req.Settlement != nil {
+		logRow, settlement, err = r.settle(ctx, tx, row, req, allowlistVersion, fingerprint, destinationJSON)
+		if err != nil {
+			return payment.VerifyOutcome{}, err
 		}
-		return payment.VerifyOutcome{}, fmt.Errorf("query InsertVerificationLog: %w", err)
-	}
-
-	switch req.Hasil {
-	case payment.VerifCocok:
-		changed, err := q.SetOrderDone(ctx, sqlc.SetOrderDoneParams{
-			OrderID: req.OrderID, VerificationLogID: logRow.ID,
-			OrderVersion: row.Versi, TransferAmount: row.Total,
+	} else {
+		logRow, err = q.InsertVerificationLog(ctx, sqlc.InsertVerificationLogParams{
+			OrderID:                req.OrderID,
+			Metode:                 sqlc.VerifyMethod(req.Metode),
+			TotalPesanan:           row.Total,
+			TotalTerbaca:           pgtypes.Int8Ptr(req.TotalTerbaca),
+			Hasil:                  sqlc.VerifStatus(req.Hasil),
+			Alasan:                 sqlc.NullReviewReason{ReviewReason: sqlc.ReviewReason(req.Alasan), Valid: req.Alasan != ""},
+			AdminID:                adminIDVerifikasi(req),
+			Catatan:                pgtypes.Text(req.Catatan),
+			OrderVersion:           row.Versi,
+			TransferAmount:         row.Total,
+			BranchAllowlistVersion: pgtype.Int8{Int64: allowlistVersion, Valid: true},
+			ProofSetFingerprint:    fingerprint,
+			DestinationResults:     destinationJSON,
 		})
 		if err != nil {
-			return payment.VerifyOutcome{}, fmt.Errorf("query SetOrderDone: %w", err)
+			if req.Metode == payment.MetodeAI && isDuplicate(err) {
+				// Dua worker review dapat sama-sama melewati precheck. Unique index
+				// menjadi arbiter akhir; transaksi pecundang dibatalkan lalu membaca
+				// outcome immutable yang sudah dikomit worker pemenang.
+				_ = tx.Rollback(ctx)
+				return r.existingAIOutcome(ctx, req.OrderID, allowlistVersion, fingerprint)
+			}
+			return payment.VerifyOutcome{}, fmt.Errorf("query InsertVerificationLog: %w", err)
 		}
-		if changed == 0 {
-			return payment.VerifyOutcome{}, payment.ErrAlreadyDone
+
+		switch req.Hasil {
+		case payment.VerifCocok:
+			changed, err := q.SetOrderDone(ctx, sqlc.SetOrderDoneParams{
+				OrderID: req.OrderID, VerificationLogID: logRow.ID,
+				OrderVersion: row.Versi, TransferAmount: row.Total,
+			})
+			if err != nil {
+				return payment.VerifyOutcome{}, fmt.Errorf("query SetOrderDone: %w", err)
+			}
+			if changed == 0 {
+				return payment.VerifyOutcome{}, payment.ErrAlreadyDone
+			}
+		case payment.VerifPerluReview:
+			changed, err := q.SetOrderPerluReview(ctx, sqlc.SetOrderPerluReviewParams{Alasan: sqlc.ReviewReason(req.Alasan), ID: req.OrderID})
+			if err != nil {
+				return payment.VerifyOutcome{}, fmt.Errorf("query SetOrderPerluReview: %w", err)
+			}
+			if changed == 0 {
+				return payment.VerifyOutcome{}, payment.ErrNotSubmitted
+			}
+		default:
+			return payment.VerifyOutcome{}, payment.ErrHasilInvalid
 		}
-	case payment.VerifPerluReview:
-		changed, err := q.SetOrderPerluReview(ctx, sqlc.SetOrderPerluReviewParams{Alasan: sqlc.ReviewReason(req.Alasan), ID: req.OrderID})
-		if err != nil {
-			return payment.VerifyOutcome{}, fmt.Errorf("query SetOrderPerluReview: %w", err)
-		}
-		if changed == 0 {
-			return payment.VerifyOutcome{}, payment.ErrNotSubmitted
-		}
-	default:
-		return payment.VerifyOutcome{}, payment.ErrHasilInvalid
+
 	}
 
 	// 5a. Timeline: nama pelaku + keputusannya.
@@ -228,6 +255,13 @@ FROM orders WHERE id=$1`, req.OrderID).Scan(&revisionPending, &hasActiveAllocati
 	if req.Alasan != "" {
 		after["alasan_review"] = req.Alasan
 	}
+	if settlement != nil {
+		after["deposit_amount"] = settlement.DepositAmount
+		after["transfer_amount"] = settlement.TransferAmount
+		after["new_credit_to_deposit"] = settlement.NewCreditToDeposit
+		after["proof_splits"] = settlement.Splits
+		after["deposit_sources"] = settlement.Sources
+	}
 	rec.After = after
 	if err := auditpg.Insert(ctx, tx, rec); err != nil {
 		return payment.VerifyOutcome{}, err
@@ -257,7 +291,8 @@ FROM orders WHERE id=$1`, req.OrderID).Scan(&revisionPending, &hasActiveAllocati
 			AlasanReview: req.Alasan,
 			Total:        row.Total,
 		},
-		Log: toVerificationLog(logRow, req.Actor.Nama),
+		Log:        toVerificationLog(logRow, req.Actor.Nama),
+		Settlement: settlement,
 	}, nil
 }
 

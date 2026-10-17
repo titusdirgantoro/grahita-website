@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 
-import { ApiClientError, api } from "@grahita/api-client";
+import { ApiClientError, api, buatIdempotencyKey } from "@grahita/api-client";
 import {
   Badge,
   Button,
@@ -27,6 +27,17 @@ import {
 import { useApi } from "../useApi";
 import { useSesi } from "../session";
 import { formatWaktu } from "./pengguna";
+import {
+  IsianRencanaReversal,
+  PanelPembayaranAdmin,
+  RincianSettlement,
+  pesanDepositAdmin,
+  susunRencanaReversal,
+  susunSettlement,
+  type PembayaranPesanan,
+  type RencanaReversal,
+  type SplitBukti,
+} from "./deposit";
 import styles from "./admin-pages.module.css";
 
 /**
@@ -431,7 +442,7 @@ function pesanVerifikasi(err: unknown): string {
       case "ORDER_NOT_SUBMITTED":
         return "Verifikasi hanya untuk pesanan yang sudah dikirim.";
       default:
-        return err.message;
+        return pesanDepositAdmin(err);
     }
   }
   return "Terjadi kesalahan. Coba lagi.";
@@ -457,7 +468,7 @@ function pesanRevisi(err: unknown): string {
     if (err.status === 503) {
       return `Layanan revisi belum siap. ${err.message} Coba lagi beberapa saat lagi.`;
     }
-    return err.message;
+    return pesanDepositAdmin(err);
   }
   return "Terjadi kesalahan. Coba lagi.";
 }
@@ -760,6 +771,20 @@ export function PesananDetailAdminPage() {
     data?.status === "submitted",
   );
   const { data: emails, muatUlang: muatEmail } = useApi<EmailPesanan[]>(`/admin/orders/${id}/emails`);
+  // Rincian deposit/settlement (C3/C4): sumber kebenaran alokasi aktif lintas
+  // versi dan journal_version untuk koreksi.
+  const { data: bayar, muatUlang: muatBayar } = useApi<PembayaranPesanan>(
+    `/admin/orders/${id}/payment`,
+    Boolean(data) && data?.status !== "draft",
+  );
+  const [split, setSplit] = useState<Record<string, SplitBukti>>({});
+  const [rincianManual, setRincianManual] = useState(false);
+  const kunciVerif = useRef<string | null>(null);
+  const [rencana, setRencana] = useState<RencanaReversal>({});
+  const kunciRevisi = useRef<string | null>(null);
+  const wajibRincian = Boolean(bayar && (bayar.committed_deposit > 0 || bayar.revision_payment_state));
+  const pakaiRincian = wajibRincian || rincianManual;
+  const rekeningDefaultVerif = rekeningOrder?.accounts?.length === 1 ? rekeningOrder.accounts[0]?.id ?? "" : "";
 
   const [catatan, setCatatan] = useState("");
   const [tersentuh, setTersentuh] = useState(false);
@@ -912,6 +937,11 @@ export function PesananDetailAdminPage() {
     setGalatVerif(null);
     const defaultAccount = rekeningOrder?.accounts?.length === 1 ? rekeningOrder.accounts[0]?.id ?? "" : "";
     setTujuanBukti(Object.fromEntries((bukti ?? []).map((b) => [b.id, defaultAccount])));
+    setSplit(
+      Object.fromEntries((bukti ?? []).map((b) => [b.id, { approved: b.ocr_nominal ? String(b.ocr_nominal) : "", applied: "" }])),
+    );
+    setRincianManual(false);
+    kunciVerif.current = null;
     setVerifBuka(true);
   }, [bukti, rekeningOrder]);
 
@@ -954,9 +984,50 @@ export function PesananDetailAdminPage() {
       setGalatVerif("Pilih rekening tujuan efektif untuk setiap bukti sebelum menyetujui.");
       return;
     }
+    const terbaca = parseNominal(nominalVerif);
+    if (keputusanVerif === "cocok" && pakaiRincian) {
+      if (!bayar) {
+        setGalatVerif("Rincian pembayaran belum termuat. Coba lagi.");
+        return;
+      }
+      const tujuan = Object.fromEntries((bukti ?? []).map((b) => [b.id, tujuanBukti[b.id] ?? rekeningDefaultVerif]));
+      const hasil = susunSettlement({
+        versi: data?.versi ?? 0,
+        pembayaran: bayar,
+        bukti: bukti ?? [],
+        tujuan,
+        split,
+        catatan: catatanVerif.trim(),
+        totalTerbaca: terbaca,
+      });
+      if ("galat" in hasil) {
+        setGalatVerif(hasil.galat);
+        return;
+      }
+      kunciVerif.current ??= buatIdempotencyKey();
+      setSibukVerif(true);
+      setGalatVerif(null);
+      try {
+        await api.post(`/admin/orders/${id}/verify`, hasil.body, { idempotencyKey: kunciVerif.current });
+        kunciVerif.current = null;
+        setVerifBuka(false);
+        muatUlang();
+        muatBayar();
+        tampilkan("Pembayaran campuran diverifikasi. Invoice & surat jalan sedang dibuat.");
+      } catch (err) {
+        setGalatVerif(pesanVerifikasi(err));
+        if (err instanceof ApiClientError && err.status === 409) {
+          kunciVerif.current = null;
+          muatUlang();
+          muatBayar();
+        }
+      } finally {
+        setSibukVerif(false);
+      }
+      return;
+    }
     setSibukVerif(true);
     setGalatVerif(null);
-    const terbaca = parseNominal(nominalVerif);
     try {
       await api.post(`/admin/orders/${id}/verify`, {
         hasil: keputusanVerif,
@@ -981,7 +1052,7 @@ export function PesananDetailAdminPage() {
     } finally {
       setSibukVerif(false);
     }
-  }, [id, keputusanVerif, alasanVerif, nominalVerif, catatanVerif, bukti, tujuanBukti, rekeningOrder, muatUlang, muatRekeningOrder, tampilkan]);
+  }, [id, data?.versi, keputusanVerif, alasanVerif, nominalVerif, catatanVerif, bukti, tujuanBukti, rekeningOrder, rekeningDefaultVerif, pakaiRincian, bayar, split, muatUlang, muatBayar, muatRekeningOrder, tampilkan]);
 
   /** Produk yang benar-benar dijual ke cabang pesanan ini (matriks harga cabang). */
   const produkRevisi = useMemo(() => {
@@ -1018,6 +1089,8 @@ export function PesananDetailAdminPage() {
           harga: String(l.harga_satuan),
         })),
     );
+    setRencana({});
+    kunciRevisi.current = null;
     setRevisiBuka(true);
   }, [data?.lines]);
 
@@ -1091,14 +1164,27 @@ export function PesananDetailAdminPage() {
           : { product_id: b.product_id, qty, harga_satuan: harga },
       );
     }
+    const rencanaRev = susunRencanaReversal(rencana);
+    if ("galat" in rencanaRev) {
+      setGalatRevisi(rencanaRev.galat);
+      return;
+    }
+    if (rencanaRev.plan.length > 0) kunciRevisi.current ??= buatIdempotencyKey();
     setSibukRevisi(true);
     setGalatRevisi(null);
     try {
-      await api.post(`/admin/orders/${id}/revise`, {
-        alasan: alasanRevisi.trim(),
-        ...(catatanRevisi.trim() !== "" ? { catatan: catatanRevisi.trim() } : {}),
-        lines,
-      });
+      await api.post(
+        `/admin/orders/${id}/revise`,
+        {
+          alasan: alasanRevisi.trim(),
+          ...(catatanRevisi.trim() !== "" ? { catatan: catatanRevisi.trim() } : {}),
+          lines,
+          ...(rencanaRev.plan.length > 0 ? { deposit_reversals: rencanaRev.plan } : {}),
+        },
+        rencanaRev.plan.length > 0 && kunciRevisi.current ? { idempotencyKey: kunciRevisi.current } : {},
+      );
+      kunciRevisi.current = null;
+      muatBayar();
       setRevisiBuka(false);
       muatUlang();
       muatEmail();
@@ -1120,7 +1206,7 @@ export function PesananDetailAdminPage() {
     } finally {
       setSibukRevisi(false);
     }
-  }, [id, alasanRevisi, catatanRevisi, barisRevisi, muatUlang, muatEmail, tampilkan]);
+  }, [id, alasanRevisi, catatanRevisi, barisRevisi, rencana, muatUlang, muatEmail, muatBayar, tampilkan]);
 
   const timeline = useMemo(() => data?.timeline ?? [], [data?.timeline]);
 
@@ -1364,6 +1450,16 @@ export function PesananDetailAdminPage() {
         </div>
 
         <div className={styles.stack}>
+          {bayar ? (
+            <PanelPembayaranAdmin
+              orderId={id}
+              pembayaran={bayar}
+              onBerubah={() => {
+                muatBayar();
+                muatUlang();
+              }}
+            />
+          ) : null}
           {data.status === "submitted" && bolehVerif ? (
             <Card>
               <CardHead title="Verifikasi pembayaran" />
@@ -1553,7 +1649,9 @@ export function PesananDetailAdminPage() {
               disabled={
                 sibukVerif ||
                 (keputusanVerif === "cocok" &&
-                  (!semuaTujuanTerpilih || (rekeningOrder?.accounts?.length ?? 0) === 0))
+                  (pakaiRincian
+                    ? (bukti?.length ?? 0) > 0 && !semuaTujuanTerpilih
+                    : !semuaTujuanTerpilih || (rekeningOrder?.accounts?.length ?? 0) === 0))
               }
               data-uji="kirim-verifikasi"
             >
@@ -1621,6 +1719,23 @@ export function PesananDetailAdminPage() {
             </tbody>
           </Table>
         )}
+        {keputusanVerif === "cocok" && bayar ? (
+          pakaiRincian ? (
+            <RincianSettlement
+              pembayaran={bayar}
+              bukti={bukti ?? []}
+              split={split}
+              onSplit={(proofId, patch) =>
+                setSplit((lama) => ({ ...lama, [proofId]: { ...(lama[proofId] ?? { approved: "", applied: "" }), ...patch } }))
+              }
+              superadmin={peran === "superadmin"}
+            />
+          ) : (
+            <Button variant="secondary" onClick={() => setRincianManual(true)} data-uji="rincian-per-bukti">
+              Rincian per bukti (lebih bayar ke deposit)
+            </Button>
+          )
+        ) : null}
         <Field
           label="Keputusan"
           htmlFor="verif-keputusan"
@@ -1713,6 +1828,13 @@ export function PesananDetailAdminPage() {
           {`versi berjalan R${data.versi}; versi baru R${data.versi + 1}.`}
         </p>
         {galatRevisi ? <Notice tone="danger">{galatRevisi}</Notice> : null}
+        <IsianRencanaReversal
+          alokasi={bayar?.allocations ?? []}
+          rencana={rencana}
+          onRencana={(alokasiId, patch) =>
+            setRencana((lama) => ({ ...lama, [alokasiId]: { ...(lama[alokasiId] ?? { nominal: "", alasan: "" }), ...patch } }))
+          }
+        />
         <Field
           label="Alasan revisi"
           htmlFor="revisi-alasan"

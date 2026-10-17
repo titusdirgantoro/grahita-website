@@ -44,6 +44,9 @@ const (
 	TopupReversed      = "reversed"
 )
 
+// statusDone adalah status order Done (enum order_status).
+const statusDone = "done"
+
 // Aksi keputusan admin atas top-up (D3 §6.2).
 const (
 	ActionReview = "review"
@@ -215,6 +218,38 @@ type QueryRepository interface {
 	Reconciled(ctx context.Context, branchID string) (bool, error)
 	OrderRef(ctx context.Context, orderID string) (OrderRef, error)
 	OrderAllocations(ctx context.Context, orderID string) ([]AllocationView, error)
+	OrderSettlement(ctx context.Context, orderID string) (OrderPaymentState, error)
+}
+
+// OrderPaymentState adalah keadaan settlement order yang dibaca repository.
+type OrderPaymentState struct {
+	RevisionPaymentState string
+	Settlement           *OrderSettlement
+}
+
+// OrderSettlement adalah pointer settlement Done aktif (snapshot immutable).
+type OrderSettlement struct {
+	VerificationLogID string `json:"verification_log_id"`
+	OrderVersion      int32  `json:"order_version"`
+	DepositAmount     int64  `json:"deposit_amount"`
+	TransferAmount    int64  `json:"transfer_amount"`
+}
+
+// OrderPayment adalah rincian pembayaran order untuk portal (C0 §5.1): total
+// kini, deposit committed lintas versi, sisa tagihan, dan pointer Done. Bukti
+// pending tidak pernah dihitung sebagai pembayaran.
+type OrderPayment struct {
+	OrderID              string           `json:"order_id"`
+	Status               string           `json:"status"`
+	Versi                int32            `json:"versi"`
+	CurrentTotal         int64            `json:"current_total"`
+	RevisionPaymentState string           `json:"revision_payment_state,omitempty"`
+	CommittedDeposit     int64            `json:"committed_deposit"`
+	RemainingDue         int64            `json:"remaining_due"`
+	IsLunas              bool             `json:"is_lunas"`
+	Settlement           *OrderSettlement `json:"settlement,omitempty"`
+	Allocations          []AllocationView `json:"allocations"`
+	Balance              Summary          `json:"balance"`
 }
 
 // ProofStore menyimpan bukti mandiri dan menerbitkan tautan unduhnya.
@@ -623,7 +658,7 @@ func (s *Service) Allocate(ctx context.Context, actor auth.Actor, orderID string
 	if actor.IsBranch() && ref.BranchID != branchID {
 		return AllocationResponse{}, ErrNotFound
 	}
-	if ref.Status == "done" {
+	if ref.Status == statusDone {
 		return AllocationResponse{}, ErrOrderDone
 	}
 	res, err := s.repo.Allocate(ctx, AllocationInput{
@@ -691,6 +726,36 @@ func (s *Service) OrderAllocations(ctx context.Context, actor auth.Actor, orderI
 	return s.repo.OrderAllocations(ctx, ref.ID)
 }
 
+// OrderPayment merangkum pembayaran satu order untuk cabang pemilik atau admin.
+func (s *Service) OrderPayment(ctx context.Context, actor auth.Actor, orderID string) (OrderPayment, error) {
+	allocations, err := s.OrderAllocations(ctx, actor, orderID)
+	if err != nil {
+		return OrderPayment{}, err
+	}
+	ref, err := s.repo.OrderRef(ctx, orderID)
+	if err != nil {
+		return OrderPayment{}, err
+	}
+	state, err := s.repo.OrderSettlement(ctx, ref.ID)
+	if err != nil {
+		return OrderPayment{}, err
+	}
+	balance, err := s.repo.Summary(ctx, ref.BranchID)
+	if err != nil {
+		return OrderPayment{}, err
+	}
+	out := OrderPayment{OrderID: ref.ID, Status: ref.Status, Versi: ref.Versi, CurrentTotal: ref.Total,
+		RevisionPaymentState: state.RevisionPaymentState, Settlement: state.Settlement,
+		Allocations: allocations, Balance: balance, IsLunas: ref.Status == statusDone}
+	for _, a := range allocations {
+		out.CommittedDeposit += a.ActiveAmount
+	}
+	if !out.IsLunas && ref.Total > out.CommittedDeposit {
+		out.RemainingDue = ref.Total - out.CommittedDeposit
+	}
+	return out, nil
+}
+
 // ReversalRequest adalah reversal parsial/penuh alokasi oleh admin.
 type ReversalRequest struct {
 	Amount                 int64
@@ -732,7 +797,7 @@ func (s *Service) Reverse(ctx context.Context, actor auth.Actor, orderID, alloca
 	if err != nil {
 		return ReversalResponse{}, err
 	}
-	if ref.Status == "done" {
+	if ref.Status == statusDone {
 		return ReversalResponse{}, ErrOrderDone
 	}
 	res, err := s.repo.ReverseAllocation(ctx, ReversalInput{

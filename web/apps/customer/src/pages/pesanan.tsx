@@ -22,6 +22,7 @@ import {
 } from "@grahita/ui";
 
 import { useApi } from "../useApi";
+import { KartuPembayaranPesanan } from "./deposit";
 import styles from "./pesanan.module.css";
 
 const rupiah = new Intl.NumberFormat("id-ID", {
@@ -463,6 +464,7 @@ export function PesananDetailPage({ id }: { id: string }) {
 
           {data.status !== "draft" ? (
             <>
+              <KartuPembayaranPesanan id={data.id} />
               <KartuRekeningPembayaran />
               <KartuBukti id={data.id} bolehUnggah={data.status === "submitted"} />
             </>

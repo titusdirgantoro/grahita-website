@@ -163,6 +163,9 @@ type VerifyInput struct {
 	// bila policy atau himpunan bukti berubah setelah pembacaan awal.
 	ExpectedAllowlistVersion int64
 	ExpectedProofFingerprint string
+	// Settlement berisi rincian approve campuran (C3). nil = jalur transfer
+	// saja; wajib diisi untuk order dengan alokasi deposit atau revisi pending.
+	Settlement *SettlementInput
 }
 
 // VerificationLog adalah satu baris `verification_logs` (Database.md §4.5).
@@ -207,8 +210,9 @@ type VerifiedOrder struct {
 // VerifyOutcome adalah hasil satu permintaan verifikasi: keadaan pesanan
 // sesudahnya beserta log yang tersimpan.
 type VerifyOutcome struct {
-	Order VerifiedOrder   `json:"order"`
-	Log   VerificationLog `json:"verifikasi"`
+	Order      VerifiedOrder     `json:"order"`
+	Log        VerificationLog   `json:"verifikasi"`
+	Settlement *SettlementResult `json:"settlement,omitempty"`
 }
 
 // MarkVerifiedRequest adalah permintaan yang sudah divalidasi service dan
@@ -229,6 +233,7 @@ type MarkVerifiedRequest struct {
 	ProofDestinations        []ProofDestination
 	ExpectedAllowlistVersion int64
 	ExpectedProofFingerprint string
+	Settlement               *SettlementInput
 }
 
 // Verifier adalah sisi penyimpanan verifikasi. Implementasinya menegakkan
@@ -315,6 +320,11 @@ func (s *VerificationService) siapkan(ctx context.Context, actor auth.Actor, ord
 		return MarkVerifiedRequest{}, ErrCatatanInvalid
 	}
 
+	settlement, destinations, err := siapkanSettlement(in.Settlement, hasil, metode, in.ProofDestinations)
+	if err != nil {
+		return MarkVerifiedRequest{}, err
+	}
+
 	req := MarkVerifiedRequest{
 		OrderID:                  orderID,
 		Hasil:                    hasil,
@@ -323,7 +333,8 @@ func (s *VerificationService) siapkan(ctx context.Context, actor auth.Actor, ord
 		Alasan:                   alasan,
 		Catatan:                  catatan,
 		Actor:                    actor,
-		ProofDestinations:        append([]ProofDestination(nil), in.ProofDestinations...),
+		ProofDestinations:        append([]ProofDestination(nil), destinations...),
+		Settlement:               settlement,
 		ExpectedAllowlistVersion: in.ExpectedAllowlistVersion,
 		ExpectedProofFingerprint: strings.ToLower(strings.TrimSpace(in.ExpectedProofFingerprint)),
 	}

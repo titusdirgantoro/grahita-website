@@ -254,13 +254,16 @@ WHERE order_id=$1 ORDER BY id FOR UPDATE`, req.OrderID)
 	if err := rowsAllocation.Err(); err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("kunci alokasi deposit revisi: %w", err)
 	}
+	if err := reversePlan(ctx, tx, row, req, totalBaru); err != nil {
+		return order.ReviseOutcome{}, err
+	}
 	var committed int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount-reversed_amount),0)::bigint
 FROM deposit_allocations WHERE order_id=$1`, req.OrderID).Scan(&committed); err != nil {
 		return order.ReviseOutcome{}, fmt.Errorf("hitung committed deposit revisi: %w", err)
 	}
 	if committed > totalBaru {
-		return order.ReviseOutcome{}, fmt.Errorf("%w: committed deposit %d melebihi total revisi %d; reversal eksplisit wajib", order.ErrInvalidData, committed, totalBaru)
+		return order.ReviseOutcome{}, fmt.Errorf("%w: committed deposit %d melebihi total revisi %d", order.ErrReversalPlanRequired, committed, totalBaru)
 	}
 	delta := totalBaru - row.Total
 	transition := sqlc.RevisionPaymentTransitionTotalUnchanged
@@ -324,7 +327,7 @@ FROM deposit_allocations WHERE order_id=$1`, req.OrderID).Scan(&committed); err 
 	rec := req.Audit
 	rec.EntityID = req.OrderID
 	rec.Before = snapshotVersi(row, lama)
-	rec.After = map[string]any{
+	after := map[string]any{
 		"versi":       versiBaru,
 		"nomor":       row.Nomor,
 		"total":       totalBaru,
@@ -333,6 +336,10 @@ FROM deposit_allocations WHERE order_id=$1`, req.OrderID).Scan(&committed); err 
 		"catatan":     req.Catatan,
 		"lines":       snapshotBaris(final),
 	}
+	if len(req.DepositReversals) > 0 {
+		after["deposit_reversals"] = req.DepositReversals
+	}
+	rec.After = after
 	if err := auditpg.Insert(ctx, tx, rec); err != nil {
 		return order.ReviseOutcome{}, err
 	}

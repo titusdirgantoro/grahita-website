@@ -505,36 +505,7 @@ WHERE reverses_transaction_id=$1 AND (created_at,id) <= ($2,$3)`,
 	if account.JournalVersion != in.ExpectedJournalVersion {
 		return deposit.ReversalResult{}, deposit.ErrVersionConflict
 	}
-	var reversedJournal int64
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount),0)::bigint
-FROM branch_deposit_transactions WHERE reverses_transaction_id=$1`, a.DebitTransactionID).
-		Scan(&reversedJournal); err != nil {
-		return deposit.ReversalResult{}, err
-	}
-	if reversedJournal != a.ReversedAmount {
-		return deposit.ReversalResult{}, deposit.ErrReconciliation
-	}
-	if in.Amount > a.Amount-a.ReversedAmount {
-		return deposit.ReversalResult{}, deposit.ErrReversalExceeds
-	}
-	var out deposit.Transaction
-	if err := tx.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
-branch_id,kind,amount,order_id,order_version,reverses_transaction_id,
-idempotency_key_hash,request_fingerprint,actor_kind,actor_id,reason)
-VALUES($1,'allocation_reversal_credit',$2,$3,$4,$5,$6,$7,$8::actor_kind,$9,$10)
-RETURNING id,branch_id,kind::text,amount,order_id,order_version,reverses_transaction_id,created_at`,
-		in.BranchID, in.Amount, in.OrderID, a.OrderVersion, a.DebitTransactionID, keyHash(in.IdempotencyKey),
-		in.RequestFingerprint, in.ActorKind, nullableUUID(in.ActorID), in.Reason).
-		Scan(&out.ID, &out.BranchID, &out.Kind, &out.Amount, &out.OrderID, &out.OrderVersion,
-			&out.ReversesTransactionID, &out.CreatedAt); err != nil {
-		return deposit.ReversalResult{}, mapConstraint(err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE deposit_allocations
-SET reversed_amount=reversed_amount+$2 WHERE id=$1`, a.ID, in.Amount); err != nil {
-		return deposit.ReversalResult{}, err
-	}
-	a.ReversedAmount += in.Amount
-	account, err = updateAccount(ctx, tx, in.BranchID, in.Amount)
+	out, a, account, err := applyReversal(ctx, tx, a, in)
 	if err != nil {
 		return deposit.ReversalResult{}, err
 	}

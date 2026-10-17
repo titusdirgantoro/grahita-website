@@ -319,6 +319,27 @@ func (r *Repo) OrderRef(ctx context.Context, orderID string) (deposit.OrderRef, 
 	return o, nil
 }
 
+func (r *Repo) OrderSettlement(ctx context.Context, orderID string) (deposit.OrderPaymentState, error) {
+	var out deposit.OrderPaymentState
+	var logID *string
+	var version *int32
+	var dep, trf *int64
+	err := r.pool.QueryRow(ctx, `SELECT COALESCE(revision_payment_state::text,''),done_verification_log_id::text,
+done_order_version,done_deposit_amount,done_transfer_amount FROM orders WHERE id=$1`, orderID).
+		Scan(&out.RevisionPaymentState, &logID, &version, &dep, &trf)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return deposit.OrderPaymentState{}, deposit.ErrNotFound
+	}
+	if err != nil {
+		return deposit.OrderPaymentState{}, fmt.Errorf("baca settlement order: %w", err)
+	}
+	if logID != nil && version != nil && dep != nil && trf != nil {
+		out.Settlement = &deposit.OrderSettlement{VerificationLogID: *logID, OrderVersion: *version,
+			DepositAmount: *dep, TransferAmount: *trf}
+	}
+	return out, nil
+}
+
 func (r *Repo) OrderAllocations(ctx context.Context, orderID string) ([]deposit.AllocationView, error) {
 	rows, err := r.pool.Query(ctx, `SELECT id, order_id, order_version, amount, reversed_amount, created_at
 FROM deposit_allocations WHERE order_id=$1 ORDER BY created_at, id`, orderID)

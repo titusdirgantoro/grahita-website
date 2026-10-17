@@ -50,6 +50,22 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Lewati header CSRF (mis. untuk endpoint yang memang dikecualikan). */
   skipCsrf?: boolean;
+  /**
+   * Idempotency-Key untuk mutasi uang (deposit/settlement, D3 §5.6). Satu key
+   * per niat: retry tombol yang sama memakai key yang sama.
+   */
+  idempotencyKey?: string;
+}
+
+/** IDEMPOTENCY_HEADER adalah header idempotensi mutasi deposit. */
+export const IDEMPOTENCY_HEADER = "Idempotency-Key";
+
+/** buatIdempotencyKey membuat key acak baru untuk satu niat mutasi. */
+export function buatIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -140,6 +156,10 @@ export class ApiClient {
         headers["Content-Type"] = "application/json";
         init.body = JSON.stringify(body);
       }
+    }
+
+    if (options.idempotencyKey) {
+      headers[IDEMPOTENCY_HEADER] = options.idempotencyKey;
     }
 
     if (method !== "GET" && method !== "HEAD" && !options.skipCsrf) {

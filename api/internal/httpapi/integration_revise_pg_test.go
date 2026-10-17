@@ -595,8 +595,8 @@ func TestPGRevisiTurunMenolakCommittedDepositTanpaReversalPlan(t *testing.T) {
 	}
 	body := reviseBody("UJI-turun butuh reversal", `{"line_no":1,"qty":3,"harga_satuan":100000}`)
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
-	if status != http.StatusBadRequest || errorKode(t, hasil) != "VALIDATION_FAILED" {
-		t.Fatalf("revisi harus ditolak 400, dapat %d %v", status, hasil)
+	if status != http.StatusConflict || errorKode(t, hasil) != "REVISION_REVERSAL_PLAN_REQUIRED" {
+		t.Fatalf("revisi harus ditolak 409, dapat %d %v", status, hasil)
 	}
 	var orderStatus string
 	var versi int

@@ -18,6 +18,7 @@ import { KatalogPage, ProfilPage } from "./pages/shell-pages";
 import { BerandaPage } from "./pages/beranda";
 import { InvoicePage } from "./pages/invoice";
 import { TutorialPage } from "./pages/tutorial";
+import { DepositPage } from "./pages/deposit";
 import {
   PesananDetailPage,
   PesananEditorPage,
@@ -171,6 +172,7 @@ const invoiceRoute = createRoute({
     return <InvoicePage dari={dari} sampai={sampai} />;
   },
 });
+const depositRoute = createRoute({ getParentRoute: () => shellRoute, path: "/deposit", component: DepositPage });
 const tutorialRoute = createRoute({ getParentRoute: () => shellRoute, path: "/tutorial", component: TutorialPage });
 const profilRoute = createRoute({ getParentRoute: () => shellRoute, path: "/profil", component: ProfilPage });
 
@@ -187,6 +189,7 @@ const routeTree = rootRoute.addChildren([
     pesananUbahRoute,
     pesananDetailRoute,
     invoiceRoute,
+    depositRoute,
     tutorialRoute,
     profilRoute,
   ]),

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -34,6 +35,49 @@ type verifyRequest struct {
 	// Catatan bebas opsional.
 	Catatan           string                     `json:"catatan"`
 	ProofDestinations []payment.ProofDestination `json:"proof_destinations"`
+	// Rincian settlement campuran (C3, D3 §6.2). Kehadiran salah satu field
+	// ini memilih jalur settlement; expected_order_version lalu wajib.
+	ExpectedOrderVersion *int32              `json:"expected_order_version"`
+	DepositAllocationIDs []string            `json:"deposit_allocation_ids"`
+	ProofSplits          []proofSplitRequest `json:"proof_splits"`
+}
+
+// proofSplitRequest menerima nama D3 (`credited_to_deposit`, attempt pertama)
+// maupun nama kumulatif C0 (`credited_to_deposit_total`).
+type proofSplitRequest struct {
+	PaymentProofID         string `json:"payment_proof_id"`
+	BankAccountID          string `json:"bank_account_id"`
+	ApprovedNominal        int64  `json:"approved_nominal"`
+	AppliedToOrder         int64  `json:"applied_to_order"`
+	CreditedToDeposit      *int64 `json:"credited_to_deposit"`
+	CreditedToDepositTotal *int64 `json:"credited_to_deposit_total"`
+}
+
+// settlementInput menyusun rincian settlement; nil bila jalur transfer saja.
+func (req verifyRequest) settlementInput(key string) (*payment.SettlementInput, error) {
+	if req.ExpectedOrderVersion == nil && req.DepositAllocationIDs == nil && req.ProofSplits == nil {
+		return nil, nil
+	}
+	if req.ExpectedOrderVersion == nil {
+		return nil, apierr.Validation("Rincian settlement tidak valid.", map[string]string{"expected_order_version": "wajib diisi"})
+	}
+	out := &payment.SettlementInput{ExpectedOrderVersion: *req.ExpectedOrderVersion,
+		DepositAllocationIDs: req.DepositAllocationIDs, IdempotencyKey: key}
+	for _, sp := range req.ProofSplits {
+		var credited int64
+		switch {
+		case sp.CreditedToDepositTotal != nil && sp.CreditedToDeposit != nil && *sp.CreditedToDepositTotal != *sp.CreditedToDeposit:
+			return nil, apierr.Validation("Rincian settlement tidak valid.", map[string]string{"proof_splits": "credited_to_deposit dan credited_to_deposit_total berbeda"})
+		case sp.CreditedToDepositTotal != nil:
+			credited = *sp.CreditedToDepositTotal
+		case sp.CreditedToDeposit != nil:
+			credited = *sp.CreditedToDeposit
+		}
+		out.ProofSplits = append(out.ProofSplits, payment.ProofSplit{PaymentProofID: sp.PaymentProofID,
+			BankAccountID: sp.BankAccountID, ApprovedNominal: sp.ApprovedNominal,
+			AppliedToOrder: sp.AppliedToOrder, CreditedToDepositTotal: credited})
+	}
+	return out, nil
 }
 
 // adminOrderVerify memverifikasi pembayaran satu pesanan: menyetujui
@@ -52,6 +96,10 @@ func (a *API) adminOrderVerify(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		return err
 	}
+	settlement, err := req.settlementInput(strings.TrimSpace(r.Header.Get(headerIdempotency)))
+	if err != nil {
+		return err
+	}
 	out, err := a.d.Verify.MarkVerified(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"), payment.VerifyInput{
 		Hasil:             req.Hasil,
 		Metode:            payment.MetodeManual,
@@ -59,6 +107,7 @@ func (a *API) adminOrderVerify(w http.ResponseWriter, r *http.Request) error {
 		Alasan:            req.Alasan,
 		Catatan:           req.Catatan,
 		ProofDestinations: req.ProofDestinations,
+		Settlement:        settlement,
 	})
 	if err != nil {
 		return mapDomainErr(err)

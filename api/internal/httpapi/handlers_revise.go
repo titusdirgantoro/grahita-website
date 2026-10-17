@@ -29,6 +29,8 @@ type reviseRequest struct {
 	Alasan  string              `json:"alasan"`
 	Catatan string              `json:"catatan"`
 	Lines   []reviseLineRequest `json:"lines"`
+	// DepositReversals: reversal plan revisi turun (C0 §5.1).
+	DepositReversals []order.DepositReversalInput `json:"deposit_reversals"`
 }
 
 // adminOrderRevise merevisi invoice satu pesanan Done (PRD §4.3 AP-REV-01..05).
@@ -56,7 +58,8 @@ func (a *API) adminOrderRevise(w http.ResponseWriter, r *http.Request) error {
 	}
 	out, err := a.d.Revise.Revise(r.Context(), auth.ActorFrom(r.Context()),
 		chi.URLParam(r, "id"),
-		order.ReviseInput{Alasan: req.Alasan, Catatan: req.Catatan, Lines: lines})
+		order.ReviseInput{Alasan: req.Alasan, Catatan: req.Catatan, Lines: lines,
+			DepositReversals: req.DepositReversals, IdempotencyKey: r.Header.Get(headerIdempotency)})
 	if err != nil {
 		return mapDomainErr(err)
 	}

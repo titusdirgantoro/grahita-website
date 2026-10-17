@@ -69,7 +69,22 @@ var (
 	// menjalankan job pertama membuat invoice versi antara TIDAK pernah
 	// dirender walau API sudah menjawab 200 (melanggar AP-REV-03/AP-REV-04).
 	ErrInvoiceVersiBelumAda = errors.New("invoice versi berjalan belum tersedia")
+	// ErrReversalPlanRequired: total turun di bawah deposit committed tanpa
+	// rencana reversal yang cukup (C0 §3.4). Tidak ada reversal otomatis.
+	ErrReversalPlanRequired = errors.New("revisi turun membutuhkan reversal plan deposit yang cukup")
+	// ErrReversalPlanInvalid: item plan salah order/cabang, nominal/alasan
+	// tidak sah, duplikat, atau plan dikirim untuk total yang tidak turun.
+	ErrReversalPlanInvalid = errors.New("reversal plan deposit revisi tidak valid")
+	// ErrRevisionKeyRequired: plan reversal wajib membawa Idempotency-Key.
+	ErrRevisionKeyRequired = errors.New("header Idempotency-Key wajib untuk reversal plan")
 )
+
+// DepositReversalInput adalah satu item reversal plan revisi turun.
+type DepositReversalInput struct {
+	AllocationID string `json:"allocation_id"`
+	Amount       int64  `json:"amount"`
+	Reason       string `json:"reason"`
+}
 
 // Batas panjang teks revisi (kolom text) dan jumlah baris per revisi.
 const (
@@ -103,6 +118,11 @@ type ReviseInput struct {
 	Catatan string `json:"catatan"`
 	// Lines adalah daftar baris FINAL (bukan diff).
 	Lines []ReviseLineInput `json:"lines"`
+	// DepositReversals adalah reversal plan eksplisit untuk total turun di
+	// bawah deposit committed (C0 §5.1); kosong untuk revisi lain.
+	DepositReversals []DepositReversalInput `json:"deposit_reversals"`
+	// IdempotencyKey berasal dari header, mencakup seluruh plan.
+	IdempotencyKey string `json:"-"`
 }
 
 // ReviseLine adalah baris final yang sudah divalidasi bentuknya dan siap
@@ -156,6 +176,9 @@ type ReviseRequest struct {
 	BiayaPackaging int64
 	// TeksEvent adalah kalimat timeline yang ditulis apa adanya.
 	TeksEvent string
+	// DepositReversals & IdempotencyKey: reversal plan yang sudah divalidasi.
+	DepositReversals []DepositReversalInput
+	IdempotencyKey   string
 }
 
 // RevisionRepository menjalankan satu transaksi revisi lengkap.
@@ -232,6 +255,10 @@ func (s *RevisionService) Revise(ctx context.Context, actor auth.Actor, orderID 
 	if err != nil {
 		return ReviseOutcome{}, err
 	}
+	plan, err := validasiReversalPlan(actor, in)
+	if err != nil {
+		return ReviseOutcome{}, err
+	}
 
 	// Izin Manager dibaca SERVER dari setelan (PRD §4.9). Superadmin tidak
 	// pernah bergantung pada toggle.
@@ -262,11 +289,41 @@ func (s *RevisionService) Revise(ctx context.Context, actor auth.Actor, orderID 
 		Lines:          lines,
 		BiayaPackaging: biaya,
 		TeksEvent:      TeksEventRevisi(actor.Nama, alasan),
+		// Reversal plan mengembalikan debit committed: hak admin.verify (C0 §5.0).
+		DepositReversals: plan,
+		IdempotencyKey:   strings.TrimSpace(in.IdempotencyKey),
 	}
 	// Audit disusun di sini supaya aktor + IP request tercatat; Before/After
 	// diisi repository dari baris yang dikunci (tidak pernah snapshot basi).
 	req.Audit = audit.NewEntry(ctx, actor, audit.EntityOrder, id, audit.ActionRevise, nil, nil)
 	return s.repo.Revise(ctx, req)
+}
+
+// validasiReversalPlan menegakkan bentuk plan; kecukupan dan kepemilikan
+// alokasi diperiksa repository di bawah kunci.
+func validasiReversalPlan(actor auth.Actor, in ReviseInput) ([]DepositReversalInput, error) {
+	if len(in.DepositReversals) == 0 {
+		return nil, nil
+	}
+	if !actor.Can(auth.CapAdminVerify) {
+		return nil, ErrForbidden
+	}
+	if strings.TrimSpace(in.IdempotencyKey) == "" {
+		return nil, ErrRevisionKeyRequired
+	}
+	seen := map[string]bool{}
+	out := make([]DepositReversalInput, 0, len(in.DepositReversals))
+	for _, p := range in.DepositReversals {
+		p.AllocationID = strings.ToLower(strings.TrimSpace(p.AllocationID))
+		p.Reason = strings.TrimSpace(p.Reason)
+		if !uuidRe.MatchString(p.AllocationID) || seen[p.AllocationID] || p.Amount <= 0 ||
+			p.Reason == "" || len([]rune(p.Reason)) > MaxAlasanRevisi {
+			return nil, ErrReversalPlanInvalid
+		}
+		seen[p.AllocationID] = true
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // validasiBarisRevisi menegakkan bentuk daftar baris final: minimal satu baris

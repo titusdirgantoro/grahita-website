@@ -10,6 +10,8 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/deposit"
+	"github.com/grahita/portal/api/internal/order"
+	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 )
@@ -52,6 +54,14 @@ var depositErrs = []struct {
 	{deposit.ErrOrderNotSubmitted, http.StatusConflict, "ORDER_NOT_SUBMITTED", "Pesanan belum dikirim."},
 	{deposit.ErrReconciliation, http.StatusServiceUnavailable, "DEPOSIT_RECONCILIATION_REQUIRED", "Saldo deposit perlu direkonsiliasi. Hubungi admin Pusat."},
 	{deposit.ErrNotFound, http.StatusNotFound, "NOT_FOUND", "Data tidak ditemukan."},
+	// Settlement campuran dan revisi berdeposit (C3; D3 §6.3, C0 §5.3).
+	{payment.ErrBreakdownMismatch, http.StatusUnprocessableEntity, "PAYMENT_BREAKDOWN_MISMATCH", "Rincian deposit dan transfer tidak tepat sama dengan total pesanan."},
+	{payment.ErrOverpayDecisionRequired, http.StatusConflict, "OVERPAY_DECISION_REQUIRED", "Ada lebih bayar yang harus diputuskan sebagai kredit deposit oleh Superadmin."},
+	{payment.ErrOrderVersionConflict, http.StatusConflict, "ORDER_VERSION_CONFLICT", "Pesanan sudah berubah. Muat ulang lalu coba lagi."},
+	{payment.ErrDepositCreditForbidden, http.StatusForbidden, "FORBIDDEN", "Hanya Superadmin yang boleh mengkreditkan lebih bayar ke deposit."},
+	{payment.ErrIdempotencyReused, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key sudah dipakai untuk keputusan lain."},
+	{order.ErrReversalPlanRequired, http.StatusConflict, "REVISION_REVERSAL_PLAN_REQUIRED", "Total revisi lebih kecil dari deposit terpakai; sertakan rencana reversal deposit yang cukup."},
+	{order.ErrReversalPlanInvalid, http.StatusConflict, "REVISION_REVERSAL_PLAN_INVALID", "Rencana reversal deposit revisi tidak valid."},
 }
 
 var depositValidation = []struct {
@@ -64,6 +74,8 @@ var depositValidation = []struct {
 	{deposit.ErrInvalidAmount, "amount", "harus lebih dari nol"},
 	{deposit.ErrInvalidAction, "action", "harus review, reject, atau verify"},
 	{deposit.ErrProofRequired, "proof", "wajib diunggah"},
+	{payment.ErrSettlementKeyRequired, "idempotency_key", "header Idempotency-Key wajib untuk kredit deposit"},
+	{order.ErrRevisionKeyRequired, "idempotency_key", "header Idempotency-Key wajib untuk reversal plan"},
 }
 
 // depositErr menerjemahkan error domain deposit; ok=false bila bukan miliknya.
@@ -201,6 +213,19 @@ func (a *API) depositOrderAllocations(w http.ResponseWriter, r *http.Request) er
 		return depositUnavailable()
 	}
 	out, err := a.d.Deposits.OrderAllocations(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"))
+	if err != nil {
+		return mapDomainErr(err)
+	}
+	httpx.OK(w, data(out))
+	return nil
+}
+
+// GET /orders/{id}/payment dan versi admin: rincian pembayaran order.
+func (a *API) depositOrderPayment(w http.ResponseWriter, r *http.Request) error {
+	if a.d.Deposits == nil {
+		return depositUnavailable()
+	}
+	out, err := a.d.Deposits.OrderPayment(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"))
 	if err != nil {
 		return mapDomainErr(err)
 	}

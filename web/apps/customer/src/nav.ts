@@ -11,6 +11,7 @@ export const NAV_CUSTOMER: NavItem[] = [
   { to: "/katalog", label: "Katalog", icon: "tag", bottomLabel: "Katalog" },
   { to: "/pesanan", label: "Pesanan", icon: "receipt", bottomLabel: "Pesanan" },
   { to: "/invoice", label: "Riwayat invoice", icon: "file-text", bottomLabel: "Invoice" },
+  { to: "/deposit", label: "Deposit", icon: "wallet" },
   { to: "/tutorial", label: "Tutorial", icon: "question" },
   { to: "/profil", label: "Profil", icon: "user-circle", bottomLabel: "Profil", sidebar: false },
 ];
