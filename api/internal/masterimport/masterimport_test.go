@@ -276,6 +276,28 @@ func TestPreviewProductionDiizinkanHanyaUntukSuperadmin(t *testing.T) {
 	}
 }
 
+// TestApplyProductionHanyaDenganIzinOperator: apply/rollback production hanya
+// terbuka lewat WithProductionApply; Superadmin tetap wajib.
+func TestApplyProductionHanyaDenganIzinOperator(t *testing.T) {
+	sa := auth.Actor{UserID: "a1", Kind: auth.KindAdmin, Role: auth.RoleSuperadmin}
+	manager := auth.Actor{UserID: "m1", Kind: auth.KindAdmin, Role: auth.RoleManager}
+	req := ApplyRequest{AttemptID: "attempt-1", PreviewHash: "hash", IdempotencyKey: "unit-production"}
+	service := NewService(&fakeRepo{}, fakeParser{}, "production", WithProductionApply(true))
+	if _, err := service.Apply(context.Background(), sa, req); err != nil {
+		t.Fatalf("apply production berizin err=%v", err)
+	}
+	if _, err := service.Rollback(context.Background(), sa, "00000000-0000-0000-0000-000000000001"); err != nil {
+		t.Fatalf("rollback production berizin err=%v", err)
+	}
+	if _, err := service.Apply(context.Background(), manager, req); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("manager tetap ditolak, err=%v", err)
+	}
+	tertutup := NewService(&fakeRepo{}, fakeParser{}, "production", WithProductionApply(false))
+	if _, err := tertutup.Apply(context.Background(), sa, req); !errors.Is(err, ErrProduction) {
+		t.Fatalf("tanpa izin operator harus ErrProduction, err=%v", err)
+	}
+}
+
 func TestReconcileBranchMatriksIdentitas(t *testing.T) {
 	head := "Kepala Existing"
 	blank := SourceBranch{Name: "Cabang", SourceKey: "branch:cabang"}

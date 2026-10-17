@@ -49,6 +49,10 @@ type Config struct {
 	// before-snapshot rollback impor staging. Kunci berasal dari secret store
 	// runtime dan tidak pernah disimpan bersama ciphertext di database.
 	ImportSnapshotKey string
+	// ImportProductionApply membuka apply/rollback impor master di production
+	// (MASTER_IMPORT_PRODUCTION_APPLY). Bawaan false; bila true kunci snapshot
+	// wajib valid karena rollback bergantung padanya.
+	ImportProductionApply bool
 
 	// Host publik per portal. Kedua host melayani API same-origin di
 	// /api/v1 (Architecture.md §5.1).
@@ -226,17 +230,18 @@ func (c Config) AdminBaseURL() string {
 // Load membaca dan memvalidasi konfigurasi.
 func Load() (Config, error) {
 	c := Config{
-		AppEnv:            env("APP_ENV", "local"),
-		HTTPAddr:          env("HTTP_ADDR", ":8080"),
-		LogLevel:          env("LOG_LEVEL", "info"),
-		DatabaseURL:       env("DATABASE_URL", ""),
-		ImportSnapshotKey: strings.TrimSpace(env("MASTER_IMPORT_SNAPSHOT_KEY", "")),
-		CustomerHost:      env("CUSTOMER_HOST", DefaultCustomerHost),
-		AdminHost:         env("ADMIN_HOST", DefaultAdminHost),
-		PublicScheme:      env("PUBLIC_SCHEME", "https"),
-		CookieName:        env("SESSION_COOKIE_NAME", "grahita_session"),
-		CSRFEnabled:       envBool("CSRF_ENABLED", true),
-		PasswordResetPath: env("PASSWORD_RESET_PATH", "/lupa"),
+		AppEnv:                env("APP_ENV", "local"),
+		HTTPAddr:              env("HTTP_ADDR", ":8080"),
+		LogLevel:              env("LOG_LEVEL", "info"),
+		DatabaseURL:           env("DATABASE_URL", ""),
+		ImportSnapshotKey:     strings.TrimSpace(env("MASTER_IMPORT_SNAPSHOT_KEY", "")),
+		ImportProductionApply: envBool("MASTER_IMPORT_PRODUCTION_APPLY", false),
+		CustomerHost:          env("CUSTOMER_HOST", DefaultCustomerHost),
+		AdminHost:             env("ADMIN_HOST", DefaultAdminHost),
+		PublicScheme:          env("PUBLIC_SCHEME", "https"),
+		CookieName:            env("SESSION_COOKIE_NAME", "grahita_session"),
+		CSRFEnabled:           envBool("CSRF_ENABLED", true),
+		PasswordResetPath:     env("PASSWORD_RESET_PATH", "/lupa"),
 		BrowserFixture: BrowserFixtureConfig{
 			Enabled:         envBool("BROWSER_FIXTURE_ENABLED", false),
 			Password:        strings.TrimSpace(env("BROWSER_FIXTURE_PASSWORD", "")),
@@ -416,8 +421,8 @@ func (c Config) Validate() error {
 			return errors.New("email ketiga profil BROWSER_FIXTURE wajib diisi")
 		}
 	}
-	if !validImportSnapshotKey(c.AppEnv, c.ImportSnapshotKey) {
-		return errors.New("MASTER_IMPORT_SNAPSHOT_KEY wajib berupa base64 32 byte di staging")
+	if !validImportSnapshotKey(c.AppEnv, c.ImportSnapshotKey, c.ImportProductionApply) {
+		return errors.New("MASTER_IMPORT_SNAPSHOT_KEY wajib berupa base64 32 byte di staging dan bila MASTER_IMPORT_PRODUCTION_APPLY aktif")
 	}
 	if err := c.ValidasiCadangan(); err != nil {
 		return err
@@ -476,8 +481,10 @@ func literalLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func validImportSnapshotKey(appEnv, encoded string) bool {
-	if !strings.EqualFold(strings.TrimSpace(appEnv), "staging") {
+func validImportSnapshotKey(appEnv, encoded string, productionApply bool) bool {
+	env := strings.TrimSpace(appEnv)
+	wajib := strings.EqualFold(env, "staging") || (strings.EqualFold(env, "production") && productionApply)
+	if !wajib {
 		return true
 	}
 	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))

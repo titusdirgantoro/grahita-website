@@ -370,11 +370,18 @@ func hashPreview(sourceHash string, items []PreviewItem, counts Counts) (string,
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// productionWritesBlocked: apply/rollback production tetap fail-closed kecuali
+// operator menyalakan MASTER_IMPORT_PRODUCTION_APPLY (keputusan pemilik
+// 2026-10-17: production adalah satu-satunya lingkungan).
+func (s *Service) productionWritesBlocked() bool {
+	return strings.EqualFold(strings.TrimSpace(s.environment), "production") && !s.productionApply
+}
+
 func (s *Service) Apply(ctx context.Context, actor auth.Actor, req ApplyRequest) (ApplyResult, error) {
 	if !actor.IsSuperadmin() {
 		return ApplyResult{}, ErrForbidden
 	}
-	if strings.EqualFold(strings.TrimSpace(s.environment), "production") {
+	if s.productionWritesBlocked() {
 		return ApplyResult{}, ErrProduction
 	}
 	if strings.TrimSpace(req.AttemptID) == "" || strings.TrimSpace(req.PreviewHash) == "" || strings.TrimSpace(req.IdempotencyKey) == "" {
@@ -387,7 +394,7 @@ func (s *Service) Rollback(ctx context.Context, actor auth.Actor, applyRunID str
 	if !actor.IsSuperadmin() {
 		return RollbackResult{}, ErrForbidden
 	}
-	if strings.EqualFold(strings.TrimSpace(s.environment), "production") {
+	if s.productionWritesBlocked() {
 		return RollbackResult{}, ErrProduction
 	}
 	if strings.TrimSpace(applyRunID) == "" {

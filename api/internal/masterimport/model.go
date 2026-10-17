@@ -1,6 +1,7 @@
 // Package masterimport menangani preview, apply idempoten, dan rollback staging
 // master Impact. Preview boleh berjalan di production, sedangkan apply dan
-// rollback production selalu ditolak fail-closed.
+// rollback production ditolak fail-closed kecuali operator menyalakan
+// WithProductionApply.
 package masterimport
 
 import (
@@ -271,13 +272,27 @@ type Parser interface {
 }
 
 type Service struct {
-	repo        Repository
-	parser      Parser
-	environment string
+	repo            Repository
+	parser          Parser
+	environment     string
+	productionApply bool
 }
 
-func NewService(repo Repository, parser Parser, environment string) *Service {
-	return &Service{repo: repo, parser: parser, environment: environment}
+// Option mengatur Service saat dibuat.
+type Option func(*Service)
+
+// WithProductionApply membuka apply/rollback di production. Bawaan tertutup;
+// hanya operator yang menyalakannya lewat MASTER_IMPORT_PRODUCTION_APPLY.
+func WithProductionApply(on bool) Option {
+	return func(s *Service) { s.productionApply = on }
+}
+
+func NewService(repo Repository, parser Parser, environment string, opts ...Option) *Service {
+	s := &Service{repo: repo, parser: parser, environment: environment}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Service) Preview(ctx context.Context, actor auth.Actor, r io.Reader, size int64) (Preview, error) {

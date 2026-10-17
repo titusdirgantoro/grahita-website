@@ -532,7 +532,8 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// di dalam transaksi pembuatan baris `report_jobs`, jadi tidak mungkin ada
 	// pekerjaan yang dijadwalkan tanpa barisnya.
 	reportSvc := report.NewService(reportpg.New(pool, reportpg.WithJobQueue(jobQueue)), store)
-	masterImportSvc := masterimport.NewService(masterimportpg.New(pool, cfg.ImportSnapshotKey), masterimport.NewExcelParser(masterimport.ExpectedHash), cfg.AppEnv)
+	masterImportSvc := masterimport.NewService(masterimportpg.New(pool, cfg.ImportSnapshotKey), masterimport.NewExcelParser(masterimport.ExpectedHash), cfg.AppEnv,
+		masterimport.WithProductionApply(cfg.ImportProductionApply))
 
 	// Cadangan terenkripsi (F1-21). Service yang sama dengan worker; di mode
 	// API ia dipakai untuk MENAMPILKAN status di halaman Pengaturan
