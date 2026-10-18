@@ -71,7 +71,6 @@ func manager() auth.Actor {
 func TestDefaultsSesuaiPRD(t *testing.T) {
 	want := map[string]string{
 		BiayaPackaging:     "3000",
-		CNCHari:            "7",
 		TokenHari:          "14",
 		ResetMenit:         "60",
 		MaxMB:              "5",
@@ -119,8 +118,8 @@ func TestCheckValidasiTipeDanRentang(t *testing.T) {
 		{"packaging negatif ditolak", BiayaPackaging, "-1", "antara", ""},
 		{"packaging pecahan ditolak", BiayaPackaging, "3000.5", "bilangan bulat", ""},
 		{"packaging terlalu besar ditolak", BiayaPackaging, "100000001", "antara", ""},
-		{"cnc nol ditolak", CNCHari, "0", "antara", ""},
-		{"cnc teks ditolak", CNCHari, `"tujuh"`, "angka", ""},
+		{"reset nol ditolak", ResetMenit, "0", "antara", ""},
+		{"reset teks ditolak", ResetMenit, `"tujuh"`, "angka", ""},
 		{"token hari oke", TokenHari, "30", "", "30"},
 		{"reset menit oke", ResetMenit, "120", "", "120"},
 		{"max mb nol ditolak", MaxMB, "0", "antara", ""},
@@ -216,7 +215,7 @@ func TestUpdateAllOrNothingDanAudit(t *testing.T) {
 
 	// Satu nilai tidak valid -> tidak ada yang tersimpan, tidak ada audit.
 	err := svc.Update(ctx, superadmin(), map[string]json.RawMessage{
-		CNCHari:        json.RawMessage("10"),
+		ResetMenit:     json.RawMessage("10"),
 		BiayaPackaging: json.RawMessage("-5"),
 	})
 	var ve *ValidationError
@@ -226,7 +225,7 @@ func TestUpdateAllOrNothingDanAudit(t *testing.T) {
 	if ve.Fields[BiayaPackaging] == "" {
 		t.Errorf("pesan field biaya_packaging hilang: %v", ve.Fields)
 	}
-	if _, ok := repo.values[CNCHari]; ok {
+	if _, ok := repo.values[ResetMenit]; ok {
 		t.Error("nilai valid tidak boleh tersimpan saat ada yang tidak valid")
 	}
 	if len(repo.audit) != 0 {
@@ -236,12 +235,12 @@ func TestUpdateAllOrNothingDanAudit(t *testing.T) {
 	// Semua valid -> tersimpan sekaligus, satu audit per kunci.
 	err = svc.Update(ctx, superadmin(), map[string]json.RawMessage{
 		BiayaPackaging: json.RawMessage("4500"),
-		CNCHari:        json.RawMessage("10"),
+		ResetMenit:     json.RawMessage("10"),
 	})
 	if err != nil {
 		t.Fatalf("update valid: %v", err)
 	}
-	if repo.values[BiayaPackaging] != "4500" || repo.values[CNCHari] != "10" {
+	if repo.values[BiayaPackaging] != "4500" || repo.values[ResetMenit] != "10" {
 		t.Errorf("nilai tidak tersimpan: %v", repo.values)
 	}
 	if len(repo.audit) != 2 {
@@ -259,7 +258,7 @@ func TestUpdateAllOrNothingDanAudit(t *testing.T) {
 	for _, rec := range repo.audit {
 		b, _ := json.Marshal(rec.Before)
 		a, _ := json.Marshal(rec.After)
-		if !strings.Contains(string(b), "3000") && !strings.Contains(string(b), "7") {
+		if !strings.Contains(string(b), "3000") && !strings.Contains(string(b), "60") {
 			t.Errorf("before audit tidak memuat nilai lama: %s", b)
 		}
 		if !strings.Contains(string(a), "4500") && !strings.Contains(string(a), "10") {
@@ -338,7 +337,7 @@ func TestUpdateHanyaMencatatKunciYangBerubah(t *testing.T) {
 	// Batch campuran: hanya kunci yang berubah yang ditulis & dicatat.
 	if err := svc.Update(ctx, superadmin(), map[string]json.RawMessage{
 		BiayaPackaging: json.RawMessage("4500"), // berubah dari 3000
-		CNCHari:        json.RawMessage("7"),    // sama dengan default
+		ResetMenit:     json.RawMessage("60"),   // sama dengan default
 	}); err != nil {
 		t.Fatalf("batch campuran: %v", err)
 	}
@@ -348,7 +347,7 @@ func TestUpdateHanyaMencatatKunciYangBerubah(t *testing.T) {
 	if repo.values[BiayaPackaging] != "4500" {
 		t.Errorf("nilai berubah harus tersimpan: %v", repo.values)
 	}
-	if _, ok := repo.values[CNCHari]; ok {
+	if _, ok := repo.values[ResetMenit]; ok {
 		t.Error("kunci yang tidak berubah tidak boleh ditulis")
 	}
 	b, _ := json.Marshal(repo.audit[0].Before)
@@ -383,7 +382,7 @@ func TestGetKunciTidakDikenal(t *testing.T) {
 }
 
 // TestIntNilaiBerlakuDanBawaan memverifikasi pembacaan bilangan bulat yang
-// dipakai domain lain (mis. pesanan mengambil biaya_packaging dan cnc_hari):
+// dipakai domain lain (mis. pesanan mengambil biaya_packaging dan digit_invoice):
 // nilai tersimpan menang, kunci yang belum pernah disimpan memakai bawaan PRD,
 // dan kunci non-bilangan-bulat ditolak.
 func TestIntNilaiBerlakuDanBawaan(t *testing.T) {
@@ -394,8 +393,8 @@ func TestIntNilaiBerlakuDanBawaan(t *testing.T) {
 		t.Errorf("nilai tersimpan harus 4000, dapat %d (%v)", got, err)
 	}
 	// Belum pernah disimpan: nilai bawaannya yang dipakai (PRD §4.9).
-	if got, err := svc.Int(ctx, CNCHari); err != nil || got != 7 {
-		t.Errorf("cnc_hari bawaan harus 7, dapat %d (%v)", got, err)
+	if got, err := svc.Int(ctx, ResetMenit); err != nil || got != 60 {
+		t.Errorf("reset_menit bawaan harus 60, dapat %d (%v)", got, err)
 	}
 	if _, err := svc.Int(ctx, "karangan"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("kunci tak dikenal harus ErrNotFound, dapat %v", err)

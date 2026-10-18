@@ -29,9 +29,10 @@ const (
 	// EntityOrder mencatat mutasi pesanan oleh admin Pusat. Dipakai verifikasi
 	// pembayaran (F1-18): EntityID-nya adalah id pesanan yang diverifikasi.
 	EntityOrder = "order"
-	// EntityCNCReminder mencatat pengingat pembayaran Cash & Carry yang
-	// diantre pekerjaan terjadwal (F2-23, SystemDesign.md §4.6). EntityID-nya
-	// adalah id pesanan yang diingatkan; aktornya pekerjaan latar ('system').
+	// EntityCNCReminder mencatat pengingat jatuh tempo Cash & Carry lama
+	// (F2-23). Pengingatnya dihapus sejak C&C dibayar dari deposit
+	// (2026-10-18); entitas ini tetap ada supaya entri audit lama bisa
+	// difilter.
 	EntityCNCReminder = "cnc_reminder"
 	// EntityDepositTopup: pengajuan dan keputusan top-up deposit (D3 §4.9).
 	EntityDepositTopup = "deposit_topup"

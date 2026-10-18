@@ -14,7 +14,8 @@ package httpapi
 //   - pekerjaan worker menjalankan rantai Done -> dokumen -> email (dokumen
 //     DULU, email kemudian) dan aman dijalankan ulang (idempoten);
 //   - keputusan "perlu review" TIDAK menyelesaikan pesanan;
-//   - C&C yang lewat jatuh tempo tetap Submitted sampai diverifikasi;
+//   - C&C berdeposit tetap Submitted sampai admin menyetujui rinciannya, dan
+//     pesanan bernilai tanpa sumber dana tidak bisa disetujui;
 //   - otorisasi CapAdminVerify (Manager & Superadmin) dan bentuk id bukan UUID.
 //
 // Uji dilewati bila TEST_DATABASE_URL tidak diisi.
@@ -26,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -78,13 +80,9 @@ func seedPesananSubmitted(t *testing.T, f *pgFixture, branchID, nomor string) (s
 	}
 
 	var id string
-	// Pesanan C&C diberi jatuh tempo KEMARIN (WIB) supaya sekaligus membuktikan
-	// pesanan lewat jatuh tempo tidak berubah status dengan sendirinya.
 	err := f.pool.QueryRow(ctx,
-		`INSERT INTO orders (branch_id, nomor, status, verif_status, tanggal, total, is_cnc,
-		                     jatuh_tempo, submitted_at)
-		 VALUES ($1, $2, 'submitted', 'belum', (now() AT TIME ZONE 'Asia/Jakarta')::date,
-		         $3, $4, CASE WHEN $4 THEN (now() AT TIME ZONE 'Asia/Jakarta')::date - 1 END, now())
+		`INSERT INTO orders (branch_id, nomor, status, verif_status, tanggal, total, is_cnc, submitted_at)
+		 VALUES ($1, $2, 'submitted', 'belum', (now() AT TIME ZONE 'Asia/Jakarta')::date, $3, $4, now())
 		 RETURNING id`,
 		branchID, nomor, total, strings.Contains(nomor, "cnc")).Scan(&id)
 	if err != nil {
@@ -123,20 +121,15 @@ func bodyVerifikasiCocokKe(t *testing.T, f *pgFixture, orderID string, total *in
 	}
 	rows.Close()
 	if len(destinations) == 0 {
-		var isCNC bool
-		if err := f.pool.QueryRow(ctx, `SELECT is_cnc FROM orders WHERE id=$1`, orderID).Scan(&isCNC); err != nil {
-			t.Fatal(err)
+		// Persetujuan butuh sumber dana: tanpa alokasi deposit, satu bukti.
+		var proofID string
+		if err := f.pool.QueryRow(ctx, `INSERT INTO payment_proofs
+			(purpose,branch_id,order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
+			VALUES ('order_payment',(SELECT branch_id FROM orders WHERE id=$1),$1,$2,'bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$3)
+			RETURNING id`, orderID, "proofs/"+orderID, f.userA).Scan(&proofID); err != nil {
+			t.Fatalf("seed bukti verifikasi manual: %v", err)
 		}
-		if !isCNC {
-			var proofID string
-			if err := f.pool.QueryRow(ctx, `INSERT INTO payment_proofs
-				(purpose,branch_id,order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
-				VALUES ('order_payment',(SELECT branch_id FROM orders WHERE id=$1),$1,$2,'bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$3)
-				RETURNING id`, orderID, "proofs/"+orderID, f.userA).Scan(&proofID); err != nil {
-				t.Fatalf("seed bukti verifikasi manual: %v", err)
-			}
-			destinations = append(destinations, payment.ProofDestination{PaymentProofID: proofID, BankAccountID: bankAccountID})
-		}
+		destinations = append(destinations, payment.ProofDestination{PaymentProofID: proofID, BankAccountID: bankAccountID})
 	}
 	payload := map[string]any{"hasil": "cocok", "proof_destinations": destinations}
 	if total != nil {
@@ -509,7 +502,7 @@ func TestPGDokumenDoneFailClosedUntukSnapshotParsialDanPointerHilang(t *testing.
 	}
 
 	cncID, cncTotal := seedPesananSubmitted(t, f, f.branchA, "2026-10-919")
-	if _, err := f.pool.Exec(ctx, `UPDATE orders SET is_cnc=true,jatuh_tempo=tanggal+7 WHERE id=$1`, cncID); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET is_cnc=true WHERE id=$1`, cncID); err != nil {
 		t.Fatal(err)
 	}
 	status, body = verifyHTTP(t, f, cookies, csrf, cncID, bodyVerifikasiCocok(t, f, cncID, &cncTotal, ""))
@@ -928,77 +921,70 @@ func TestPGVerifikasiTransferOnlyMenolakAlokasiDepositAktifManualDanAI(t *testin
 	})
 }
 
-// TestPGCnCTanpaBuktiMenungguVerifikasi menjalankan alur C&C yang sesungguhnya
-// lewat HTTP: submit tanpa bukti berhasil, pesanan lewat jatuh tempo TETAP
-// Submitted (tidak ada auto-Done), dan baru selesai sesudah diverifikasi.
-func TestPGCnCTanpaBuktiMenungguVerifikasi(t *testing.T) {
+// TestPGCnCDibayarDepositSampaiDone menjalankan alur C&C berdeposit lewat HTTP:
+// submit tanpa bukti memotong saldo, pesanan tetap Submitted (tidak ada
+// auto-Done) sampai admin menyetujui rincian deposit, lalu Done dengan deposit
+// = total dan transfer = 0. Pesanan bernilai tanpa sumber dana sama sekali
+// tidak bisa disetujui.
+func TestPGCnCDibayarDepositSampaiDone(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
-
-	// Cabang A dijadikan C&C lewat master cabang (flag dibaca server).
 	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_cnc = true WHERE id = $1`, f.branchA); err != nil {
 		t.Fatalf("tandai cabang C&C: %v", err)
 	}
+	seedSaldoDeposit(t, f, f.branchA, 500000)
 	cookiesCabang, csrfCabang := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	produk := produkKode(t, f, "P-01")
 	draft := buatDraftHTTP(t, f, cookiesCabang, csrfCabang, produk, 2)
 	id, _ := draft["id"].(string)
+	total := int64(draft["total"].(float64))
 
-	// Submit C&C TANPA satu pun bukti: sah (BR-08) dan wajib jatuh tempo.
-	resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", cookiesCabang, csrfCabang, nil, "true")
+	var versiSaldo int64
+	if err := f.pool.QueryRow(ctx, `SELECT journal_version FROM branch_deposit_accounts WHERE branch_id=$1`, f.branchA).Scan(&versiSaldo); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", cookiesCabang, csrfCabang,
+		nil, strconv.FormatInt(versiSaldo, 10))
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("submit C&C tanpa bukti harus 200, dapat %d (%v)", resp.StatusCode, body)
+		t.Fatalf("submit C&C berdeposit harus 200, dapat %d (%v)", resp.StatusCode, body)
 	}
-	hasil := dataMap(t, body)
-	if hasil["status"] != "submitted" || hasil["is_cnc"] != true {
-		t.Fatalf("pesanan C&C harus submitted dengan penanda cnc: %v", hasil)
-	}
-	if hasil["jatuh_tempo"] == nil || hasil["jatuh_tempo"] == "" {
-		t.Fatal("C&C wajib punya jatuh tempo (CP-CNC-04)")
+	if st, _, _, doneAt := statusPesanan(t, f, id); st != "submitted" || (doneAt != nil && *doneAt != "") {
+		t.Fatalf("dibayar deposit belum berarti Done tanpa verifikasi: %s / %v", st, doneAt)
 	}
 
-	// Lewat jatuh tempo: tetap Submitted, dan muncul di filter terlambat admin.
-	if _, err := f.pool.Exec(ctx,
-		`UPDATE orders SET jatuh_tempo = (now() AT TIME ZONE 'Asia/Jakarta')::date - 2 WHERE id = $1`, id); err != nil {
-		t.Fatalf("majukan jatuh tempo: %v", err)
+	var alokasi string
+	var versi int
+	if err := f.pool.QueryRow(ctx, `SELECT a.id::text, o.versi FROM deposit_allocations a
+		JOIN orders o ON o.id = a.order_id WHERE a.order_id=$1`, id).Scan(&alokasi, &versi); err != nil {
+		t.Fatalf("submit harus menulis satu alokasi deposit: %v", err)
 	}
 	cookiesSA, csrfSA := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
-	status, listBody, _ := apiReq(t, http.DefaultClient, http.MethodGet,
-		f.srv.URL+"/api/v1/admin/orders?terlambat=true&per_halaman=100", "", cookiesSA, "")
-	if status != http.StatusOK {
-		t.Fatalf("daftar terlambat harus 200, dapat %d", status)
+	if status, res := verifyHTTP(t, f, cookiesSA, csrfSA, id, `{"hasil":"cocok"}`); status != http.StatusUnprocessableEntity ||
+		kodeErrorVerifikasi(res) != "PAYMENT_BREAKDOWN_MISMATCH" {
+		t.Fatalf("persetujuan tanpa rincian deposit harus 422, dapat %d (%v)", status, res)
 	}
-	ditemukan := false
-	for _, it := range listBody["data"].(map[string]any)["items"].([]any) {
-		if row, ok := it.(map[string]any); ok && row["id"] == id {
-			ditemukan = true
-			if row["status"] != "submitted" {
-				t.Errorf("C&C lewat jatuh tempo harus tetap submitted, dapat %v", row["status"])
-			}
-		}
+	if status, res := verifyKey(t, f, cookiesSA, csrfSA, id, settlementBody(f, versi, []string{alokasi}, nil), ""); status != http.StatusOK {
+		t.Fatalf("persetujuan rincian deposit harus 200, dapat %d (%v)", status, res)
 	}
-	if !ditemukan {
-		t.Error("C&C lewat jatuh tempo harus muncul di filter terlambat")
+	var st, verif string
+	var depositDone, transferDone int64
+	if err := f.pool.QueryRow(ctx, `SELECT status::text, verif_status::text, done_deposit_amount, done_transfer_amount
+		FROM orders WHERE id=$1`, id).Scan(&st, &verif, &depositDone, &transferDone); err != nil {
+		t.Fatal(err)
 	}
-	st, _, _, doneAt := statusPesanan(t, f, id)
-	if st != "submitted" || (doneAt != nil && *doneAt != "") {
-		t.Errorf("tanpa verifikasi tidak boleh auto-Done: %s / done_at=%v", st, doneAt)
+	if st != "done" || verif != "cocok" || depositDone != total || transferDone != 0 {
+		t.Fatalf("Done harus tercatat deposit=%d transfer=0, dapat %s/%s deposit=%d transfer=%d",
+			total, st, verif, depositDone, transferDone)
 	}
 
-	// Verifikasi manual menyelesaikannya, dan penanda terlambat hilang.
-	status, respBody := verifyHTTP(t, f, cookiesSA, csrfSA, id, `{"hasil":"cocok"}`)
-	if status != http.StatusOK {
-		t.Fatalf("verifikasi C&C harus 200, dapat %d (%v)", status, respBody)
+	// Pesanan C&C bernilai tanpa alokasi deposit maupun bukti: tidak ada sumber
+	// dana yang bisa disetujui.
+	kosong, _ := seedPesananSubmitted(t, f, f.branchA, "2026-10-cnc981")
+	if status, res := verifyHTTP(t, f, cookiesSA, csrfSA, kosong, `{"hasil":"cocok","proof_destinations":[]}`); status != http.StatusUnprocessableEntity ||
+		kodeErrorVerifikasi(res) != "PAYMENT_PROOF_REQUIRED" {
+		t.Fatalf("pesanan tanpa sumber dana harus 422 PAYMENT_PROOF_REQUIRED, dapat %d (%v)", status, res)
 	}
-	st, verif, _, _ := statusPesanan(t, f, id)
-	if st != "done" || verif != "cocok" {
-		t.Errorf("sesudah verifikasi harus done/cocok, dapat %s/%s", st, verif)
-	}
-	_, lagi, _ := apiReq(t, http.DefaultClient, http.MethodGet,
-		f.srv.URL+"/api/v1/admin/orders?terlambat=true&per_halaman=100", "", cookiesSA, "")
-	for _, it := range lagi["data"].(map[string]any)["items"].([]any) {
-		if row, ok := it.(map[string]any); ok && row["id"] == id {
-			t.Errorf("pesanan yang sudah done tidak boleh lagi terlambat: %v", row)
-		}
+	if st, _, _, _ := statusPesanan(t, f, kosong); st != "submitted" {
+		t.Fatalf("pesanan tanpa sumber dana harus tetap submitted, dapat %s", st)
 	}
 }

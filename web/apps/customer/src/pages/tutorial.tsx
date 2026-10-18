@@ -83,13 +83,14 @@ const TOPIK_CNC: TopikApi = {
   id: "bawaan-cnc",
   ikon: "cnc",
   judul: "Pesanan Cash & Carry",
-  ringkas: "Bayar sebelum jatuh tempo yang dihitung dari tanggal pesanan.",
+  ringkas: "Pesanan dibayar dari saldo deposit cabang yang sudah diverifikasi Pusat.",
   langkah: [
-    "Opsi Cash & Carry hanya muncul untuk cabang yang diizinkan Pusat.",
-    "Saat mengirim pesanan, aktifkan centang Cash & Carry; bukti transfer boleh menyusul.",
-    "Jatuh tempo = tanggal pesanan + jumlah hari C&C yang berlaku (bawaan 7 hari).",
-    "Bayar sebelum tanggal jatuh tempo; pesanan baru selesai setelah pembayaran diverifikasi Pusat.",
-    "Pengingat dikirim ke email cabang mendekati dan pada hari jatuh tempo.",
+    "Cash & Carry berlaku untuk cabang yang ditetapkan Pusat; pesanannya dibayar dari saldo deposit.",
+    "Top-up deposit lewat menu Deposit: transfer ke rekening cabang lalu unggah buktinya.",
+    "Saldo bertambah setelah top-up diverifikasi Pusat; top-up yang masih menunggu belum bisa dipakai.",
+    "Saat pesanan dikirim, saldo deposit langsung dipotong sebesar total pesanan.",
+    "Bila saldo kurang, transfer sisanya dan unggah buktinya saat mengirim pesanan.",
+    "Pesanan selesai setelah pembayarannya diverifikasi Pusat.",
   ],
 };
 
@@ -155,15 +156,16 @@ function GambarSertifikat() {
   );
 }
 
-/** Cash & Carry: jam jatuh tempo + dompet pembayaran. */
+/** Cash & Carry: dompet deposit cabang yang membayar pesanan. */
 function GambarCNC() {
   return (
     <Kanvas>
-      <circle cx="70" cy="42" r="24" fill="#fff" stroke="var(--brand-300, #c3b6d4)" strokeWidth="2" />
-      <path d="M70 30v13l9 6" stroke="var(--brand-500, #906088)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-      <rect x="96" y="46" width="40" height="26" rx="6" fill="var(--brand-900, #504068)" />
-      <rect x="96" y="54" width="40" height="4" fill="var(--brand-500, #906088)" />
-      <circle cx="126" cy="62" r="3" fill="#fff" />
+      <rect x="52" y="28" width="56" height="38" rx="8" fill="var(--brand-900, #504068)" />
+      <rect x="52" y="40" width="56" height="5" fill="var(--brand-500, #906088)" />
+      <circle cx="96" cy="56" r="4" fill="#fff" />
+      <rect x="112" y="36" width="22" height="30" rx="4" fill="#fff" stroke="var(--brand-300, #c3b6d4)" strokeWidth="2" />
+      <rect x="117" y="44" width="12" height="3" rx="1.5" fill="var(--brand-500, #906088)" />
+      <rect x="117" y="52" width="12" height="3" rx="1.5" fill="var(--line, #e3e0e8)" />
     </Kanvas>
   );
 }

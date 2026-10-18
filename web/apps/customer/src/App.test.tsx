@@ -26,12 +26,16 @@ const penggunaCabang = {
   email: "bandung@example.test",
 };
 
-/** fetchAndalan memasang fetch palsu untuk sesi cabang + katalog. */
-function fetchAndalan() {
+/**
+ * fetchAndalan memasang fetch palsu untuk sesi cabang + katalog. `cnc` adalah
+ * flag Cash & Carry cabang sesi (menentukan menu Deposit).
+ */
+function fetchAndalan(cnc = true) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string) => {
       if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
+      if (input.endsWith("/me/branch")) return json({ data: { id: "b1", nama: "Grahita Bandung", is_cnc: cnc } });
       if (input.endsWith("/catalog")) {
         return json({
           data: [
@@ -81,10 +85,11 @@ describe("Customer Portal — shell & navigasi", () => {
     expect(within(nav).queryByRole("link", { name: /Profil/ })).toBeNull();
     expect(within(nav).getByRole("link", { name: /Katalog/ }).getAttribute("aria-current")).toBe("page");
 
-    // Di layar sempit sidebar tersembunyi: Deposit hanya terjangkau lewat
-    // bottom-nav, sedangkan Tutorial tetap lewat kartu panduan di Beranda.
+    // Di layar sempit sidebar tersembunyi: Deposit (cabang C&C) hanya
+    // terjangkau lewat bottom-nav, sedangkan Tutorial tetap lewat kartu
+    // panduan di Beranda.
     const bawah = screen.getByRole("navigation", { name: "Navigasi bawah" });
-    expect(within(bawah).getByRole("link", { name: /Deposit/ })).toBeDefined();
+    expect(await within(bawah).findByRole("link", { name: /Deposit/ })).toBeDefined();
     expect(within(bawah).queryByRole("link", { name: /Tutorial/ })).toBeNull();
 
     // Harga khusus cabang diformat Rupiah, sertifikat diberi badge.
@@ -92,6 +97,17 @@ describe("Customer Portal — shell & navigasi", () => {
     expect(screen.getByText("Sertifikat")).toBeDefined();
     // CP-KAT-04: produk Sertifikat mencantumkan biaya packaging yang berlaku.
     expect(screen.getByText(/Biaya packaging Rp\s?3\.000 ditambahkan otomatis per pesanan\./)).toBeDefined();
+  });
+
+  it("menu Deposit hanya untuk cabang Cash & Carry", async () => {
+    fetchAndalan(false);
+
+    render(<RouterProvider router={buatRouter("/katalog")} />);
+
+    expect(await screen.findByText("Bio Magnetik")).toBeDefined();
+    const bawah = screen.getByRole("navigation", { name: "Navigasi bawah" });
+    expect(within(bawah).getByRole("link", { name: /Pesanan/ })).toBeDefined();
+    expect(within(bawah).queryByRole("link", { name: /Deposit/ })).toBeNull();
   });
 
   it("rute /tutorial merender shell dan empat topik panduan", async () => {

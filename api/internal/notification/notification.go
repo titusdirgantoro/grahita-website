@@ -52,7 +52,10 @@ const (
 	JenisInvoiceCabang   = "invoice_cabang"
 	JenisInvoiceAdmin    = "invoice_admin"
 	JenisSuratJalanAdmin = "surat_jalan_admin"
-	JenisReminderCNC     = "reminder_cnc"
+	// JenisReminderCNC adalah pengingat jatuh tempo C&C lama. Sejak C&C dibayar
+	// dari deposit (2026-10-18) tidak ada lagi yang mengantrenya; template-nya
+	// dipertahankan supaya baris outbox lama tetap bisa dirender/dikirim ulang.
+	JenisReminderCNC = "reminder_cnc"
 )
 
 // Status email (enum email_status, Database.md §3).
@@ -203,7 +206,6 @@ type OrderRef struct {
 	Versi       int
 	Total       int64
 	Tanggal     time.Time
-	JatuhTempo  *time.Time
 	IsCNC       bool
 }
 
@@ -265,14 +267,13 @@ type Hasil struct {
 
 // Service adalah logika bisnis outbox email.
 type Service struct {
-	store    Store
-	mail     mailer.Mailer
-	obj      ObjectStore
-	orders   OrderReader
-	admins   AdminRecipients
-	reminder ReminderStore
-	clk      clock.Clock
-	cfg      Config
+	store  Store
+	mail   mailer.Mailer
+	obj    ObjectStore
+	orders OrderReader
+	admins AdminRecipients
+	clk    clock.Clock
+	cfg    Config
 }
 
 // Option menyesuaikan Service.

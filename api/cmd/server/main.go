@@ -375,10 +375,6 @@ func buildNotification(pool *database.Pool, cfg config.Config, store storage.Sto
 		notification.WithObjectStore(store),
 		notification.WithOrderReader(repo),
 		notification.WithAdminRecipients(userspg.New(pool)),
-		// Pengingat pembayaran C&C terjadwal (F2-23): repository yang sama
-		// menulis baris cnc_reminders + email_outbox + audit dalam satu
-		// transaksi.
-		notification.WithReminderStore(repo),
 		notification.WithConfig(notification.Config{
 			MaxAttempts: cfg.OutboxMaxAttempts,
 			SendTimeout: cfg.SMTPTimeout,
@@ -475,7 +471,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	// domain pesanan: harga selalu diambil dari branch_prices cabang sesi.
 	catalogSvc := catalog.NewService(catalogpg.New(pool))
 	// Setelan sistem (F1-09) sekaligus sumber angka server untuk pesanan:
-	// biaya_packaging pesanan Sertifikat dan cnc_hari tenggat C&C (F1-12).
+	// biaya_packaging pesanan Sertifikat (F1-12).
 	settingsSvc := settings.NewService(settingspg.New(pool))
 	// Pesanan cabang: draft, editor order line, aturan Sertifikat/packaging,
 	// daftar dan detail (F1-11 + F1-12). Sumber setelan AI dipasang supaya

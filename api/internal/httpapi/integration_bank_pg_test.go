@@ -181,7 +181,7 @@ func TestPGBankRekeningTransaksionalDanNonaktif(t *testing.T) {
 		VALUES ($1,'proofs/sintetis','bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$2)`, orderID, f.userA); err != nil {
 		t.Fatalf("seed bukti untuk uji submit fail-closed: %v", err)
 	}
-	resp, submitBody := multipartSubmit(t, base+"/orders/"+orderID+"/submit", cabangCookies, cabangCsrf, nil, "false")
+	resp, submitBody := multipartSubmit(t, base+"/orders/"+orderID+"/submit", cabangCookies, cabangCsrf, nil, "")
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("submit tanpa rekening efektif harus 409, dapat %d (%v)", resp.StatusCode, submitBody)
@@ -293,7 +293,7 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 
 	// Nilai tidak valid → 400, tidak ada baris tersimpan, tanpa event audit.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
-		`{"values":{"biaya_packaging":-1,"cnc_hari":10}}`, saCookies, saCsrf)
+		`{"values":{"biaya_packaging":-1,"reset_menit":10}}`, saCookies, saCsrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("nilai tidak valid harus 400, dapat %d (%v)", status, body)
 	}
@@ -330,15 +330,15 @@ func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 
 	// Batch campuran: hanya kunci yang benar-benar berubah yang dicatat.
 	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
-		`{"values":{"biaya_packaging":5000,"cnc_hari":10}}`, saCookies, saCsrf)
+		`{"values":{"biaya_packaging":5000,"reset_menit":10}}`, saCookies, saCsrf)
 	if status != http.StatusOK {
 		t.Fatalf("batch campuran harus 200, dapat %d", status)
 	}
-	if err := f.pool.QueryRow(ctx, `SELECT value::text FROM settings WHERE key='cnc_hari'`).Scan(&stored); err != nil {
-		t.Fatalf("baca cnc_hari: %v", err)
+	if err := f.pool.QueryRow(ctx, `SELECT value::text FROM settings WHERE key='reset_menit'`).Scan(&stored); err != nil {
+		t.Fatalf("baca reset_menit: %v", err)
 	}
 	if stored != "10" {
-		t.Errorf("cnc_hari harus tersimpan 10, dapat %s", stored)
+		t.Errorf("reset_menit harus tersimpan 10, dapat %s", stored)
 	}
 	if auditCount, _ = hitungPengaturan(); auditCount != 3 {
 		t.Errorf("hanya kunci yang berubah dicatat: mau 3, dapat %d", auditCount)

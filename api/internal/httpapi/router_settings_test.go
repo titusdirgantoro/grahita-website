@@ -65,13 +65,13 @@ func TestApiPengaturanBatchValidasi(t *testing.T) {
 
 	// Batch valid → 200 dan tersimpan.
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
-		`{"values":{"biaya_packaging":4500,"cnc_hari":10,"manager_boleh_revisi":false}}`, cookies, csrf)
+		`{"values":{"biaya_packaging":4500,"reset_menit":10,"manager_boleh_revisi":false}}`, cookies, csrf)
 	if status != http.StatusOK {
 		t.Fatalf("batch valid harus 200, dapat %d (%v)", status, body)
 	}
 	data := body["data"].(map[string]any)
 	values := data["values"].(map[string]any)
-	if values["biaya_packaging"] != float64(4500) || values["cnc_hari"] != float64(10) {
+	if values["biaya_packaging"] != float64(4500) || values["reset_menit"] != float64(10) {
 		t.Errorf("nilai tersimpan tidak sesuai: %v", values)
 	}
 	if bs.settings.values["biaya_packaging"] != "4500" {
@@ -80,7 +80,7 @@ func TestApiPengaturanBatchValidasi(t *testing.T) {
 
 	// Batch dengan satu nilai tidak valid → 400, tidak ada yang tersimpan.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, base+"/admin/settings",
-		`{"values":{"biaya_packaging":-5,"cnc_hari":11}}`, cookies, csrf)
+		`{"values":{"biaya_packaging":-5,"reset_menit":11}}`, cookies, csrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("nilai tidak valid harus 400, dapat %d (%v)", status, body)
 	}
@@ -90,8 +90,8 @@ func TestApiPengaturanBatchValidasi(t *testing.T) {
 	if _, ok := fields["biaya_packaging"]; !ok {
 		t.Errorf("fields harus memuat kunci biaya_packaging: %v", fields)
 	}
-	if bs.settings.values["cnc_hari"] != "10" {
-		t.Errorf("nilai valid tidak boleh ikut berubah saat batch gagal: %q", bs.settings.values["cnc_hari"])
+	if bs.settings.values["reset_menit"] != "10" {
+		t.Errorf("nilai valid tidak boleh ikut berubah saat batch gagal: %q", bs.settings.values["reset_menit"])
 	}
 
 	// Nilai uang pecahan ditolak.

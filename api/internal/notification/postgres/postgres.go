@@ -438,20 +438,19 @@ func (r *Repo) Release(ctx context.Context, ids []string, now time.Time) error {
 // akun cabang saat itu.
 func (r *Repo) OrderByID(ctx context.Context, id string) (notification.OrderRef, error) {
 	var (
-		ref        notification.OrderRef
-		nomor      *string
-		tanggal    *time.Time
-		jatuhTempo *time.Time
-		status     string
+		ref     notification.OrderRef
+		nomor   *string
+		tanggal *time.Time
+		status  string
 	)
 	err := r.pool.QueryRow(ctx, `
 		SELECT o.id, o.nomor, b.nama, b.nama_kepala, b.email,
-		       o.versi, o.total, o.tanggal, o.jatuh_tempo, o.is_cnc, o.status
+		       o.versi, o.total, o.tanggal, o.is_cnc, o.status
 		FROM orders o
 		JOIN branches b ON b.id = o.branch_id
 		WHERE o.id = $1::uuid`, id).
 		Scan(&ref.ID, &nomor, &ref.Cabang, &ref.NamaKepala, &ref.CabangEmail,
-			&ref.Versi, &ref.Total, &tanggal, &jatuhTempo, &ref.IsCNC, &status)
+			&ref.Versi, &ref.Total, &tanggal, &ref.IsCNC, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return notification.OrderRef{}, notification.ErrNotFound
 	}
@@ -464,7 +463,6 @@ func (r *Repo) OrderByID(ctx context.Context, id string) (notification.OrderRef,
 	if tanggal != nil {
 		ref.Tanggal = *tanggal
 	}
-	ref.JatuhTempo = jatuhTempo
 	return ref, nil
 }
 

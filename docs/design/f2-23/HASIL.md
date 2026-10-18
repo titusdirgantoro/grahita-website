@@ -1,5 +1,10 @@
 # F2-23 — Reminder pembayaran C&C terjadwal
 
+> **Dihapus 2026-10-18.** Cash & Carry kini sistem deposit (pesanan dibayar dari
+> saldo deposit saat dikirim), jadi tidak ada lagi jatuh tempo maupun pengingat
+> ini. Lihat `docs/PRD.md` §3.7 dan `docs/design/branch-deposit.md` §3.8.
+> Dokumen di bawah adalah catatan historis kartu F2-23.
+
 Kartu: **t_fe92acd7 — F2-23 Reminder pembayaran C&C terjadwal**
 
 Dokumen acuan: `docs/PRD.md` §3.7 (CP-CNC-02..07), §6.2 (template "Reminder Cash

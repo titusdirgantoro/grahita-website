@@ -302,8 +302,8 @@ func TestFilterCabangSemuaDianggapTanpaFilter(t *testing.T) {
 	}
 }
 
-func TestChipSelaluEmpatDenganKunciStabil(t *testing.T) {
-	repo := &fakeRepo{chip: HitunganChip{Menunggu: 3, PerluReview: 1, LewatJatuhTempo: 2, EmailGagal: 4}}
+func TestChipDenganKunciStabil(t *testing.T) {
+	repo := &fakeRepo{chip: HitunganChip{Menunggu: 3, PerluReview: 1, EmailGagal: 4}}
 	svc := newSvc(repo, WithEmailGagal(sumberEmailGagal{ids: []string{"a", "b"}}))
 	d, err := svc.Get(context.Background(), manager(), Filter{})
 	if err != nil {
@@ -312,7 +312,6 @@ func TestChipSelaluEmpatDenganKunciStabil(t *testing.T) {
 	mau := []Chip{
 		{Kunci: ChipMenunggu, Label: "menunggu verifikasi", Jumlah: 3},
 		{Kunci: ChipPerluReview, Label: "perlu review", Jumlah: 1},
-		{Kunci: ChipLewatJatuhTempo, Label: "C&C lewat jatuh tempo", Jumlah: 2},
 		{Kunci: ChipEmailGagal, Label: "email gagal", Jumlah: 4},
 	}
 	if len(d.Chip) != len(mau) {

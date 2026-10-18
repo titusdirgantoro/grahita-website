@@ -85,11 +85,6 @@
   color: var(--brand-fg, #fff);
 }
 
-.warning {
-  border-color: var(--warning, #b8860b);
-  background: color-mix(in oklch, var(--warning, #b8860b) 8%, white);
-}
-
 .guide {
   grid-column: 1 / -1;
   background: var(--brand-50);

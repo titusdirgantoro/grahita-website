@@ -4,8 +4,8 @@ package httpapi
 // filter, grouping, paginasi server, catatan internal, dokumen, log verifikasi,
 // dan isolasi catatan internal dari portal cabang benar-benar dieksekusi SQL.
 //
-// Data disemai langsung lewat SQL supaya keadaan yang jarang (C&C lewat jatuh
-// tempo, email gagal, dokumen + log verifikasi) bisa dibuat deterministik tanpa
+// Data disemai langsung lewat SQL supaya keadaan yang jarang (email gagal,
+// dokumen + log verifikasi) bisa dibuat deterministik tanpa
 // harus menempuh seluruh alur submit/verifikasi yang pemiliknya kartu lain.
 
 import (
@@ -28,7 +28,6 @@ type seedOrderAdmin struct {
 	verif    string // belum|cocok|perlu_review
 	alasan   string // review_reason atau kosong
 	cnc      bool
-	jt       string // jatuh_tempo YYYY-MM-DD atau kosong
 	catatan  string
 	note     string
 	harga    int64
@@ -49,10 +48,7 @@ func insertProdukAdmin(t *testing.T, ctx context.Context, pool *database.Pool, k
 // berserial. Total ditentukan trigger order_lines_recalc dari subtotal baris.
 func insertOrderAdmin(t *testing.T, ctx context.Context, pool *database.Pool, s seedOrderAdmin, productID, serial string) string {
 	t.Helper()
-	var jt, alasan any
-	if s.jt != "" {
-		jt = s.jt
-	}
+	var alasan any
 	if s.alasan != "" {
 		alasan = s.alasan
 	}
@@ -65,11 +61,11 @@ func insertOrderAdmin(t *testing.T, ctx context.Context, pool *database.Pool, s 
 	var id string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO orders (branch_id, nomor, versi, status, verif_status, alasan_review, is_cnc,
-		                    is_sertifikat, tanggal, jatuh_tempo, catatan, note_admin, total, submitted_at)
+		                    is_sertifikat, tanggal, catatan, note_admin, total, submitted_at)
 		VALUES ($1, $2, 0, $3::order_status, $4::verif_status, $5::review_reason, $6,
-		        false, $7::date, $8::date, $9, $10, 0, now())
+		        false, $7::date, $8, $9, 0, now())
 		RETURNING id`,
-		s.branchID, s.nomor, status, verif, alasan, s.cnc, s.tanggal, jt, s.catatan, s.note).Scan(&id)
+		s.branchID, s.nomor, status, verif, alasan, s.cnc, s.tanggal, s.catatan, s.note).Scan(&id)
 	if err != nil {
 		t.Fatalf("semai pesanan %s: %v", s.nomor, err)
 	}
@@ -154,10 +150,9 @@ func TestPGAdminRiwayatDetailDanCatatan(t *testing.T) {
 		branchID: f.branchA, nomor: "2026-10-01", tanggal: tglBaru.Format("2006-01-02"),
 		status: "done", verif: "cocok", harga: 300000,
 	}, produk, "20261001001")
-	o3 := insertOrderAdmin(t, ctx, f.pool, seedOrderAdmin{
+	_ = insertOrderAdmin(t, ctx, f.pool, seedOrderAdmin{
 		branchID: f.branchB, nomor: "2026-10-02", tanggal: tglBaru.Format("2006-01-02"),
-		status: "submitted", verif: "belum", cnc: true,
-		jt: tglBaru.AddDate(0, 0, -7).Format("2006-01-02"), harga: 150000,
+		status: "submitted", verif: "belum", cnc: true, harga: 150000,
 	}, produk, "20261002001")
 	_ = insertOrderAdmin(t, ctx, f.pool, seedOrderAdmin{
 		branchID: f.branchC, nomor: "2026-09-02", tanggal: tglLama.Format("2006-01-02"),
@@ -254,8 +249,6 @@ func TestPGAdminRiwayatDetailDanCatatan(t *testing.T) {
 		{"status done", "?status=done", 2},
 		{"verifikasi perlu review", "?verif=perlu_review", 1},
 		{"C&C", "?cnc=true", 1},
-		{"lewat jatuh tempo", "?terlambat=true", 1},
-		{"tidak lewat jatuh tempo", "?terlambat=false", 4},
 		{"email gagal", "?email_gagal=true", 1},
 		{"email tidak gagal", "?email_gagal=false", 4},
 		{"rentang tanggal", "?dari=" + tglLama.Format("2006-01-02") + "&sampai=" + tglLama.Format("2006-01-02"), 2},
@@ -277,12 +270,9 @@ func TestPGAdminRiwayatDetailDanCatatan(t *testing.T) {
 		if len(its) != k.mau {
 			t.Fatalf("filter %s: items %d != total %v", k.nama, len(its), h["total"])
 		}
-		// Penanda terlambat/email gagal ikut terhitung benar di baris.
+		// Penanda email gagal ikut terhitung benar di baris.
 		for _, it := range its {
 			m := it.(map[string]any)
-			if m["id"] == o3 && m["terlambat"] != true {
-				t.Fatalf("pesanan C&C lewat tempo harus bertanda terlambat: %v", m)
-			}
 			if m["id"] == o4 && m["email_gagal"] != true {
 				t.Fatalf("pesanan ber-email gagal harus bertanda email_gagal: %v", m)
 			}

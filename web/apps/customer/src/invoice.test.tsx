@@ -83,7 +83,6 @@ const RIAWAYAT: Invoice[] = [
     tanggal: "2026-10-09",
     status: "submitted",
     is_cnc: true,
-    jatuh_tempo: "2026-10-16",
     total: 150000,
     jumlah_item: 1,
     dokumen_id: undefined,

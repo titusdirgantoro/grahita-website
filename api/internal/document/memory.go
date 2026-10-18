@@ -167,9 +167,6 @@ func (m *Memory) ListInvoices(_ context.Context, branchID string, dari, sampai *
 		if !o.Tanggal.IsZero() {
 			dasar.Tanggal = o.Tanggal.Format(TanggalLayout)
 		}
-		if o.JatuhTempo != nil && !o.JatuhTempo.IsZero() {
-			dasar.JatuhTempo = o.JatuhTempo.Format(TanggalLayout)
-		}
 		ada := false
 		for _, d := range m.docs {
 			if d.OrderID != o.ID || d.Jenis != JenisInvoicePDF {

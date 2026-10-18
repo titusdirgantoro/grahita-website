@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import pathlib
 import subprocess
@@ -31,6 +32,7 @@ for index, arg in enumerate(args):
 urls = [arg for arg in args if arg.startswith(('http://', 'https://'))]
 url = urls[-1] if urls else ''
 state_path = pathlib.Path(os.environ['FAKE_CURL_STATE'])
+CNC = os.environ.get('FAKE_CNC') == '1'
 try:
     state = int(state_path.read_text())
 except (FileNotFoundError, ValueError):
@@ -61,11 +63,26 @@ elif url.endswith('/api/v1/orders'):
     status = 201
     body = json.dumps({'data': {'id': 'order-1', 'total': 200000}}).encode()
 elif url.endswith('/api/v1/orders/order-1/submit'):
+    rekam = pathlib.Path(os.environ['FAKE_CURL_REKAM'])
+    rekam.with_suffix('.submit').write_text(' '.join(a for a in args if a.startswith(('file=', 'expected_journal_version='))))
     body = json.dumps({'data': {'status': 'submitted', 'nomor': 'UJI-001'}}).encode()
+elif url.endswith('/api/v1/me/branch'):
+    body = json.dumps({'data': {'id': 'branch-1', 'is_cnc': CNC}}).encode()
+elif url.endswith('/api/v1/deposit'):
+    body = json.dumps({'data': {'available_balance': 500000, 'journal_version': 3}}).encode()
+elif url.endswith('/api/v1/orders/order-1/payment'):
+    alokasi = [{'id': 'alloc-1', 'active_amount': 200000}] if CNC else []
+    body = json.dumps({'data': {'versi': 0, 'allocations': alokasi}}).encode()
+elif url.endswith('/api/v1/orders/order-1/proofs'):
+    body = json.dumps({'data': [] if CNC else [{'id': 'proof-1'}]}).encode()
+elif url.endswith('/api/v1/bank-accounts'):
+    body = json.dumps({'data': [{'id': 'bank-1'}]}).encode()
 elif url.endswith('/api/v1/auth/me') and '/admin/' in url:
     status = 401
     body = json.dumps({'error': {'code': 'UNAUTHORIZED'}}).encode()
 elif url.endswith('/api/v1/admin/orders/order-1/verify'):
+    data_arg = args[args.index('--data') + 1] if '--data' in args else ''
+    pathlib.Path(os.environ['FAKE_CURL_REKAM']).with_suffix('.verify').write_text(data_arg)
     body = json.dumps({'data': {'order': {'status': 'done'}, 'verifikasi': {'hasil': 'cocok'}}}).encode()
 elif url.endswith('/api/v1/orders/order-1/documents'):
     state += 1
@@ -92,7 +109,7 @@ if any(arg == '-w' for arg in args):
 
 
 class SmokeStagingTest(unittest.TestCase):
-    def test_menunggu_dokumen_dan_mengunduh_presigned_url(self):
+    def jalankan(self, cnc: bool):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = pathlib.Path(raw_tmp)
             fake_curl = tmp / "curl"
@@ -102,6 +119,8 @@ class SmokeStagingTest(unittest.TestCase):
             env.update({
                 "PATH": f"{tmp}:{env['PATH']}",
                 "FAKE_CURL_STATE": str(tmp / "state"),
+                "FAKE_CURL_REKAM": str(tmp / "rekam"),
+                "FAKE_CNC": "1" if cnc else "0",
                 "CUSTOMER_BASE": "https://branch.example/branch",
                 "ADMIN_BASE": "https://admin.example/admin",
                 "SMOKE_EMAIL": "uji@example.invalid",
@@ -120,11 +139,32 @@ class SmokeStagingTest(unittest.TestCase):
                 timeout=20,
                 check=False,
             )
+            submit = (tmp / "rekam.submit").read_text() if (tmp / "rekam.submit").exists() else ""
+            verif = json.loads((tmp / "rekam.verify").read_text()) if (tmp / "rekam.verify").exists() else {}
+        return result, submit, verif
+
+    def test_menunggu_dokumen_dan_mengunduh_presigned_url(self):
+        result, submit, verif = self.jalankan(cnc=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("dokumen tersedia setelah menunggu 1s", result.stdout)
         self.assertIn("unduh dokumen 200 (2048 byte, invoice_pdf)", result.stdout)
         self.assertIn("HASIL: LULUS", result.stdout)
         self.assertNotIn("signature=secret", result.stdout)
+        # Cabang non-C&C: submit berbukti, verifikasi menyebut rekening tujuannya.
+        self.assertIn("file=@", submit)
+        self.assertNotIn("expected_journal_version", submit)
+        self.assertEqual(verif.get("proof_destinations"),
+                         [{"payment_proof_id": "proof-1", "bank_account_id": "bank-1"}])
+
+    def test_cabang_cnc_dibayar_deposit_tanpa_bukti(self):
+        result, submit, verif = self.jalankan(cnc=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # Saldo 500.000 menutup total 200.000: tanpa bukti, versi saldo dikirim,
+        # dan verifikasi memakai settlement alokasi deposit.
+        self.assertNotIn("file=@", submit)
+        self.assertIn("expected_journal_version=3", submit)
+        self.assertEqual(verif.get("deposit_allocation_ids"), ["alloc-1"])
+        self.assertEqual(verif.get("proof_splits"), [])
 
 
 if __name__ == "__main__":

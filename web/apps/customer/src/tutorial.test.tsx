@@ -86,8 +86,8 @@ describe("Customer Portal — Tutorial (F1-19)", () => {
       "Harga satuan Sertifikat selalu Rp0 berapa pun jumlah lembarnya.",
       "Biaya packaging ditambahkan otomatis satu baris per pesanan dan tidak bisa diubah.",
       // Cash & Carry (PRD §3.7)
-      "Jatuh tempo = tanggal pesanan + jumlah hari C&C yang berlaku (bawaan 7 hari).",
-      "Bayar sebelum tanggal jatuh tempo; pesanan baru selesai setelah pembayaran diverifikasi Pusat.",
+      "Saat pesanan dikirim, saldo deposit langsung dipotong sebesar total pesanan.",
+      "Bila saldo kurang, transfer sisanya dan unggah buktinya saat mengirim pesanan.",
     ];
     for (const langkah of wajib) {
       expect(screen.getByText(langkah)).toBeDefined();

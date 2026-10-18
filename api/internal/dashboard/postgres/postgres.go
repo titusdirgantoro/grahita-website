@@ -58,11 +58,10 @@ func (r *Repo) Ringkasan(ctx context.Context, q dashboard.Query) (dashboard.Hitu
 	}, nil
 }
 
-// Chip menghitung empat chip "perlu tindakan" (AP-DSH-03) dengan klausa yang
+// Chip menghitung tiga chip "perlu tindakan" (AP-DSH-03) dengan klausa yang
 // sama dengan filter daftar riwayat pemesanan (F1-15).
 func (r *Repo) Chip(ctx context.Context, q dashboard.Query) (dashboard.HitunganChip, error) {
 	row, err := r.q.DashboardChip(ctx, sqlc.DashboardChipParams{
-		HariIni:       q.HariIni,
 		EmailGagalIds: q.EmailGagalIDs,
 		BranchID:      pgtypes.UUID(q.BranchID),
 	})
@@ -70,10 +69,9 @@ func (r *Repo) Chip(ctx context.Context, q dashboard.Query) (dashboard.HitunganC
 		return dashboard.HitunganChip{}, fmt.Errorf("query DashboardChip: %w", err)
 	}
 	return dashboard.HitunganChip{
-		Menunggu:        row.Menunggu,
-		PerluReview:     row.PerluReview,
-		LewatJatuhTempo: row.LewatJatuhTempo,
-		EmailGagal:      row.EmailGagal,
+		Menunggu:    row.Menunggu,
+		PerluReview: row.PerluReview,
+		EmailGagal:  row.EmailGagal,
 	}, nil
 }
 
@@ -153,7 +151,6 @@ func (r *Repo) Item(ctx context.Context, q dashboard.Query) (int64, error) {
 // Komposisi membaca komposisi pesanan periode terpilih.
 func (r *Repo) Komposisi(ctx context.Context, q dashboard.Query) (dashboard.HitunganKomposisi, error) {
 	row, err := r.q.DashboardKomposisi(ctx, sqlc.DashboardKomposisiParams{
-		HariIni:  q.HariIni,
 		BranchID: pgtypes.UUID(q.BranchID),
 		Dari:     q.Dari,
 		Sampai:   q.Sampai,
@@ -161,9 +158,7 @@ func (r *Repo) Komposisi(ctx context.Context, q dashboard.Query) (dashboard.Hitu
 	if err != nil {
 		return dashboard.HitunganKomposisi{}, fmt.Errorf("query DashboardKomposisi: %w", err)
 	}
-	return dashboard.HitunganKomposisi{
-		Reguler: row.Reguler, CNC: row.Cnc, Sertifikat: row.Sertifikat, CNCLewatTempo: row.CncLewatTempo,
-	}, nil
+	return dashboard.HitunganKomposisi{Reguler: row.Reguler, CNC: row.Cnc, Sertifikat: row.Sertifikat}, nil
 }
 
 // ProdukTerlaris membaca product terlaris periode terpilih, dibatasi

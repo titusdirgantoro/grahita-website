@@ -142,16 +142,20 @@ Token disimpan sebagai **hash** di DB; nilai aslinya hanya ditampilkan sekali ke
 
 ```
 BEGIN;
+  SELECT pg_advisory_xact_lock(...);         -- policy rekening (D2)
+  -- cabang C&C: kunci cabang FOR SHARE → akun deposit FOR UPDATE, versi saldo
+  --             harus sama dengan expected_journal_version (D3 §5.1)
   SELECT ... FROM orders WHERE id=$1 AND branch_id=$2 FOR UPDATE;   -- cegah double submit
   -- validasi: status=draft, ada minimal 1 baris, produk aktif & punya harga cabang,
-  --           aturan sertifikat, aturan C&C, bukti wajib bila bukan C&C
+  --           aturan sertifikat, bukti wajib untuk bagian yang dibayar transfer
   -- snapshot harga terbaru dari branch_prices ke order_lines
   -- penomoran:
   nomor  := next_invoice_no(tanggal_wib);    -- UPDATE counters ... RETURNING
   serial := next_serial_no(tanggal_wib, n);  -- n serial sekaligus untuk n baris produk
   UPDATE orders SET status='submitted', nomor=..., tanggal=..., total=...,
-                    jatuh_tempo = CASE WHEN is_cnc THEN tanggal + cnc_hari END,
                     submitted_at = now();
+  -- cabang C&C: debit min(saldo, total) → branch_deposit_transactions +
+  --             deposit_allocations; sisanya wajib berbukti
   INSERT INTO order_events (...);            -- "Pesanan dikirim oleh <cabang>"
   INSERT INTO river_job (...);               -- job: verifikasi AI (bila aktif)
 COMMIT;
@@ -209,9 +213,9 @@ COMMIT;
 
 Serial number baris lama **tidak** dibuat ulang; baris yang benar-benar baru mendapat serial number baru dengan tanggal pesanan asli.
 
-### 4.6 Reminder Cash & Carry
+### 4.6 Cash & Carry (deposit)
 
-Job terjadwal (cron River, 07:00 WIB) memilih pesanan `is_cnc = true AND status <> 'done'` lalu mengirim email pada H-2, H-0, H+1, H+3 relatif jatuh tempo. Tabel `cnc_reminders (order_id, tahap)` dengan unique constraint memastikan tiap tahap hanya terkirim sekali meski job berjalan ulang.
+Sejak 2026-10-18 Cash & Carry adalah sistem deposit: pesanan cabang C&C dibayar dari saldo deposit di dalam transaksi submit (§4.2; `design/branch-deposit.md` §3.8). Tidak ada lagi jatuh tempo maupun job reminder; tabel `cnc_reminders` dan kolom `orders.jatuh_tempo` hanya menyimpan riwayat pesanan C&C lama.
 
 ---
 
@@ -237,7 +241,7 @@ Setiap mutasi oleh admin memanggil `audit.Record(ctx, actor, entity, action, bef
 
 ### 5.5 Waktu
 
-Satu interface `Clock` di-inject ke seluruh service agar penomoran, jatuh tempo, dan reminder dapat diuji deterministik. Perhitungan tanggal bisnis memakai `time.LoadLocation("Asia/Jakarta")`.
+Satu interface `Clock` di-inject ke seluruh service agar penomoran dan tanggal bisnis dapat diuji deterministik. Perhitungan tanggal bisnis memakai `time.LoadLocation("Asia/Jakarta")`.
 
 ---
 
@@ -351,7 +355,7 @@ Dokumen disimpan di object storage dengan kunci `documents/{order_id}/{jenis}-{v
 
 | Lapisan | Cakupan |
 |---|---|
-| Unit | Aturan sertifikat & packaging, perhitungan total, jatuh tempo C&C, format penomoran, toleransi verifikasi |
+| Unit | Aturan sertifikat & packaging, perhitungan total, potongan deposit C&C, format penomoran, toleransi verifikasi |
 | Integrasi (testcontainers) | Penomoran paralel 100 submit, state machine, outbox, revisi versi, isolasi data antar cabang |
 | Kontrak | Skema OpenAPI divalidasi di CI; tipe frontend di-generate dari skema |
 | E2E (Playwright) | Registrasi→login→pesan→submit→verifikasi→invoice; alur sertifikat; alur C&C; batas akses Manager |

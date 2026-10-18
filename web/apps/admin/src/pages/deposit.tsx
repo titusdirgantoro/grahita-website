@@ -51,6 +51,7 @@ export interface RingkasanDeposit {
 
 interface IkhtisarCabang extends RingkasanDeposit {
   branch_nama: string;
+  is_cnc: boolean;
 }
 
 interface TopupAdmin {
@@ -576,7 +577,10 @@ export function DepositAdminPage() {
 
   return (
     <>
-      <PageHead title="Deposit cabang" sub="Saldo per cabang dan antrean top-up" />
+      <PageHead
+        title="Deposit cabang"
+        sub="Saldo cabang Cash & Carry dan antrean top-up — pesanan C&C dibayar dari saldo ini"
+      />
       <div className={styles.stack}>
         <Card>
           <CardHead title="Antrean top-up" tools={<span className="muted small">{`${terbuka.length} menunggu`}</span>} />
@@ -641,6 +645,9 @@ export function DepositAdminPage() {
         <Card>
           <CardHead title="Saldo per cabang" />
           {ikhtisar.memuat ? <SkeletonList rows={3} /> : null}
+          {!ikhtisar.memuat && (ikhtisar.data ?? []).length === 0 ? (
+            <EmptyState icon="wallet">Belum ada cabang Cash &amp; Carry.</EmptyState>
+          ) : null}
           {(ikhtisar.data ?? []).length > 0 ? (
             <Table stack="narrow" caption="Saldo deposit per cabang">
               <thead>
@@ -653,7 +660,10 @@ export function DepositAdminPage() {
               <tbody>
                 {(ikhtisar.data ?? []).map((c) => (
                   <tr key={c.branch_id}>
-                    <td>{c.branch_nama}</td>
+                    <td>
+                      {c.branch_nama}
+                      {c.is_cnc ? null : <span className="muted small"> · bukan C&amp;C</span>}
+                    </td>
                     <td className="num tabular">{rupiah.format(c.available_balance)}</td>
                     <td className="num tabular">
                       {c.pending_topup_count > 0

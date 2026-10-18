@@ -26,7 +26,6 @@ export type NilaiPengaturan = Record<string, unknown>;
 const label = (kunci: string) =>
   ({
     biaya_packaging: "Biaya packaging (Rp)",
-    cnc_hari: "Tenggat Cash & Carry (hari)",
     token_hari: "Masa berlaku token registrasi (hari)",
     reset_menit: "Masa berlaku tautan reset (menit)",
     max_mb: "Ukuran maksimal bukti transfer (MB)",
@@ -37,7 +36,6 @@ const label = (kunci: string) =>
 /** Kunci bilangan bulat yang ditampilkan sebagai input angka. */
 const KUNCI_ANGKA = [
   "biaya_packaging",
-  "cnc_hari",
   "token_hari",
   "reset_menit",
   "max_mb",

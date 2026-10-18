@@ -33,6 +33,9 @@ var (
 	ErrInvalidAmount       = errors.New("nominal harus lebih dari nol")
 	ErrInvalidAction       = errors.New("aksi keputusan top-up tidak dikenal")
 	ErrStorageUnavailable  = errors.New("penyimpanan bukti tidak tersedia")
+	// ErrTopupCNCOnly: top-up hanya untuk cabang Cash & Carry, karena hanya
+	// pesanan cabang itu yang dibayar dari deposit (keputusan user 2026-10-18).
+	ErrTopupCNCOnly = errors.New("top-up deposit hanya untuk cabang Cash & Carry")
 )
 
 // Status top-up (enum deposit_topup_status, D3 §3.1).
@@ -100,10 +103,12 @@ type Topup struct {
 	ProofKey string `json:"-"`
 }
 
-// BranchOverview adalah satu baris antrean admin (GET /admin/deposits).
+// BranchOverview adalah satu baris antrean admin (GET /admin/deposits): cabang
+// Cash & Carry, ditambah cabang lain yang masih bersaldo atau punya top-up.
 type BranchOverview struct {
 	BranchID           string `json:"branch_id"`
 	BranchNama         string `json:"branch_nama"`
+	IsCNC              bool   `json:"is_cnc"`
 	AvailableBalance   int64  `json:"available_balance"`
 	JournalVersion     int64  `json:"journal_version"`
 	PendingTopupCount  int    `json:"pending_topup_count"`
@@ -215,6 +220,7 @@ type QueryRepository interface {
 	MarkTopup(ctx context.Context, in MarkTopupInput) (Topup, error)
 	Overview(ctx context.Context) ([]BranchOverview, error)
 	BranchNama(ctx context.Context, branchID string) (string, error)
+	BranchCNC(ctx context.Context, branchID string) (bool, error)
 	Reconciled(ctx context.Context, branchID string) (bool, error)
 	OrderRef(ctx context.Context, orderID string) (OrderRef, error)
 	OrderAllocations(ctx context.Context, orderID string) ([]AllocationView, error)
@@ -365,6 +371,13 @@ func (s *Service) CreateTopup(ctx context.Context, actor auth.Actor, in TopupReq
 	}
 	if in.Content == nil {
 		return Topup{}, false, ErrProofRequired
+	}
+	cnc, err := s.repo.BranchCNC(ctx, branchID)
+	if err != nil {
+		return Topup{}, false, err
+	}
+	if !cnc {
+		return Topup{}, false, ErrTopupCNCOnly
 	}
 	if _, err := s.effectiveAccount(ctx, branchID, in.BankAccountID); err != nil {
 		return Topup{}, false, err

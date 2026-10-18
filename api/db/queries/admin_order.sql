@@ -6,7 +6,7 @@
 --
 -- Tiga hal yang dijaga di sini:
 --   * seluruh tanggal BISNIS memakai zona Asia/Jakarta (PRD §7.2) — bukan UTC —
---     termasuk grouping per hari/bulan/tahun dan penanda "lewat jatuh tempo";
+--     termasuk grouping per hari/bulan/tahun;
 --   * daftar SELALU dipaginasi di server (LIMIT/OFFSET) dan ringkasan grup
 --     dihitung agregat, sehingga pesanan besar tidak pernah diunduh seluruhnya
 --     ke browser (AP-ORD-03);
@@ -27,7 +27,6 @@ SELECT o.id,
        o.branch_id,
        b.nama                                                      AS branch_nama,
        o.tanggal,
-       o.jatuh_tempo,
        o.status::text                                              AS status,
        o.verif_status::text                                        AS verif_status,
        o.is_cnc,
@@ -35,8 +34,6 @@ SELECT o.id,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
                   WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
-       COALESCE(o.is_cnc AND o.status <> 'done'
-                AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)::bool AS terlambat,
        (o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))::bool       AS email_gagal,
        o.submitted_at,
        o.created_at,
@@ -47,11 +44,6 @@ SELECT o.id,
    AND (sqlc.narg(status)::order_status IS NULL OR o.status = sqlc.narg(status)::order_status)
    AND (sqlc.narg(verif_status)::verif_status IS NULL OR o.verif_status = sqlc.narg(verif_status)::verif_status)
    AND (sqlc.narg(is_cnc)::bool IS NULL OR o.is_cnc = sqlc.narg(is_cnc)::bool)
-   AND (sqlc.narg(terlambat)::bool IS NULL
-        OR (sqlc.narg(terlambat)::bool AND COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false))
-        OR (NOT sqlc.narg(terlambat)::bool AND NOT COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)))
    AND (sqlc.narg(email_gagal)::bool IS NULL
         OR (sqlc.narg(email_gagal)::bool AND o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))
         OR (NOT sqlc.narg(email_gagal)::bool AND NOT (o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))))
@@ -87,11 +79,6 @@ SELECT count(*)::bigint AS total
    AND (sqlc.narg(status)::order_status IS NULL OR o.status = sqlc.narg(status)::order_status)
    AND (sqlc.narg(verif_status)::verif_status IS NULL OR o.verif_status = sqlc.narg(verif_status)::verif_status)
    AND (sqlc.narg(is_cnc)::bool IS NULL OR o.is_cnc = sqlc.narg(is_cnc)::bool)
-   AND (sqlc.narg(terlambat)::bool IS NULL
-        OR (sqlc.narg(terlambat)::bool AND COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false))
-        OR (NOT sqlc.narg(terlambat)::bool AND NOT COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)))
    AND (sqlc.narg(email_gagal)::bool IS NULL
         OR (sqlc.narg(email_gagal)::bool AND o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))
         OR (NOT sqlc.narg(email_gagal)::bool AND NOT (o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))))
@@ -127,11 +114,6 @@ SELECT CASE sqlc.arg(grup)::text
    AND (sqlc.narg(status)::order_status IS NULL OR o.status = sqlc.narg(status)::order_status)
    AND (sqlc.narg(verif_status)::verif_status IS NULL OR o.verif_status = sqlc.narg(verif_status)::verif_status)
    AND (sqlc.narg(is_cnc)::bool IS NULL OR o.is_cnc = sqlc.narg(is_cnc)::bool)
-   AND (sqlc.narg(terlambat)::bool IS NULL
-        OR (sqlc.narg(terlambat)::bool AND COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false))
-        OR (NOT sqlc.narg(terlambat)::bool AND NOT COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)))
    AND (sqlc.narg(email_gagal)::bool IS NULL
         OR (sqlc.narg(email_gagal)::bool AND o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))
         OR (NOT sqlc.narg(email_gagal)::bool AND NOT (o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))))
@@ -163,14 +145,11 @@ SELECT o.id,
        o.is_cnc,
        o.is_sertifikat,
        o.tanggal,
-       o.jatuh_tempo,
        COALESCE(o.catatan, '')                                     AS catatan,
        COALESCE(o.note_admin, '')                                  AS note_admin,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
                   WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
-       COALESCE(o.is_cnc AND o.status <> 'done'
-                AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)::bool AS terlambat,
        (o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))::bool       AS email_gagal,
        o.submitted_at,
        o.done_at,

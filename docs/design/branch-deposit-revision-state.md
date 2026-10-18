@@ -996,6 +996,10 @@ Pada kedua sub-state:
 
 ### 6.3 Cash & Carry dan reminder
 
+> Amandemen 2026-10-18: Cash & Carry kini sistem deposit tanpa jatuh tempo
+> maupun reminder (`branch-deposit.md` §3.8). Bagian ini hanya berlaku untuk
+> riwayat pesanan C&C lama yang masih memiliki `jatuh_tempo`.
+
 Order C&C pada sub-state tetap belum lunas. `jatuh_tempo` tidak dihitung ulang;
 BR-08 tetap memakai tanggal order asli + `cnc_hari`.
 

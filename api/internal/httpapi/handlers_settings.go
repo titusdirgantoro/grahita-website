@@ -26,7 +26,7 @@ func (a *API) adminSettings(w http.ResponseWriter, r *http.Request) error {
 //
 // Dua bentuk diterima:
 //   - {"key":"biaya_packaging","value":4000} — satu kunci (kompatibel).
-//   - {"values":{"biaya_packaging":4000,"cnc_hari":7}} — banyak kunci sekaligus.
+//   - {"values":{"biaya_packaging":4000,"token_hari":14}} — banyak kunci sekaligus.
 type updateSettingRequest struct {
 	Key    *string                    `json:"key"`
 	Value  json.RawMessage            `json:"value"`

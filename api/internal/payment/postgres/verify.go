@@ -141,6 +141,18 @@ FROM orders WHERE id=$1`, req.OrderID).Scan(&revisionPending, &hasActiveAllocati
 			}
 			return payment.VerifyOutcome{}, fmt.Errorf("%w: pesanan memakai deposit atau revisi; kirim rincian settlement", payment.ErrBreakdownMismatch)
 		}
+		// Tidak ada lagi pesanan berutang: C&C dibayar deposit, sisanya transfer
+		// berbukti. Pesanan bernilai tanpa alokasi deposit maupun bukti (mis.
+		// alokasinya dibalik) tidak punya sumber dana untuk disetujui.
+		if !revisionPending && !hasActiveAllocation && row.Total > 0 {
+			jumlah, err := q.CountPaymentProofs(ctx, req.OrderID)
+			if err != nil {
+				return payment.VerifyOutcome{}, fmt.Errorf("query CountPaymentProofs: %w", err)
+			}
+			if jumlah == 0 {
+				return payment.VerifyOutcome{}, payment.ErrPaymentProofRequired
+			}
+		}
 	}
 	destinationResults, fingerprint, finalHasil, finalAlasan, err := r.validateDestinations(ctx, tx, req, row.BranchID)
 	if err != nil {

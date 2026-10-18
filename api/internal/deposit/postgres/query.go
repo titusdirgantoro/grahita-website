@@ -263,7 +263,9 @@ VALUES ($1,'manual',$2,$3,$4,'{}'::jsonb,$5,$6)`,
 }
 
 func (r *Repo) Overview(ctx context.Context) ([]deposit.BranchOverview, error) {
-	rows, err := r.pool.Query(ctx, `SELECT b.id, b.nama, COALESCE(a.balance,0)::bigint,
+	// Deposit milik cabang Cash & Carry; cabang lain hanya muncul selama masih
+	// bersaldo (mis. kredit lebih bayar) atau punya top-up yang tercatat.
+	rows, err := r.pool.Query(ctx, `SELECT b.id, b.nama, b.is_cnc, COALESCE(a.balance,0)::bigint,
   COALESCE(a.journal_version,0)::bigint,
   count(t.id) FILTER (WHERE t.status IN ('pending_review','needs_review'))::int,
   COALESCE(sum(t.declared_amount) FILTER (WHERE t.status IN ('pending_review','needs_review')),0)::bigint
@@ -271,8 +273,9 @@ FROM branches b
 LEFT JOIN branch_deposit_accounts a ON a.branch_id=b.id
 LEFT JOIN deposit_topups t ON t.branch_id=b.id
 WHERE b.is_active
-GROUP BY b.id, b.nama, a.balance, a.journal_version
-ORDER BY 5 DESC, b.nama`)
+GROUP BY b.id, b.nama, b.is_cnc, a.balance, a.journal_version
+HAVING b.is_cnc OR COALESCE(a.balance,0) <> 0 OR count(t.id) > 0
+ORDER BY 6 DESC, b.nama`)
 	if err != nil {
 		return nil, fmt.Errorf("ikhtisar deposit: %w", err)
 	}
@@ -280,7 +283,7 @@ ORDER BY 5 DESC, b.nama`)
 	out := []deposit.BranchOverview{}
 	for rows.Next() {
 		var o deposit.BranchOverview
-		if err := rows.Scan(&o.BranchID, &o.BranchNama, &o.AvailableBalance, &o.JournalVersion,
+		if err := rows.Scan(&o.BranchID, &o.BranchNama, &o.IsCNC, &o.AvailableBalance, &o.JournalVersion,
 			&o.PendingTopupCount, &o.PendingTopupAmount); err != nil {
 			return nil, fmt.Errorf("baca ikhtisar deposit: %w", err)
 		}
@@ -296,6 +299,16 @@ func (r *Repo) BranchNama(ctx context.Context, branchID string) (string, error) 
 		return "", deposit.ErrNotFound
 	}
 	return nama, err
+}
+
+// BranchCNC membaca flag Cash & Carry cabang.
+func (r *Repo) BranchCNC(ctx context.Context, branchID string) (bool, error) {
+	var cnc bool
+	err := r.pool.QueryRow(ctx, `SELECT is_cnc FROM branches WHERE id=$1`, branchID).Scan(&cnc)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, deposit.ErrNotFound
+	}
+	return cnc, err
 }
 
 // Reconciled membandingkan cache saldo dengan jumlah journal (D3 §10).

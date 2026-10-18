@@ -97,9 +97,9 @@ interface Panggilan {
 }
 
 /**
- * sertifikatCNC adalah pesanan Sertifikat ber-flag Cash & Carry dengan jatuh
- * tempo hasil hitungan server (tanggal submit WIB + cnc_hari) — dipakai untuk
- * memeriksa penanda C&C dan baris biaya packaging pada halaman detail.
+ * sertifikatCNC adalah pesanan Sertifikat ber-flag Cash & Carry (dibayar dari
+ * deposit) — dipakai untuk memeriksa penanda C&C dan baris biaya packaging pada
+ * halaman detail.
  */
 const sertifikatCNC = {
   id: "o3",
@@ -109,7 +109,6 @@ const sertifikatCNC = {
   is_sertifikat: true,
   nomor: "2026-10-02",
   tanggal: "2026-10-08",
-  jatuh_tempo: "2026-10-15",
   catatan: "",
   total: 3000,
   jumlah_item: 10,
@@ -150,8 +149,12 @@ function fetchPesanan(
     tundaRekeningGagalMs?: number;
     submitBankUnavailable?: boolean;
     uploadBankUnavailable?: boolean;
-    /** Flag cash_and_carry cabang sesi (F1-14: centang C&C di modal kirim). */
+    /** Flag cash_and_carry cabang sesi: pesanan dibayar dari saldo deposit. */
     cabangCNC?: boolean;
+    /** Saldo deposit cabang sesi (GET /deposit) dan versi journal-nya. */
+    saldoDeposit?: number;
+    /** submitDepositBerubah menjawab submit pertama dengan 409 DEPOSIT_CHANGED. */
+    submitDepositBerubah?: boolean;
     /**
      * tundaDaftarMs menunda balasan GET /orders. Dipakai uji regresi anggaran
      * tunggu (F1-11): rantai sesi → daftar menempuh dua putaran, jadi balasan
@@ -172,6 +175,7 @@ function fetchPesanan(
   // memaksa UI memuat ulang dan menampilkan nomor/serial.
   let setelahKirim = false;
   let jumlahRekening = 0;
+  let depositBerubah = opsi.submitDepositBerubah ?? false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -185,6 +189,17 @@ function fetchPesanan(
           return json({ error: { code: "UNAVAILABLE", message: "Rekening terbaru gagal dimuat." } }, 503);
         }
         return json({ data: rekening });
+      }
+      if (input.endsWith("/deposit")) {
+        return json({
+          data: {
+            branch_id: "b1",
+            available_balance: opsi.saldoDeposit ?? 0,
+            journal_version: 7,
+            pending_topup_count: 0,
+            pending_topup_amount_declared: 0,
+          },
+        });
       }
       if (input.endsWith("/me/branch")) {
         return json({
@@ -213,6 +228,10 @@ function fetchPesanan(
       if (input.endsWith("/orders/o1/submit") && init?.method === "POST") {
         if (opsi.submitBankUnavailable) {
           return json({ error: { code: "BRANCH_BANK_ACCOUNT_UNAVAILABLE", message: "Rekening tujuan berubah." } }, 409);
+        }
+        if (depositBerubah) {
+          depositBerubah = false;
+          return json({ error: { code: "DEPOSIT_CHANGED", message: "Saldo deposit berubah sejak ditampilkan." } }, 409);
         }
         setelahKirim = true;
         return json({ data: terkirim });
@@ -461,17 +480,16 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
 });
 
 describe("Customer Portal — Sertifikat & Cash and Carry (F1-12)", () => {
-  it("menandai C&C, menampilkan jatuh tempo, dan mengunci baris packaging di detail", async () => {
+  it("menandai C&C tanpa jatuh tempo dan mengunci baris packaging di detail", async () => {
     fetchPesanan({ detail: sertifikatCNC });
 
     render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
 
     expect(await screen.findByRole("heading", { name: "2026-10-02" })).toBeDefined();
-    // Penanda C&C (PRD CP-CNC-03) dan jatuh tempo hasil hitungan server.
+    // Penanda C&C (PRD CP-CNC-03); C&C dibayar deposit sehingga tidak berutang.
     expect(screen.getByText("Cash & Carry")).toBeDefined();
     expect(screen.getByText("Sertifikat")).toBeDefined();
-    expect(screen.getByText("Jatuh tempo C&C")).toBeDefined();
-    expect(screen.getByText("15 Okt 2026")).toBeDefined();
+    expect(screen.queryByText(/Jatuh tempo/)).toBeNull();
     // Baris biaya packaging tampil di rincian dengan harga snapshot-nya.
     expect(screen.getByText("Biaya packaging")).toBeDefined();
     expect(screen.getAllByText(/3\.000/).length).toBeGreaterThan(0);
@@ -521,8 +539,8 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
 
     expect(within(dialog).getByText(/nomor pesanan dan serial number dibuat/)).toBeDefined();
     expect(within(dialog).getByLabelText(/minimal satu berkas/)).toBeDefined();
-    // Cabang tanpa flag C&C tidak punya pilihan C&C sama sekali (CP-CNC-01).
-    expect(within(dialog).queryByRole("switch")).toBeNull();
+    // Cabang tanpa flag C&C tidak memakai deposit (CP-CNC-01).
+    expect(within(dialog).queryByTestId("rincian-bayar")).toBeNull();
   });
 
   it("menolak mengirim pesanan non-C&C tanpa bukti tanpa memanggil API", async () => {
@@ -541,7 +559,7 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
     expect(panggilan.some((p) => p.url.endsWith("/submit"))).toBe(false);
   });
 
-  it("mengirim multipart bukti + is_cnc=false lalu menampilkan nomor pesanan", async () => {
+  it("mengirim multipart bukti tanpa versi saldo deposit lalu menampilkan nomor pesanan", async () => {
     const panggilan = fetchPesanan();
 
     render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
@@ -564,7 +582,7 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
     expect(kirim?.init?.body instanceof FormData).toBe(true);
     const form = kirim?.init?.body as FormData;
     expect(form.getAll("file").length).toBe(1);
-    expect(form.get("is_cnc")).toBe("false");
+    expect(form.get("expected_journal_version")).toBeNull();
     // Content-Type tidak disetel manual supaya boundary multipart tetap sah.
     expect((kirim?.init?.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
 
@@ -576,29 +594,68 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
     expect(screen.queryByRole("button", { name: "Ubah" })).toBeNull();
   });
 
-  it("cabang C&C boleh mengirim tanpa bukti dan mengirim is_cnc=true", async () => {
-    const panggilan = fetchPesanan({ cabangCNC: true });
+  it("cabang C&C bersaldo cukup dibayar penuh dari deposit tanpa bukti", async () => {
+    const panggilan = fetchPesanan({ cabangCNC: true, saldoDeposit: 500000 });
 
     render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
     await screen.findByRole("heading", { name: "Draft" });
     fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
     const dialog = await screen.findByRole("dialog");
 
-    // Flag C&C cabang dibaca dari server; centangnya muncul karena itu.
-    const saklar = await within(dialog).findByRole("switch", { name: "Cash & Carry" });
-    expect(within(dialog).getByLabelText(/minimal satu berkas/)).toBeDefined();
-
-    fireEvent.click(saklar);
-    expect(within(dialog).getByLabelText(/opsional untuk Cash & Carry/)).toBeDefined();
+    // Rincian: total 300.000 seluruhnya dari deposit, sisa transfer nol.
+    const rincian = await within(dialog).findByTestId("rincian-bayar");
+    expect(within(rincian).getByTestId("sisa-transfer").textContent).toMatch(/Rp\s?0$/);
+    expect(within(dialog).queryByLabelText(/Bukti transfer/)).toBeNull();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
     await waitFor(() => {
       expect(panggilan.some((p) => p.url.endsWith("/orders/o1/submit"))).toBe(true);
     });
-    const kirim = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"));
-    const form = kirim?.init?.body as FormData;
-    expect(form.get("is_cnc")).toBe("true");
+    const form = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"))?.init?.body as FormData;
+    // Versi saldo yang ditampilkan ikut terkirim supaya potongan tidak berubah diam-diam.
+    expect(form.get("expected_journal_version")).toBe("7");
     expect(form.getAll("file").length).toBe(0);
+  });
+
+  it("cabang C&C bersaldo kurang wajib mengunggah bukti untuk sisanya", async () => {
+    const panggilan = fetchPesanan({ cabangCNC: true, saldoDeposit: 50000 });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    const rincian = await within(dialog).findByTestId("rincian-bayar");
+    expect(within(rincian).getByTestId("sisa-transfer").textContent).toMatch(/250\.000/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+    expect(await within(dialog).findByText(/Unggah bukti transfer untuk sisanya/)).toBeDefined();
+    expect(panggilan.some((p) => p.url.endsWith("/submit"))).toBe(false);
+
+    const berkas = new File(["data"], "transfer.jpg", { type: "image/jpeg" });
+    fireEvent.change(within(dialog).getByLabelText(/Bukti transfer sisa pembayaran/), { target: { files: [berkas] } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+    await waitFor(() => {
+      expect(panggilan.some((p) => p.url.endsWith("/orders/o1/submit"))).toBe(true);
+    });
+    const form = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"))?.init?.body as FormData;
+    expect(form.getAll("file").length).toBe(1);
+    expect(form.get("expected_journal_version")).toBe("7");
+  });
+
+  it("saldo yang berubah saat dikirim memuat ulang saldo dan menjelaskan alasannya", async () => {
+    const panggilan = fetchPesanan({ cabangCNC: true, saldoDeposit: 500000, submitDepositBerubah: true });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByTestId("rincian-bayar");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+    expect(await within(dialog).findByText(/Saldo deposit berubah sejak ditampilkan/)).toBeDefined();
+    await waitFor(() => {
+      expect(panggilan.filter((p) => p.url.endsWith("/deposit")).length).toBeGreaterThanOrEqual(2);
+    });
   });
 });
 

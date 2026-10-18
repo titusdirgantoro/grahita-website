@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   Link,
   Outlet,
@@ -12,7 +12,8 @@ import {
 import { CustomerShell, SkeletonList, type ShellLinkProps } from "@grahita/ui";
 
 import { SessionProvider, useSesi } from "./session";
-import { NAV_CUSTOMER } from "./nav";
+import { navCabang } from "./nav";
+import { useApi } from "./useApi";
 import { HalamanDaftar, HalamanLupa, HalamanMasuk } from "./pages/auth";
 import { KatalogPage, ProfilPage } from "./pages/shell-pages";
 import { BerandaPage } from "./pages/beranda";
@@ -43,6 +44,9 @@ function ShellLayout() {
   const { status, pengguna } = useSesi();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Menu Deposit hanya untuk cabang Cash & Carry; flag dibaca dari server.
+  const { data: cabang } = useApi<{ is_cnc: boolean }>("/me/branch", !!pengguna);
+  const nav = useMemo(() => navCabang(cabang?.is_cnc === true), [cabang]);
 
   useEffect(() => {
     if (status === "belum") void navigate({ to: "/masuk", replace: true });
@@ -59,7 +63,7 @@ function ShellLayout() {
 
   return (
     <CustomerShell
-      nav={NAV_CUSTOMER}
+      nav={nav}
       active={pathname}
       account={{ nama: pengguna.nama, email: pengguna.email }}
       Link={RouterLink}

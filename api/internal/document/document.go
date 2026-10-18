@@ -183,7 +183,6 @@ type InvoiceRow struct {
 	Status     string `json:"status"`
 	Versi      int    `json:"versi"`
 	IsCNC      bool   `json:"is_cnc"`
-	JatuhTempo string `json:"jatuh_tempo,omitempty"`
 	Total      int64  `json:"total"`
 	JumlahItem int64  `json:"jumlah_item"`
 	// DokumenID adalah dokumen invoice versi baris ini; kosong bila belum ada.
@@ -240,11 +239,10 @@ type Order struct {
 	Catatan      string
 	// Tanggal adalah tanggal bisnis (WIB) dari kolom `date`; hanya ada setelah
 	// submit (BR-04).
-	Tanggal    time.Time
-	JatuhTempo *time.Time
-	Cabang     Cabang
-	Lines      []Line
-	Rekening   []Rekening
+	Tanggal  time.Time
+	Cabang   Cabang
+	Lines    []Line
+	Rekening []Rekening
 }
 
 // SaveRequest adalah satu unit kerja penyimpanan metadata dokumen: seluruh

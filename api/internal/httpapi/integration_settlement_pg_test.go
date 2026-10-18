@@ -82,6 +82,7 @@ func hitungSQL(t *testing.T, f *pgFixture, query string, args ...any) int64 {
 // sumber deposit tanpa debit kedua.
 func TestPGSettlementCampuranTepatTotal(t *testing.T) {
 	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
 	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-501")
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	versi := kreditCabang(t, f, cookiesA, csrfA, 300000, "c3-tepat")
@@ -152,6 +153,7 @@ ON o.done_verification_log_id=s.verification_log_id WHERE o.id=$1 AND s.amount_s
 // dan key dipakai ulang untuk keputusan lain ditolak.
 func TestPGSettlementLebihBayarHanyaSuperadmin(t *testing.T) {
 	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
 	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-502")
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	versi := kreditCabang(t, f, cookiesA, csrfA, 100000, "c3-lebih")
@@ -216,6 +218,7 @@ ON t.id=s.new_credit_transaction_id WHERE s.order_id=$1 AND t.kind='overpay_cred
 // tetap, dan hanya delta kredit kumulatif yang dijurnal.
 func TestPGSettlementRevisiTurunReversalPlanDanCarryForward(t *testing.T) {
 	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
 	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-503")
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	versi := kreditCabang(t, f, cookiesA, csrfA, 200000, "c3-rev")

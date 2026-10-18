@@ -212,7 +212,7 @@ CREATE TABLE orders (
     is_cnc         boolean NOT NULL DEFAULT false,
     is_sertifikat  boolean NOT NULL DEFAULT false,    -- diturunkan dari isi baris
     tanggal        date,                              -- tanggal submit (WIB)
-    jatuh_tempo    date,                              -- tanggal + cnc_hari, hanya C&C
+    jatuh_tempo    date,                              -- riwayat C&C lama (sebelum 2026-10-18)
     catatan        text,                              -- dari cabang
     note_admin     text,
     total          bigint NOT NULL DEFAULT 0 CHECK (total >= 0),
@@ -226,13 +226,14 @@ CREATE TABLE orders (
     CONSTRAINT draft_tanpa_nomor CHECK (
         (status = 'draft'  AND nomor IS NULL AND tanggal IS NULL) OR
         (status <> 'draft' AND nomor IS NOT NULL AND tanggal IS NOT NULL)),
-    CONSTRAINT cnc_punya_jatuh_tempo CHECK (NOT is_cnc OR status = 'draft' OR jatuh_tempo IS NOT NULL),
+    -- 0014: C&C dibayar deposit, jatuh tempo hanya riwayat pesanan C&C lama.
+    CONSTRAINT jatuh_tempo_hanya_cnc CHECK (jatuh_tempo IS NULL OR is_cnc),
     CONSTRAINT done_punya_waktu CHECK (status <> 'done' OR done_at IS NOT NULL)
 );
 CREATE INDEX orders_branch_tanggal ON orders (branch_id, tanggal DESC);
 CREATE INDEX orders_status         ON orders (status, verif_status);
 CREATE INDEX orders_tanggal        ON orders (tanggal DESC);
-CREATE INDEX orders_cnc_jatuh_tempo ON orders (jatuh_tempo)
+CREATE INDEX orders_cnc_jatuh_tempo ON orders (jatuh_tempo)   -- sisa reminder lama
        WHERE is_cnc AND status <> 'done';
 CREATE INDEX orders_nomor_trgm     ON orders USING gin (nomor gin_trgm_ops);
 
@@ -365,6 +366,8 @@ CREATE INDEX email_outbox_pending ON email_outbox (next_try_at)
        WHERE status IN ('queued','sending');
 CREATE INDEX email_outbox_failed  ON email_outbox (created_at DESC) WHERE status = 'failed';
 
+-- Riwayat pengingat jatuh tempo C&C lama; tidak ada penulis baru sejak C&C
+-- dibayar dari deposit (2026-10-18).
 CREATE TABLE cnc_reminders (
     order_id   uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     tahap      text NOT NULL,                         -- 'h-2','h-0','h+1','h+3'
@@ -417,7 +420,6 @@ CREATE TABLE backup_runs (
 ```sql
 INSERT INTO settings (key, value) VALUES
   ('biaya_packaging',      '3000'),
-  ('cnc_hari',             '7'),
   ('token_hari',           '14'),
   ('reset_menit',          '60'),
   ('max_mb',               '5'),
@@ -492,7 +494,6 @@ ORDER BY p.urutan, p.nama;
 SELECT
   count(*) FILTER (WHERE status='submitted' AND verif_status='belum')                      AS menunggu,
   count(*) FILTER (WHERE verif_status='perlu_review')                                      AS review,
-  count(*) FILTER (WHERE is_cnc AND status<>'done' AND jatuh_tempo < current_date)         AS lewat,
   (SELECT count(*) FROM email_outbox WHERE status='failed')                                AS email_gagal
 FROM orders
 WHERE ($1::uuid IS NULL OR branch_id = $1);

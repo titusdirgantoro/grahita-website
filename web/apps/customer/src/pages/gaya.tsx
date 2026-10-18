@@ -72,7 +72,7 @@ export function GayaPage() {
               Menunggu verifikasi
             </Chip>
             <Chip pressed={false} onToggle={() => undefined} onRemove={() => undefined}>
-              C&amp;C lewat jatuh tempo
+              Email gagal
             </Chip>
             <Switch checked={switchAktif} onChange={setSwitchAktif} label="Contoh switch" />
           </div>
@@ -166,7 +166,7 @@ export function GayaPage() {
           <CardHead title="Notifikasi" />
           <div style={{ display: "grid", gap: 8 }}>
             <Notice tone="info">Informasi umum untuk cabang.</Notice>
-            <Notice tone="warning">Perhatian: pesanan C&amp;C mendekati jatuh tempo.</Notice>
+            <Notice tone="warning">Perhatian: saldo deposit belum menutup seluruh pesanan.</Notice>
             <Notice tone="success">Pembayaran terverifikasi, invoice siap diunduh.</Notice>
             <Notice tone="danger">Bukti transfer tidak terbaca, mohon unggah ulang.</Notice>
           </div>

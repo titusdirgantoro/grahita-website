@@ -53,24 +53,14 @@ func FormatAngka(n int64) string {
 // FormatRupiah menampilkan nilai uang lengkap dengan awalan "Rp".
 func FormatRupiah(n int64) string { return "Rp " + FormatAngka(n) }
 
-func formatTanggalOpsional(t *time.Time) string {
-	if t == nil || t.IsZero() {
-		return ""
-	}
-	return FormatTanggal(*t)
-}
-
-// penandaPembayaran menentukan penanda LUNAS / Cash & Carry pada invoice
-// (PRD §6.1). C&C memakai tenggat pembayarannya; pesanan lain dianggap lunas
-// karena invoice baru lahir saat pesanan selesai.
+// penandaPembayaran menentukan penanda pembayaran invoice (PRD §6.1). Invoice
+// baru lahir saat pesanan selesai diverifikasi, jadi semuanya LUNAS; pesanan
+// Cash & Carry (dibayar dari deposit cabang) diberi keterangan tambahan.
 func penandaPembayaran(o Order) string {
-	if !o.IsCNC {
-		return "LUNAS"
+	if o.IsCNC {
+		return "LUNAS — CASH & CARRY"
 	}
-	if jt := formatTanggalOpsional(o.JatuhTempo); jt != "" {
-		return "CASH & CARRY — jatuh tempo " + jt
-	}
-	return "CASH & CARRY"
+	return "LUNAS"
 }
 
 // lineView adalah satu baris tabel dokumen yang sudah diformat.

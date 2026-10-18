@@ -64,26 +64,13 @@ func TestInvoiceHTMLVersiDanPenanda(t *testing.T) {
 	if !strings.Contains(html, "Revisi v2") {
 		t.Error("invoice revisi harus menyebut versinya")
 	}
-	if !strings.Contains(html, "CASH &amp; CARRY — jatuh tempo 15 Oktober 2026") {
-		t.Errorf("penanda C&C salah: %s", cuplikan(html, "CASH", 120))
+	// Invoice hanya terbit untuk pesanan yang sudah diverifikasi lunas; C&C
+	// (dibayar dari deposit) tetap LUNAS dengan keterangan Cash & Carry.
+	if !strings.Contains(html, "LUNAS — CASH &amp; CARRY") {
+		t.Errorf("penanda C&C salah: %s", cuplikan(html, "LUNAS", 120))
 	}
-	if strings.Contains(html, ">LUNAS<") {
-		t.Error("pesanan C&C tidak boleh ditandai LUNAS")
-	}
-}
-
-// TestInvoiceTanpaJatuhTempoTetapCNC menjaga pesanan C&C tanpa jatuh tempo
-// tidak mencetak tanggal kosong.
-func TestInvoiceTanpaJatuhTempoTetapCNC(t *testing.T) {
-	o := fixtureOrder("o1")
-	o.IsCNC = true
-	o.JatuhTempo = nil
-	b, err := invoiceHTML(o)
-	if err != nil {
-		t.Fatalf("invoiceHTML: %v", err)
-	}
-	if !strings.Contains(string(b), "CASH &amp; CARRY") {
-		t.Error("penanda C&C harus tetap tercetak")
+	if strings.Contains(html, "jatuh tempo") {
+		t.Error("invoice C&C tidak lagi memuat jatuh tempo")
 	}
 }
 

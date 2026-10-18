@@ -21,7 +21,6 @@ import (
 	"github.com/grahita/portal/api/internal/fulfillment"
 	"github.com/grahita/portal/api/internal/notification"
 	"github.com/grahita/portal/api/internal/payment"
-	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/jobs"
@@ -29,7 +28,7 @@ import (
 )
 
 // PingArgs adalah job contoh yang dipakai untuk memverifikasi rantai
-// enqueue → work berjalan. Job bisnis (email, PDF, OCR, reminder) menyusul di
+// enqueue → work berjalan. Job bisnis (email, PDF, OCR) menyusul di
 // domain masing-masing dengan pola yang sama.
 type PingArgs struct {
 	Pesan string `json:"pesan"`
@@ -257,39 +256,6 @@ func (w *RevisiInvoiceWorker) Work(ctx context.Context, job *river.Job[jobs.Revi
 	return nil
 }
 
-// ReminderCNCWorker menjalankan job "reminder_cnc": memeriksa pesanan C&C yang
-// belum Done lalu mengantre email pengingat pada H-2, H-0, H+1, dan H+3 relatif
-// jatuh tempo (F2-23, SystemDesign.md §4.6, PRD CP-CNC-05).
-//
-// Seluruh keadaan ada di tabel cnc_reminders + email_outbox, jadi job yang
-// terlewat/tergandakan tidak pernah menggandakan email: tahap yang sudah
-// tercatat dilewati begitu saja. Kegagalan satu kandidat tidak dikembalikan
-// sebagai error job (pekerjaan terlewat, bukan gagal total).
-type ReminderCNCWorker struct {
-	river.WorkerDefaults[jobs.ReminderCNCArgs]
-	notif *notification.Service
-}
-
-// NewReminderCNCWorker membuat worker pengingat C&C.
-func NewReminderCNCWorker(notif *notification.Service) *ReminderCNCWorker {
-	return &ReminderCNCWorker{notif: notif}
-}
-
-// Kind adalah Kind job di tabel River.
-func (ReminderCNCWorker) Kind() string { return jobs.KindReminderCNC }
-
-// Work menjalankan satu pemeriksaan pengingat C&C.
-func (w *ReminderCNCWorker) Work(ctx context.Context, job *river.Job[jobs.ReminderCNCArgs]) error {
-	if w.notif == nil {
-		return nil
-	}
-	hasil, err := w.notif.JalankanReminderCNC(ctx)
-	slog.InfoContext(ctx, "pemeriksaan pengingat C&C",
-		"diperiksa", hasil.Diperiksa, "diantre", hasil.Diantre,
-		"dilewati", hasil.Dilewati, "gagal", hasil.Gagal)
-	return err
-}
-
 // PembacaBuktiAI membaca seluruh bukti satu pesanan lalu memutuskan
 // verifikasinya secara otomatis (payment.OCRService, kartu F2-26).
 type PembacaBuktiAI interface {
@@ -352,28 +318,6 @@ func hasilVerifikasi(h payment.OCRHasil) string {
 		return ""
 	}
 	return h.Keputusan.Hasil + ":" + h.Keputusan.Alasan
-}
-
-// JadwalHarianWIB memicu pekerjaan setiap hari pada jam:menit WIB — jadwal
-// pengingat C&C 07:00 Asia/Jakarta (SystemDesign.md §4.6).
-//
-// Waktu dikembalikan dalam UTC karena River membandingkan waktu absolut; jam
-// dinding dihitung pada zona bisnis Asia/Jakarta supaya pemicunya tetap 07:00
-// WIB walau jam server memakai UTC atau zona lain. Jakarta tidak punya DST,
-// jadi jadwal tidak pernah bergeser satu jam.
-type JadwalHarianWIB struct {
-	Jam   int
-	Menit int
-}
-
-// Next mengembalikan pemicu berikutnya setelah `current`.
-func (j JadwalHarianWIB) Next(current time.Time) time.Time {
-	now := current.In(clock.Jakarta())
-	berikut := time.Date(now.Year(), now.Month(), now.Day(), j.Jam, j.Menit, 0, 0, clock.Jakarta())
-	if !berikut.After(now) {
-		berikut = berikut.AddDate(0, 0, 1)
-	}
-	return berikut.UTC()
 }
 
 // Client membungkus River client beserta pool-nya.
@@ -466,7 +410,6 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 	river.AddWorker(workers, &PingWorker{})
 	if notif != nil {
 		river.AddWorker(workers, &EmailScanWorker{notif: notif})
-		river.AddWorker(workers, NewReminderCNCWorker(notif))
 	}
 	if bk != nil {
 		river.AddWorker(workers, &BackupWorker{svc: bk})
@@ -511,20 +454,6 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 			&river.PeriodicJobOpts{ID: "email-outbox", RunOnStart: true},
 		))
 
-		// Pengingat C&C terjadwal 07:00 Asia/Jakarta (F2-23,
-		// SystemDesign.md §4.6). RunOnStart dipasang sebagai jaring pengaman
-		// bila proses sempat mati melewati jam 07:00; pemindaian bersifat
-		// idempoten (PRIMARY KEY cnc_reminders), jadi pemicu tambahan tidak
-		// pernah menggandakan email.
-		jamCNC := cfg.ReminderJamWIB
-		if jamCNC < 0 || jamCNC > 23 {
-			jamCNC = 7
-		}
-		periodic = append(periodic, river.NewPeriodicJob(
-			JadwalHarianWIB{Jam: jamCNC, Menit: 0},
-			func() (river.JobArgs, *river.InsertOpts) { return jobs.ReminderCNCArgs{}, nil },
-			&river.PeriodicJobOpts{ID: "reminder-cnc", RunOnStart: true},
-		))
 	}
 	if bk != nil {
 		interval := cfg.BackupInterval

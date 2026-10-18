@@ -118,6 +118,17 @@ func kreditCabang(t *testing.T, f *pgFixture, branchCookies []*http.Cookie, bran
 	return num(dataObj(body)["balance"].(map[string]any)["journal_version"])
 }
 
+// jadikanCNC menandai cabang sebagai Cash & Carry: hanya cabang ini yang
+// memakai deposit (top-up dan pembayaran pesanan dari saldo).
+func jadikanCNC(t *testing.T, f *pgFixture, branchIDs ...string) {
+	t.Helper()
+	for _, id := range branchIDs {
+		if _, err := f.pool.Exec(context.Background(), `UPDATE branches SET is_cnc = true WHERE id = $1`, id); err != nil {
+			t.Fatalf("tandai cabang C&C: %v", err)
+		}
+	}
+}
+
 func insertOrderSubmitted(t *testing.T, f *pgFixture, branchID, nomor string, total int64) string {
 	t.Helper()
 	var id string
@@ -138,7 +149,14 @@ func TestPGDepositTopupPendingTidakMenambahSaldo(t *testing.T) {
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	isi := berkasJPEGUji("topup-a-1")
 
-	status, body := topupHTTP(t, f, cookiesA, csrfA, "", f.bankDefault, 150000, isi)
+	// Deposit milik cabang Cash & Carry: cabang lain tidak bisa top-up.
+	status, body := topupHTTP(t, f, cookiesA, csrfA, "k-0", f.bankDefault, 150000, berkasJPEGUji("topup-a-0"))
+	if status != http.StatusForbidden || errCode(body) != "DEPOSIT_CNC_ONLY" {
+		t.Fatalf("top-up cabang non-C&C harus 403 DEPOSIT_CNC_ONLY, dapat %d (%v)", status, body)
+	}
+	jadikanCNC(t, f, f.branchA)
+
+	status, body = topupHTTP(t, f, cookiesA, csrfA, "", f.bankDefault, 150000, isi)
 	if status != http.StatusBadRequest {
 		t.Fatalf("tanpa Idempotency-Key harus 400, dapat %d (%v)", status, body)
 	}
@@ -186,6 +204,7 @@ func TestPGDepositTopupPendingTidakMenambahSaldo(t *testing.T) {
 // dan keputusan kedua ditolak.
 func TestPGDepositKreditHanyaSuperadmin(t *testing.T) {
 	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	status, body := topupHTTP(t, f, cookiesA, csrfA, "k-1", f.bankDefault, 200000, berkasJPEGUji("kredit-1"))
 	if status != http.StatusCreated {
@@ -244,6 +263,7 @@ func TestPGDepositKreditHanyaSuperadmin(t *testing.T) {
 // ditolak; saldo kurang ditolak tanpa pengurangan diam-diam.
 func TestPGDepositAlokasiParalelDanIsolasi(t *testing.T) {
 	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	versi := kreditCabang(t, f, cookiesA, csrfA, 100000, "a")
 
@@ -315,6 +335,7 @@ func TestPGDepositAlokasiParalelDanIsolasi(t *testing.T) {
 // bertahap, tidak melebihi bagian aktif, dan ditolak untuk order Done.
 func TestPGDepositReversalAdmin(t *testing.T) {
 	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	versi := kreditCabang(t, f, cookiesA, csrfA, 100000, "rev")
 	orderID := insertOrderSubmitted(t, f, f.branchA, "2026-10-3001", 90000)

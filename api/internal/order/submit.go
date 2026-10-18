@@ -3,6 +3,7 @@ package order
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,13 +21,14 @@ import (
 // Pembagian tanggung jawab:
 //
 //   - lapisan ini menegakkan aturan yang bisa diputuskan tanpa database
-//     (siapa aktornya, C&C sah atau tidak, tanggal bisnis WIB, tenggat,
+//     (siapa aktornya, apakah cabangnya Cash & Carry, tanggal bisnis WIB,
 //     bentuk snapshot final baris) dan membaca setelan server (biaya
-//     packaging, cnc_hari, digit_invoice);
+//     packaging, digit_invoice);
 //   - repository Submit menjalankan SATU transaksi yang mengunci baris
 //     pesanan, membaca ULANG harga cabang dan keadaan produk dari master
 //     (BR-05), mengambil nomor invoice/serial dari tabel counter, menulis
-//     snapshot + serial + status + tanggal + tenggat + total + timeline.
+//     snapshot + serial + status + tanggal + total + timeline, dan untuk
+//     cabang C&C mendebit saldo deposit pada transaksi yang sama.
 //
 // Semua keputusan uang/penomoran karena itu diambil di dalam transaksi:
 // nomor tidak pernah terbuang saat rollback, urutan nomor tidak bolong, dan
@@ -36,20 +38,43 @@ import (
 // (PRD CP-ORD-08, SystemDesign §4.2).
 const TeksEventSubmit = "Pesanan dikirim oleh cabang"
 
-// ErrProofRequired dikembalikan bila pesanan BUKAN Cash & Carry dikirim tanpa
-// satu pun bukti transfer (PRD CP-ORD-04: submit non-C&C wajib ≥1 bukti).
+// TeksEventDeposit adalah kalimat timeline saat submit Cash & Carry mendebit
+// saldo deposit cabang.
+func TeksEventDeposit(potong int64) string {
+	return "Dibayar dari saldo deposit Rp " + ribuan(potong)
+}
+
+// ribuan menulis bilangan bulat dengan pemisah ribuan titik ("150.000").
+func ribuan(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	if n < 0 {
+		return "-" + ribuan(-n)
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "." + s[i:]
+	}
+	return s
+}
+
+// ErrProofRequired dikembalikan bila bagian pesanan yang dibayar transfer
+// dikirim tanpa satu pun bukti: seluruh pesanan non-C&C, atau sisa pesanan C&C
+// yang tidak tertutup saldo deposit (PRD CP-ORD-04, CP-CNC-02).
 var ErrProofRequired = fmt.Errorf("%w: pesanan wajib disertai minimal satu bukti transfer", ErrInvalidData)
 
-// SubmitInput adalah pilihan yang datang dari klien saat submit. Hanya penanda
-// C&C yang diterima; harga, biaya, dan total TIDAK pernah dari klien
-// (SystemDesign §3, BR-10).
+// SubmitInput adalah pilihan yang datang dari klien saat submit. Harga, biaya,
+// total, dan status Cash & Carry TIDAK pernah dari klien (SystemDesign §3,
+// BR-10).
 type SubmitInput struct {
-	IsCNC bool
+	// ExpectedJournalVersion adalah versi saldo deposit yang dilihat cabang
+	// C&C saat menekan Kirim (GET /deposit); wajib untuk cabang C&C dan
+	// diabaikan untuk cabang lain. Bila saldo sudah berubah, submit ditolak
+	// ErrDepositChanged.
+	ExpectedJournalVersion *int64
 }
 
 // BranchFlags membaca flag `cash_and_carry` cabang. Implementasinya adalah
 // branch.Service; nilainya dibaca SERVER dari master cabang sehingga cabang
-// tanpa flag tidak bisa memalsukan C&C (PRD CP-CNC-01, CP-CNC-02).
+// tidak bisa memilih sendiri jalur pembayaran deposit (PRD CP-CNC-01).
 type BranchFlags interface {
 	IsCNC(ctx context.Context, branchID string) (bool, error)
 }
@@ -73,9 +98,9 @@ type AISettingsSource interface {
 // submit tidak pernah menitipkan pekerjaan pembacaan bukti.
 func WithAISettings(a AISettingsSource) Option { return func(s *Service) { s.ai = a } }
 
-// WithBranchFlags memasang sumber flag cabang (C&C). Tanpa ini, permintaan
-// C&C SELALU ditolak (fail closed): flag yang tidak bisa diverifikasi tidak
-// boleh dianggap benar.
+// WithBranchFlags memasang sumber flag cabang (C&C). Tanpa ini, setiap
+// cabang diperlakukan non-C&C (wajib bukti transfer): flag yang tidak bisa
+// diverifikasi tidak boleh membuka jalur deposit.
 func WithBranchFlags(f BranchFlags) Option { return func(s *Service) { s.flags = f } }
 
 func WithPaymentAccounts(b PaymentAccountSource) Option { return func(s *Service) { s.banks = b } }
@@ -89,20 +114,23 @@ func WithClock(c clock.Clock) Option {
 	}
 }
 
-// SubmitRequest adalah seluruh masukan transaksi submit. Tanggal dan JatuhTempo
-// dihitung service dari waktu submit (WIB) supaya perilaku dekat tengah malam
-// dapat diuji deterministik; harga, serial, dan nomor dihitung repository di
-// dalam transaksi.
+// SubmitRequest adalah seluruh masukan transaksi submit. Tanggal dihitung
+// service dari waktu submit (WIB) supaya perilaku dekat tengah malam dapat diuji
+// deterministik; harga, serial, nomor, dan potongan deposit dihitung repository
+// di dalam transaksi.
 type SubmitRequest struct {
 	ID       string
 	BranchID string
 	// ActorID adalah akun cabang pelaku submit (dicatat di timeline).
 	ActorID string
-	IsCNC   bool
+	// IsCNC adalah flag cabang yang dibaca server: pesanan dibayar dari saldo
+	// deposit sebanyak PotonganDeposit (CP-CNC-02).
+	IsCNC bool
+	// ExpectedJournalVersion adalah versi saldo deposit yang dilihat cabang;
+	// hanya berarti bila IsCNC.
+	ExpectedJournalVersion int64
 	// Tanggal adalah tanggal bisnis submit (tengah malam WIB, BR-04/BR-11).
 	Tanggal time.Time
-	// JatuhTempo hanya terisi bila IsCNC (CP-CNC-04); zero berarti NULL.
-	JatuhTempo time.Time
 	// BiayaPackaging adalah snapshot setelan `biaya_packaging` saat submit,
 	// dipakai menyegarkan baris packaging pesanan Sertifikat (CP-SER-02/05).
 	BiayaPackaging int64
@@ -242,13 +270,15 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 // Aturan yang diputuskan di sini:
 //
 //   - hanya akun cabang pemilik pesanan (branch_id SESI) yang boleh submit;
-//   - C&C hanya sah bila cabang SESI benar-benar berflag cash_and_carry
-//     (ValidateCNC); tanpa sumber flag, C&C ditolak;
-//   - pesanan non-C&C wajib punya minimal satu bukti transfer, diperiksa
-//     repository DI DALAM transaksi submit (bukan di sini) supaya tidak ada
-//     celah balapan antara pembacaan bukti dan penguncian pesanan;
-//   - tanggal pesanan = tanggal submit WIB dan tenggat C&C = tanggal + cnc_hari
-//     (BR-04, BR-08, CP-CNC-04), dihitung dari clock yang disuntikkan.
+//   - pesanan cabang berflag cash_and_carry (dibaca server; tanpa sumber flag
+//     dianggap non-C&C) dibayar dari saldo deposit DI DALAM transaksi submit,
+//     dan cabang wajib menyebut versi saldo deposit yang ia lihat;
+//   - bagian yang dibayar transfer (seluruh pesanan non-C&C, atau sisa C&C
+//     setelah deposit) wajib punya minimal satu bukti, diperiksa repository
+//     DI DALAM transaksi submit supaya tidak ada celah balapan antara
+//     pembacaan bukti/saldo dan penguncian pesanan;
+//   - tanggal pesanan = tanggal submit WIB (BR-04), dihitung dari clock yang
+//     disuntikkan.
 //
 // Submit ulang pada pesanan yang sudah Submitted/Done dijawab ErrLocked → 409
 // ORDER_LOCKED; tidak ada pembatalan pesanan Submitted.
@@ -263,7 +293,7 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 	}
 
 	// Flag cabang dibaca server (bukan dari klien); bila sumbernya tidak
-	// tersedia, C&C ditolak alih-alih dipercaya (fail closed).
+	// tersedia, cabang diperlakukan non-C&C (fail closed: wajib bukti).
 	var cabangCNC bool
 	if s.flags != nil {
 		cabangCNC, err = s.flags.IsCNC(ctx, branchID)
@@ -271,10 +301,17 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 			return Order{}, fmt.Errorf("baca flag Cash & Carry cabang: %w", err)
 		}
 	}
-	if err := ValidateCNC(cabangCNC, in.IsCNC); err != nil {
-		return Order{}, err
+	var expectedJournal int64
+	if cabangCNC {
+		if in.ExpectedJournalVersion == nil || *in.ExpectedJournalVersion < 0 {
+			return Order{}, ErrDepositVersionRequired
+		}
+		expectedJournal = *in.ExpectedJournalVersion
 	}
-	if !in.IsCNC && s.banks != nil {
+	// Pra-cek rekening hanya untuk cabang non-C&C. Pesanan C&C baru butuh
+	// rekening bila deposit tidak menutup totalnya; itu diputuskan repository
+	// setelah total final diketahui.
+	if !cabangCNC && s.banks != nil {
 		available, err := s.banks.PaymentAvailable(ctx, branchID)
 		if err != nil {
 			return Order{}, fmt.Errorf("baca rekening pembayaran cabang: %w", err)
@@ -303,13 +340,14 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 
 	tanggal := TanggalWIB(s.clk.Now())
 	req := SubmitRequest{
-		ID:             id,
-		BranchID:       branchID,
-		ActorID:        actor.UserID,
-		IsCNC:          in.IsCNC,
-		Tanggal:        tanggal,
-		BiayaPackaging: biaya,
-		DigitInvoice:   int(digit),
+		ID:                     id,
+		BranchID:               branchID,
+		ActorID:                actor.UserID,
+		IsCNC:                  cabangCNC,
+		ExpectedJournalVersion: expectedJournal,
+		Tanggal:                tanggal,
+		BiayaPackaging:         biaya,
+		DigitInvoice:           int(digit),
 	}
 
 	// Setelan AI dibaca pada saat submit: pesanan yang dikirim dengan AI
@@ -322,16 +360,5 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 		}
 		req.EnqueueOCR = ai.Aktif
 	}
-	if in.IsCNC {
-		cncHari, err := s.cfg.Int(ctx, settings.CNCHari)
-		if err != nil {
-			return Order{}, fmt.Errorf("baca setelan %s: %w", settings.CNCHari, err)
-		}
-		if cncHari < 0 {
-			return Order{}, fmt.Errorf("%w: cnc_hari tidak valid", ErrInvalidData)
-		}
-		req.JatuhTempo = JatuhTempo(tanggal, int(cncHari))
-	}
-
 	return s.repo.Submit(ctx, req)
 }

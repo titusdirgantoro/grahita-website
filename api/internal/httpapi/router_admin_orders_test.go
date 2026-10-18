@@ -161,7 +161,7 @@ func TestAdminRiwayatOtorisasiDanFilter(t *testing.T) {
 
 	// Filter lengkap diteruskan ke domain (bukan diabaikan handler).
 	cari := as.srv.URL + "/api/v1/admin/orders?cari=bio&cabang=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" +
-		"&status=submitted&verif=belum&cnc=true&terlambat=true&email_gagal=true" +
+		"&status=submitted&verif=belum&cnc=true&email_gagal=true" +
 		"&dari=2026-10-01&sampai=2026-10-31&grup=bulan&halaman=2&per_halaman=10"
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, cari, "", ac, csrf)
 	if status != http.StatusOK {
@@ -171,7 +171,7 @@ func TestAdminRiwayatOtorisasiDanFilter(t *testing.T) {
 	if q.Cari != "bio" || q.Status != "submitted" || q.VerifStatus != "belum" || q.Grup != "bulan" {
 		t.Fatalf("filter teks/status salah: %+v", q)
 	}
-	if q.IsCNC == nil || !*q.IsCNC || q.Terlambat == nil || !*q.Terlambat || q.EmailGagal == nil || !*q.EmailGagal {
+	if q.IsCNC == nil || !*q.IsCNC || q.EmailGagal == nil || !*q.EmailGagal {
 		t.Fatalf("filter boolean tidak diteruskan: %+v", q)
 	}
 	if q.Limit != 10 || q.Offset != 10 {

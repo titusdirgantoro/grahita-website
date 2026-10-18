@@ -44,7 +44,6 @@ var (
 // supaya tidak ada penulisan kunci yang salah ketik.
 const (
 	BiayaPackaging     = "biaya_packaging"
-	CNCHari            = "cnc_hari"
 	TokenHari          = "token_hari"
 	ResetMenit         = "reset_menit"
 	MaxMB              = "max_mb"
@@ -139,8 +138,8 @@ func (s *Service) Get(ctx context.Context, key string) (json.RawMessage, error) 
 // pengaturan: nilai tersimpan bila ada, selain itu nilai bawaannya.
 //
 // Dipakai domain lain yang butuh setelan operasional tanpa permukaan HTTP
-// pengaturan — mis. domain pesanan mengambil `biaya_packaging` dan `cnc_hari`
-// untuk snapshot order line (PRD CP-SER-02/CP-CNC-04). Pembacaan ini TIDAK
+// pengaturan — mis. domain pesanan mengambil `biaya_packaging` dan
+// `digit_invoice` untuk snapshot submit (PRD CP-SER-02, BR-03). Pembacaan ini TIDAK
 // membuka akses tulis: pengaturan tetap hanya bisa diubah Superadmin
 // (PRD §2.1) dan tidak ada endpoint lintas-role (keputusan kartu F1-09).
 func (s *Service) Int(ctx context.Context, key string) (int64, error) {
@@ -441,7 +440,6 @@ type keySpec struct {
 // salah (negatif, nol, atau tidak masuk akal) — "validasi rentang nilai".
 var specs = map[string]keySpec{
 	BiayaPackaging:     {kind: kindInt, min: 0, max: 100_000_000, defaultRaw: "3000"},
-	CNCHari:            {kind: kindInt, min: 1, max: 3650, defaultRaw: "7"},
 	TokenHari:          {kind: kindInt, min: 1, max: 3650, defaultRaw: "14"},
 	ResetMenit:         {kind: kindInt, min: 1, max: 43200, defaultRaw: "60"},
 	MaxMB:              {kind: kindInt, min: 1, max: 1024, defaultRaw: "5"},

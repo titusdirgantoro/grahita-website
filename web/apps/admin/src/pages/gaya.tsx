@@ -176,7 +176,7 @@ export function GayaPage() {
           <EmptyState icon="storefront">Belum ada data untuk ditampilkan.</EmptyState>
           <SkeletonList rows={2} />
           <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-            <Notice tone="warning">Pesanan C&amp;C melewati jatuh tempo.</Notice>
+            <Notice tone="warning">Saldo deposit cabang belum menutup seluruh pesanan.</Notice>
             <Notice tone="danger">Email invoice gagal terkirim.</Notice>
           </div>
           <Skeleton variant="block" />

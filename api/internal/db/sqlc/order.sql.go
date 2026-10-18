@@ -77,7 +77,6 @@ SELECT o.id,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
-       o.jatuh_tempo,
        COALESCE(o.catatan, '') AS catatan,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
@@ -105,7 +104,6 @@ type GetOrderForBranchRow struct {
 	IsSertifikat bool        `json:"is_sertifikat"`
 	Versi        int32       `json:"versi"`
 	Tanggal      *time.Time  `json:"tanggal"`
-	JatuhTempo   *time.Time  `json:"jatuh_tempo"`
 	Catatan      string      `json:"catatan"`
 	Total        int64       `json:"total"`
 	JumlahItem   int64       `json:"jumlah_item"`
@@ -129,7 +127,6 @@ func (q *Queries) GetOrderForBranch(ctx context.Context, arg GetOrderForBranchPa
 		&i.IsSertifikat,
 		&i.Versi,
 		&i.Tanggal,
-		&i.JatuhTempo,
 		&i.Catatan,
 		&i.Total,
 		&i.JumlahItem,
@@ -358,7 +355,6 @@ SELECT o.id,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
-       o.jatuh_tempo,
        COALESCE(o.catatan, '') AS catatan,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
@@ -386,7 +382,6 @@ type ListOrdersForBranchRow struct {
 	IsSertifikat bool        `json:"is_sertifikat"`
 	Versi        int32       `json:"versi"`
 	Tanggal      *time.Time  `json:"tanggal"`
-	JatuhTempo   *time.Time  `json:"jatuh_tempo"`
 	Catatan      string      `json:"catatan"`
 	Total        int64       `json:"total"`
 	JumlahItem   int64       `json:"jumlah_item"`
@@ -406,8 +401,7 @@ type ListOrdersForBranchRow struct {
 // Kolom enum dikembalikan sebagai teks (`status::text`) agar lapisan repository
 // tidak perlu mengimpor tipe enum hasil generate.
 // Daftar pesanan satu cabang: nomor, tanggal, jumlah item (Σ qty baris produk),
-// total, status, penanda C&C (PRD CP-ORD-01), dan jatuh tempo C&C (CP-CNC-04)
-// supaya beranda bisa menampilkan pengingat C&C lewat jatuh tempo (PRD §3.3).
+// total, status, dan penanda C&C (PRD CP-ORD-01).
 // Filter status opsional; draft punya nomor/tanggal NULL sehingga diurutkan
 // memakai created_at.
 func (q *Queries) ListOrdersForBranch(ctx context.Context, arg ListOrdersForBranchParams) ([]ListOrdersForBranchRow, error) {
@@ -428,7 +422,6 @@ func (q *Queries) ListOrdersForBranch(ctx context.Context, arg ListOrdersForBran
 			&i.IsSertifikat,
 			&i.Versi,
 			&i.Tanggal,
-			&i.JatuhTempo,
 			&i.Catatan,
 			&i.Total,
 			&i.JumlahItem,
@@ -467,7 +460,7 @@ type LockOrderForSubmitParams struct {
 // Seluruh query di bawah ini dipanggil DI DALAM SATU transaksi repository
 // Submit, dengan urutan: kunci baris pesanan → baca baris + master + harga
 // cabang → validasi ulang → ambil nomor invoice/serial → tulis snapshot,
-// serial, status, tanggal, jatuh tempo, total, dan timeline. Karena penomoran
+// serial, status, tanggal, total, debit deposit C&C, dan timeline. Karena penomoran
 // memakai tabel counter (bukan SEQUENCE) dan berada di transaksi yang sama,
 // submit yang gagal/rollback tidak memakai nomor (BR-09) dan submit
 // bersamaan tidak bisa mendapat nomor yang sama.
@@ -508,26 +501,24 @@ UPDATE orders
        nomor        = $1,
        tanggal      = $2::date,
        is_cnc       = $3,
-       jatuh_tempo  = $4::date,
-       total        = $5,
+       total        = $4,
        submitted_at = now()
- WHERE id = $6::uuid
-   AND branch_id = $7::uuid
+ WHERE id = $5::uuid
+   AND branch_id = $6::uuid
    AND status = 'draft'
 `
 
 type SetOrderSubmittedParams struct {
-	Nomor      pgtype.Text `json:"nomor"`
-	Tanggal    time.Time   `json:"tanggal"`
-	IsCnc      bool        `json:"is_cnc"`
-	JatuhTempo *time.Time  `json:"jatuh_tempo"`
-	Total      int64       `json:"total"`
-	ID         string      `json:"id"`
-	BranchID   string      `json:"branch_id"`
+	Nomor    pgtype.Text `json:"nomor"`
+	Tanggal  time.Time   `json:"tanggal"`
+	IsCnc    bool        `json:"is_cnc"`
+	Total    int64       `json:"total"`
+	ID       string      `json:"id"`
+	BranchID string      `json:"branch_id"`
 }
 
-// Transisi draft -> submitted: nomor, tanggal bisnis WIB, penanda C&C,
-// jatuh tempo (hanya C&C), total, dan waktu submit (UTC). Status 'draft'
+// Transisi draft -> submitted: nomor, tanggal bisnis WIB, penanda C&C
+// (cabang berdeposit), total, dan waktu submit (UTC). Status 'draft'
 // diperiksa ulang di klausa WHERE supaya submit bersamaan tidak bisa
 // menembus dua kali; trigger orders_guard_submit menegakkan invariant isi
 // baris (serial lengkap, aturan sertifikat/packaging, total cocok).
@@ -536,7 +527,6 @@ func (q *Queries) SetOrderSubmitted(ctx context.Context, arg SetOrderSubmittedPa
 		arg.Nomor,
 		arg.Tanggal,
 		arg.IsCnc,
-		arg.JatuhTempo,
 		arg.Total,
 		arg.ID,
 		arg.BranchID,

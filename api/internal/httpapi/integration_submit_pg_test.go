@@ -24,15 +24,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 )
 
 // multipartSubmit mengirim POST /orders/{id}/submit sebagai multipart:
-// berkas bukti (boleh kosong) dan penanda C&C.
-func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf string, berkas map[string][]byte, isCNC string) (*http.Response, map[string]any) {
+// berkas bukti (boleh kosong) dan versi saldo deposit yang dilihat cabang C&C
+// (kosong = tidak dikirim).
+func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf string, berkas map[string][]byte, versiSaldo string) (*http.Response, map[string]any) {
 	t.Helper()
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
@@ -45,9 +45,9 @@ func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf stri
 			t.Fatalf("tulis isi berkas: %v", err)
 		}
 	}
-	if isCNC != "" {
-		if err := w.WriteField("is_cnc", isCNC); err != nil {
-			t.Fatalf("tulis field is_cnc: %v", err)
+	if versiSaldo != "" {
+		if err := w.WriteField("expected_journal_version", versiSaldo); err != nil {
+			t.Fatalf("tulis field expected_journal_version: %v", err)
 		}
 	}
 	if err := w.Close(); err != nil {
@@ -79,9 +79,14 @@ func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf stri
 
 // submitParalel adalah submit yang aman dipanggil dari banyak goroutine: tanpa
 // t.Fatal, hanya mengembalikan status dan nomor invoice (bila berhasil).
-func submitParalel(url string, cookies []*http.Cookie, csrf string) (int, string) {
+func submitParalel(url string, cookies []*http.Cookie, csrf, versiSaldo string) (int, string) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
+	if versiSaldo != "" {
+		if err := w.WriteField("expected_journal_version", versiSaldo); err != nil {
+			return 0, ""
+		}
+	}
 	if err := w.Close(); err != nil {
 		return 0, ""
 	}
@@ -178,18 +183,6 @@ func setSetting(t *testing.T, f *pgFixture, key, nilaiJSON string) {
 	}
 }
 
-// setelanInt membaca satu setelan bilangan bulat (0 bila belum ada).
-func setelanInt(t *testing.T, f *pgFixture, key string) int {
-	t.Helper()
-	var n int
-	err := f.pool.QueryRow(context.Background(),
-		`SELECT COALESCE((SELECT (value)::text::int FROM settings WHERE key = $1), 0)`, key).Scan(&n)
-	if err != nil {
-		t.Fatalf("baca setelan %s: %v", key, err)
-	}
-	return n
-}
-
 // TestPGSubmitEndToEndMultipart menjalankan alur submit lengkap lewat HTTP:
 // draft -> submit multipart dengan bukti -> pesanan bernomor, berserial,
 // bertanggal WIB, bercatatan timeline, dan terkunci.
@@ -224,9 +217,6 @@ func TestPGSubmitEndToEndMultipart(t *testing.T) {
 	}
 	if hasil["is_cnc"] != false {
 		t.Errorf("non-C&C tidak boleh ditandai C&C: %v", hasil["is_cnc"])
-	}
-	if jt, ada := hasil["jatuh_tempo"]; ada && jt != nil && jt != "" {
-		t.Errorf("non-C&C tidak boleh punya jatuh tempo: %v", jt)
 	}
 	if hasil["total"] != float64(200000) {
 		t.Errorf("total harus 200000, dapat %v", hasil["total"])
@@ -442,78 +432,142 @@ func TestPGSubmitHargaDanNamaMasterBerubah(t *testing.T) {
 	}
 }
 
-// TestPGSubmitCNCFlagDanJatuhTempo memverifikasi CP-CNC-01/02/04: cabang
-// berflag C&C boleh submit tanpa bukti dan mendapat jatuh tempo; cabang tanpa
-// flag ditolak 400 (flag dibaca server, bukan dari klien).
-func TestPGSubmitCNCFlagDanJatuhTempo(t *testing.T) {
+// TestPGSubmitCNCMemotongDepositAtomik memverifikasi CP-CNC-02 di PostgreSQL:
+// pesanan cabang C&C dibayar dari saldo deposit DI DALAM transaksi submit
+// (alokasi, journal, dan saldo tetap konsisten), saldo yang berubah sejak
+// dilihat cabang ditolak tanpa memakai nomor maupun saldo, sisa yang tidak
+// tertutup deposit wajib berbukti, dan dua submit yang berebut saldo yang sama
+// tidak pernah membuat saldo negatif.
+func TestPGSubmitCNCMemotongDepositAtomik(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
 	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_cnc = true WHERE id = $1`, f.branchA); err != nil {
 		t.Fatalf("aktifkan flag C&C cabang A: %v", err)
 	}
+	seedSaldoDeposit(t, f, f.branchA, 300000)
 	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	produk := produkKode(t, f, "P-01")
+	urlSubmit := func(id string) string { return f.srv.URL + "/api/v1/orders/" + id + "/submit" }
+	// saldo membaca saldo + versi journal yang dilihat cabang, dan memastikan
+	// cache saldo selalu sama dengan journal serta tidak pernah negatif.
+	saldo := func() (int64, string) {
+		t.Helper()
+		var balance, versi int64
+		var cocok bool
+		if err := f.pool.QueryRow(ctx, `SELECT a.balance, a.journal_version,
+			a.balance = (SELECT COALESCE(sum(amount),0) FROM branch_deposit_transactions WHERE branch_id=a.branch_id)
+			FROM branch_deposit_accounts a WHERE a.branch_id=$1`, f.branchA).Scan(&balance, &versi, &cocok); err != nil {
+			t.Fatalf("baca saldo: %v", err)
+		}
+		if !cocok || balance < 0 {
+			t.Fatalf("saldo %d tidak rekonsiliasi dengan journal atau negatif", balance)
+		}
+		return balance, strconv.FormatInt(versi, 10)
+	}
+	terpakai := func(orderID string) int64 {
+		t.Helper()
+		var n int64
+		if err := f.pool.QueryRow(ctx, `SELECT COALESCE(sum(amount-reversed_amount),0)::bigint
+			FROM deposit_allocations WHERE order_id=$1`, orderID).Scan(&n); err != nil {
+			t.Fatalf("baca alokasi: %v", err)
+		}
+		return n
+	}
 
-	draft := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 1)
-	id, _ := draft["id"].(string)
-	resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", cookiesA, csrfA, nil, "true")
+	// Versi saldo yang dilihat cabang wajib dikirim dan harus masih berlaku;
+	// penolakan tidak memakai nomor maupun saldo.
+	_, dilihat := saldo()
+	d1 := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 2)
+	id1, _ := d1["id"].(string)
+	if resp, body := multipartSubmit(t, urlSubmit(id1), cookiesA, csrfA, nil, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("tanpa versi saldo harus 400, dapat %d (%v)", resp.StatusCode, body)
+	}
+	seedSaldoDeposit(t, f, f.branchA, 1)
+	resp, body := multipartSubmit(t, urlSubmit(id1), cookiesA, csrfA, nil, dilihat)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("saldo berubah harus 409, dapat %d (%v)", resp.StatusCode, body)
+	}
+	assertErrorShape(t, body, "DEPOSIT_CHANGED")
+	var nomor *string
+	if err := f.pool.QueryRow(ctx, `SELECT nomor FROM orders WHERE id=$1`, id1).Scan(&nomor); err != nil || nomor != nil {
+		t.Fatalf("pesanan yang ditolak harus tetap tanpa nomor: %v %v", nomor, err)
+	}
+	if s, _ := saldo(); s != 300001 {
+		t.Fatalf("submit yang ditolak tidak boleh memakai saldo, sisa %d", s)
+	}
+
+	// Saldo cukup: dibayar penuh dari deposit tanpa bukti transfer.
+	_, dilihat = saldo()
+	resp, body = multipartSubmit(t, urlSubmit(id1), cookiesA, csrfA, nil, dilihat)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("C&C tanpa bukti harus 200, dapat %d (%v)", resp.StatusCode, body)
+		t.Fatalf("submit C&C bersaldo cukup harus 200, dapat %d (%v)", resp.StatusCode, body)
 	}
 	hasil := dataMap(t, body)
-	if hasil["is_cnc"] != true {
-		t.Errorf("pesanan harus ditandai C&C: %v", hasil["is_cnc"])
+	if hasil["is_cnc"] != true || hasil["status"] != "submitted" {
+		t.Fatalf("pesanan harus submitted bertanda C&C: %v", hasil)
 	}
-	tanggal, _, _ := wibHariIni(t, f)
-	var jatuhTempo string
-	if err := f.pool.QueryRow(ctx, `SELECT COALESCE(jatuh_tempo::text,'') FROM orders WHERE id = $1`, id).Scan(&jatuhTempo); err != nil {
-		t.Fatalf("baca jatuh tempo: %v", err)
+	total := int64(hasil["total"].(float64))
+	if s, _ := saldo(); terpakai(id1) != total || s != 300001-total {
+		t.Fatalf("deposit terpakai %d / saldo %d tidak sesuai total %d", terpakai(id1), s, total)
 	}
-	// Setelan cnc_hari ditulis eksplisit: fixture mengosongkan tabel settings,
-	// jadi tanpa baris ini domain memakai bawaan Go (7 hari).
-	setSetting(t, f, "cnc_hari", "7")
-	cncHari := setelanInt(t, f, "cnc_hari")
-	if cncHari != 7 {
-		t.Fatalf("prasyarat: cnc_hari harus 7, dapat %d", cncHari)
-	}
-	hari, err := time.Parse("2006-01-02", tanggal)
-	if err != nil {
-		t.Fatalf("urai tanggal: %v", err)
-	}
-	if jatuhTempo != hari.AddDate(0, 0, cncHari).Format("2006-01-02") {
-		t.Errorf("jatuh tempo harus %s + %d hari, dapat %s", tanggal, cncHari, jatuhTempo)
+	var jatuhTempo *string
+	if err := f.pool.QueryRow(ctx, `SELECT jatuh_tempo::text FROM orders WHERE id=$1`, id1).Scan(&jatuhTempo); err != nil || jatuhTempo != nil {
+		t.Fatalf("C&C berdeposit tidak punya jatuh tempo: %v %v", jatuhTempo, err)
 	}
 
-	// Cabang B tidak berflag C&C: permintaan C&C ditolak sebagai validasi dan
-	// pesanannya tetap draft tanpa nomor.
-	cookiesB, csrfB := pgLogin(t, f.srv, "b@example.test", "rahasia123")
-	produkB := produkKode(t, f, "P-01")
-	draftB := buatDraftHTTP(t, f, cookiesB, csrfB, produkB, 1)
-	idB, _ := draftB["id"].(string)
-	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, '\\x02', 'branch')`, idB); err != nil {
-		t.Fatalf("seed bukti cabang B: %v", err)
+	// Saldo kurang: seluruh saldo terpakai dan sisanya wajib berbukti.
+	sisaSaldo, dilihat := saldo()
+	d2 := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 2)
+	id2, _ := d2["id"].(string)
+	if resp, body := multipartSubmit(t, urlSubmit(id2), cookiesA, csrfA, nil, dilihat); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("sisa tanpa bukti harus 400, dapat %d (%v)", resp.StatusCode, body)
 	}
-	respB, bodyB := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+idB+"/submit", cookiesB, csrfB, nil, "true")
-	if respB.StatusCode != http.StatusBadRequest {
-		t.Fatalf("C&C cabang tanpa flag harus 400, dapat %d (%v)", respB.StatusCode, bodyB)
+	if s, _ := saldo(); s != sisaSaldo {
+		t.Fatal("submit tanpa bukti tidak boleh memakai saldo")
 	}
-	assertErrorShape(t, bodyB, "VALIDATION_FAILED")
-	var statusB string
-	var cncB, nomorB *string
-	if err := f.pool.QueryRow(ctx, `SELECT status::text, is_cnc::text, nomor FROM orders WHERE id = $1`, idB).
-		Scan(&statusB, &cncB, &nomorB); err != nil {
-		t.Fatalf("baca orders cabang B: %v", err)
+	resp, body = multipartSubmit(t, urlSubmit(id2), cookiesA, csrfA,
+		map[string][]byte{"bukti.jpg": berkasJPEGUji("bukti-sisa-cnc")}, dilihat)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("submit campuran harus 200, dapat %d (%v)", resp.StatusCode, body)
 	}
-	if statusB != "draft" || nomorB != nil || (cncB != nil && *cncB == "true") {
-		t.Errorf("pesanan cabang B harus tetap draft non-C&C: %s %v %v", statusB, cncB, nomorB)
+	if s, _ := saldo(); terpakai(id2) != sisaSaldo || s != 0 {
+		t.Fatalf("seluruh saldo %d harus terpakai pesanan campuran: terpakai %d saldo %d", sisaSaldo, terpakai(id2), s)
 	}
 
-	// Nilai is_cnc yang bukan boolean ditolak, tidak diam-diam dianggap false.
-	respC, bodyC := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+idB+"/submit", cookiesB, csrfB, nil, "mungkin")
-	if respC.StatusCode != http.StatusBadRequest {
-		t.Fatalf("is_cnc tidak dikenal harus 400, dapat %d (%v)", respC.StatusCode, bodyC)
+	// Dua submit berebut saldo yang sama: tepat satu menang, yang lain melihat
+	// saldo berubah, dan saldo tidak pernah negatif.
+	seedSaldoDeposit(t, f, f.branchA, 150000)
+	_, dilihat = saldo()
+	var ids []string
+	for i := 0; i < 2; i++ {
+		d := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 1)
+		id, _ := d["id"].(string)
+		ids = append(ids, id)
+	}
+	kode := make([]int, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			kode[i], _ = submitParalel(urlSubmit(id), cookiesA, csrfA, dilihat)
+		}(i, id)
+	}
+	wg.Wait()
+	sukses, konflik := 0, 0
+	for _, k := range kode {
+		switch k {
+		case http.StatusOK:
+			sukses++
+		case http.StatusConflict:
+			konflik++
+		}
+	}
+	if sukses != 1 || konflik != 1 {
+		t.Fatalf("balapan saldo harus tepat satu 200 dan satu 409, dapat %v", kode)
+	}
+	if s, _ := saldo(); s != 150000-terpakai(ids[0])-terpakai(ids[1]) {
+		t.Fatalf("saldo setelah balapan harus 150000 dikurangi satu pesanan, dapat %d", s)
 	}
 }
 
@@ -633,7 +687,7 @@ func TestPGSubmit100ParalelNomorDanSerialUnik(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			kode[i], nomor[i] = submitParalel(f.srv.URL+"/api/v1/orders/"+pesanan[i]+"/submit", cookiesA, csrfA)
+			kode[i], nomor[i] = submitParalel(f.srv.URL+"/api/v1/orders/"+pesanan[i]+"/submit", cookiesA, csrfA, "")
 		}(i)
 	}
 	wg.Wait()
@@ -819,7 +873,7 @@ func TestPGSubmitBalapanSatuPesananSatuNomor(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			kode[i], nomor[i] = submitParalel(f.srv.URL+"/api/v1/orders/"+id+"/submit", cookiesA, csrfA)
+			kode[i], nomor[i] = submitParalel(f.srv.URL+"/api/v1/orders/"+id+"/submit", cookiesA, csrfA, "")
 		}(i)
 	}
 	wg.Wait()

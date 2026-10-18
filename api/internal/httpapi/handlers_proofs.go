@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -24,31 +25,28 @@ func proofsUnavailable() error {
 // multipart; sisanya melimpah ke berkas sementara di luar repo.
 const memoryBerkas = 1 << 20 // 1 MiB
 
-// fieldCNC adalah nama field multipart penanda Cash & Carry pada submit
-// pesanan (PRD CP-CNC-02).
-const fieldCNC = "is_cnc"
+// fieldExpectedJournal adalah nama field multipart versi saldo deposit yang
+// dilihat cabang Cash & Carry saat submit (PRD CP-CNC-02).
+const fieldExpectedJournal = "expected_journal_version"
 
 // defaultMaxRequestBytes adalah batas badan permintaan bila domain bukti tidak
 // terpasang (mis. pada pengujian yang hanya memasang domain pesanan): cukup
 // besar untuk beberapa berkas kecil, tetap terbatas.
 const defaultMaxRequestBytes = 4 << 20 // 4 MiB
 
-// parseCNC membaca penanda Cash & Carry dari nilai form. Nilai yang tidak
-// dikenal DITOLAK (bukan diam-diam dianggap false) supaya salah ketik tidak
-// membuat pesanan kehilangan penanda C&C tanpa terlihat.
-func parseCNC(nilai []string) (bool, error) {
-	if len(nilai) == 0 {
-		return false, nil
+// parseExpectedJournal membaca versi saldo deposit dari nilai form: tidak ada
+// atau kosong berarti tidak dikirim (nil), selain itu wajib bilangan bulat
+// >= 0. Nilai yang tidak terbaca DITOLAK, bukan ditebak.
+func parseExpectedJournal(nilai []string) (*int64, error) {
+	if len(nilai) == 0 || strings.TrimSpace(nilai[0]) == "" {
+		return nil, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(nilai[0])) {
-	case "", "false", "0", "off":
-		return false, nil
-	case "true", "1", "on":
-		return true, nil
-	default:
-		return false, apierr.Validation("Penanda Cash & Carry tidak valid.",
-			map[string]string{fieldCNC: "harus true atau false"})
+	v, err := strconv.ParseInt(strings.TrimSpace(nilai[0]), 10, 64)
+	if err != nil || v < 0 {
+		return nil, apierr.Validation("Versi saldo deposit tidak valid.",
+			map[string]string{fieldExpectedJournal: "harus bilangan bulat >= 0"})
 	}
+	return &v, nil
 }
 
 // unggahBukti adalah alur bersama kedua portal: batasi laju → baca berkas →
@@ -88,17 +86,18 @@ func (a *API) bacaBerkas(w http.ResponseWriter, r *http.Request) ([]payment.File
 
 // bacaSubmit mengurai badan multipart submit pesanan: berkas bukti pada field
 // `file` (boleh NOL berkas — bukti boleh sudah diunggah lewat
-// /orders/{id}/proofs) dan penanda C&C pada field `is_cnc`.
-func (a *API) bacaSubmit(w http.ResponseWriter, r *http.Request) ([]payment.FileInput, bool, func(), error) {
+// /orders/{id}/proofs) dan versi saldo deposit C&C pada field
+// `expected_journal_version`.
+func (a *API) bacaSubmit(w http.ResponseWriter, r *http.Request) ([]payment.FileInput, *int64, func(), error) {
 	files, tutup, err := a.bacaMultipart(w, r, false)
 	if err != nil {
-		return nil, false, tutup, err
+		return nil, nil, tutup, err
 	}
-	isCNC, err := parseCNC(r.MultipartForm.Value[fieldCNC])
+	expected, err := parseExpectedJournal(r.MultipartForm.Value[fieldExpectedJournal])
 	if err != nil {
-		return nil, false, tutup, err
+		return nil, nil, tutup, err
 	}
-	return files, isCNC, tutup, nil
+	return files, expected, tutup, nil
 }
 
 // bacaMultipart mengurai badan multipart permintaan bukti. wajibBerkas

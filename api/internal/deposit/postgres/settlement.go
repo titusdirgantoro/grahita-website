@@ -22,6 +22,52 @@ func LockAccount(ctx context.Context, tx pgx.Tx, branchID string) (deposit.Accou
 	return lockBranchAndAccount(ctx, tx, branchID)
 }
 
+// DebitLocked adalah alokasi deposit ke satu order yang ditulis di dalam
+// transaksi pemanggil: endpoint alokasi dan submit pesanan Cash & Carry.
+type DebitLocked struct {
+	BranchID           string
+	OrderID            string
+	OrderVersion       int32
+	Amount             int64
+	IdempotencyKey     string
+	RequestFingerprint []byte
+	ActorKind          string
+	ActorID            string
+}
+
+// AllocateLocked menulis journal `order_allocation_debit` + baris alokasi dan
+// menurunkan saldo. Pemanggil sudah mengunci cabang -> akun -> order dan sudah
+// memastikan nominal tidak melebihi saldo maupun sisa total order; saldo yang
+// akan negatif tetap ditolak updateAccount.
+func AllocateLocked(ctx context.Context, tx pgx.Tx, in DebitLocked) (deposit.Allocation, deposit.Account, error) {
+	if in.Amount <= 0 {
+		return deposit.Allocation{}, deposit.Account{}, deposit.ErrExceedsOrder
+	}
+	var transactionID string
+	if err := tx.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
+branch_id,kind,amount,order_id,order_version,idempotency_key_hash,request_fingerprint,
+actor_kind,actor_id)
+VALUES($1,'order_allocation_debit',$2,$3,$4,$5,$6,$7::actor_kind,$8) RETURNING id`,
+		in.BranchID, -in.Amount, in.OrderID, in.OrderVersion, keyHash(in.IdempotencyKey),
+		in.RequestFingerprint, in.ActorKind, nullableUUID(in.ActorID)).Scan(&transactionID); err != nil {
+		return deposit.Allocation{}, deposit.Account{}, mapConstraint(err)
+	}
+	var a deposit.Allocation
+	if err := tx.QueryRow(ctx, `INSERT INTO deposit_allocations(
+branch_id,order_id,order_version,debit_transaction_id,amount,created_by_kind,created_by_id)
+VALUES($1,$2,$3,$4,$5,$6::actor_kind,$7)
+RETURNING id,branch_id,order_id,order_version,debit_transaction_id,amount,reversed_amount,created_at`,
+		in.BranchID, in.OrderID, in.OrderVersion, transactionID, in.Amount, in.ActorKind, nullableUUID(in.ActorID)).
+		Scan(&a.ID, &a.BranchID, &a.OrderID, &a.OrderVersion, &a.DebitTransactionID, &a.Amount, &a.ReversedAmount, &a.CreatedAt); err != nil {
+		return deposit.Allocation{}, deposit.Account{}, mapConstraint(err)
+	}
+	account, err := updateAccount(ctx, tx, in.BranchID, -in.Amount)
+	if err != nil {
+		return deposit.Allocation{}, deposit.Account{}, err
+	}
+	return a, account, nil
+}
+
 // OverpayCredit adalah kredit lebih bayar yang bersumber dari satu bukti order
 // pada attempt verifikasi tertentu.
 type OverpayCredit struct {

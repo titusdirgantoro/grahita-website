@@ -4,6 +4,12 @@
 # Alur: login cabang → katalog → draft → submit → login admin → verifikasi
 # (cocok → Done) → daftar dokumen → unduh dokumen.
 #
+# Submit mengikuti jenis cabang akun uji: cabang Cash & Carry membayar dari
+# saldo deposit (versi saldo ikut dikirim) dan bukti transfer hanya
+# dilampirkan untuk sisa yang tidak tertutup deposit; cabang lain selalu
+# melampirkan bukti. Verifikasi admin menyebut sumber dana yang sama: rekening
+# tujuan tiap bukti, dan alokasi deposit (settlement) bila ada.
+#
 # Dua host diuji sekaligus supaya isolasi cookie host-only ikut terbukti:
 # sesi yang diterbitkan host cabang tidak boleh berlaku di host admin.
 #
@@ -87,6 +93,40 @@ elif val is None:
     print("")
 else:
     print(val)
+PY
+
+# verif.py menyusun body verifikasi "cocok" dari sumber dana pesanan: tanpa
+# alokasi deposit cukup rekening tujuan tiap bukti; dengan alokasi, settlement
+# lengkap (alokasi aktif + bukti untuk sisa) supaya deposit + transfer = total.
+cat > "$KERJA/verif.py" <<'PY'
+import json, sys
+
+def baca(path, bawaan):
+    try:
+        return json.load(open(path)).get("data", bawaan)
+    except Exception:
+        return bawaan
+
+bayar = baca(sys.argv[1], {}) or {}
+bukti = baca(sys.argv[2], []) or []
+rekening = baca(sys.argv[3], []) or []
+total = int(sys.argv[4] or 0)
+bank = rekening[0]["id"] if rekening else ""
+alokasi = [a for a in bayar.get("allocations", []) if a.get("active_amount", 0) > 0]
+if not alokasi:
+    body = {"hasil": "cocok", "proof_destinations": [
+        {"payment_proof_id": b["id"], "bank_account_id": bank} for b in bukti]}
+else:
+    sisa = max(total - sum(a["active_amount"] for a in alokasi), 0)
+    splits = []
+    for i, b in enumerate(bukti):
+        bagian = sisa if i == 0 else 0
+        splits.append({"payment_proof_id": b["id"], "bank_account_id": bank,
+                       "approved_nominal": bagian, "applied_to_order": bagian,
+                       "credited_to_deposit_total": 0})
+    body = {"hasil": "cocok", "expected_order_version": bayar.get("versi", 0),
+            "deposit_allocation_ids": [a["id"] for a in alokasi], "proof_splits": splits}
+print(json.dumps(body))
 PY
 
 # Permintaan ber-JSON dengan token CSRF dari cookie jar.
@@ -177,14 +217,16 @@ fi
 echo
 
 # ---------- 4. draft + submit ----------
-echo "4. Buat draft lalu submit (C&C tanpa bukti)"
+echo "4. Buat draft lalu submit (deposit C&C atau bukti transfer)"
 draft=""
+TOTAL=0
 if [ -n "$PRODUK_ID" ]; then
     draft=$(req_json POST "$CUSTOMER_BASE/api/v1/orders" "$JAR_CABANG" "$TMP1" \
         "{\"catatan\":\"uji asap F1-22\",\"lines\":[{\"product_id\":\"$PRODUK_ID\",\"qty\":2}]}")
     if sukses2xx "$(kode "$draft")"; then
         idPesanan=$(json "$TMP1" "d['data']['id']")
-        ok "draft dibuat $idPesanan (total $(json "$TMP1" "d['data']['total']"), status $(kode "$draft"))"
+        TOTAL=$(json "$TMP1" "d['data']['total']")
+        ok "draft dibuat $idPesanan (total $TOTAL, status $(kode "$draft"))"
     else
         gagal "buat draft -> $(kode "$draft"): $(head -c 300 "$TMP1")"
     fi
@@ -192,15 +234,46 @@ fi
 
 idPesanan=${idPesanan:-}
 if [ -n "$idPesanan" ]; then
+    # Cabang C&C: saldo deposit membayar min(saldo, total); sisanya transfer.
+    CNC=false
+    VERSI_SALDO=""
+    SISA=$TOTAL
+    if [ "$(kode "$(curlx -o "$TMP1" -w '\n%{http_code}' -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/me/branch")")" = "200" ]; then
+        CNC=$(json "$TMP1" "d['data'].get('is_cnc', False)")
+    fi
+    if [ "$CNC" = "true" ]; then
+        if [ "$(kode "$(curlx -o "$TMP1" -w '\n%{http_code}' -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/deposit")")" = "200" ]; then
+            VERSI_SALDO=$(json "$TMP1" "d['data']['journal_version']")
+            SISA=$(json "$TMP1" "max($TOTAL - min(d['data']['available_balance'], $TOTAL), 0)")
+            info "cabang C&C: saldo $(json "$TMP1" "d['data']['available_balance']"), sisa transfer $SISA"
+        else
+            gagal "saldo deposit cabang C&C tidak terbaca"
+        fi
+    fi
+    # Bukti sintetis berformat JPEG (magic bytes) hanya untuk bagian transfer.
+    set --
+    if [ "$SISA" -gt 0 ]; then
+        printf '\377\330\377\340uji-asap' > "$KERJA/bukti.jpg"
+        set -- "$@" -F "file=@$KERJA/bukti.jpg;type=image/jpeg"
+    fi
+    if [ -n "$VERSI_SALDO" ]; then
+        set -- "$@" -F "expected_journal_version=$VERSI_SALDO"
+    fi
     token=$(cookie "$JAR_CABANG" grahita_csrf)
     submit=$(curlx -o "$TMP1" -w '\n%{http_code}' -X POST \
         "$CUSTOMER_BASE/api/v1/orders/$idPesanan/submit" -b "$JAR_CABANG" -c "$JAR_CABANG" \
-        -H "X-CSRF-Token: $token" -F "is_cnc=true")
+        -H "X-CSRF-Token: $token" "$@")
     if [ "$(kode "$submit")" = "200" ]; then
         ok "submit 200; status $(json "$TMP1" "d['data']['status']"), nomor $(json "$TMP1" "d['data']['nomor']")"
     else
         gagal "submit -> $(kode "$submit"): $(head -c 300 "$TMP1")"
     fi
+
+    # Sumber dana pesanan untuk verifikasi admin: alokasi deposit, bukti, dan
+    # rekening tujuan efektif cabang (dibaca dari portal cabang).
+    curlx -o "$KERJA/bayar.json" -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/orders/$idPesanan/payment" >/dev/null 2>&1 || true
+    curlx -o "$KERJA/bukti.json" -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/orders/$idPesanan/proofs" >/dev/null 2>&1 || true
+    curlx -o "$KERJA/rekening.json" -b "$JAR_CABANG" "$CUSTOMER_BASE/api/v1/bank-accounts" >/dev/null 2>&1 || true
 fi
 echo
 
@@ -230,8 +303,9 @@ else
 fi
 
 if [ -n "$idPesanan" ]; then
+    BODY_VERIF=$(python3 "$KERJA/verif.py" "$KERJA/bayar.json" "$KERJA/bukti.json" "$KERJA/rekening.json" "$TOTAL")
     verif=$(req_json POST "$ADMIN_BASE/api/v1/admin/orders/$idPesanan/verify" "$JAR_ADMIN" "$TMP1" \
-        '{"hasil":"cocok"}')
+        "$BODY_VERIF")
     if [ "$(kode "$verif")" = "200" ]; then
         ok "verifikasi 200; status pesanan $(json "$TMP1" "d['data']['order']['status']"), hasil $(json "$TMP1" "d['data']['verifikasi']['hasil']")"
     else

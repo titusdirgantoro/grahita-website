@@ -52,7 +52,6 @@ export interface FilterPesanan {
   status?: string;
   verif?: string;
   cnc?: boolean;
-  terlambat?: boolean;
   email_gagal?: boolean;
   dari?: string;
   sampai?: string;
@@ -68,14 +67,12 @@ export interface PesananAdmin {
   branch_id: string;
   branch_nama: string;
   tanggal?: string;
-  jatuh_tempo?: string;
   status: string;
   verif_status: string;
   is_cnc: boolean;
   is_sertifikat: boolean;
   total: number;
   jumlah_item: number;
-  terlambat: boolean;
   email_gagal: boolean;
   submitted_at?: string;
   created_at: string;
@@ -160,7 +157,6 @@ export interface PesananDetail {
   is_cnc: boolean;
   is_sertifikat: boolean;
   tanggal?: string;
-  jatuh_tempo?: string;
   submitted_at?: string;
   done_at?: string;
   created_at: string;
@@ -169,7 +165,6 @@ export interface PesananDetail {
   note_admin: string;
   total: number;
   jumlah_item: number;
-  terlambat: boolean;
   email_gagal: boolean;
   lines: BarisPesanan[];
   timeline: EntriTimeline[];
@@ -416,7 +411,6 @@ export function queryPesanan(f: FilterPesanan): string {
   if (f.status && f.status !== "semua") p.set("status", f.status);
   if (f.verif && f.verif !== "semua") p.set("verif", f.verif);
   if (f.cnc) p.set("cnc", "true");
-  if (f.terlambat) p.set("terlambat", "true");
   if (f.email_gagal) p.set("email_gagal", "true");
   if (f.dari) p.set("dari", f.dari);
   if (f.sampai) p.set("sampai", f.sampai);
@@ -514,11 +508,11 @@ export function PesananAdminPage() {
   const grup = data?.grup ?? "";
   const ringkasan = data?.ringkasan ?? [];
   const adaFilter = Boolean(
-    search.cari || search.cabang || search.status || search.verif || search.cnc || search.terlambat || search.email_gagal || search.dari || search.sampai,
+    search.cari || search.cabang || search.status || search.verif || search.cnc || search.email_gagal || search.dari || search.sampai,
   );
 
   const namaCabang = search.cabang ? cabang?.find((c) => c.id === search.cabang)?.nama : undefined;
-  const jumlahFilterLanjut = [search.status, search.verif, search.grup, search.dari, search.sampai, search.cnc, search.terlambat, search.email_gagal]
+  const jumlahFilterLanjut = [search.status, search.verif, search.grup, search.dari, search.sampai, search.cnc, search.email_gagal]
     .filter(Boolean).length;
   const [filterTerbuka, setFilterTerbuka] = useState(false);
 
@@ -619,9 +613,6 @@ export function PesananAdminPage() {
               <Chip pressed={Boolean(search.cnc)} onToggle={(v) => ubah({ cnc: v || undefined })}>
                 C&amp;C
               </Chip>
-              <Chip pressed={Boolean(search.terlambat)} onToggle={(v) => ubah({ terlambat: v || undefined })}>
-                Lewat jatuh tempo
-              </Chip>
               <Chip pressed={Boolean(search.email_gagal)} onToggle={(v) => ubah({ email_gagal: v || undefined })}>
                 Email gagal
               </Chip>
@@ -632,7 +623,7 @@ export function PesananAdminPage() {
                   icon="x"
                   onClick={() => {
                     setCariKetik("");
-                    ubah({ cari: undefined, cabang: undefined, status: undefined, verif: undefined, cnc: undefined, terlambat: undefined, email_gagal: undefined, dari: undefined, sampai: undefined });
+                    ubah({ cari: undefined, cabang: undefined, status: undefined, verif: undefined, cnc: undefined, email_gagal: undefined, dari: undefined, sampai: undefined });
                   }}
                 >
                   Reset filter
@@ -706,7 +697,6 @@ export function PesananAdminPage() {
                   <td>
                     <span className={riwayat.status}>
                       <Badge tone={statusPesanan(p).tone}>{statusPesanan(p).label}</Badge>
-                      {p.terlambat ? <Badge tone="danger">Lewat jatuh tempo</Badge> : null}
                       {p.email_gagal ? <Badge tone="danger">Email gagal</Badge> : null}
                       {p.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
                       {p.is_sertifikat ? <Badge tone="neutral">Sertifikat</Badge> : null}
@@ -1278,7 +1268,6 @@ export function PesananDetailAdminPage() {
             {data.versi > 0 ? <Badge tone="rev">{`Revisi R${data.versi}`}</Badge> : null}
             {data.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
             {data.is_sertifikat ? <Badge tone="neutral">Sertifikat</Badge> : null}
-            {data.terlambat ? <Badge tone="danger">Lewat jatuh tempo</Badge> : null}
             {data.email_gagal ? <Badge tone="danger">Email gagal</Badge> : null}
           </div>
         }
@@ -1298,14 +1287,6 @@ export function PesananDetailAdminPage() {
                 <div>{data.branch_nama}</div>
                 <div className="muted small">{data.branch_email}</div>
               </div>
-              {data.is_cnc ? (
-                <div>
-                  <div className="muted small">Jatuh tempo C&amp;C</div>
-                  <div style={data.terlambat ? { color: "var(--danger-fg)" } : undefined}>
-                    {tanggalSingkat(data.jatuh_tempo)}
-                  </div>
-                </div>
-              ) : null}
               <div>
                 <div className="muted small">Status verifikasi</div>
                 <div>
@@ -1685,7 +1666,9 @@ export function PesananDetailAdminPage() {
             {rupiah.format(data.total)}
           </strong>
         </div>
-        {(bukti?.length ?? 0) === 0 ? (
+        {(bukti?.length ?? 0) === 0 && wajibRincian ? (
+          <Notice tone="info">Pesanan dibayar dari saldo deposit cabang; tidak ada bukti transfer untuk dipetakan.</Notice>
+        ) : (bukti?.length ?? 0) === 0 ? (
           <Notice tone="danger">Pesanan belum mempunyai bukti pembayaran untuk dipetakan.</Notice>
         ) : (
           <Table stack="narrow" caption="Tujuan rekening per bukti">
@@ -1764,7 +1747,7 @@ export function PesananDetailAdminPage() {
         <Field
           label="Nominal di bukti transfer"
           htmlFor="verif-nominal"
-          hint="Kosongkan bila bukti tidak terbaca atau pembayaran tunai C&C. Selisih = nominal terbaca − total pesanan."
+          hint="Kosongkan bila bukti tidak terbaca atau pesanan dibayar penuh dari deposit. Selisih = nominal terbaca − total pesanan."
         >
           <Input
             id="verif-nominal"

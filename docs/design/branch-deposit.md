@@ -287,17 +287,25 @@ harus tetap review. Sistem tidak boleh mengarang write-off atau refund.
 
 ### 3.8 Cash & Carry
 
-- C&C tetap boleh submit tanpa bukti dan tanpa alokasi deposit.
-- Bila deposit cukup, cabang boleh mengalokasikan sebagian/seluruhnya setelah
-  submit; hal itu tidak otomatis Done.
-- C&C hanya Done setelah admin memverifikasi seluruh settlement melalui pintu
-  yang sama.
-- Reminder memakai `remaining_due` settlement. Bila `remaining_due=0` tetapi
-  admin belum menyelesaikan verifikasi, reminder uang dapat dihentikan, namun
-  dashboard tetap menampilkan `menunggu verifikasi`.
-- Reversal yang membuka kekurangan pada C&C membuat `remaining_due` naik kembali
-  dan reminder berikutnya kembali eligible sesuai jadwal; email lama tidak
-  ditarik.
+Amandemen 2026-10-18 (keputusan user, migrasi `0014_cnc_deposit.sql`): Cash &
+Carry ADALAH sistem deposit, bukan pesanan berutang. Aturan di bawah
+menggantikan versi sebelumnya (submit tanpa bukti + jatuh tempo + reminder).
+
+- Cabang C&C ditentukan flag `cash_and_carry` di master cabang; hanya cabang
+  ini yang boleh top-up (`403 DEPOSIT_CNC_ONLY` untuk cabang lain). Saldo
+  cabang non-C&C yang lahir dari kredit lebih bayar tetap boleh dialokasikan
+  lewat §3.4.
+- Submit pesanan C&C mendebit `min(saldo, total)` sebagai alokasi deposit DI
+  DALAM transaksi submit, dengan urutan kunci §5.1 (policy rekening → cabang →
+  akun → order). Cabang wajib mengirim `expected_journal_version` yang ia
+  lihat; versi berbeda → `409 DEPOSIT_CHANGED` tanpa nomor maupun debit.
+- Sisa `total - debit` wajib dibayar transfer berbukti ke rekening efektif D2;
+  bila saldo menutup total, bukti tidak diperlukan.
+- C&C hanya Done setelah admin memverifikasi settlement melalui pintu yang sama
+  (§5.4); tidak ada auto-Done. Pesanan bernilai tanpa alokasi aktif maupun
+  bukti ditolak `422 PAYMENT_PROOF_REQUIRED`.
+- Tidak ada jatuh tempo, reminder, maupun chip "lewat jatuh tempo". Kolom
+  `orders.jatuh_tempo` dan tabel `cnc_reminders` hanya menyimpan riwayat.
 
 ## 4. Model data target
 

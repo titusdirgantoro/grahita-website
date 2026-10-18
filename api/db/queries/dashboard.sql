@@ -38,21 +38,18 @@ SELECT count(*)::bigint                                                    AS ju
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= sqlc.arg(sampai)::date;
 
 -- name: DashboardChip :one
--- Empat chip "perlu tindakan" (AP-DSH-03). Tiap angkanya adalah jumlah pesanan
+-- Tiga chip "perlu tindakan" (AP-DSH-03). Tiap angkanya adalah jumlah pesanan
 -- yang akan muncul bila chip diklik, karena klausanya sama dengan filter daftar
 -- riwayat (admin_order.sql):
 --   menunggu            -> status=submitted & verif=belum
 --   perlu_review        -> verif=perlu_review
---   lewat_jatuh_tempo   -> is_cnc & status<>'done' & jatuh_tempo < hari ini (WIB)
 --   email_gagal         -> id pesanan ada di daftar email `failed` (domain notification)
 --
--- C&C yang lewat jatuh tempo TIDAK diubah statusnya oleh sistem: ia tetap
--- `submitted` dan hanya muncul sebagai chip (PRD CP-CNC-06, §7.1 state machine).
+-- Cash & Carry dibayar dari deposit saat dikirim, jadi tidak ada lagi chip
+-- "lewat jatuh tempo" (keputusan user 2026-10-18).
 SELECT count(*) FILTER (WHERE o.status = 'submitted'
                           AND o.verif_status = 'belum')::bigint            AS menunggu,
        count(*) FILTER (WHERE o.verif_status = 'perlu_review')::bigint     AS perlu_review,
-       count(*) FILTER (WHERE o.is_cnc AND o.status <> 'done'
-                          AND o.jatuh_tempo < sqlc.arg(hari_ini)::date)::bigint AS lewat_jatuh_tempo,
        count(*) FILTER (WHERE o.id = ANY(sqlc.arg(email_gagal_ids)::uuid[]))::bigint AS email_gagal
   FROM orders o
  WHERE (sqlc.narg(branch_id)::uuid IS NULL OR o.branch_id = sqlc.narg(branch_id)::uuid);
@@ -116,13 +113,11 @@ SELECT COALESCE(sum(l.qty), 0)::bigint AS item
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= sqlc.arg(sampai)::date;
 
 -- name: DashboardKomposisi :one
--- Komposisi pesanan periode terpilih: reguler vs Cash and Carry, Sertifikat,
--- dan C&C lewat jatuh tempo (klausa lewat tempo sama dengan DashboardChip).
+-- Komposisi pesanan periode terpilih: reguler vs Cash and Carry (dibayar dari
+-- deposit) dan Sertifikat.
 SELECT count(*) FILTER (WHERE NOT o.is_cnc)::bigint                       AS reguler,
        count(*) FILTER (WHERE o.is_cnc)::bigint                           AS cnc,
-       count(*) FILTER (WHERE o.is_sertifikat)::bigint                    AS sertifikat,
-       count(*) FILTER (WHERE o.is_cnc AND o.status <> 'done'
-                          AND o.jatuh_tempo < sqlc.arg(hari_ini)::date)::bigint AS cnc_lewat_tempo
+       count(*) FILTER (WHERE o.is_sertifikat)::bigint                    AS sertifikat
   FROM orders o
  WHERE (sqlc.narg(branch_id)::uuid IS NULL OR o.branch_id = sqlc.narg(branch_id)::uuid)
    AND COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= sqlc.arg(dari)::date

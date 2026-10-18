@@ -39,7 +39,6 @@ function halamanUji(total: number): PesananHalaman {
         is_sertifikat: false,
         total: 200000,
         jumlah_item: 2,
-        terlambat: false,
         email_gagal: false,
         created_at: "2026-10-01T03:00:00Z",
         updated_at: "2026-10-01T03:00:00Z",
@@ -66,14 +65,12 @@ const DETAIL_UJI: PesananDetail = {
   is_cnc: true,
   is_sertifikat: false,
   tanggal: "2026-10-01",
-  jatuh_tempo: "2026-10-08",
   created_at: "2026-10-01T03:00:00Z",
   updated_at: "2026-10-01T03:00:00Z",
   catatan: "Mohon dikirim pagi",
   note_admin: "Sudah dihubungi cabang",
   total: 200000,
   jumlah_item: 2,
-  terlambat: true,
   email_gagal: true,
   lines: [
     {

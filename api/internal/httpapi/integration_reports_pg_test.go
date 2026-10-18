@@ -151,11 +151,10 @@ func (l *laporanPG) seedPesanan(t *testing.T, o pesananLaporan) string {
 			    SET status = $2::order_status,
 			        nomor = $3,
 			        tanggal = $4::date,
-			        jatuh_tempo = CASE WHEN $5::bool THEN $4::date + 7 END,
 			        submitted_at = now(),
 			        done_at = CASE WHEN $2::text = 'done' THEN now() END
 			  WHERE id = $1`,
-			id, o.Status, o.Nomor, o.Tanggal, o.IsCNC); err != nil {
+			id, o.Status, o.Nomor, o.Tanggal); err != nil {
 			t.Fatalf("pindahkan pesanan %s ke %s: %v", o.Nomor, o.Status, err)
 		}
 	}

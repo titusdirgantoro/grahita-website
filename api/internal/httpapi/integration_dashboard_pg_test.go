@@ -2,8 +2,8 @@ package httpapi
 
 // Uji integrasi dashboard admin (F1-20) pada PostgreSQL NYATA: metrik berbasis
 // role, chip "perlu tindakan" yang KONSISTEN dengan daftar terfilternya,
-// batas hari bisnis Asia/Jakarta, C&C lewat jatuh tempo yang tetap Submitted,
-// dan email gagal setelah retry sungguhan lewat worker outbox.
+// batas hari bisnis Asia/Jakarta, dan email gagal setelah retry sungguhan lewat
+// worker outbox.
 //
 // Data disemai langsung lewat SQL supaya keadaan yang jarang bisa dibuat
 // deterministik; satu bagian (email gagal setelah retry) sengaja menempuh
@@ -139,10 +139,9 @@ func TestPGDashboardMetrikChipDanRole(t *testing.T) {
 		branchID: f.branchA, nomor: "2026-10-12", tanggal: hariIni.Format("2006-01-02"),
 		status: "done", verif: "cocok", harga: 300000,
 	}, produk, "20261012001")
-	b1 := insertOrderAdmin(t, ctx, f.pool, seedOrderAdmin{
+	insertOrderAdmin(t, ctx, f.pool, seedOrderAdmin{
 		branchID: f.branchB, nomor: "2026-10-13", tanggal: hariIni.Format("2006-01-02"),
-		status: "submitted", verif: "belum", cnc: true,
-		jt: hariIni.AddDate(0, 0, -7).Format("2006-01-02"), harga: 150000,
+		status: "submitted", verif: "belum", cnc: true, harga: 150000,
 	}, produk, "20261013001")
 	insertOrderAdmin(t, ctx, f.pool, seedOrderAdmin{
 		branchID: f.branchB, nomor: "2026-10-14", tanggal: hariIni.Format("2006-01-02"),
@@ -210,10 +209,9 @@ func TestPGDashboardMetrikChipDanRole(t *testing.T) {
 	// --- Chip + konsistensi dengan daftar terfilter -------------------------
 	chip := chipDashboard(t, d)
 	mauChip := map[string]int64{
-		"menunggu":          4, // a1, b1, c1, historis (chip TIDAK dibatasi periode)
-		"perlu_review":      1, // b2
-		"lewat_jatuh_tempo": 1, // b1 (C&C lewat tempo, masih submitted)
-		"email_gagal":       0,
+		"menunggu":     4, // a1, b1, c1, historis (chip TIDAK dibatasi periode)
+		"perlu_review": 1, // b2
+		"email_gagal":  0,
 	}
 	for kunci, mau := range mauChip {
 		if chip[kunci] != mau {
@@ -222,10 +220,9 @@ func TestPGDashboardMetrikChipDanRole(t *testing.T) {
 	}
 
 	padanan := map[string]string{
-		"menunggu":          "status=submitted&verif=belum",
-		"perlu_review":      "verif=perlu_review",
-		"lewat_jatuh_tempo": "terlambat=true",
-		"email_gagal":       "email_gagal=true",
+		"menunggu":     "status=submitted&verif=belum",
+		"perlu_review": "verif=perlu_review",
+		"email_gagal":  "email_gagal=true",
 	}
 	for kunci, query := range padanan {
 		for _, cabang := range []string{"", "&cabang=" + f.branchA, "&cabang=" + f.branchB} {
@@ -312,7 +309,7 @@ func TestPGDashboardMetrikChipDanRole(t *testing.T) {
 		t.Fatalf("bulan lalu harus kosong: bulan_lalu=%v harian_pembanding=%v", d["bulan_lalu"], d["harian_pembanding"])
 	}
 	komposisi := d["komposisi"].(map[string]any)
-	for nama, mau := range map[string]float64{"reguler": 4, "cnc": 1, "sertifikat": 0, "cnc_lewat_tempo": 1} {
+	for nama, mau := range map[string]float64{"reguler": 4, "cnc": 1, "sertifikat": 0} {
 		if got := angka(t, komposisi, nama); got != mau {
 			t.Fatalf("komposisi.%s harus %v, dapat %v", nama, mau, got)
 		}
@@ -332,17 +329,8 @@ func TestPGDashboardMetrikChipDanRole(t *testing.T) {
 		t.Fatalf("ringkasan cabang A harus 2, dapat %v", dA["ringkasan"])
 	}
 	chipA := chipDashboard(t, dA)
-	if chipA["menunggu"] != 2 || chipA["perlu_review"] != 0 || chipA["lewat_jatuh_tempo"] != 0 {
+	if chipA["menunggu"] != 2 || chipA["perlu_review"] != 0 {
 		t.Fatalf("chip cabang A salah: %v", chipA)
-	}
-
-	// --- C&C lewat jatuh tempo TETAP Submitted ------------------------------
-	var status string
-	if err := f.pool.QueryRow(ctx, `SELECT status::text FROM orders WHERE id = $1`, b1).Scan(&status); err != nil {
-		t.Fatalf("membaca status pesanan C&C: %v", err)
-	}
-	if status != "submitted" {
-		t.Fatalf("C&C lewat jatuh tempo harus tetap submitted, dapat %q", status)
 	}
 
 	// --- Superadmin: nilai rupiah ada --------------------------------------
@@ -386,9 +374,8 @@ func bentukDaftar(t *testing.T, bentuk map[string]any) map[string]any {
 func chipCabang(t *testing.T, ctx context.Context, f *pgFixture, kunci, branchID string) int64 {
 	t.Helper()
 	kondisi := map[string]string{
-		"menunggu":          "o.status = 'submitted' AND o.verif_status = 'belum'",
-		"perlu_review":      "o.verif_status = 'perlu_review'",
-		"lewat_jatuh_tempo": "o.is_cnc AND o.status <> 'done' AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date",
+		"menunggu":     "o.status = 'submitted' AND o.verif_status = 'belum'",
+		"perlu_review": "o.verif_status = 'perlu_review'",
 		// email_gagal dihitung dari outbox: satu-satunya pesanan cabang yang
 		// punya email `failed` pada uji ini dibuat belakangan, sebelum itu nol.
 		"email_gagal": "EXISTS (SELECT 1 FROM email_outbox e WHERE e.order_id = o.id AND e.status = 'failed')",

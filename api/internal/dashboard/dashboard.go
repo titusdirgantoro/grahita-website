@@ -68,10 +68,9 @@ const (
 // Kunci chip "perlu tindakan" (AP-DSH-03). Dipakai UI untuk memetakan chip ke
 // daftar terfilter di riwayat pemesanan.
 const (
-	ChipMenunggu        = "menunggu"
-	ChipPerluReview     = "perlu_review"
-	ChipLewatJatuhTempo = "lewat_jatuh_tempo"
-	ChipEmailGagal      = "email_gagal"
+	ChipMenunggu    = "menunggu"
+	ChipPerluReview = "perlu_review"
+	ChipEmailGagal  = "email_gagal"
 )
 
 // uuidRe memeriksa format id cabang tanpa menyentuh database.
@@ -95,7 +94,8 @@ type Query struct {
 	// Dari/Sampai adalah rentang tanggal bisnis periode terpilih (inklusif).
 	Dari   time.Time
 	Sampai time.Time
-	// HariIni adalah tanggal bisnis hari ini (WIB), dasar chip lewat jatuh tempo.
+	// HariIni adalah tanggal bisnis hari ini (WIB), dasar periode berjalan dan
+	// pembanding.
 	HariIni time.Time
 	// BulanAwal/BulanAkhir adalah rentang bulan bisnis berjalan — dasar tren
 	// harian, yang tidak terpengaruh periode terpilih (AP-DSH-04).
@@ -125,10 +125,9 @@ type HitunganPeriode struct {
 
 // HitunganChip adalah hasil agregat chip "perlu tindakan".
 type HitunganChip struct {
-	Menunggu        int64
-	PerluReview     int64
-	LewatJatuhTempo int64
-	EmailGagal      int64
+	Menunggu    int64
+	PerluReview int64
+	EmailGagal  int64
 }
 
 // Titik adalah satu titik deret waktu (bulan `YYYY-MM` atau hari `YYYY-MM-DD`).
@@ -149,10 +148,9 @@ type BarisPeringkat struct {
 
 // HitunganKomposisi adalah komposisi pesanan periode terpilih.
 type HitunganKomposisi struct {
-	Reguler       int64
-	CNC           int64
-	Sertifikat    int64
-	CNCLewatTempo int64
+	Reguler    int64
+	CNC        int64
+	Sertifikat int64
 }
 
 // BarisProduk adalah satu baris product terlaris (dalam qty baris produk).
@@ -248,12 +246,11 @@ type Pembanding struct {
 }
 
 // Komposisi adalah komposisi pesanan periode terpilih: reguler vs Cash and
-// Carry, berapa yang Sertifikat, dan berapa C&C yang lewat jatuh tempo.
+// Carry (dibayar dari deposit) dan berapa yang Sertifikat.
 type Komposisi struct {
-	Reguler       int64 `json:"reguler"`
-	CNC           int64 `json:"cnc"`
-	Sertifikat    int64 `json:"sertifikat"`
-	CNCLewatTempo int64 `json:"cnc_lewat_tempo"`
+	Reguler    int64 `json:"reguler"`
+	CNC        int64 `json:"cnc"`
+	Sertifikat int64 `json:"sertifikat"`
 }
 
 // ProdukTerlaris adalah satu baris product terlaris periode terpilih.
@@ -425,7 +422,6 @@ func (s *Service) Get(ctx context.Context, actor auth.Actor, f Filter) (Dashboar
 		Chip: []Chip{
 			{Kunci: ChipMenunggu, Label: "menunggu verifikasi", Jumlah: chip.Menunggu},
 			{Kunci: ChipPerluReview, Label: "perlu review", Jumlah: chip.PerluReview},
-			{Kunci: ChipLewatJatuhTempo, Label: "C&C lewat jatuh tempo", Jumlah: chip.LewatJatuhTempo},
 			{Kunci: ChipEmailGagal, Label: "email gagal", Jumlah: chip.EmailGagal},
 		},
 	}
@@ -439,13 +435,10 @@ func (s *Service) Get(ctx context.Context, actor auth.Actor, f Filter) (Dashboar
 	}
 	d.BulanLalu = metrik(bulanLalu.Jumlah, bulanLalu.Nilai)
 	d.HarianPembanding = bulanLaluSampaiHariIni.Jumlah
-	d.Komposisi = Komposisi{
-		Reguler: komposisi.Reguler, CNC: komposisi.CNC,
-		Sertifikat: komposisi.Sertifikat, CNCLewatTempo: komposisi.CNCLewatTempo,
-	}
+	d.Komposisi = Komposisi(komposisi)
 	d.ProdukTerlaris = make([]ProdukTerlaris, 0, len(produkRows))
 	for _, p := range produkRows {
-		d.ProdukTerlaris = append(d.ProdukTerlaris, ProdukTerlaris{ProductID: p.ProductID, Nama: p.Nama, Qty: p.Qty})
+		d.ProdukTerlaris = append(d.ProdukTerlaris, ProdukTerlaris(p))
 	}
 	d.TrenBulanan = isiBulanan(trenRows, q, titik)
 	d.Harian = isiHarian(harianRows, q, titik)

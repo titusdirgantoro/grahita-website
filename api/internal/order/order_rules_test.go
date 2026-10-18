@@ -226,35 +226,34 @@ func TestBarisPackagingSatuUntukBeberapaProdukSertifikat(t *testing.T) {
 	}
 }
 
-// TestValidasiCNCFlagCabang memverifikasi CP-CNC-01: C&C hanya sah bila cabang
-// berflag cash_and_carry. Flag dibaca server, jadi cabang tanpa flag tidak bisa
-// memalsukan C&C.
-func TestValidasiCNCFlagCabang(t *testing.T) {
+// TestPotonganDepositTidakMelebihiSaldoMaupunTotal memverifikasi CP-CNC-02:
+// pesanan Cash & Carry dibayar dari deposit sebanyak mungkin tanpa melebihi
+// saldo maupun total, dan sisa transfer hanya ada bila saldo sudah habis.
+func TestPotonganDepositTidakMelebihiSaldoMaupunTotal(t *testing.T) {
 	kasus := []struct {
-		nama      string
-		branchCNC bool
-		diminta   bool
-		mauErr    bool
+		nama         string
+		saldo, total int64
 	}{
-		{"cabang C&C meminta C&C", true, true, false},
-		{"cabang C&C tanpa C&C", true, false, false},
-		{"cabang biasa tanpa C&C", false, false, false},
-		{"cabang biasa memalsukan C&C", false, true, true},
+		{"saldo cukup", 500_000, 320_000},
+		{"saldo kurang", 100_000, 320_000},
+		{"saldo pas", 320_000, 320_000},
+		{"saldo nol", 0, 320_000},
+		{"pesanan bernilai nol", 500_000, 0},
 	}
 	for _, k := range kasus {
-		err := ValidateCNC(k.branchCNC, k.diminta)
-		if k.mauErr && !errors.Is(err, ErrCNCNotAllowed) {
-			t.Errorf("%s: mau ErrCNCNotAllowed, dapat %v", k.nama, err)
+		p := PotonganDeposit(k.saldo, k.total)
+		if p < 0 || p > k.saldo || p > k.total {
+			t.Errorf("%s: potongan %d keluar dari batas saldo %d / total %d", k.nama, p, k.saldo, k.total)
 		}
-		if !k.mauErr && err != nil {
-			t.Errorf("%s: tidak boleh gagal, dapat %v", k.nama, err)
+		if sisa := k.total - p; sisa > 0 && p != k.saldo {
+			t.Errorf("%s: sisa transfer %d padahal saldo %d belum habis terpakai", k.nama, sisa, k.saldo)
 		}
 	}
 }
 
 // TestTanggalWIBLintasTengahMalam memverifikasi CP-ORD-06/BR-04: tanggal bisnis
 // memakai zona Asia/Jakarta (UTC+7), bukan UTC — sehingga submit pukul 00:30
-// WIB tercatat pada tanggal yang benar dan tenggat C&C-nya ikut benar.
+// WIB tercatat pada tanggal yang benar.
 func TestTanggalWIBLintasTengahMalam(t *testing.T) {
 	kasus := []struct {
 		nama string
@@ -282,33 +281,5 @@ func TestTanggalWIBLintasTengahMalam(t *testing.T) {
 		if got.Location() != clock.Jakarta() {
 			t.Errorf("%s: tanggal bisnis harus di zona WIB, dapat %v", k.nama, got.Location())
 		}
-		// Tenggat C&C = tanggal pesanan + cnc_hari.
-		if jt := JatuhTempo(got, 7); jt.Format(TanggalLayout) != lebihHari(k.mau, 7) {
-			t.Errorf("%s: jatuh tempo 7 hari salah: %s", k.nama, jt.Format(TanggalLayout))
-		}
-	}
-}
-
-// lebihHari menambahkan n hari pada tanggal YYYY-MM-DD (pembanding uji).
-func lebihHari(tanggal string, n int) string {
-	d, err := time.Parse(TanggalLayout, tanggal)
-	if err != nil {
-		return "tanggal-tidak-valid"
-	}
-	return d.AddDate(0, 0, n).Format(TanggalLayout)
-}
-
-// TestJatuhTempoLintasBulan memastikan penambahan cnc_hari tidak meleset saat
-// melewati batas bulan/tahun (mis. 31 Desember + 7 hari).
-func TestJatuhTempoLintasBulan(t *testing.T) {
-	tanggal, err := time.Parse(TanggalLayout, "2026-12-31")
-	if err != nil {
-		t.Fatalf("tanggal uji: %v", err)
-	}
-	if got := JatuhTempo(tanggal, 7).Format(TanggalLayout); got != "2027-01-07" {
-		t.Errorf("31 Des 2026 + 7 hari harus 2027-01-07, dapat %s", got)
-	}
-	if got := JatuhTempo(tanggal, 0).Format(TanggalLayout); got != "2026-12-31" {
-		t.Errorf("cnc_hari 0 harus tetap tanggal pesanan, dapat %s", got)
 	}
 }

@@ -98,7 +98,7 @@ Navigasi (sidebar desktop / bottom-bar mobile): **Beranda · Katalog · Pesanan 
 
 ### 3.3 Beranda
 
-Ringkasan untuk cabang: jumlah pesanan periode berjalan, pesanan menunggu verifikasi, draft yang belum dikirim, dan untuk cabang Cash & Carry — pengingat tagihan yang mendekati/melewati jatuh tempo. Shortcut "Buat pesanan" dan daftar 5 pesanan terakhir.
+Ringkasan untuk cabang: jumlah pesanan periode berjalan, pesanan menunggu verifikasi, dan draft yang belum dikirim. Shortcut "Buat pesanan" dan daftar 5 pesanan terakhir.
 
 ### 3.4 Katalog (read-only)
 
@@ -138,15 +138,15 @@ Ringkasan untuk cabang: jumlah pesanan periode berjalan, pesanan menunggu verifi
 
 ### 3.7 Cash & Carry
 
+Cash & Carry adalah **sistem deposit** (keputusan user 2026-10-18): cabang berflag C&C menyetor deposit lebih dulu, lalu pesanannya dibayar dari saldo deposit itu. Tidak ada lagi utang C&C, jatuh tempo, maupun pengingat jatuh tempo. Kontrak saldo, top-up, dan settlement ada di `design/branch-deposit.md`.
+
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
-| CP-CNC-01 | Opsi C&C hanya muncul untuk cabang dengan flag `cash_and_carry` aktif. | Must |
-| CP-CNC-02 | Saat submit, user mencentang C&C → unggah bukti transfer menjadi opsional. | Must |
+| CP-CNC-01 | Cabang C&C ditentukan flag `cash_and_carry` di master cabang (dibaca server, tidak dipilih cabang saat submit). Hanya cabang C&C yang memakai deposit: menu Deposit dan top-up hanya untuk cabang ini. Cabang non-C&C tetap membayar dengan transfer + bukti per pesanan. | Must |
+| CP-CNC-02 | Saat submit, saldo deposit cabang C&C langsung dipotong sebesar `min(saldo, total)` di dalam transaksi submit. Bila saldo cukup, bukti transfer tidak diperlukan; bila kurang, sisanya wajib ditransfer dengan minimal satu bukti. Saldo yang berubah sejak ditampilkan membatalkan submit (tidak ada potongan diam-diam). | Must |
 | CP-CNC-03 | Pesanan C&C diberi penanda jelas di portal cabang dan admin. | Must |
-| CP-CNC-04 | Sistem menghitung jatuh tempo = tanggal pesanan + `cnc_hari` (default 7 hari). | Must |
-| CP-CNC-05 | Email reminder dikirim ke cabang H-2 sebelum jatuh tempo, pada hari jatuh tempo, dan H+1/H+3 jika masih belum lunas. | Must |
-| CP-CNC-06 | Pesanan C&C yang lewat jatuh tempo muncul sebagai "perlu tindakan" di dashboard admin. | Must |
-| CP-CNC-07 | Pesanan C&C menjadi Done setelah pembayaran diverifikasi admin (bukti diunggah cabang atau admin). | Must |
+| CP-CNC-04 | Top-up deposit diunggah cabang C&C dan baru menambah saldo setelah diverifikasi Superadmin. | Must |
+| CP-CNC-05 | Pesanan C&C tetap Submitted sampai admin memverifikasi rincian pembayarannya (deposit + transfer = total); tidak ada Done otomatis. | Must |
 
 ### 3.8 Riwayat invoice, Profil, Tutorial
 
@@ -166,7 +166,7 @@ Navigasi sesuai prototype: **Menu** (Dashboard, Riwayat pemesanan) · **Data mas
 |---|---|---|
 | AP-DSH-01 | Filter global: pilihan cabang (semua / satu cabang) dan periode (hari, minggu, bulan, tahun ini). | Must |
 | AP-DSH-02 | Superadmin melihat metrik dalam rupiah; Manager melihat metrik dalam jumlah pesanan. | Must |
-| AP-DSH-03 | Chip "perlu tindakan": menunggu verifikasi, perlu review, C&C lewat jatuh tempo, email gagal — dapat diklik ke daftar terfilter dan dapat disembunyikan. | Must |
+| AP-DSH-03 | Chip "perlu tindakan": menunggu verifikasi, perlu review, email gagal — dapat diklik ke daftar terfilter dan dapat disembunyikan. | Must |
 | AP-DSH-04 | Grafik: tren 12 bulan berjalan dan tren harian bulan berjalan. | Should |
 | AP-DSH-05 | Ringkasan status pembayaran periode terpilih (terverifikasi / menunggu / perlu review). | Should |
 | AP-DSH-06 | Peringkat cabang berdasarkan nilai atau jumlah pesanan. | Could |
@@ -176,7 +176,7 @@ Navigasi sesuai prototype: **Menu** (Dashboard, Riwayat pemesanan) · **Data mas
 
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
-| AP-ORD-01 | Daftar pesanan seluruh cabang dengan pencarian (nomor, cabang, serial number) dan filter: status, status verifikasi, C&C, lewat jatuh tempo, email gagal, rentang tanggal. | Must |
+| AP-ORD-01 | Daftar pesanan seluruh cabang dengan pencarian (nomor, cabang, serial number) dan filter: status, status verifikasi, C&C, email gagal, rentang tanggal. | Must |
 | AP-ORD-02 | Grouping: tanpa grup, per cabang, per hari, per bulan, per tahun. | Must |
 | AP-ORD-03 | Paginasi server-side. | Must |
 | AP-ORD-04 | Detail pesanan: header, order line + serial number, bukti transfer (dengan zoom), timeline, catatan, dokumen, log verifikasi, riwayat email. | Must |
@@ -249,7 +249,6 @@ Field: Bank (BCA / BRI), Nama di rekening, Nomor rekening, Aktif. Rekening aktif
 | Setting | Default | Keterangan |
 |---|---|---|
 | `biaya_packaging` | 3000 | Biaya packaging pesanan sertifikat |
-| `cnc_hari` | 7 | Tenggat pembayaran Cash & Carry |
 | `token_hari` | 14 | Masa berlaku token registrasi |
 | `reset_menit` | 60 | Masa berlaku link reset password |
 | `max_mb` / `max_file` | 5 / 5 | Batas unggah bukti transfer |
@@ -297,7 +296,7 @@ Aturan AI:
 | Surat Jalan | XLSX + PDF | Status → Done | Email admin ber-flag Surat Jalan |
 | Laporan | XLSX | Diminta Superadmin | Unduhan |
 
-Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi revisi), tanggal, data cabang, rincian order line dengan serial number, biaya packaging bila ada, total, rekening pembayaran, dan penanda Cash & Carry atau LUNAS.
+Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi revisi), tanggal, data cabang, rincian order line dengan serial number, biaya packaging bila ada, total, rekening pembayaran, dan penanda LUNAS (pesanan C&C: "LUNAS — CASH & CARRY").
 
 ### 6.2 Email
 
@@ -308,7 +307,6 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 | Invoice | Email cabang | Status Done & setiap revisi |
 | Invoice | Admin ber-flag Invoice | Status Done & setiap revisi |
 | Surat Jalan (XLSX + PDF) | Admin ber-flag Surat Jalan | Status Done |
-| Reminder Cash & Carry | Email cabang | H-2, H-0, H+1, H+3 dari jatuh tempo |
 
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
@@ -330,7 +328,7 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 | BR-05 | Harga order line di-snapshot saat submit dan tidak ikut berubah bila master harga berubah. |
 | BR-06 | Produk Sertifikat: harga 0, otomatis + baris biaya packaging, tidak boleh digabung produk lain, satu invoice tersendiri. |
 | BR-07 | Pesanan Submitted/Done terkunci untuk cabang; perubahan hanya lewat revisi invoice oleh admin. |
-| BR-08 | Pesanan C&C: bukti transfer opsional saat submit, jatuh tempo = tanggal pesanan + `cnc_hari`. |
+| BR-08 | Pesanan C&C dibayar dari saldo deposit saat submit; bukti transfer hanya untuk sisa yang tidak tertutup saldo. Tidak ada jatuh tempo. |
 | BR-09 | Penomoran hanya diberikan saat submit berhasil; nomor tidak boleh bolong atau dipakai ulang. |
 | BR-10 | Semua perhitungan uang dalam Rupiah bulat (tanpa sen). |
 | BR-11 | Semua tanggal bisnis memakai zona waktu Asia/Jakarta; penyimpanan memakai UTC. |
@@ -356,7 +354,7 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 |---|---|---|
 | 1 | Apa efek flag **Special** pada cabang (harga? termin? template invoice?) | Logika harga & invoice |
 | 2 | Apa efek **Pajak In (PI)** — apakah invoice perlu baris PPN/materai? | Perhitungan total & layout invoice |
-| 3 | Apakah C&C otomatis Done saat jatuh tempo lewat tanpa bayar, atau tetap menunggu verifikasi? | State machine |
+| 3 | ~~Apakah C&C otomatis Done saat jatuh tempo lewat tanpa bayar?~~ Diputus 2026-10-18: C&C adalah sistem deposit tanpa jatuh tempo; pesanan tetap diverifikasi admin (CP-CNC-05). | State machine |
 | 4 | Apakah cabang boleh membatalkan pesanan Submitted (status Batal)? | State machine & penomoran |
 | 5 | Email Pusat untuk Surat Jalan: cukup via flag per admin, atau ada alamat tetap tambahan? | Konfigurasi email |
 | 6 | Apakah nomor invoice berlanjut lintas cabang (global per bulan) atau per cabang? | Penomoran — asumsi saat ini: global per bulan |
@@ -373,7 +371,7 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 2. Dua cabang dengan harga berbeda melihat harga masing-masing untuk produk yang sama.
 3. Submit 100 pesanan paralel menghasilkan 100 nomor invoice dan serial number unik berurutan tanpa bolong.
 4. Memilih Sertifikat memunculkan baris biaya packaging Rp3.000 otomatis dan menolak pencampuran produk lain.
-5. C&C dapat submit tanpa bukti; reminder terkirim H-2 dan jatuh tempo tampil di dashboard admin.
+5. Cabang C&C bersaldo cukup dapat submit tanpa bukti dan saldonya terpotong tepat sebesar total; saldo kurang mewajibkan bukti untuk sisanya; dua submit yang berebut saldo tidak pernah membuat saldo negatif.
 6. Verifikasi cocok mengubah status ke Done, menghasilkan Invoice PDF + Surat Jalan XLSX/PDF, dan mengirim email sesuai flag penerima.
 7. Email gagal muncul di chip dashboard dan berhasil dikirim ulang.
 8. Revisi invoice menaikkan versi, menyimpan PDF lama, dan mengirim ulang invoice baru.
@@ -388,5 +386,5 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 | Fase | Isi |
 |---|---|
 | **F1 — MVP (inti)** | Auth & token, master cabang/produk/harga/rekening, pesanan + sertifikat + C&C, unggah bukti, verifikasi manual, Invoice & Surat Jalan, email outbox, riwayat pemesanan, dashboard, user management, pengaturan, backup harian. |
-| **F2 — Otomasi** | Verifikasi AI/OCR, reminder C&C otomatis, reporting lanjutan + ekspor asinkron, revisi invoice, halaman tutorial dinamis, audit log UI. |
+| **F2 — Otomasi** | Verifikasi AI/OCR, reporting lanjutan + ekspor asinkron, revisi invoice, halaman tutorial dinamis, audit log UI. |
 | **F3 — Pembayaran** | Virtual Account BCA (lalu BRI), rekonsiliasi otomatis, laporan pembayaran. |

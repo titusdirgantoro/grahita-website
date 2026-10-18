@@ -12,14 +12,18 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/db/sqlc"
+	"github.com/grahita/portal/api/internal/deposit"
+	depositpg "github.com/grahita/portal/api/internal/deposit/postgres"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/jobs"
@@ -77,7 +81,6 @@ func (r *Repo) List(ctx context.Context, branchID, status string) ([]order.Order
 			IsCNC:        row.IsCnc,
 			IsSertifikat: row.IsSertifikat,
 			Tanggal:      tanggalOr(row.Tanggal),
-			JatuhTempo:   tanggalOr(row.JatuhTempo),
 			Catatan:      row.Catatan,
 			Total:        row.Total,
 			JumlahItem:   row.JumlahItem,
@@ -214,6 +217,9 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 //
 // Urutannya penting dan disengaja:
 //
+//  0. kunci policy rekening, lalu untuk cabang C&C kunci cabang -> akun deposit
+//     SEBELUM baris pesanan: urutan global D3 §5.1 yang sama dengan alokasi,
+//     reversal, dan verifikasi, sehingga tidak ada siklus deadlock;
 //  1. kunci baris pesanan (`FOR UPDATE`) memakai branch_id SESI — cegah double
 //     submit dan submit yang menembus pemeriksaan status (SystemDesign §5.3);
 //  2. baca baris draft beserta master produk dan harga cabang SAAT ITU, lalu
@@ -226,12 +232,17 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 //  4. nomor invoice (global bulanan) dan serial (harian, satu rentang untuk
 //     seluruh baris produk) diambil dari tabel counter DI DALAM transaksi yang
 //     sama; rollback karena itu tidak memakai nomor (BR-09);
-//  5. snapshot nama/harga disegarkan, serial ditulis, lalu status,
-//     nomor, tanggal WIB, tenggat C&C, total, dan timeline ditulis; trigger
-//     orders_guard_submit menjadi benteng terakhir atas invariant isi pesanan.
+//  5. snapshot nama/harga disegarkan dan serial ditulis; untuk C&C potongan
+//     deposit dihitung dari total final + saldo terkunci (versi saldo harus
+//     sama dengan yang dilihat cabang), sisanya wajib berbukti dan berekening
+//     efektif;
+//  6. status, nomor, tanggal WIB, total, debit deposit, dan timeline ditulis;
+//     trigger orders_guard_submit menjadi benteng terakhir atas invariant isi
+//     pesanan.
 //
 // Kegagalan di langkah mana pun membatalkan seluruhnya: tidak ada nomor yang
-// terpakai, tidak ada baris yang berubah, dan tidak ada timeline yang tertulis.
+// terpakai, tidak ada saldo yang terdebit, tidak ada baris yang berubah, dan
+// tidak ada timeline yang tertulis.
 func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -239,11 +250,21 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := r.q.WithTx(tx)
-	if !req.IsCNC {
-		// Ambil lock policy sebelum lock baris order. Urutan yang sama dipakai
-		// upload/verifikasi agar tidak membentuk siklus deadlock order↔policy.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
-			return order.Order{}, fmt.Errorf("kunci kebijakan rekening: %w", err)
+	// Ambil lock policy sebelum lock baris order. Urutan yang sama dipakai
+	// upload/verifikasi agar tidak membentuk siklus deadlock order↔policy.
+	// Pesanan C&C juga memerlukannya: sisa yang tidak tertutup deposit dibayar
+	// transfer ke rekening efektif cabang.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
+		return order.Order{}, fmt.Errorf("kunci kebijakan rekening: %w", err)
+	}
+	var akun deposit.Account
+	if req.IsCNC {
+		akun, err = depositpg.LockAccount(ctx, tx, req.BranchID)
+		if err != nil {
+			return order.Order{}, fmt.Errorf("kunci akun deposit: %w", err)
+		}
+		if akun.JournalVersion != req.ExpectedJournalVersion {
+			return order.Order{}, order.ErrDepositChanged
 		}
 	}
 
@@ -261,19 +282,8 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	if !req.IsCNC {
 		// Serialisasi submit dengan perubahan policy rekening. Dengan demikian
 		// rekening yang dicabut serentak tidak bisa lolos lewat pra-cek service.
-		var tersedia bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM branches b
-				JOIN branch_bank_accounts bba ON bba.branch_id = b.id AND bba.is_allowed
-				JOIN bank_accounts ba ON ba.id = bba.bank_account_id AND ba.is_active
-				WHERE b.id = $1 AND b.is_active
-			)`, req.BranchID).Scan(&tersedia); err != nil {
-			return order.Order{}, fmt.Errorf("periksa rekening efektif cabang: %w", err)
-		}
-		if !tersedia {
-			return order.Order{}, bank.ErrUnavailable
+		if err := wajibRekeningEfektif(ctx, tx, req.BranchID); err != nil {
+			return order.Order{}, err
 		}
 	}
 
@@ -400,19 +410,34 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 		return order.Order{}, fmt.Errorf("query SumOrderLineSubtotals: %w", err)
 	}
 
-	params := sqlc.SetOrderSubmittedParams{
+	// Cash & Carry: deposit membayar sebanyak mungkin dari saldo yang sama
+	// dengan tampilan cabang; sisanya wajib berbukti ke rekening efektif cabang
+	// (CP-CNC-02, D3 §3.4).
+	var potong int64
+	if req.IsCNC {
+		potong = order.PotonganDeposit(akun.Balance, total)
+		if total > potong {
+			if err := wajibRekeningEfektif(ctx, tx, req.BranchID); err != nil {
+				return order.Order{}, err
+			}
+			jumlah, err := q.CountPaymentProofs(ctx, req.ID)
+			if err != nil {
+				return order.Order{}, fmt.Errorf("query CountPaymentProofs: %w", err)
+			}
+			if jumlah < 1 {
+				return order.Order{}, order.ErrProofRequired
+			}
+		}
+	}
+
+	changed, err := q.SetOrderSubmitted(ctx, sqlc.SetOrderSubmittedParams{
 		Nomor:    pgtypes.Text(nomor),
 		Tanggal:  req.Tanggal,
 		IsCnc:    req.IsCNC,
 		Total:    total,
 		ID:       req.ID,
 		BranchID: req.BranchID,
-	}
-	if !req.JatuhTempo.IsZero() {
-		jt := req.JatuhTempo
-		params.JatuhTempo = &jt
-	}
-	changed, err := q.SetOrderSubmitted(ctx, params)
+	})
 	if err != nil {
 		return order.Order{}, fmt.Errorf("query SetOrderSubmitted: %w", err)
 	}
@@ -429,6 +454,20 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 		ActorID:   pgtypes.UUID(req.ActorID),
 	}); err != nil {
 		return order.Order{}, fmt.Errorf("query InsertOrderEvent: %w", err)
+	}
+	if potong > 0 {
+		if err := debitDepositSubmit(ctx, tx, req, potong); err != nil {
+			return order.Order{}, err
+		}
+		if err := q.InsertOrderEvent(ctx, sqlc.InsertOrderEventParams{
+			OrderID:   req.ID,
+			Icon:      pgtypes.Text("wallet"),
+			Teks:      order.TeksEventDeposit(potong),
+			ActorKind: sqlc.ActorKindBranch,
+			ActorID:   pgtypes.UUID(req.ActorID),
+		}); err != nil {
+			return order.Order{}, fmt.Errorf("query InsertOrderEvent(deposit): %w", err)
+		}
 	}
 
 	// Pekerjaan pembacaan bukti AI/OCR (kartu F2-26) DITITIPKAN pada transaksi
@@ -454,6 +493,45 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 		return order.Order{}, fmt.Errorf("commit submit: %w", err)
 	}
 	return saved, nil
+}
+
+// wajibRekeningEfektif menolak transfer bila cabang tidak punya rekening tujuan
+// efektif (D2). Pemanggil sudah memegang advisory lock policy rekening.
+func wajibRekeningEfektif(ctx context.Context, tx pgx.Tx, branchID string) error {
+	var tersedia bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM branches b
+			JOIN branch_bank_accounts bba ON bba.branch_id = b.id AND bba.is_allowed
+			JOIN bank_accounts ba ON ba.id = bba.bank_account_id AND ba.is_active
+			WHERE b.id = $1 AND b.is_active
+		)`, branchID).Scan(&tersedia); err != nil {
+		return fmt.Errorf("periksa rekening efektif cabang: %w", err)
+	}
+	if !tersedia {
+		return bank.ErrUnavailable
+	}
+	return nil
+}
+
+// debitDepositSubmit mendebit saldo deposit untuk pesanan C&C yang baru
+// Submitted. Kunci idempotensi diturunkan dari id pesanan: submit hanya terjadi
+// sekali per pesanan, dan ledger menolak debit kedua dengan kunci yang sama.
+func debitDepositSubmit(ctx context.Context, tx pgx.Tx, req order.SubmitRequest, potong int64) error {
+	var versi int32
+	if err := tx.QueryRow(ctx, `SELECT versi FROM orders WHERE id = $1`, req.ID).Scan(&versi); err != nil {
+		return fmt.Errorf("baca versi pesanan: %w", err)
+	}
+	sidik := sha256.Sum256([]byte("submit-deposit|" + req.ID + "|" + strconv.FormatInt(potong, 10)))
+	if _, _, err := depositpg.AllocateLocked(ctx, tx, depositpg.DebitLocked{
+		BranchID: req.BranchID, OrderID: req.ID, OrderVersion: versi, Amount: potong,
+		IdempotencyKey: "order-submit:" + req.ID, RequestFingerprint: sidik[:],
+		ActorKind: "branch", ActorID: req.ActorID,
+	}); err != nil {
+		return fmt.Errorf("debit deposit submit: %w", err)
+	}
+	return nil
 }
 
 // Scope counter penomoran (Database.md §6): invoice global per bulan, serial
@@ -486,7 +564,6 @@ func loadOrder(ctx context.Context, q *sqlc.Queries, id, branchID string) (order
 		IsCNC:        row.IsCnc,
 		IsSertifikat: row.IsSertifikat,
 		Tanggal:      tanggalOr(row.Tanggal),
-		JatuhTempo:   tanggalOr(row.JatuhTempo),
 		Catatan:      row.Catatan,
 		Total:        row.Total,
 		JumlahItem:   row.JumlahItem,

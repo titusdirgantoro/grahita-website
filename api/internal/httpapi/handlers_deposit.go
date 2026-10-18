@@ -54,6 +54,8 @@ var depositErrs = []struct {
 	{deposit.ErrOrderNotSubmitted, http.StatusConflict, "ORDER_NOT_SUBMITTED", "Pesanan belum dikirim."},
 	{deposit.ErrReconciliation, http.StatusServiceUnavailable, "DEPOSIT_RECONCILIATION_REQUIRED", "Saldo deposit perlu direkonsiliasi. Hubungi admin Pusat."},
 	{deposit.ErrNotFound, http.StatusNotFound, "NOT_FOUND", "Data tidak ditemukan."},
+	{deposit.ErrTopupCNCOnly, http.StatusForbidden, "DEPOSIT_CNC_ONLY", "Top-up deposit hanya untuk cabang Cash & Carry."},
+	{order.ErrDepositChanged, http.StatusConflict, "DEPOSIT_CHANGED", "Saldo deposit berubah sejak ditampilkan. Periksa lagi rincian pembayaran lalu kirim ulang."},
 	// Settlement campuran dan revisi berdeposit (C3; D3 §6.3, C0 §5.3).
 	{payment.ErrBreakdownMismatch, http.StatusUnprocessableEntity, "PAYMENT_BREAKDOWN_MISMATCH", "Rincian deposit dan transfer tidak tepat sama dengan total pesanan."},
 	{payment.ErrOverpayDecisionRequired, http.StatusConflict, "OVERPAY_DECISION_REQUIRED", "Ada lebih bayar yang harus diputuskan sebagai kredit deposit oleh Superadmin."},

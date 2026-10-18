@@ -21,23 +21,18 @@ SELECT count(*)::bigint AS total
    AND ($3::verif_status IS NULL OR o.verif_status = $3::verif_status)
    AND ($4::bool IS NULL OR o.is_cnc = $4::bool)
    AND ($5::bool IS NULL
-        OR ($5::bool AND COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false))
-        OR (NOT $5::bool AND NOT COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)))
-   AND ($6::bool IS NULL
-        OR ($6::bool AND o.id = ANY($7::uuid[]))
-        OR (NOT $6::bool AND NOT (o.id = ANY($7::uuid[]))))
+        OR ($5::bool AND o.id = ANY($6::uuid[]))
+        OR (NOT $5::bool AND NOT (o.id = ANY($6::uuid[]))))
+   AND ($7::date IS NULL
+        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $7::date)
    AND ($8::date IS NULL
-        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $8::date)
-   AND ($9::date IS NULL
-        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $9::date)
-   AND ($10::text IS NULL
-        OR o.nomor ILIKE '%' || $10::text || '%'
-        OR b.nama ILIKE '%' || $10::text || '%'
+        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $8::date)
+   AND ($9::text IS NULL
+        OR o.nomor ILIKE '%' || $9::text || '%'
+        OR b.nama ILIKE '%' || $9::text || '%'
         OR EXISTS (SELECT 1 FROM order_lines l
                     WHERE l.order_id = o.id
-                      AND l.serial_number ILIKE '%' || $10::text || '%'))
+                      AND l.serial_number ILIKE '%' || $9::text || '%'))
 `
 
 type CountAdminOrdersParams struct {
@@ -45,7 +40,6 @@ type CountAdminOrdersParams struct {
 	Status        NullOrderStatus `json:"status"`
 	VerifStatus   NullVerifStatus `json:"verif_status"`
 	IsCnc         pgtype.Bool     `json:"is_cnc"`
-	Terlambat     pgtype.Bool     `json:"terlambat"`
 	EmailGagal    pgtype.Bool     `json:"email_gagal"`
 	EmailGagalIds []string        `json:"email_gagal_ids"`
 	Dari          *time.Time      `json:"dari"`
@@ -60,7 +54,6 @@ func (q *Queries) CountAdminOrders(ctx context.Context, arg CountAdminOrdersPara
 		arg.Status,
 		arg.VerifStatus,
 		arg.IsCnc,
-		arg.Terlambat,
 		arg.EmailGagal,
 		arg.EmailGagalIds,
 		arg.Dari,
@@ -87,14 +80,11 @@ SELECT o.id,
        o.is_cnc,
        o.is_sertifikat,
        o.tanggal,
-       o.jatuh_tempo,
        COALESCE(o.catatan, '')                                     AS catatan,
        COALESCE(o.note_admin, '')                                  AS note_admin,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
                   WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
-       COALESCE(o.is_cnc AND o.status <> 'done'
-                AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)::bool AS terlambat,
        (o.id = ANY($1::uuid[]))::bool       AS email_gagal,
        o.submitted_at,
        o.done_at,
@@ -125,12 +115,10 @@ type GetAdminOrderRow struct {
 	IsCnc        bool       `json:"is_cnc"`
 	IsSertifikat bool       `json:"is_sertifikat"`
 	Tanggal      *time.Time `json:"tanggal"`
-	JatuhTempo   *time.Time `json:"jatuh_tempo"`
 	Catatan      string     `json:"catatan"`
 	NoteAdmin    string     `json:"note_admin"`
 	Total        int64      `json:"total"`
 	JumlahItem   int64      `json:"jumlah_item"`
-	Terlambat    bool       `json:"terlambat"`
 	EmailGagal   bool       `json:"email_gagal"`
 	SubmittedAt  *time.Time `json:"submitted_at"`
 	DoneAt       *time.Time `json:"done_at"`
@@ -157,12 +145,10 @@ func (q *Queries) GetAdminOrder(ctx context.Context, arg GetAdminOrderParams) (G
 		&i.IsCnc,
 		&i.IsSertifikat,
 		&i.Tanggal,
-		&i.JatuhTempo,
 		&i.Catatan,
 		&i.NoteAdmin,
 		&i.Total,
 		&i.JumlahItem,
-		&i.Terlambat,
 		&i.EmailGagal,
 		&i.SubmittedAt,
 		&i.DoneAt,
@@ -190,23 +176,18 @@ SELECT CASE $1::text
    AND ($4::verif_status IS NULL OR o.verif_status = $4::verif_status)
    AND ($5::bool IS NULL OR o.is_cnc = $5::bool)
    AND ($6::bool IS NULL
-        OR ($6::bool AND COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false))
-        OR (NOT $6::bool AND NOT COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)))
-   AND ($7::bool IS NULL
-        OR ($7::bool AND o.id = ANY($8::uuid[]))
-        OR (NOT $7::bool AND NOT (o.id = ANY($8::uuid[]))))
+        OR ($6::bool AND o.id = ANY($7::uuid[]))
+        OR (NOT $6::bool AND NOT (o.id = ANY($7::uuid[]))))
+   AND ($8::date IS NULL
+        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $8::date)
    AND ($9::date IS NULL
-        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $9::date)
-   AND ($10::date IS NULL
-        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $10::date)
-   AND ($11::text IS NULL
-        OR o.nomor ILIKE '%' || $11::text || '%'
-        OR b.nama ILIKE '%' || $11::text || '%'
+        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $9::date)
+   AND ($10::text IS NULL
+        OR o.nomor ILIKE '%' || $10::text || '%'
+        OR b.nama ILIKE '%' || $10::text || '%'
         OR EXISTS (SELECT 1 FROM order_lines l
                     WHERE l.order_id = o.id
-                      AND l.serial_number ILIKE '%' || $11::text || '%'))
+                      AND l.serial_number ILIKE '%' || $10::text || '%'))
  GROUP BY 1, 2
 `
 
@@ -216,7 +197,6 @@ type GroupAdminOrdersParams struct {
 	Status        NullOrderStatus `json:"status"`
 	VerifStatus   NullVerifStatus `json:"verif_status"`
 	IsCnc         pgtype.Bool     `json:"is_cnc"`
-	Terlambat     pgtype.Bool     `json:"terlambat"`
 	EmailGagal    pgtype.Bool     `json:"email_gagal"`
 	EmailGagalIds []string        `json:"email_gagal_ids"`
 	Dari          *time.Time      `json:"dari"`
@@ -242,7 +222,6 @@ func (q *Queries) GroupAdminOrders(ctx context.Context, arg GroupAdminOrdersPara
 		arg.Status,
 		arg.VerifStatus,
 		arg.IsCnc,
-		arg.Terlambat,
 		arg.EmailGagal,
 		arg.EmailGagalIds,
 		arg.Dari,
@@ -280,7 +259,6 @@ SELECT o.id,
        o.branch_id,
        b.nama                                                      AS branch_nama,
        o.tanggal,
-       o.jatuh_tempo,
        o.status::text                                              AS status,
        o.verif_status::text                                        AS verif_status,
        o.is_cnc,
@@ -288,8 +266,6 @@ SELECT o.id,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
                   WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
-       COALESCE(o.is_cnc AND o.status <> 'done'
-                AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)::bool AS terlambat,
        (o.id = ANY($1::uuid[]))::bool       AS email_gagal,
        o.submitted_at,
        o.created_at,
@@ -301,26 +277,21 @@ SELECT o.id,
    AND ($4::verif_status IS NULL OR o.verif_status = $4::verif_status)
    AND ($5::bool IS NULL OR o.is_cnc = $5::bool)
    AND ($6::bool IS NULL
-        OR ($6::bool AND COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false))
-        OR (NOT $6::bool AND NOT COALESCE(o.is_cnc AND o.status <> 'done'
-             AND o.jatuh_tempo < (now() AT TIME ZONE 'Asia/Jakarta')::date, false)))
-   AND ($7::bool IS NULL
-        OR ($7::bool AND o.id = ANY($1::uuid[]))
-        OR (NOT $7::bool AND NOT (o.id = ANY($1::uuid[]))))
+        OR ($6::bool AND o.id = ANY($1::uuid[]))
+        OR (NOT $6::bool AND NOT (o.id = ANY($1::uuid[]))))
+   AND ($7::date IS NULL
+        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $7::date)
    AND ($8::date IS NULL
-        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) >= $8::date)
-   AND ($9::date IS NULL
-        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $9::date)
-   AND ($10::text IS NULL
-        OR o.nomor ILIKE '%' || $10::text || '%'
-        OR b.nama ILIKE '%' || $10::text || '%'
+        OR COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date) <= $8::date)
+   AND ($9::text IS NULL
+        OR o.nomor ILIKE '%' || $9::text || '%'
+        OR b.nama ILIKE '%' || $9::text || '%'
         OR EXISTS (SELECT 1 FROM order_lines l
                     WHERE l.order_id = o.id
-                      AND l.serial_number ILIKE '%' || $10::text || '%'))
- ORDER BY CASE WHEN $11::text = 'cabang' THEN b.nama END ASC NULLS LAST,
-       CASE WHEN $11::text IN ('hari', 'bulan', 'tahun') THEN
-         CASE $11::text
+                      AND l.serial_number ILIKE '%' || $9::text || '%'))
+ ORDER BY CASE WHEN $10::text = 'cabang' THEN b.nama END ASC NULLS LAST,
+       CASE WHEN $10::text IN ('hari', 'bulan', 'tahun') THEN
+         CASE $10::text
            WHEN 'hari'  THEN to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date), 'YYYY-MM-DD')
            WHEN 'bulan' THEN to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date), 'YYYY-MM')
            WHEN 'tahun' THEN to_char(COALESCE(o.tanggal, (o.created_at AT TIME ZONE 'Asia/Jakarta')::date), 'YYYY')
@@ -329,7 +300,7 @@ SELECT o.id,
        COALESCE(o.tanggal::timestamptz, o.created_at) DESC,
        o.created_at DESC,
        o.id DESC
- LIMIT $13::int OFFSET $12::int
+ LIMIT $12::int OFFSET $11::int
 `
 
 type ListAdminOrdersParams struct {
@@ -338,7 +309,6 @@ type ListAdminOrdersParams struct {
 	Status        NullOrderStatus `json:"status"`
 	VerifStatus   NullVerifStatus `json:"verif_status"`
 	IsCnc         pgtype.Bool     `json:"is_cnc"`
-	Terlambat     pgtype.Bool     `json:"terlambat"`
 	EmailGagal    pgtype.Bool     `json:"email_gagal"`
 	Dari          *time.Time      `json:"dari"`
 	Sampai        *time.Time      `json:"sampai"`
@@ -355,14 +325,12 @@ type ListAdminOrdersRow struct {
 	BranchID     string     `json:"branch_id"`
 	BranchNama   string     `json:"branch_nama"`
 	Tanggal      *time.Time `json:"tanggal"`
-	JatuhTempo   *time.Time `json:"jatuh_tempo"`
 	Status       string     `json:"status"`
 	VerifStatus  string     `json:"verif_status"`
 	IsCnc        bool       `json:"is_cnc"`
 	IsSertifikat bool       `json:"is_sertifikat"`
 	Total        int64      `json:"total"`
 	JumlahItem   int64      `json:"jumlah_item"`
-	Terlambat    bool       `json:"terlambat"`
 	EmailGagal   bool       `json:"email_gagal"`
 	SubmittedAt  *time.Time `json:"submitted_at"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -377,7 +345,7 @@ type ListAdminOrdersRow struct {
 //
 // Tiga hal yang dijaga di sini:
 //   - seluruh tanggal BISNIS memakai zona Asia/Jakarta (PRD §7.2) — bukan UTC —
-//     termasuk grouping per hari/bulan/tahun dan penanda "lewat jatuh tempo";
+//     termasuk grouping per hari/bulan/tahun;
 //   - daftar SELALU dipaginasi di server (LIMIT/OFFSET) dan ringkasan grup
 //     dihitung agregat, sehingga pesanan besar tidak pernah diunduh seluruhnya
 //     ke browser (AP-ORD-03);
@@ -398,7 +366,6 @@ func (q *Queries) ListAdminOrders(ctx context.Context, arg ListAdminOrdersParams
 		arg.Status,
 		arg.VerifStatus,
 		arg.IsCnc,
-		arg.Terlambat,
 		arg.EmailGagal,
 		arg.Dari,
 		arg.Sampai,
@@ -421,14 +388,12 @@ func (q *Queries) ListAdminOrders(ctx context.Context, arg ListAdminOrdersParams
 			&i.BranchID,
 			&i.BranchNama,
 			&i.Tanggal,
-			&i.JatuhTempo,
 			&i.Status,
 			&i.VerifStatus,
 			&i.IsCnc,
 			&i.IsSertifikat,
 			&i.Total,
 			&i.JumlahItem,
-			&i.Terlambat,
 			&i.EmailGagal,
 			&i.SubmittedAt,
 			&i.CreatedAt,

@@ -11,8 +11,7 @@
 
 -- name: ListOrdersForBranch :many
 -- Daftar pesanan satu cabang: nomor, tanggal, jumlah item (Σ qty baris produk),
--- total, status, penanda C&C (PRD CP-ORD-01), dan jatuh tempo C&C (CP-CNC-04)
--- supaya beranda bisa menampilkan pengingat C&C lewat jatuh tempo (PRD §3.3).
+-- total, status, dan penanda C&C (PRD CP-ORD-01).
 -- Filter status opsional; draft punya nomor/tanggal NULL sehingga diurutkan
 -- memakai created_at.
 SELECT o.id,
@@ -23,7 +22,6 @@ SELECT o.id,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
-       o.jatuh_tempo,
        COALESCE(o.catatan, '') AS catatan,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
@@ -48,7 +46,6 @@ SELECT o.id,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
-       o.jatuh_tempo,
        COALESCE(o.catatan, '') AS catatan,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
@@ -120,7 +117,7 @@ SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot,
 -- Seluruh query di bawah ini dipanggil DI DALAM SATU transaksi repository
 -- Submit, dengan urutan: kunci baris pesanan → baca baris + master + harga
 -- cabang → validasi ulang → ambil nomor invoice/serial → tulis snapshot,
--- serial, status, tanggal, jatuh tempo, total, dan timeline. Karena penomoran
+-- serial, status, tanggal, total, debit deposit C&C, dan timeline. Karena penomoran
 -- memakai tabel counter (bukan SEQUENCE) dan berada di transaksi yang sama,
 -- submit yang gagal/rollback tidak memakai nomor (BR-09) dan submit
 -- bersamaan tidak bisa mendapat nomor yang sama.
@@ -188,8 +185,8 @@ SELECT COALESCE(sum(subtotal), 0)::bigint AS total
  WHERE order_id = sqlc.arg(order_id)::uuid;
 
 -- name: SetOrderSubmitted :execrows
--- Transisi draft -> submitted: nomor, tanggal bisnis WIB, penanda C&C,
--- jatuh tempo (hanya C&C), total, dan waktu submit (UTC). Status 'draft'
+-- Transisi draft -> submitted: nomor, tanggal bisnis WIB, penanda C&C
+-- (cabang berdeposit), total, dan waktu submit (UTC). Status 'draft'
 -- diperiksa ulang di klausa WHERE supaya submit bersamaan tidak bisa
 -- menembus dua kali; trigger orders_guard_submit menegakkan invariant isi
 -- baris (serial lengkap, aturan sertifikat/packaging, total cocok).
@@ -198,7 +195,6 @@ UPDATE orders
        nomor        = sqlc.arg(nomor),
        tanggal      = sqlc.arg(tanggal)::date,
        is_cnc       = sqlc.arg(is_cnc),
-       jatuh_tempo  = sqlc.narg(jatuh_tempo)::date,
        total        = sqlc.arg(total),
        submitted_at = now()
  WHERE id = sqlc.arg(id)::uuid

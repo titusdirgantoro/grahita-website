@@ -259,8 +259,13 @@ function FormTopup({ onSukses }: { onSukses: () => void }) {
   );
 }
 
-/** DepositPage (/deposit): saldo, top-up, dan riwayat journal cabang sesi. */
+/**
+ * DepositPage (/deposit): saldo, top-up, dan riwayat journal cabang sesi.
+ * Deposit dipakai cabang Cash & Carry untuk membayar pesanan; cabang lain
+ * tidak bisa top-up, tetapi tetap melihat saldo (mis. kredit kelebihan bayar).
+ */
 export function DepositPage() {
+  const cabang = useApi<{ is_cnc: boolean }>("/me/branch");
   const ringkasan = useApi<RingkasanDeposit>("/deposit");
   const topup = useApi<TopupDeposit[]>("/deposit/topups?limit=50");
   const transaksi = useApi<TransaksiDeposit[]>("/deposit/transactions?limit=50");
@@ -274,14 +279,27 @@ export function DepositPage() {
 
   return (
     <>
-      <PageHead title="Deposit" sub="Saldo deposit milik cabang Anda" />
+      <PageHead
+        title="Deposit"
+        sub={
+          cabang.data?.is_cnc
+            ? "Saldo deposit dipakai otomatis saat cabang mengirim pesanan"
+            : "Saldo deposit milik cabang Anda"
+        }
+      />
       <div className={styles.detailGrid}>
         <div className={styles.stack}>
           {ringkasan.memuat ? <SkeletonList rows={2} /> : null}
           {ringkasan.galat ? <Notice tone="danger">{ringkasan.galat}</Notice> : null}
           {ringkasan.data ? <KartuSaldo data={ringkasan.data} /> : null}
           {sukses ? <Notice tone="success">{sukses}</Notice> : null}
-          <FormTopup onSukses={setelahTopup} />
+          {cabang.data?.is_cnc ? <FormTopup onSukses={setelahTopup} /> : null}
+          {cabang.data && !cabang.data.is_cnc ? (
+            <Notice tone="info">
+              Deposit hanya untuk cabang Cash &amp; Carry. Pesanan cabang Anda dibayar dengan transfer dan
+              bukti per pesanan.
+            </Notice>
+          ) : null}
           <Card>
             <CardHead title="Riwayat top-up" />
             {(topup.data ?? []).length === 0 && !topup.memuat ? (

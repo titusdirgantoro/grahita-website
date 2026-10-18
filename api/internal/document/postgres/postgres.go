@@ -140,7 +140,6 @@ func (r *Repo) OrderForDocument(ctx context.Context, orderID string) (document.O
 		IsSertifikat: row.IsSertifikat,
 		Total:        row.Total,
 		Catatan:      row.Catatan,
-		JatuhTempo:   row.JatuhTempo,
 		Cabang: document.Cabang{
 			Nama:    row.CabangNama,
 			Kepala:  row.CabangKepala,
@@ -291,7 +290,6 @@ func (r *Repo) ListInvoices(ctx context.Context, branchID string, dari, sampai *
 			UkuranByte: row.UkuranByte,
 		}
 		invoice.Tanggal = tanggalInvoice(row.Tanggal)
-		invoice.JatuhTempo = tanggalInvoice(row.JatuhTempo)
 		if row.DokumenID != "" && row.VersiDokumen >= 0 {
 			invoice.DokumenID = row.DokumenID
 			versi := int(row.VersiDokumen)

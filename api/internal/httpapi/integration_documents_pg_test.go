@@ -81,18 +81,13 @@ func (f *pgFixture) seedPesananDone(t *testing.T, branchID, nomor string, isCNC 
 	serial2 := "20261008" + basis + "2"
 
 	var id string
-	var jatuhTempo any
-	if isCNC {
-		jt := time.Date(2026, time.October, 15, 0, 0, 0, 0, time.UTC)
-		jatuhTempo = jt
-	}
 	total := int64(2*100000 + 50000)
 	err := f.pool.QueryRow(ctx,
-		`INSERT INTO orders (branch_id, nomor, status, tanggal, total, is_cnc, jatuh_tempo,
+		`INSERT INTO orders (branch_id, nomor, status, tanggal, total, is_cnc,
 		                     submitted_at, verif_status)
-		 VALUES ($1,$2,'submitted',DATE '2026-10-08',$3,$4,$5, now(), 'belum')
+		 VALUES ($1,$2,'submitted',DATE '2026-10-08',$3,$4, now(), 'belum')
 		 RETURNING id`,
-		branchID, nomor, total, isCNC, jatuhTempo).Scan(&id)
+		branchID, nomor, total, isCNC).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed pesanan done %s: %v", nomor, err)
 	}
@@ -324,8 +319,8 @@ func TestPGDokumenGenerateIdempotenDanIsolasi(t *testing.T) {
 		t.Fatalf("Ensure pesanan B: %v", err)
 	}
 	invoiceB := string(f.isiBerkas(t, document.StorageKey(pesananB.ID, "invoice_pdf", 0)))
-	if !strings.Contains(invoiceB, "CASH &amp; CARRY") {
-		t.Error("pesanan C&C harus ditandai CASH & CARRY")
+	if !strings.Contains(invoiceB, "LUNAS — CASH &amp; CARRY") {
+		t.Error("pesanan C&C (dibayar deposit) harus ditandai LUNAS — CASH & CARRY")
 	}
 
 	// 4) Surat jalan XLSX valid: satu baris per order line + serial.

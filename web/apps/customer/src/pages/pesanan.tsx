@@ -16,13 +16,12 @@ import {
   Segmented,
   Select,
   SkeletonList,
-  SwitchRow,
   Table,
   Textarea,
 } from "@grahita/ui";
 
 import { useApi } from "../useApi";
-import { KartuPembayaranPesanan } from "./deposit";
+import { KartuPembayaranPesanan, type RingkasanDeposit } from "./deposit";
 import styles from "./pesanan.module.css";
 
 const rupiah = new Intl.NumberFormat("id-ID", {
@@ -64,7 +63,6 @@ export interface Pesanan {
   is_cnc: boolean;
   is_sertifikat?: boolean;
   tanggal?: string;
-  jatuh_tempo?: string;
   catatan?: string;
   total: number;
   jumlah_item: number;
@@ -151,17 +149,6 @@ function tanggalTampil(o: Pesanan): string {
   if (!sumber) return "—";
   const t = new Date(o.tanggal ? `${sumber}T00:00:00` : sumber);
   if (Number.isNaN(t.getTime())) return sumber;
-  return t.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-/**
- * tanggalWIB menampilkan tanggal bisnis (YYYY-MM-DD dari server) dalam format
- * Indonesia tanpa menggeser harinya — dipakai untuk jatuh tempo C&C, yang
- * sudah dihitung server memakai zona Asia/Jakarta (PRD CP-CNC-04).
- */
-function tanggalWIB(tanggal: string): string {
-  const t = new Date(`${tanggal}T00:00:00`);
-  if (Number.isNaN(t.getTime())) return tanggal;
   return t.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
 }
 
@@ -405,12 +392,6 @@ export function PesananDetailPage({ id }: { id: string }) {
                 <dt>{draft ? "Dibuat" : "Tanggal pesanan"}</dt>
                 <dd>{tanggalTampil(data)}</dd>
               </div>
-              {data.jatuh_tempo ? (
-                <div>
-                  <dt>Jatuh tempo C&amp;C</dt>
-                  <dd>{tanggalWIB(data.jatuh_tempo)}</dd>
-                </div>
-              ) : null}
               <div className={styles.metaPenuh}>
                 <dt>Catatan</dt>
                 <dd className={styles.muted}>{data.catatan || "—"}</dd>
@@ -558,13 +539,15 @@ function KartuRekeningPembayaran() {
 
 /**
  * ModalKirim mengirim draft menjadi pesanan resmi (F1-14): satu permintaan
- * multipart berisi berkas bukti transfer dan penanda Cash & Carry.
+ * multipart berisi berkas bukti transfer dan, untuk cabang Cash & Carry, versi
+ * saldo deposit yang sedang ditampilkan.
  *
- * Aturan yang ditampilkan di sini hanya membantu pengguna; yang MENGIKAT tetap
- * server: pesanan non-C&C wajib punya minimal satu bukti (kalau tidak, API
- * menjawab 400 dan pesanan tetap draft), dan pilihan C&C hanya sah untuk
- * cabang berflag `cash_and_carry` — karena itu centangnya hanya muncul bila
- * flag cabang (dibaca server lewat /me/branch) memang aktif.
+ * Cabang C&C membayar dari saldo deposit (keputusan 2026-10-18): server
+ * memotong saldo sebanyak mungkin (maksimal total pesanan) di dalam transaksi
+ * submit, dan sisanya wajib ditransfer dengan bukti. Angka di modal ini hanya
+ * pratinjau; yang mengikat tetap server — bila saldo berubah sejak ditampilkan,
+ * API menjawab 409 DEPOSIT_CHANGED dan modal memuat ulang saldo. Cabang
+ * non-C&C wajib minimal satu bukti seperti sebelumnya.
  */
 function ModalKirim({
   open,
@@ -577,16 +560,19 @@ function ModalKirim({
   pesanan: Pesanan;
   onSukses: () => void;
 }) {
-  const { data: cabang } = useApi<CabangRingkas>("/me/branch", open);
+  const { data: cabang, memuat: memuatCabang, galat: galatCabang } = useApi<CabangRingkas>("/me/branch", open);
+  const cnc = cabang?.is_cnc === true;
+  const saldo = useApi<RingkasanDeposit>("/deposit", open && cnc);
   const { data: rekening, memuat: memuatRekening, galat: galatRekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", open);
-  const [cnc, setCnc] = useState(false);
   const [berkas, setBerkas] = useState<File[]>([]);
   const [galat, setGalat] = useState<string | null>(null);
   const [mengirim, setMengirim] = useState(false);
 
-  const bisaCNC = cabang?.is_cnc === true;
-  const wajibBukti = !(bisaCNC && cnc);
+  const potong = cnc && saldo.data ? Math.max(0, Math.min(saldo.data.available_balance, pesanan.total)) : 0;
+  const sisa = Math.max(0, pesanan.total - potong);
+  const wajibBukti = !cnc || sisa > 0;
   const transferTersedia = !memuatRekening && !galatRekening && (rekening?.length ?? 0) > 0;
+  const siap = cabang !== null && (!cnc || saldo.data !== null);
 
   function tutup() {
     if (mengirim) return;
@@ -595,22 +581,27 @@ function ModalKirim({
   }
 
   async function kirim() {
+    if (!siap) return;
     if (wajibBukti && berkas.length === 0) {
-      setGalat("Pesanan wajib disertai minimal satu bukti transfer (JPG, PNG, atau PDF).");
+      setGalat(
+        cnc
+          ? "Saldo deposit belum menutup seluruh pesanan. Unggah bukti transfer untuk sisanya (JPG, PNG, atau PDF)."
+          : "Pesanan wajib disertai minimal satu bukti transfer (JPG, PNG, atau PDF).",
+      );
       return;
     }
     setMengirim(true);
     setGalat(null);
     try {
       const form = new FormData();
-      for (const f of berkas) form.append("file", f);
-      form.append("is_cnc", bisaCNC && cnc ? "true" : "false");
+      if (wajibBukti) for (const f of berkas) form.append("file", f);
+      if (cnc && saldo.data) form.append("expected_journal_version", String(saldo.data.journal_version));
       await api.postForm<Pesanan>(`/orders/${pesanan.id}/submit`, form);
       setBerkas([]);
-      setCnc(false);
       onSukses();
     } catch (err) {
       setGalat(galatPesan(err));
+      if (err instanceof ApiClientError && err.code === "DEPOSIT_CHANGED") saldo.muatUlang();
       if (err instanceof ApiClientError && err.code === "BRANCH_BANK_ACCOUNT_UNAVAILABLE") {
         tandaiRekeningTidakSegar();
         muatRekening();
@@ -634,7 +625,7 @@ function ModalKirim({
             variant="primary"
             icon="paper-plane-tilt"
             onClick={() => void kirim()}
-            disabled={mengirim || (wajibBukti && !transferTersedia)}
+            disabled={mengirim || !siap || (wajibBukti && !transferTersedia)}
           >
             {mengirim ? "Mengirim…" : "Kirim pesanan"}
           </Button>
@@ -647,13 +638,53 @@ function ModalKirim({
           void kirim();
         }}
         data-testid="form-kirim"
+        className={styles.stack}
       >
         <Notice tone="info">
           Setelah dikirim, nomor pesanan dan serial number dibuat, harga dikunci sesuai daftar harga
           cabang saat ini, dan pesanan tidak dapat diubah atau dihapus lagi dari portal cabang.
         </Notice>
         {galat ? <Notice tone="danger">{galat}</Notice> : null}
-        {wajibBukti && !transferTersedia ? (
+        {galatCabang || saldo.galat ? <Notice tone="danger">{galatCabang ?? saldo.galat}</Notice> : null}
+        {memuatCabang || saldo.memuat ? <SkeletonList rows={2} /> : null}
+
+        {cnc && saldo.data ? (
+          <div className={styles.rincianBayar} data-testid="rincian-bayar">
+            <b>Pembayaran dari deposit (Cash &amp; Carry)</b>
+            <div className={styles.rincianBaris}>
+              <span>Total pesanan</span>
+              <span className="tabular">{rupiah.format(pesanan.total)}</span>
+            </div>
+            <div className={styles.rincianBaris}>
+              <span>
+                Dibayar dari saldo deposit
+                <span className={`${styles.rincianCatatan} muted small`}>
+                  {`Saldo tersedia ${rupiah.format(saldo.data.available_balance)}`}
+                </span>
+              </span>
+              <span className="tabular">{`− ${rupiah.format(potong)}`}</span>
+            </div>
+            <div className={`${styles.rincianBaris} ${styles.rincianSisa}`}>
+              <span>Sisa yang ditransfer</span>
+              <span className="tabular" data-testid="sisa-transfer">
+                {rupiah.format(sisa)}
+              </span>
+            </div>
+          </div>
+        ) : null}
+        {cnc && saldo.data && sisa === 0 ? (
+          <Notice tone="success">
+            Saldo deposit mencukupi. Pesanan dibayar penuh dari deposit, jadi bukti transfer tidak diperlukan.
+            Admin Pusat tetap memverifikasi pesanan sebelum selesai.
+          </Notice>
+        ) : null}
+        {cnc && saldo.data && sisa > 0 ? (
+          <Notice tone="warning">
+            {`Saldo deposit kurang ${rupiah.format(sisa)}. Transfer sisanya ke rekening cabang lalu unggah buktinya, atau top-up deposit lebih dulu di menu Deposit.`}
+          </Notice>
+        ) : null}
+
+        {siap && wajibBukti && !transferTersedia ? (
           <Notice tone="danger">
             {galatRekening
               ? "Rekening tujuan terbaru tidak dapat dimuat. Transfer diblokir; coba lagi atau hubungi admin."
@@ -663,36 +694,21 @@ function ModalKirim({
           </Notice>
         ) : null}
 
-        {bisaCNC ? (
-          <SwitchRow
-            checked={cnc}
-            onChange={setCnc}
-            label="Cash & Carry"
-            hint="Bukti transfer menjadi opsional. Jatuh tempo dihitung server setelah pesanan dikirim."
-          />
+        {siap && wajibBukti ? (
+          <Field
+            label={cnc ? "Bukti transfer sisa pembayaran (JPG/PNG/PDF)" : "Bukti transfer (JPG/PNG/PDF, minimal satu berkas)"}
+            htmlFor="berkas-kirim"
+            hint="Boleh beberapa berkas bila pembayaran dicicil."
+          >
+            <Input
+              id="berkas-kirim"
+              type="file"
+              multiple
+              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+              onChange={(e) => setBerkas(Array.from(e.target.files ?? []))}
+            />
+          </Field>
         ) : null}
-
-        <Field
-          label={
-            wajibBukti
-              ? "Bukti transfer (JPG/PNG/PDF, minimal satu berkas)"
-              : "Bukti transfer (opsional untuk Cash & Carry)"
-          }
-          htmlFor="berkas-kirim"
-          hint={
-            wajibBukti
-              ? "Boleh beberapa berkas bila pembayaran dicicil."
-              : "Boleh dikosongkan; bukti bisa ditambahkan setelah pesanan dikirim."
-          }
-        >
-          <Input
-            id="berkas-kirim"
-            type="file"
-            multiple
-            accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-            onChange={(e) => setBerkas(Array.from(e.target.files ?? []))}
-          />
-        </Field>
       </form>
     </Modal>
   );

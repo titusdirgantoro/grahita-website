@@ -148,16 +148,16 @@ func mapDomainErr(err error) error {
 			map[string]string{"lines": "minimal satu baris produk"})
 	case errors.Is(err, order.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
-	case errors.Is(err, order.ErrCNCNotAllowed):
-		// Cabang tanpa flag Cash & Carry tidak boleh memakai C&C (CP-CNC-01).
-		// Jawabannya 400 VALIDATION_FAILED seperti aturan domain lain, dengan
-		// penjelasan yang bisa ditampilkan UI.
-		return apierr.Validation("Cash & Carry tidak tersedia untuk cabang ini.",
-			map[string]string{"is_cnc": "cabang ini tidak berflag Cash & Carry"})
+	case errors.Is(err, order.ErrDepositVersionRequired):
+		// Cabang C&C wajib menyebut versi saldo deposit yang ia lihat supaya
+		// potongan tidak pernah berubah diam-diam (CP-CNC-02).
+		return apierr.Validation("Versi saldo deposit belum dikirim.",
+			map[string]string{"expected_journal_version": "wajib untuk cabang Cash & Carry"})
 	case errors.Is(err, order.ErrProofRequired):
-		// Pesanan non-C&C wajib disertai bukti transfer (PRD CP-ORD-04).
+		// Bagian yang dibayar transfer wajib disertai bukti (PRD CP-ORD-04):
+		// seluruh pesanan non-C&C, atau sisa C&C setelah saldo deposit.
 		return apierr.Validation("Pesanan belum disertai bukti transfer.",
-			map[string]string{"bukti": "minimal satu bukti transfer, kecuali pesanan Cash & Carry"})
+			map[string]string{"bukti": "minimal satu bukti transfer untuk bagian yang tidak tertutup saldo deposit"})
 	// Revisi invoice berversi (F2-25). Diperiksa SEBELUM ErrInvalidData karena
 	// ErrAlasanWajib membungkusnya.
 	case errors.Is(err, order.ErrAlasanWajib):

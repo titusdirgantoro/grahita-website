@@ -134,9 +134,6 @@ func (s *Service) buildOrderEnvelope(ctx context.Context, in OrderEmailInput) (E
 	if !ref.Tanggal.IsZero() {
 		payload["tanggal"] = tanggalID(ref.Tanggal)
 	}
-	if ref.JatuhTempo != nil {
-		payload["jatuh_tempo"] = tanggalID(*ref.JatuhTempo)
-	}
 	if in.Jenis == JenisInvoiceCabang {
 		payload["nama"] = ref.NamaKepala
 	}

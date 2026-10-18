@@ -38,7 +38,6 @@ type filterAdmin struct {
 	Status        sqlc.NullOrderStatus
 	VerifStatus   sqlc.NullVerifStatus
 	IsCnc         pgtype.Bool
-	Terlambat     pgtype.Bool
 	EmailGagal    pgtype.Bool
 	EmailGagalIDs []string
 	Dari          *time.Time
@@ -52,7 +51,6 @@ func newFilterAdmin(q order.AdminQuery) filterAdmin {
 	f := filterAdmin{
 		BranchID:      pgtypes.UUID(q.BranchID),
 		IsCnc:         pgtypes.BoolPtr(q.IsCNC),
-		Terlambat:     pgtypes.BoolPtr(q.Terlambat),
 		EmailGagal:    pgtypes.BoolPtr(q.EmailGagal),
 		EmailGagalIDs: q.EmailGagalIDs,
 		Dari:          q.Dari,
@@ -80,7 +78,6 @@ func (r *Repo) ListAdmin(ctx context.Context, q order.AdminQuery) (order.AdminPa
 		Status:        f.Status,
 		VerifStatus:   f.VerifStatus,
 		IsCnc:         f.IsCnc,
-		Terlambat:     f.Terlambat,
 		EmailGagal:    f.EmailGagal,
 		Dari:          f.Dari,
 		Sampai:        f.Sampai,
@@ -101,14 +98,12 @@ func (r *Repo) ListAdmin(ctx context.Context, q order.AdminQuery) (order.AdminPa
 			BranchID:     row.BranchID,
 			BranchNama:   row.BranchNama,
 			Tanggal:      tanggalOr(row.Tanggal),
-			JatuhTempo:   tanggalOr(row.JatuhTempo),
 			Status:       row.Status,
 			VerifStatus:  row.VerifStatus,
 			IsCNC:        row.IsCnc,
 			IsSertifikat: row.IsSertifikat,
 			Total:        row.Total,
 			JumlahItem:   row.JumlahItem,
-			Terlambat:    row.Terlambat,
 			EmailGagal:   row.EmailGagal,
 			SubmittedAt:  waktuOr(row.SubmittedAt),
 			CreatedAt:    row.CreatedAt.UTC().Format(rfc3339),
@@ -121,7 +116,6 @@ func (r *Repo) ListAdmin(ctx context.Context, q order.AdminQuery) (order.AdminPa
 		Status:        f.Status,
 		VerifStatus:   f.VerifStatus,
 		IsCnc:         f.IsCnc,
-		Terlambat:     f.Terlambat,
 		EmailGagal:    f.EmailGagal,
 		EmailGagalIds: f.EmailGagalIDs,
 		Dari:          f.Dari,
@@ -140,7 +134,6 @@ func (r *Repo) ListAdmin(ctx context.Context, q order.AdminQuery) (order.AdminPa
 			Status:        f.Status,
 			VerifStatus:   f.VerifStatus,
 			IsCnc:         f.IsCnc,
-			Terlambat:     f.Terlambat,
 			EmailGagal:    f.EmailGagal,
 			EmailGagalIds: f.EmailGagalIDs,
 			Dari:          f.Dari,
@@ -189,7 +182,6 @@ func (r *Repo) GetAdmin(ctx context.Context, id string, emailGagalIDs []string) 
 		IsCNC:        row.IsCnc,
 		IsSertifikat: row.IsSertifikat,
 		Tanggal:      tanggalOr(row.Tanggal),
-		JatuhTempo:   tanggalOr(row.JatuhTempo),
 		SubmittedAt:  waktuOr(row.SubmittedAt),
 		DoneAt:       waktuOr(row.DoneAt),
 		CreatedAt:    row.CreatedAt.UTC().Format(rfc3339),
@@ -198,7 +190,6 @@ func (r *Repo) GetAdmin(ctx context.Context, id string, emailGagalIDs []string) 
 		NoteAdmin:    row.NoteAdmin,
 		Total:        row.Total,
 		JumlahItem:   row.JumlahItem,
-		Terlambat:    row.Terlambat,
 		EmailGagal:   row.EmailGagal,
 	}
 

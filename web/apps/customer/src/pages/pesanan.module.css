@@ -276,3 +276,35 @@
     z-index: 10;
   }
 }
+
+/* Rincian pembayaran cabang Cash & Carry di modal kirim: total, potongan
+   deposit, dan sisa yang harus ditransfer. */
+.rincianBayar {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+}
+
+.rincianBaris {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.rincianBaris > :last-child {
+  white-space: nowrap;
+}
+
+.rincianCatatan {
+  display: block;
+}
+
+.rincianSisa {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  font-weight: 600;
+}

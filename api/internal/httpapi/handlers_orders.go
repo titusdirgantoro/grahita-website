@@ -123,9 +123,10 @@ func (a *API) orderDelete(w http.ResponseWriter, r *http.Request) error {
 //
 // Badan permintaan berbentuk multipart (SystemDesign.md §6): berkas bukti
 // transfer pada field `file` (boleh NOL berkas — bukti boleh sudah diunggah
-// lewat POST /orders/{id}/proofs) dan penanda C&C pada field `is_cnc`
-// (PRD CP-CNC-02). Harga, biaya packaging, dan total tidak pernah diterima
-// dari klien; semuanya dibaca server.
+// lewat POST /orders/{id}/proofs) dan, untuk cabang Cash & Carry, versi saldo
+// deposit yang dilihat cabang pada field `expected_journal_version`
+// (PRD CP-CNC-02). Status C&C, harga, biaya packaging, dan total tidak pernah
+// diterima dari klien; semuanya dibaca server.
 //
 // Urutan dua langkah ini disengaja dan tidak diklaim atomik lintas sistem:
 // berkas bukti disimpan lebih dulu lewat domain bukti (transaksinya sendiri),
@@ -137,7 +138,7 @@ func (a *API) orderSubmit(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Orders == nil {
 		return ordersUnavailable()
 	}
-	files, isCNC, tutup, err := a.bacaSubmit(w, r)
+	files, expectedJournal, tutup, err := a.bacaSubmit(w, r)
 	if err != nil {
 		return err
 	}
@@ -159,7 +160,7 @@ func (a *API) orderSubmit(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	o, err := a.d.Orders.Submit(r.Context(), actor, orderID, order.SubmitInput{IsCNC: isCNC})
+	o, err := a.d.Orders.Submit(r.Context(), actor, orderID, order.SubmitInput{ExpectedJournalVersion: expectedJournal})
 	if err != nil {
 		return mapDomainErr(err)
 	}

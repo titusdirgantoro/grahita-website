@@ -105,18 +105,3 @@ type OCRBuktiArgs struct {
 
 // Kind mengidentifikasi jenis job pembacaan bukti di tabel River.
 func (OCRBuktiArgs) Kind() string { return KindOCRBukti }
-
-// KindReminderCNC adalah Kind pekerjaan "periksa dan antre pengingat pembayaran
-// Cash & Carry" yang dijalankan terjadwal 07:00 WIB (F2-23, SystemDesign.md
-// §4.6, PRD CP-CNC-05).
-const KindReminderCNC = "reminder_cnc"
-
-// ReminderCNCArgs tidak membawa data apa pun: seluruh keadaan ada di tabel
-// `orders` (kandidat: is_cnc, status<>'done', jatuh_tempo), `cnc_reminders`
-// (tahap yang sudah diantre) dan `email_outbox` (pengiriman). Job yang
-// terlewat maupun tergandakan karena itu tidak pernah menggandakan email —
-// tahap yang sudah tercatat dilewati begitu saja (River at-least-once).
-type ReminderCNCArgs struct{}
-
-// Kind mengidentifikasi jenis job pengingat C&C di tabel River.
-func (ReminderCNCArgs) Kind() string { return KindReminderCNC }

@@ -699,7 +699,7 @@ export function CabangPage() {
               checked={form.is_cnc}
               onChange={(v) => setForm({ ...form, is_cnc: v })}
               label="Cash and Carry"
-              hint="Cabang boleh mengirim pesanan tanpa bukti transfer."
+              hint="Pesanan cabang dibayar dari saldo deposit; sisanya ditransfer dengan bukti."
             />
             <SwitchRow
               checked={form.is_special}

@@ -94,7 +94,7 @@ export interface DashboardData {
   pembanding: { dari: string; sampai: string; ringkasan: Metrik; item: number };
   bulan_lalu: Metrik;
   harian_pembanding: number;
-  komposisi: { reguler: number; cnc: number; sertifikat: number; cnc_lewat_tempo: number };
+  komposisi: { reguler: number; cnc: number; sertifikat: number };
   produk_terlaris: ProdukTerlaris[];
 }
 
@@ -107,7 +107,6 @@ export interface DashboardData {
 export const PADANAN_CHIP: Record<string, FilterPesanan> = {
   menunggu: { status: "submitted", verif: "belum" },
   perlu_review: { verif: "perlu_review" },
-  lewat_jatuh_tempo: { terlambat: true },
   email_gagal: { email_gagal: true },
 };
 
@@ -451,7 +450,7 @@ function IsiDashboard({
               <span className="muted small">Cash and Carry</span>
               <span className={styles.v}>
                 <span className={styles.kpiSm}>{k.cnc}</span>
-                <span className={styles.pillnote}>{`${k.cnc_lewat_tempo} lewat tempo`}</span>
+                <span className={styles.pillnote}>dibayar deposit</span>
               </span>
             </div>
             <div className={`${styles.pcol} hatch`}>

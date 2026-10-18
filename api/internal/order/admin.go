@@ -75,7 +75,6 @@ type AdminFilter struct {
 	Status      string
 	VerifStatus string
 	IsCNC       *bool
-	Terlambat   *bool
 	EmailGagal  *bool
 	Dari        string
 	Sampai      string
@@ -92,7 +91,6 @@ type AdminQuery struct {
 	Status        string
 	VerifStatus   string
 	IsCNC         *bool
-	Terlambat     *bool
 	EmailGagal    *bool
 	Dari          *time.Time
 	Sampai        *time.Time
@@ -110,15 +108,12 @@ type AdminRow struct {
 	BranchID     string `json:"branch_id"`
 	BranchNama   string `json:"branch_nama"`
 	Tanggal      string `json:"tanggal,omitempty"`
-	JatuhTempo   string `json:"jatuh_tempo,omitempty"`
 	Status       string `json:"status"`
 	VerifStatus  string `json:"verif_status"`
 	IsCNC        bool   `json:"is_cnc"`
 	IsSertifikat bool   `json:"is_sertifikat"`
 	Total        int64  `json:"total"`
 	JumlahItem   int64  `json:"jumlah_item"`
-	// Terlambat: C&C yang belum Done dan sudah melewati jatuh tempo (WIB).
-	Terlambat bool `json:"terlambat"`
 	// EmailGagal: pesanan punya email berstatus `failed` di outbox.
 	EmailGagal  bool   `json:"email_gagal"`
 	SubmittedAt string `json:"submitted_at,omitempty"`
@@ -201,7 +196,6 @@ type AdminDetail struct {
 	IsCNC        bool   `json:"is_cnc"`
 	IsSertifikat bool   `json:"is_sertifikat"`
 	Tanggal      string `json:"tanggal,omitempty"`
-	JatuhTempo   string `json:"jatuh_tempo,omitempty"`
 	SubmittedAt  string `json:"submitted_at,omitempty"`
 	DoneAt       string `json:"done_at,omitempty"`
 	CreatedAt    string `json:"created_at"`
@@ -211,7 +205,6 @@ type AdminDetail struct {
 	NoteAdmin  string          `json:"note_admin"`
 	Total      int64           `json:"total"`
 	JumlahItem int64           `json:"jumlah_item"`
-	Terlambat  bool            `json:"terlambat"`
 	EmailGagal bool            `json:"email_gagal"`
 	Lines      []Line          `json:"lines"`
 	Timeline   []Event         `json:"timeline"`
@@ -369,7 +362,6 @@ func (s *AdminService) query(f AdminFilter) (AdminQuery, error) {
 		Cari:       strings.TrimSpace(f.Cari),
 		BranchID:   strings.TrimSpace(f.BranchID),
 		IsCNC:      f.IsCNC,
-		Terlambat:  f.Terlambat,
 		EmailGagal: f.EmailGagal,
 		Grup:       strings.ToLower(strings.TrimSpace(f.Grup)),
 	}

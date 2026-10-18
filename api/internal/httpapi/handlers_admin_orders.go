@@ -48,9 +48,6 @@ func (a *API) adminOrdersList(w http.ResponseWriter, r *http.Request) error {
 	if f.IsCNC, err = boolParam(q.Get("cnc"), "cnc"); err != nil {
 		return err
 	}
-	if f.Terlambat, err = boolParam(q.Get("terlambat"), "terlambat"); err != nil {
-		return err
-	}
 	if f.EmailGagal, err = boolParam(q.Get("email_gagal"), "email_gagal"); err != nil {
 		return err
 	}

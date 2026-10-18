@@ -41,13 +41,11 @@
 //     klien tidak punya cara menambah, mengubah, menghapus, atau menduplikasi
 //     baris packaging — setiap simpan draft menyusunnya ulang dari nol.
 //   - Pesanan Sertifikat tidak boleh dicampur produk reguler (CP-SER-03).
-//   - C&C hanya sah bila cabang SESI berflag `cash_and_carry` (CP-CNC-01).
-//     Flag dibaca server, bukan dari klien, sehingga cabang tanpa flag tidak
-//     bisa memalsukan C&C: ValidateCNC menolaknya. Tenggat C&C = tanggal
-//     submit WIB + `cnc_hari` (CP-CNC-04) lewat TanggalWIB + JatuhTempo.
-//     Ketiga fungsi ini adalah satu-satunya sumber aturan C&C dan WAJIB dipakai
-//     transaksi submit (F1-14) — draft sendiri tidak menyimpan pilihan C&C
-//     (prototype menaruh centang C&C di modal kirim, bukan di editor).
+//   - Cash & Carry adalah cabang berdeposit (keputusan user 2026-10-18):
+//     setiap pesanan cabang berflag `cash_and_carry` dibayar dari saldo
+//     deposit saat dikirim, sebanyak PotonganDeposit; sisanya wajib ditutup
+//     transfer berbukti. Flag dibaca server dari master cabang, bukan dari
+//     klien, dan tidak ada lagi jatuh tempo maupun utang C&C.
 package order
 
 import (
@@ -86,9 +84,13 @@ var (
 	ErrProductNotSold = errors.New("produk tidak dijual ke cabang ini")
 	// ErrNoBranch dikembalikan bila akun cabang tidak terhubung ke cabang.
 	ErrNoBranch = errors.New("akun tidak terhubung ke cabang")
-	// ErrCNCNotAllowed dikembalikan bila pesanan meminta Cash & Carry padahal
-	// cabangnya tidak berflag cash_and_carry (PRD CP-CNC-01).
-	ErrCNCNotAllowed = errors.New("pesanan Cash & Carry tidak diizinkan untuk cabang ini")
+	// ErrDepositChanged dikembalikan bila saldo deposit cabang berubah (versi
+	// journal berbeda) sejak modal kirim dibuka. Submit dibatalkan supaya
+	// potongan deposit tidak pernah berubah diam-diam (D3 §3.4).
+	ErrDepositChanged = errors.New("saldo deposit berubah sejak ditampilkan")
+	// ErrDepositVersionRequired dikembalikan bila cabang Cash & Carry mengirim
+	// pesanan tanpa menyebut versi saldo deposit yang ia lihat.
+	ErrDepositVersionRequired = fmt.Errorf("%w: versi saldo deposit yang ditampilkan wajib dikirim", ErrInvalidData)
 )
 
 // Status pesanan (Database.md §3, enum order_status).
@@ -159,7 +161,6 @@ type Order struct {
 	// Tanggal adalah tanggal submit (WIB) dalam bentuk YYYY-MM-DD; kosong
 	// selama masih draft (BR-04).
 	Tanggal     string    `json:"tanggal,omitempty"`
-	JatuhTempo  string    `json:"jatuh_tempo,omitempty"`
 	Catatan     string    `json:"catatan"`
 	Total       int64     `json:"total"`
 	JumlahItem  int64     `json:"jumlah_item"`
@@ -196,10 +197,10 @@ type Catalog interface {
 
 // Config adalah sudut pandang domain pengaturan yang dibutuhkan aturan
 // pesanan: nilai bilangan bulat yang sedang berlaku untuk satu kunci
-// (biaya_packaging, cnc_hari). Implementasinya adalah settings.Service, dan
-// nilainya dibaca SERVER — bukan dari klien — sehingga snapshot biaya
-// packaging dan tenggat C&C selalu mengikuti setelan yang berlaku
-// (PRD CP-SER-05, CP-CNC-04).
+// (biaya_packaging, digit_invoice). Implementasinya adalah settings.Service,
+// dan nilainya dibaca SERVER — bukan dari klien — sehingga snapshot biaya
+// packaging dan penomoran selalu mengikuti setelan yang berlaku
+// (PRD CP-SER-05, BR-03).
 type Config interface {
 	Int(ctx context.Context, key string) (int64, error)
 }
@@ -489,23 +490,15 @@ func TanggalWIB(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, clock.Jakarta())
 }
 
-// JatuhTempo menghitung tenggat pembayaran Cash & Carry: tanggal pesanan +
-// `cnc_hari` hari (PRD CP-CNC-04, BR-08). Nilainya hanya dipakai bila pesanan
-// benar-benar C&C; pesanan non-C&C tidak punya jatuh tempo.
-func JatuhTempo(tanggal time.Time, cncHari int) time.Time {
-	return tanggal.In(clock.Jakarta()).AddDate(0, 0, cncHari)
-}
-
-// ValidateCNC menegakkan CP-CNC-01: pilihan/penanda C&C hanya sah bila cabang
-// benar-benar berflag `cash_and_carry`. Flag dibaca server dari master cabang,
-// bukan dari masukan klien, sehingga cabang tanpa flag tidak bisa memalsukan
-// C&C. Transaksi submit (F1-14) WAJIB memanggil fungsi ini sebelum menetapkan
-// orders.is_cnc dan jatuh_tempo.
-func ValidateCNC(branchIsCNC, requested bool) error {
-	if requested && !branchIsCNC {
-		return ErrCNCNotAllowed
+// PotonganDeposit adalah bagian total pesanan Cash & Carry yang dibayar dari
+// saldo deposit saat submit: seluruh saldo bila kurang dari total, atau tepat
+// sebesar total bila saldo cukup. Sisanya (total - potongan) wajib ditutup
+// transfer berbukti.
+func PotonganDeposit(saldo, total int64) int64 {
+	if saldo <= 0 || total <= 0 {
+		return 0
 	}
-	return nil
+	return min(saldo, total)
 }
 
 // branchActor memastikan aktor adalah akun cabang yang boleh menulis pesanan

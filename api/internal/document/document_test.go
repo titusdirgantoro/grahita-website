@@ -114,7 +114,6 @@ func isiObjek(t *testing.T, s *storeHitung, key string) []byte {
 // baris packaging, lengkap dengan serialnya.
 func fixtureOrder(id string) Order {
 	tanggal := time.Date(2026, time.October, 8, 0, 0, 0, 0, time.UTC)
-	jt := time.Date(2026, time.October, 15, 0, 0, 0, 0, time.UTC)
 	return Order{
 		ID:       id,
 		Nomor:    "2026-10-0001",
@@ -138,7 +137,6 @@ func fixtureOrder(id string) Order {
 			{Bank: "BCA", Nomor: "1234567890", AtasNama: "PT Grahita Indonesia"},
 			{Bank: "BRI", Nomor: "0987654321", AtasNama: "PT Grahita Indonesia"},
 		},
-		JatuhTempo: &jt,
 	}
 }
 

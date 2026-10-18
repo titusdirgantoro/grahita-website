@@ -663,9 +663,11 @@ paths:
           TIDAK DIISI bila buktinya sudah diunggah lewat
           `POST /orders/{id}/proofs`. Aturan jenis/ukuran/jumlah sama dengan
           unggahan bukti (`max_file` × `max_mb`, CP-ORD-04);
-        - `is_cnc` — `true`/`false` (opsional, bawaan `false`). Menandai Cash
-          & Carry: bukti transfer menjadi opsional dan `jatuh_tempo` diisi
-          tanggal pesanan + `cnc_hari` (CP-CNC-02, CP-CNC-04).
+        - `expected_journal_version` — versi saldo deposit (`journal_version`
+          dari `GET /deposit`) yang dilihat cabang saat menekan Kirim. WAJIB
+          untuk cabang Cash & Carry, diabaikan untuk cabang lain (CP-CNC-02).
+          Status C&C pesanan TIDAK diterima dari klien: server membacanya dari
+          flag `cash_and_carry` cabang sesi.
 
         Aturan yang ditegakkan server di dalam SATU transaksi:
 
@@ -677,12 +679,17 @@ paths:
           dengan tepat satu baris biaya packaging senilai setelan
           `biaya_packaging` yang berlaku, dan pencampuran Sertifikat dengan
           produk reguler ditolak;
-        - pesanan non-C&C wajib punya minimal satu bukti transfer →
-          `400 VALIDATION_FAILED` bila belum ada (bukti yang sudah diunggah
-          tetap tersimpan, dan TIDAK ada nomor yang terpakai);
-        - C&C hanya sah bila cabang sesi benar-benar berflag `cash_and_carry`;
-          cabang tanpa flag dijawab `400` (flag dibaca server, bukan dari
-          klien) → anti pemalsuan `is_cnc`/biaya/total;
+        - pesanan cabang Cash & Carry dibayar dari saldo deposit DI DALAM
+          transaksi ini: server mengunci akun deposit, memastikan versinya
+          sama dengan `expected_journal_version` (bila berbeda →
+          `409 DEPOSIT_CHANGED`), lalu mendebit `min(saldo, total)` sebagai
+          alokasi deposit pesanan. Tidak ada jatuh tempo maupun utang C&C;
+          pesanan tetap `submitted` sampai admin memverifikasi rinciannya;
+        - bagian yang dibayar transfer (seluruh pesanan non-C&C, atau sisa C&C
+          yang tidak tertutup saldo) wajib punya minimal satu bukti dan
+          rekening tujuan efektif → `400 VALIDATION_FAILED` bila belum ada
+          (bukti yang sudah diunggah tetap tersimpan, dan TIDAK ada nomor
+          maupun saldo yang terpakai);
         - nomor invoice diambil dari counter global bulanan (`YYYY-MM-XX`,
           `XX` = `digit_invoice`, melebar bila urutannya melebihi digit itu)
           dan serial dari counter harian (`YYYYMMDDXXX`, satu rentang untuk
@@ -706,9 +713,11 @@ paths:
                 file:
                   type: array
                   items: { type: string, format: binary }
-                is_cnc:
-                  type: boolean
-                  default: false
+                expected_journal_version:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: Versi saldo deposit yang dilihat cabang C&C (wajib untuk cabang C&C).
       responses:
         "200":
           description: Pesanan terkirim (status submitted, bernomor)
@@ -1477,7 +1486,7 @@ paths:
         (PRD §2.1).
 
         Rentang: biaya_packaging 0..100000000 (Rupiah bulat);
-        cnc_hari/token_hari 1..3650; reset_menit 1..43200; max_mb 1..1024;
+        token_hari 1..3650; reset_menit 1..43200; max_mb 1..1024;
         max_file 1..100; digit_invoice 1..10; manager_boleh_revisi boolean;
         `ai` objek {aktif, min_keyakinan 0..1, tol_kurang, tol_lebih,
         digit_rek 1..20, mundur 0..3650}.
@@ -1496,7 +1505,6 @@ paths:
                   enum:
                     [
                       biaya_packaging,
-                      cnc_hari,
                       token_hari,
                       reset_menit,
                       max_mb,
@@ -1514,7 +1522,7 @@ paths:
               satuKunci:
                 value: { key: biaya_packaging, value: 4000 }
               banyakKunci:
-                value: { values: { biaya_packaging: 4000, cnc_hari: 7 } }
+                value: { values: { biaya_packaging: 4000, token_hari: 14 } }
       responses:
         "200":
           description: Pengaturan tersimpan (bentuk nilai kanonik)
@@ -1984,11 +1992,9 @@ paths:
           menunggu penanganan sekarang. Tiap angkanya sama dengan `total` daftar
           `/api/v1/admin/orders` bila chip diklik dengan filter padanannya:
           `menunggu` → `status=submitted&verif=belum`, `perlu_review` →
-          `verif=perlu_review`, `lewat_jatuh_tempo` → `terlambat=true`,
-          `email_gagal` → `email_gagal=true`.
-        - **C&C lewat jatuh tempo tetap `submitted`**: sistem tidak mengubah
-          status pesanan karena tenggat terlewat, ia hanya muncul sebagai chip
-          (PRD CP-CNC-06).
+          `verif=perlu_review`, `email_gagal` → `email_gagal=true`. Cash &
+          Carry dibayar dari deposit saat dikirim, jadi tidak ada chip jatuh
+          tempo.
         - **Tanggal bisnis** memakai zona Asia/Jakarta. Rentang periode mengikuti
           prototype: minggu mulai Senin, bulan & tahun berjalan berakhir HARI INI
           (bukan akhir bulan/tahun). `harian` selalu bulan berjalan, tidak
@@ -2044,8 +2050,7 @@ paths:
           (per cabang A→Z, per periode terbaru dahulu) dan array `ringkasan`
           berisi jumlah + nilai per grup untuk seluruh himpunan terfilter.
         - **Tanggal bisnis** memakai zona Asia/Jakarta, termasuk grouping
-          hari/bulan/tahun dan penanda `terlambat` (C&C yang belum Done dan
-          sudah melewati jatuh tempo).
+          hari/bulan/tahun.
         - **`email_gagal`** dibaca dari outbox email domain notification: sebuah
           pesanan bertanda `email_gagal` bila punya minimal satu email
           `failed`; filter `email_gagal=true` hanya menyisakan pesanan itu.
@@ -2071,10 +2076,6 @@ paths:
         - name: cnc
           in: query
           description: Filter pesanan Cash & Carry (`true`/`false`).
-          schema: { type: boolean }
-        - name: terlambat
-          in: query
-          description: Filter C&C yang sudah melewati jatuh tempo (`true`/`false`).
           schema: { type: boolean }
         - name: email_gagal
           in: query
@@ -2369,6 +2370,9 @@ paths:
             `PAYMENT_BREAKDOWN_MISMATCH` — deposit + transfer untuk order tidak
             tepat total, daftar alokasi tidak sama dengan alokasi aktif, atau
             keputusan bukti bertentangan dengan keputusan sebelumnya.
+            `PAYMENT_PROOF_REQUIRED` — persetujuan untuk pesanan bernilai yang
+            tidak punya alokasi deposit aktif maupun bukti transfer (tidak ada
+            lagi pesanan berutang; C&C dibayar dari deposit).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -3633,7 +3637,9 @@ paths:
         cabang sesi). Header `Idempotency-Key` wajib. Bukti identik untuk
         permintaan yang sama dijawab ulang `200`; untuk permintaan berbeda
         `409 PAYMENT_PROOF_ALREADY_USED`. Sukses `201` selalu `pending_review`
-        dan tidak pernah menambah saldo.
+        dan tidak pernah menambah saldo. Deposit hanya untuk cabang Cash &
+        Carry (pesanannya dibayar dari saldo); cabang lain dijawab
+        `403 DEPOSIT_CNC_ONLY`.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -4218,10 +4224,14 @@ components:
         mime_type: { type: string }
     DepositBranchOverview:
       type: object
-      required: [branch_id, branch_nama, available_balance, journal_version, pending_topup_count, pending_topup_amount_declared]
+      description: |
+        Satu cabang di ikhtisar deposit admin: semua cabang Cash & Carry, ditambah
+        cabang lain yang masih bersaldo atau punya top-up tercatat.
+      required: [branch_id, branch_nama, is_cnc, available_balance, journal_version, pending_topup_count, pending_topup_amount_declared]
       properties:
         branch_id: { type: string, format: uuid }
         branch_nama: { type: string }
+        is_cnc: { type: boolean }
         available_balance: { type: integer }
         journal_version: { type: integer }
         pending_topup_count: { type: integer }
@@ -4508,7 +4518,6 @@ components:
         tanggal:
           type: string
           description: Tanggal submit (WIB) YYYY-MM-DD; kosong selama draft (BR-04).
-        jatuh_tempo: { type: string }
         catatan: { type: string }
         total:
           type: integer
@@ -4553,7 +4562,7 @@ components:
     AdminOrderRow:
       type: object
       required:
-        [id, versi, branch_id, branch_nama, status, verif_status, is_cnc, is_sertifikat, total, jumlah_item, terlambat, email_gagal, created_at, updated_at]
+        [id, versi, branch_id, branch_nama, status, verif_status, is_cnc, is_sertifikat, total, jumlah_item, email_gagal, created_at, updated_at]
       description: Satu baris riwayat pemesanan admin (F1-15).
       properties:
         id: { type: string, format: uuid }
@@ -4567,10 +4576,6 @@ components:
           type: string
           format: date
           description: Tanggal bisnis (WIB) saat submit; kosong untuk draft.
-        jatuh_tempo:
-          type: string
-          format: date
-          description: Tenggat C&C; kosong untuk non-C&C.
         status: { type: string, enum: [draft, submitted, done] }
         verif_status: { type: string, enum: [belum, cocok, perlu_review] }
         is_cnc: { type: boolean }
@@ -4580,11 +4585,6 @@ components:
           type: integer
           format: int64
           description: Σ qty baris produk (baris packaging tidak dihitung).
-        terlambat:
-          type: boolean
-          description: |
-            C&C yang belum `done` dan sudah melewati `jatuh_tempo` menurut
-            tanggal bisnis Asia/Jakarta (PRD AP-DSH-03).
         email_gagal:
           type: boolean
           description: |
@@ -4694,7 +4694,7 @@ components:
       properties:
         kunci:
           type: string
-          enum: [menunggu, perlu_review, lewat_jatuh_tempo, email_gagal]
+          enum: [menunggu, perlu_review, email_gagal]
         label: { type: string }
         jumlah: { type: integer, format: int64, minimum: 0 }
 
@@ -4784,17 +4784,12 @@ components:
           description: Jumlah pesanan bulan lalu dari tanggal 1 sampai tanggal yang sama dengan hari ini.
         komposisi:
           type: object
-          required: [reguler, cnc, sertifikat, cnc_lewat_tempo]
-          description: Komposisi pesanan periode terpilih.
+          required: [reguler, cnc, sertifikat]
+          description: Komposisi pesanan periode terpilih (C&C = dibayar dari deposit).
           properties:
             reguler: { type: integer, format: int64, minimum: 0 }
             cnc: { type: integer, format: int64, minimum: 0 }
             sertifikat: { type: integer, format: int64, minimum: 0 }
-            cnc_lewat_tempo:
-              type: integer
-              format: int64
-              minimum: 0
-              description: C&C belum done yang jatuh temponya sebelum hari ini (WIB).
         produk_terlaris:
           type: array
           description: Maksimal 5 product dengan Σ qty baris produk terbesar pada periode terpilih.
@@ -4876,10 +4871,6 @@ components:
           minimum: 0
           description: Versi pesanan (0 = asli, >0 = sudah direvisi).
         is_cnc: { type: boolean }
-        jatuh_tempo:
-          type: string
-          format: date
-          description: Tenggat Cash & Carry; hanya untuk pesanan C&C.
         total: { type: integer, format: int64 }
         jumlah_item:
           type: integer
@@ -5060,7 +5051,7 @@ components:
     AdminOrderDetail:
       type: object
       required:
-        [id, versi, branch_id, branch_nama, branch_kepala, branch_email, branch_cnc, status, verif_status, is_cnc, is_sertifikat, catatan, note_admin, total, jumlah_item, terlambat, email_gagal, created_at, updated_at, lines, timeline, dokumen, verifikasi]
+        [id, versi, branch_id, branch_nama, branch_kepala, branch_email, branch_cnc, status, verif_status, is_cnc, is_sertifikat, catatan, note_admin, total, jumlah_item, email_gagal, created_at, updated_at, lines, timeline, dokumen, verifikasi]
       description: |
         Detail lengkap satu pesanan untuk admin (PRD AP-ORD-04). `note_admin`
         adalah catatan internal dan hanya muncul di respons admin.
@@ -5081,7 +5072,6 @@ components:
         is_cnc: { type: boolean }
         is_sertifikat: { type: boolean }
         tanggal: { type: string, format: date }
-        jatuh_tempo: { type: string, format: date }
         submitted_at: { type: string, format: date-time }
         done_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
@@ -5094,7 +5084,6 @@ components:
           description: Catatan internal admin — TIDAK pernah dikirim ke portal cabang.
         total: { type: integer, format: int64, minimum: 0 }
         jumlah_item: { type: integer, format: int64 }
-        terlambat: { type: boolean }
         email_gagal: { type: boolean }
         lines:
           type: array

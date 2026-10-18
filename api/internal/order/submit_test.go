@@ -14,8 +14,8 @@ import (
 )
 
 // Berkas ini menguji submit pesanan (kartu F1-14) di tingkat domain:
-// aturan snapshot/harga (SiapkanSubmit), kewajiban bukti, flag C&C, tanggal
-// bisnis WIB, tenggat, dan penomoran. Penomoran di sini memakai Memory (cermin
+// aturan snapshot/harga (SiapkanSubmit), kewajiban bukti, potongan deposit
+// cabang C&C, tanggal bisnis WIB, dan penomoran. Penomoran di sini memakai Memory (cermin
 // tabel counter); perilaku SQL/trigger sebenarnya diuji di uji integrasi
 // PostgreSQL (internal/httpapi/integration_submit_pg_test.go).
 
@@ -37,12 +37,12 @@ func (f fakeFlags) IsCNC(_ context.Context, branchID string) (bool, error) {
 var waktuSubmit = time.Date(2026, 10, 8, 7, 0, 0, 0, time.UTC)
 
 // newSubmitService menyiapkan service submit dengan Memory, flag cabang
-// (A dan C berflag C&C, B tidak), setelan uji, dan clock tetap.
+// (hanya br-cnc berflag C&C), setelan uji, dan clock tetap.
 func newSubmitService() (*Service, *Memory, *fakeConfig) {
 	repo := NewMemory()
 	cfg := cfgUji()
 	svc := NewService(repo, katalogUji(), cfg,
-		WithBranchFlags(fakeFlags{cnc: map[string]bool{"br-a": true, "br-c": true}}),
+		WithBranchFlags(fakeFlags{cnc: map[string]bool{"br-cnc": true}}),
 		WithClock(clock.Fixed(waktuSubmit)))
 	return svc, repo, cfg
 }
@@ -212,8 +212,8 @@ func TestSubmitWajibBuktiUntukNonCNC(t *testing.T) {
 	if out.SubmittedAt == "" {
 		t.Error("submitted_at harus terisi (penyimpanan UTC)")
 	}
-	if out.IsCNC || out.JatuhTempo != "" {
-		t.Errorf("pesanan non-C&C tidak boleh punya jatuh tempo: %+v", out)
+	if out.IsCNC {
+		t.Errorf("pesanan cabang non-C&C tidak boleh bertanda C&C: %+v", out)
 	}
 	if len(out.Lines) != 1 || out.Lines[0].SerialNumber != "20261008001" {
 		t.Errorf("serial baris produk harus 20261008001, dapat %+v", out.Lines)
@@ -278,63 +278,128 @@ func TestSubmitPenomoranBerurutanTanpaCelah(t *testing.T) {
 	}
 }
 
-// TestSubmitCNCTanpaBuktiDanJatuhTempo memverifikasi CP-CNC-02/CP-CNC-04:
-// cabang berflag boleh submit tanpa bukti, penanda C&C terpasang, dan jatuh
-// tempo = tanggal pesanan + cnc_hari (7 hari).
-func TestSubmitCNCTanpaBuktiDanJatuhTempo(t *testing.T) {
+// versi adalah alamat versi saldo deposit yang dilihat cabang (SubmitInput).
+func versi(v int64) *int64 { return &v }
+
+// TestSubmitCNCDibayarDeposit memverifikasi CP-CNC-02: pesanan cabang C&C yang
+// saldonya cukup dibayar penuh dari deposit saat dikirim, tanpa bukti
+// transfer, dan saldo turun tepat sebesar total.
+func TestSubmitCNCDibayarDeposit(t *testing.T) {
 	svc, repo, _ := newSubmitService()
 	ctx := context.Background()
-	repo.SetHargaCabang("br-a", hargaA())
+	repo.SetHargaCabang("br-cnc", hargaA())
+	repo.SetSaldoDeposit("br-cnc", 500000)
 
-	d := draftReguler(t, svc, "br-a", 1)
-	out, err := svc.Submit(ctx, aktorCabang("br-a"), d.ID, SubmitInput{IsCNC: true})
+	d := draftReguler(t, svc, "br-cnc", 2)
+	out, err := svc.Submit(ctx, aktorCabang("br-cnc"), d.ID, SubmitInput{ExpectedJournalVersion: versi(repo.VersiSaldoDeposit("br-cnc"))})
 	if err != nil {
-		t.Fatalf("submit C&C tanpa bukti: %v", err)
+		t.Fatalf("submit C&C bersaldo cukup: %v", err)
 	}
-	if !out.IsCNC {
-		t.Error("penanda C&C harus terpasang")
+	if !out.IsCNC || out.Status != StatusSubmitted {
+		t.Fatalf("pesanan harus Submitted bertanda C&C, dapat %+v", out)
 	}
-	if out.JatuhTempo != "2026-10-15" {
-		t.Errorf("jatuh tempo harus 2026-10-08 + 7 = 2026-10-15, dapat %q", out.JatuhTempo)
+	if got := repo.PotonganDepositPesanan(d.ID); got != out.Total {
+		t.Errorf("deposit terpakai harus sama dengan total %d, dapat %d", out.Total, got)
 	}
-
-	// Setelan cnc_hari dibaca saat submit (bukan saat draft).
-	svc2, repo2, cfg2 := newSubmitService()
-	repo2.SetHargaCabang("br-a", hargaA())
-	cfg2.values[settings.CNCHari] = 3
-	d2 := draftReguler(t, svc2, "br-a", 1)
-	out2, err := svc2.Submit(ctx, aktorCabang("br-a"), d2.ID, SubmitInput{IsCNC: true})
-	if err != nil {
-		t.Fatalf("submit C&C tanpa bukti: %v", err)
+	if got := repo.SaldoDeposit("br-cnc"); got != 500000-out.Total {
+		t.Errorf("saldo harus berkurang sebesar total, sisa %d", got)
 	}
-	if out2.JatuhTempo != "2026-10-11" {
-		t.Errorf("setelan cnc_hari=3 harus dipakai, dapat %q", out2.JatuhTempo)
+	if ev := repo.Events(d.ID); len(ev) != 2 || ev[1] != TeksEventDeposit(out.Total) {
+		t.Errorf("timeline harus mencatat pembayaran deposit, dapat %v", ev)
 	}
 }
 
-// TestSubmitCNCDitolakTanpaFlagCabang memverifikasi CP-CNC-01: cabang tanpa
-// flag (dan service tanpa sumber flag sekalipun) tidak bisa memalsukan C&C.
-func TestSubmitCNCDitolakTanpaFlagCabang(t *testing.T) {
+// TestSubmitCNCSisaSetelahDepositWajibBukti memverifikasi bahwa bila saldo
+// kurang, seluruh saldo terpakai dan sisanya wajib disertai bukti transfer;
+// penolakan tidak memakai nomor maupun saldo.
+func TestSubmitCNCSisaSetelahDepositWajibBukti(t *testing.T) {
+	svc, repo, _ := newSubmitService()
+	ctx := context.Background()
+	repo.SetHargaCabang("br-cnc", hargaA())
+	repo.SetSaldoDeposit("br-cnc", 30000)
+
+	d := draftReguler(t, svc, "br-cnc", 1)
+	dilihat := SubmitInput{ExpectedJournalVersion: versi(repo.VersiSaldoDeposit("br-cnc"))}
+	if _, err := svc.Submit(ctx, aktorCabang("br-cnc"), d.ID, dilihat); !errors.Is(err, ErrProofRequired) {
+		t.Fatalf("sisa tanpa bukti harus ErrProofRequired, dapat %v", err)
+	}
+	if repo.SaldoDeposit("br-cnc") != 30000 || repo.Counter("invoice", "2026-10") != 0 {
+		t.Fatal("submit yang ditolak tidak boleh memakai saldo maupun nomor")
+	}
+
+	repo.SetProofs(d.ID, 1)
+	out, err := svc.Submit(ctx, aktorCabang("br-cnc"), d.ID, dilihat)
+	if err != nil {
+		t.Fatalf("submit campuran: %v", err)
+	}
+	if got := repo.PotonganDepositPesanan(d.ID); got != 30000 || got >= out.Total {
+		t.Errorf("seluruh saldo (30000) harus terpakai dan kurang dari total %d, dapat %d", out.Total, got)
+	}
+	if repo.SaldoDeposit("br-cnc") != 0 {
+		t.Errorf("saldo harus habis, sisa %d", repo.SaldoDeposit("br-cnc"))
+	}
+}
+
+// TestSubmitCNCMenolakSaldoYangBerubah memverifikasi bahwa potongan deposit
+// tidak pernah berubah diam-diam: cabang C&C wajib menyebut versi saldo yang ia
+// lihat, dan saldo yang sudah berubah sejak itu membatalkan submit.
+func TestSubmitCNCMenolakSaldoYangBerubah(t *testing.T) {
+	svc, repo, _ := newSubmitService()
+	ctx := context.Background()
+	repo.SetHargaCabang("br-cnc", hargaA())
+	repo.SetSaldoDeposit("br-cnc", 500000)
+	dilihat := repo.VersiSaldoDeposit("br-cnc")
+	d := draftReguler(t, svc, "br-cnc", 1)
+
+	if _, err := svc.Submit(ctx, aktorCabang("br-cnc"), d.ID, SubmitInput{}); !errors.Is(err, ErrDepositVersionRequired) {
+		t.Fatalf("tanpa versi saldo yang dilihat harus ErrDepositVersionRequired, dapat %v", err)
+	}
+	// Saldo berubah setelah modal kirim dibuka (mis. top-up baru diverifikasi).
+	repo.SetSaldoDeposit("br-cnc", 400000)
+	if _, err := svc.Submit(ctx, aktorCabang("br-cnc"), d.ID, SubmitInput{ExpectedJournalVersion: versi(dilihat)}); !errors.Is(err, ErrDepositChanged) {
+		t.Fatalf("saldo berubah harus ErrDepositChanged, dapat %v", err)
+	}
+	if repo.SaldoDeposit("br-cnc") != 400000 || repo.Counter("invoice", "2026-10") != 0 {
+		t.Fatal("submit yang ditolak tidak boleh memakai saldo maupun nomor")
+	}
+}
+
+// TestSubmitCabangNonCNCTidakMemakaiDeposit memverifikasi CP-CNC-01: status
+// C&C dibaca server, jadi cabang tanpa flag (atau service tanpa sumber flag)
+// tetap wajib bukti dan tidak bisa memakai jalur deposit lewat masukan klien.
+func TestSubmitCabangNonCNCTidakMemakaiDeposit(t *testing.T) {
 	svc, repo, _ := newSubmitService()
 	ctx := context.Background()
 	repo.SetHargaCabang("br-b", map[string]MemoryProduct{
 		"p1": {Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Aktif: true, Harga: 200000},
 	})
+	repo.SetSaldoDeposit("br-b", 1_000_000)
 	d := draftReguler(t, svc, "br-b", 1)
+	if _, err := svc.Submit(ctx, aktorCabang("br-b"), d.ID, SubmitInput{ExpectedJournalVersion: versi(repo.VersiSaldoDeposit("br-b"))}); !errors.Is(err, ErrProofRequired) {
+		t.Fatalf("cabang non-C&C tanpa bukti harus ErrProofRequired, dapat %v", err)
+	}
 	repo.SetProofs(d.ID, 1)
-	if _, err := svc.Submit(ctx, aktorCabang("br-b"), d.ID, SubmitInput{IsCNC: true}); !errors.Is(err, ErrCNCNotAllowed) {
-		t.Fatalf("C&C cabang tanpa flag harus ErrCNCNotAllowed, dapat %v", err)
+	out, err := svc.Submit(ctx, aktorCabang("br-b"), d.ID, SubmitInput{ExpectedJournalVersion: versi(repo.VersiSaldoDeposit("br-b"))})
+	if err != nil {
+		t.Fatalf("submit non-C&C berbukti: %v", err)
+	}
+	if out.IsCNC || repo.SaldoDeposit("br-b") != 1_000_000 {
+		t.Errorf("cabang non-C&C tidak boleh bertanda C&C maupun memakai saldo: %+v", out)
 	}
 
-	// Service tanpa sumber flag: C&C ditolak (fail closed).
-	polos := NewService(NewMemory(), katalogUji(), cfgUji(), WithClock(clock.Fixed(waktuSubmit)))
-	if _, err := polos.Submit(ctx, aktorCabang("br-a"), d.ID, SubmitInput{IsCNC: true}); !errors.Is(err, ErrCNCNotAllowed) {
-		t.Fatalf("tanpa sumber flag C&C harus ditolak, dapat %v", err)
+	// Service tanpa sumber flag: semua cabang diperlakukan non-C&C.
+	polosRepo := NewMemory()
+	polos := NewService(polosRepo, katalogUji(), cfgUji(), WithClock(clock.Fixed(waktuSubmit)))
+	polosRepo.SetHargaCabang("br-cnc", hargaA())
+	polosRepo.SetSaldoDeposit("br-cnc", 500000)
+	dp := draftReguler(t, polos, "br-cnc", 1)
+	if _, err := polos.Submit(ctx, aktorCabang("br-cnc"), dp.ID, SubmitInput{ExpectedJournalVersion: versi(polosRepo.VersiSaldoDeposit("br-cnc"))}); !errors.Is(err, ErrProofRequired) {
+		t.Fatalf("tanpa sumber flag harus wajib bukti, dapat %v", err)
 	}
 
-	// Error membaca flag tidak boleh diam-diam dianggap "bukan C&C".
+	// Error membaca flag dilaporkan apa adanya, bukan dianggap non-C&C.
 	rusak := NewService(NewMemory(), katalogUji(), cfgUji(), WithBranchFlags(fakeFlags{err: errors.New("db mati")}))
-	if _, err := rusak.Submit(ctx, aktorCabang("br-a"), d.ID, SubmitInput{}); err == nil || errors.Is(err, ErrCNCNotAllowed) {
+	if _, err := rusak.Submit(ctx, aktorCabang("br-cnc"), dp.ID, SubmitInput{}); err == nil || errors.Is(err, ErrProofRequired) {
 		t.Fatalf("kegagalan baca flag harus dilaporkan apa adanya, dapat %v", err)
 	}
 }
@@ -367,8 +432,7 @@ func TestSubmitMenolakAktorDanPesananYangSalah(t *testing.T) {
 }
 
 // TestSubmitTanggalWIBDekatTengahMalam memverifikasi BR-04/BR-11: tanggal
-// pesanan mengikuti zona Asia/Jakarta, bukan UTC, dan tenggat C&C dihitung
-// dari tanggal itu.
+// pesanan mengikuti zona Asia/Jakarta, bukan UTC.
 func TestSubmitTanggalWIBDekatTengahMalam(t *testing.T) {
 	kasus := []struct {
 		nama     string
@@ -387,12 +451,12 @@ func TestSubmitTanggalWIBDekatTengahMalam(t *testing.T) {
 		t.Run(k.nama, func(t *testing.T) {
 			repo := NewMemory()
 			svc := NewService(repo, katalogUji(), cfgUji(),
-				WithBranchFlags(fakeFlags{cnc: map[string]bool{"br-a": true}}),
+				WithBranchFlags(fakeFlags{}),
 				WithClock(clock.Fixed(k.sekarang)))
 			repo.SetHargaCabang("br-a", hargaA())
 			d := draftReguler(t, svc, "br-a", 1)
 			repo.SetProofs(d.ID, 1)
-			out, err := svc.Submit(context.Background(), aktorCabang("br-a"), d.ID, SubmitInput{IsCNC: true})
+			out, err := svc.Submit(context.Background(), aktorCabang("br-a"), d.ID, SubmitInput{})
 			if err != nil {
 				t.Fatalf("submit: %v", err)
 			}
@@ -410,10 +474,6 @@ func TestSubmitTanggalWIBDekatTengahMalam(t *testing.T) {
 			}
 			if len(out.Lines[0].SerialNumber) != 11 {
 				t.Errorf("serial harus YYYYMMDDXXX (11 karakter), dapat %q", out.Lines[0].SerialNumber)
-			}
-			// Jatuh tempo = tanggal pesanan WIB + 7 hari.
-			if out.JatuhTempo != mulai.AddDate(0, 0, 7).Format(TanggalLayout) {
-				t.Errorf("jatuh tempo harus %s + 7 hari, dapat %s", k.tanggal, out.JatuhTempo)
 			}
 		})
 	}

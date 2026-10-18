@@ -45,7 +45,6 @@ func (f *fakeConfig) Int(_ context.Context, key string) (int64, error) {
 func cfgUji() *fakeConfig {
 	return &fakeConfig{values: map[string]int64{
 		settings.BiayaPackaging: 3000,
-		settings.CNCHari:        7,
 		settings.DigitInvoice:   2,
 	}}
 }
@@ -62,6 +61,10 @@ func katalogUji() fakeCatalog {
 		},
 		"br-b": {
 			{ID: "p1", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Harga: 200000, Urutan: 1},
+		},
+		// br-cnc adalah cabang Cash & Carry (berdeposit) pada uji submit.
+		"br-cnc": {
+			{ID: "p1", Nama: "Bio Magnetik", Jenis: catalog.JenisReguler, Harga: 100000, Urutan: 1},
 		},
 	}}
 }

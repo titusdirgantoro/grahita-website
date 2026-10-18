@@ -45,7 +45,6 @@ function dashboardUji(nilai: boolean, patch?: Partial<DashboardData>): Dashboard
     chip: [
       { kunci: "menunggu", label: "menunggu verifikasi", jumlah: 3 },
       { kunci: "perlu_review", label: "perlu review", jumlah: 1 },
-      { kunci: "lewat_jatuh_tempo", label: "C&C lewat jatuh tempo", jumlah: 2 },
       { kunci: "email_gagal", label: "email gagal", jumlah: 0 },
     ],
     tren_bulanan: BULAN.map((label, i) => ({
@@ -68,7 +67,7 @@ function dashboardUji(nilai: boolean, patch?: Partial<DashboardData>): Dashboard
     pembanding: { dari: "2026-09-01", sampai: "2026-09-09", ringkasan: metrik(2, 300000), item: 4 },
     bulan_lalu: metrik(4, 640000),
     harian_pembanding: 2,
-    komposisi: { reguler: 4, cnc: 1, sertifikat: 1, cnc_lewat_tempo: 1 },
+    komposisi: { reguler: 4, cnc: 1, sertifikat: 1 },
     produk_terlaris: [
       { product_id: "p1", nama: "Bio Magnetik", qty: 9 },
       { product_id: "p2", nama: "Rimpang Daun", qty: 3 },
@@ -149,7 +148,6 @@ describe("Dashboard admin (F1-20, tata letak admin_v2.html)", () => {
 
     expect(await screen.findByText("3 menunggu verifikasi")).toBeDefined();
     expect(screen.getByLabelText("Sembunyikan: 1 perlu review")).toBeDefined();
-    expect(screen.getByLabelText("Sembunyikan: 2 C&C lewat jatuh tempo")).toBeDefined();
     // Chip berangka 0 tidak ditampilkan.
     expect(screen.queryByLabelText("Sembunyikan: 0 email gagal")).toBeNull();
 
@@ -162,11 +160,11 @@ describe("Dashboard admin (F1-20, tata letak admin_v2.html)", () => {
   it("chip peringatan lain memakai padanan filternya masing-masing", async () => {
     const { panggilan } = stubDashboard();
     render(<RouterProvider router={buatRouter("/")} />);
-    await screen.findByText("2 C&C lewat jatuh tempo");
+    await screen.findByText("1 perlu review");
 
-    fireEvent.click(screen.getByText("2 C&C lewat jatuh tempo"));
+    fireEvent.click(screen.getByText("1 perlu review"));
     await waitFor(() => {
-      expect(panggilan.some((u) => u.includes("terlambat=true"))).toBe(true);
+      expect(panggilan.some((u) => u.includes("/admin/orders?") && u.includes("verif=perlu_review"))).toBe(true);
     });
   });
 
@@ -245,7 +243,7 @@ describe("Dashboard admin (F1-20, tata letak admin_v2.html)", () => {
     expect(screen.getByText("2,4")).toBeDefined();
     expect(screen.getByText("0,4 lebih banyak")).toBeDefined();
     expect(screen.getByText("1 sertifikat")).toBeDefined();
-    expect(screen.getByText("1 lewat tempo")).toBeDefined();
+    expect(screen.getByText("dibayar deposit")).toBeDefined();
     expect(screen.getByText("80,0%")).toBeDefined();
     const produk = screen.getByTestId("produk-terlaris").textContent ?? "";
     expect(produk.indexOf("Bio Magnetik")).toBeLessThan(produk.indexOf("Rimpang Daun"));

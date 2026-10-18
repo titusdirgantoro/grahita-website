@@ -419,25 +419,11 @@ FROM deposit_allocations WHERE order_id=$1`, in.OrderID).Scan(&committed); err !
 	if committed+in.Amount > total {
 		return deposit.AllocationResult{}, deposit.ErrExceedsOrder
 	}
-	var transactionID string
-	if err := tx.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
-branch_id,kind,amount,order_id,order_version,idempotency_key_hash,request_fingerprint,
-actor_kind,actor_id)
-VALUES($1,'order_allocation_debit',$2,$3,$4,$5,$6,$7::actor_kind,$8) RETURNING id`,
-		in.BranchID, -in.Amount, in.OrderID, orderVersion, keyHash(in.IdempotencyKey),
-		in.RequestFingerprint, in.ActorKind, nullableUUID(in.ActorID)).Scan(&transactionID); err != nil {
-		return deposit.AllocationResult{}, mapConstraint(err)
-	}
-	var a deposit.Allocation
-	if err := tx.QueryRow(ctx, `INSERT INTO deposit_allocations(
-branch_id,order_id,order_version,debit_transaction_id,amount,created_by_kind,created_by_id)
-VALUES($1,$2,$3,$4,$5,$6::actor_kind,$7)
-RETURNING id,branch_id,order_id,order_version,debit_transaction_id,amount,reversed_amount,created_at`,
-		in.BranchID, in.OrderID, orderVersion, transactionID, in.Amount, in.ActorKind, nullableUUID(in.ActorID)).
-		Scan(&a.ID, &a.BranchID, &a.OrderID, &a.OrderVersion, &a.DebitTransactionID, &a.Amount, &a.ReversedAmount, &a.CreatedAt); err != nil {
-		return deposit.AllocationResult{}, mapConstraint(err)
-	}
-	account, err = updateAccount(ctx, tx, in.BranchID, -in.Amount)
+	a, account, err := AllocateLocked(ctx, tx, DebitLocked{
+		BranchID: in.BranchID, OrderID: in.OrderID, OrderVersion: orderVersion, Amount: in.Amount,
+		IdempotencyKey: in.IdempotencyKey, RequestFingerprint: in.RequestFingerprint,
+		ActorKind: in.ActorKind, ActorID: in.ActorID,
+	})
 	if err != nil {
 		return deposit.AllocationResult{}, err
 	}

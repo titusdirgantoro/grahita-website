@@ -7,6 +7,9 @@ import type { NavItem } from "@grahita/ui";
  * (Beranda · Katalog · Pesanan · Invoice · Deposit · Profil). Deposit ikut di
  * bottom-nav karena di layar sempit tidak ada jalur lain menuju halamannya;
  * Tutorial tetap terjangkau dari kartu "Cara membuat pesanan" di Beranda.
+ *
+ * Deposit hanya milik cabang Cash & Carry (pesanannya dibayar dari saldo), jadi
+ * menu itu disaring lewat navCabang.
  */
 export const NAV_CUSTOMER: NavItem[] = [
   { to: "/", label: "Beranda", icon: "squares-four", bottomLabel: "Beranda" },
@@ -17,3 +20,8 @@ export const NAV_CUSTOMER: NavItem[] = [
   { to: "/tutorial", label: "Tutorial", icon: "question" },
   { to: "/profil", label: "Profil", icon: "user-circle", bottomLabel: "Profil", sidebar: false },
 ];
+
+/** navCabang adalah menu cabang sesi: tanpa Deposit untuk cabang non-C&C. */
+export function navCabang(isCNC: boolean): NavItem[] {
+  return isCNC ? NAV_CUSTOMER : NAV_CUSTOMER.filter((item) => item.to !== "/deposit");
+}

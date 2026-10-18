@@ -23,17 +23,12 @@ import styles from "./beranda.module.css";
  *
  * Isi: ringkasan periode berjalan (jumlah pesanan, total belanja, yang sudah
  * selesai), pesanan Submitted yang menunggu verifikasi, draft yang belum
- * dikirim, pengingat tagihan Cash & Carry yang mendekati/melewati jatuh tempo,
- * dan 5 pesanan terakhir — plus pintasan "Buat pesanan".
+ * dikirim, dan 5 pesanan terakhir — plus pintasan "Buat pesanan".
  *
  * Seluruh angka dihitung dari GET /api/v1/orders, satu-satunya sumber daftar
  * pesanan cabang yang sudah dibatasi branch_id SESI di server (isolasi data
  * cabang). Tidak ada endpoint agregat baru, jadi angka di beranda, halaman
  * Pesanan, dan riwayat invoice selalu berasal dari data DB yang sama.
- *
- * Pengingat C&C bersifat TAMPILAN saja: pesanan C&C yang lewat jatuh tempo
- * tetap berstatus Submitted sampai Pusat memverifikasi pembayarannya
- * (PRD CP-CNC-07) — beranda tidak pernah mengubah status pesanan.
  */
 
 const rupiah = new Intl.NumberFormat("id-ID", {
@@ -45,7 +40,7 @@ const rupiah = new Intl.NumberFormat("id-ID", {
 /** hariIni mengembalikan tanggal bisnis WIB (UTC+7) sebagai YYYY-MM-DD. */
 export function hariIni(sekarang: Date = new Date()): string {
   // Memakai WIB, BUKAN zona waktu browser: orders.tanggal adalah tanggal bisnis
-  // WIB (BR-04), sehingga "periode berjalan" dan pengingat C&C tidak bergeser
+  // WIB (BR-04), sehingga "periode berjalan" tidak bergeser
   // bagi pengguna yang membuka portal dari zona waktu lain dekat pergantian
   // hari/bulan. WIB tidak punya DST, jadi geserannya tetap +7 jam.
   const wib = new Date(sekarang.getTime() + 7 * 60 * 60 * 1000);
@@ -64,17 +59,6 @@ export function bulanSebelumnya(bulan: string): string {
   const d = new Date(Date.UTC(tahun, bulanKe - 2, 1));
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}`;
-}
-
-/**
- * selisihHari menghitung selisih hari kalender (sampai - dari) dari dua tanggal
- * YYYY-MM-DD, memakai UTC supaya tidak bergeser oleh zona waktu browser.
- */
-export function selisihHari(dari: string, sampai: string): number {
-  const a = Date.parse(`${dari}T00:00:00Z`);
-  const b = Date.parse(`${sampai}T00:00:00Z`);
-  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
-  return Math.round((a - b) / 86_400_000);
 }
 
 /** tanggalPanjang menampilkan tanggal dalam bentuk "09 Oktober 2026". */
@@ -108,32 +92,6 @@ function toneStatus(status: StatusPesanan, verif?: string): "draft" | "warning" 
   if (status === "draft") return "draft";
   if (status === "done") return "success";
   return verif === "perlu_review" ? "danger" : "warning";
-}
-
-/**
- * pengingatCNC memilih pesanan C&C paling mendesak yang belum selesai
- * (PRD §3.3, CP-CNC-04..07). Yang dikembalikan hanya teks pengingat: status
- * pesanannya tidak pernah disentuh dari sini.
- */
-export function pengingatCNC(
-  orders: Pesanan[],
-  hariIniStr: string,
-): { pesanan: Pesanan; sisaHari: number; judul: string; catatan: string } | null {
-  const kandidat = orders
-    .filter((o) => o.is_cnc && o.status === "submitted" && !!o.jatuh_tempo)
-    .sort((a, b) => String(a.jatuh_tempo).localeCompare(String(b.jatuh_tempo)));
-  if (kandidat.length === 0) return null;
-  const p = kandidat[0];
-  const sisa = selisihHari(String(p.jatuh_tempo), hariIniStr);
-  let judul = `C&C jatuh tempo ${sisa} hari lagi`;
-  if (sisa === 0) judul = "C&C jatuh tempo hari ini";
-  else if (sisa < 0) judul = `C&C lewat jatuh tempo ${Math.abs(sisa)} hari`;
-  return {
-    pesanan: p,
-    sisaHari: sisa,
-    judul,
-    catatan: `Pesanan ${p.nomor ?? ""} · ${rupiah.format(p.total)}. Bayar lalu unggah bukti transfer.`,
-  };
 }
 
 export function BerandaPage() {
@@ -173,8 +131,6 @@ export function BerandaPage() {
       terakhir,
     };
   }, [data, bulan, bulanLalu]);
-
-  const cnc = useMemo(() => pengingatCNC(data ?? [], hariIniStr), [data, hariIniStr]);
 
   return (
     <>
@@ -298,34 +254,18 @@ export function BerandaPage() {
               </span>
             </button>
 
-            {cnc ? (
-              <button
-                type="button"
-                className={`${styles.banner} ${styles.warning}`}
-                data-testid="banner-cnc"
-                onClick={() => void navigate({ to: "/pesanan/$id", params: { id: cnc.pesanan.id } })}
-              >
-                <span className={styles.ring}>{cnc.sisaHari <= 0 ? "!" : `${cnc.sisaHari}h`}</span>
-                <span>
-                  <span className={styles.ttl}>{cnc.judul}</span>
-                  <br />
-                  <span className={styles.sub}>{cnc.catatan}</span>
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                className={styles.banner}
-                onClick={() => void navigate({ to: "/pesanan", search: { status: "draft" } })}
-              >
-                <span className={styles.ring}>{r.draft.length}</span>
-                <span>
-                  <span className={styles.ttl}>{r.draft.length} draft belum dikirim</span>
-                  <br />
-                  <span className={styles.sub}>Lanjutkan dan kirim agar diproses Pusat.</span>
-                </span>
-              </button>
-            )}
+            <button
+              type="button"
+              className={styles.banner}
+              onClick={() => void navigate({ to: "/pesanan", search: { status: "draft" } })}
+            >
+              <span className={styles.ring}>{r.draft.length}</span>
+              <span>
+                <span className={styles.ttl}>{r.draft.length} draft belum dikirim</span>
+                <br />
+                <span className={styles.sub}>Lanjutkan dan kirim agar diproses Pusat.</span>
+              </span>
+            </button>
 
             <button
               type="button"

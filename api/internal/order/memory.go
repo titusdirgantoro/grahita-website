@@ -18,8 +18,8 @@ import (
 //
 // Submit (F1-14) juga ditiru: urutan nomor invoice/serial dari tabel counter,
 // snapshot harga terbaru dari master yang disuntikkan lewat SetHargaCabang,
-// kewajiban bukti untuk pesanan non-C&C (SetProofs), dan timeline "Pesanan
-// dikirim". Nilai yang dihasilkan TestSubmit* di paket ini memakai Memory;
+// kewajiban bukti untuk bagian yang dibayar transfer (SetProofs), potongan
+// saldo deposit cabang C&C (SetSaldoDeposit), dan timeline "Pesanan dikirim". Nilai yang dihasilkan TestSubmit* di paket ini memakai Memory;
 // kebenaran penomoran/trigger sebenarnya diuji di uji integrasi PostgreSQL.
 type Memory struct {
 	mu     sync.Mutex
@@ -37,6 +37,12 @@ type Memory struct {
 	counters map[string]int
 	// events adalah teks timeline per pesanan.
 	events map[string][]string
+	// saldo dan versiSaldo adalah saldo deposit + versi journal per cabang;
+	// potongan adalah deposit yang didebit submit per pesanan (cermin
+	// branch_deposit_accounts dan deposit_allocations).
+	saldo      map[string]int64
+	versiSaldo map[string]int64
+	potongan   map[string]int64
 }
 
 // MemoryProduct adalah keadaan satu produk di mata Memory: master (nama,
@@ -55,7 +61,40 @@ func NewMemory() *Memory {
 		proofs:      map[string]int{},
 		counters:    map[string]int{},
 		events:      map[string][]string{},
+		saldo:       map[string]int64{},
+		versiSaldo:  map[string]int64{},
+		potongan:    map[string]int64{},
 	}
+}
+
+// SetSaldoDeposit menetapkan saldo deposit terverifikasi satu cabang; seperti
+// kredit journal, versinya naik satu.
+func (m *Memory) SetSaldoDeposit(branchID string, saldo int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saldo[branchID] = saldo
+	m.versiSaldo[branchID]++
+}
+
+// VersiSaldoDeposit mengembalikan versi journal deposit satu cabang.
+func (m *Memory) VersiSaldoDeposit(branchID string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.versiSaldo[branchID]
+}
+
+// SaldoDeposit mengembalikan saldo deposit satu cabang.
+func (m *Memory) SaldoDeposit(branchID string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.saldo[branchID]
+}
+
+// PotonganDepositPesanan mengembalikan deposit yang didebit saat submit.
+func (m *Memory) PotonganDepositPesanan(orderID string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.potongan[orderID]
 }
 
 // SetHargaCabang menetapkan master + harga produk yang berlaku untuk satu
@@ -229,8 +268,9 @@ func (m *Memory) DeleteDraft(_ context.Context, id, branchID string) error {
 }
 
 // Submit meniru transaksi submit PostgreSQL: validasi ulang isi draft
-// (SiapkanSubmit), kewajiban bukti non-C&C, penomoran invoice + serial, lalu
-// penulisan status/tanggal/tenggat/timeline.
+// (SiapkanSubmit), potongan deposit C&C, kewajiban bukti untuk bagian yang
+// dibayar transfer, penomoran invoice + serial, lalu penulisan
+// status/tanggal/timeline.
 //
 // Seluruh pemeriksaan yang bisa gagal dilakukan SEBELUM counter bergerak,
 // sehingga submit yang ditolak tidak memakai nomor — sama seperti rollback
@@ -249,6 +289,9 @@ func (m *Memory) Submit(_ context.Context, req SubmitRequest) (Order, error) {
 	}
 	if !req.IsCNC && m.proofs[o.ID] < 1 {
 		return Order{}, ErrProofRequired
+	}
+	if req.IsCNC && req.ExpectedJournalVersion != m.versiSaldo[o.BranchID] {
+		return Order{}, ErrDepositChanged
 	}
 
 	// Baris draft + keadaan master/harga cabang saat submit.
@@ -278,6 +321,21 @@ func (m *Memory) Submit(_ context.Context, req SubmitRequest) (Order, error) {
 	snapshots, err := SiapkanSubmit(lines, req.BiayaPackaging)
 	if err != nil {
 		return Order{}, err
+	}
+	var potong int64
+	if req.IsCNC {
+		var total int64
+		for _, sn := range snapshots {
+			for _, l := range o.Lines {
+				if l.LineNo == sn.LineNo {
+					total += int64(l.Qty) * sn.HargaSatuan
+				}
+			}
+		}
+		potong = PotonganDeposit(m.saldo[o.BranchID], total)
+		if total > potong && m.proofs[o.ID] < 1 {
+			return Order{}, ErrProofRequired
+		}
 	}
 
 	// Penomoran: satu rentang serial untuk seluruh baris produk (urutan
@@ -325,15 +383,19 @@ func (m *Memory) Submit(_ context.Context, req SubmitRequest) (Order, error) {
 	o.Status = StatusSubmitted
 	o.IsCNC = req.IsCNC
 	o.Tanggal = req.Tanggal.Format(TanggalLayout)
-	o.JatuhTempo = ""
-	if req.IsCNC && !req.JatuhTempo.IsZero() {
-		o.JatuhTempo = req.JatuhTempo.Format(TanggalLayout)
+	if potong > 0 {
+		m.saldo[o.BranchID] -= potong
+		m.versiSaldo[o.BranchID]++
+		m.potongan[o.ID] = potong
 	}
 	o.SubmittedAt = now.Format(time.RFC3339)
 	o.UpdatedAt = now
 	o.Total, o.JumlahItem = hitung(o.Lines)
 	o.IsSertifikat = adaPackaging(o.Lines)
 	m.events[o.ID] = append(m.events[o.ID], TeksEventSubmit)
+	if potong > 0 {
+		m.events[o.ID] = append(m.events[o.ID], TeksEventDeposit(potong))
+	}
 	return m.publik(*o), nil
 }
 

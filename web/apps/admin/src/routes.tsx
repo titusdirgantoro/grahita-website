@@ -180,7 +180,6 @@ const pesananRoute = createRoute({
     status: teksMungkin(search.status),
     verif: teksMungkin(search.verif),
     cnc: boolMungkin(search.cnc),
-    terlambat: boolMungkin(search.terlambat),
     email_gagal: boolMungkin(search.email_gagal),
     dari: teksMungkin(search.dari),
     sampai: teksMungkin(search.sampai),

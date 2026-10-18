@@ -44,7 +44,6 @@ export interface Invoice {
   status: "submitted" | "done";
   versi: number;
   is_cnc: boolean;
-  jatuh_tempo?: string;
   total: number;
   jumlah_item: number;
   dokumen_id?: string;

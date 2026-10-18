@@ -102,8 +102,9 @@ describe("Customer Portal — Profil cabang (F1-10)", () => {
     expect(telepon.value).toBe("081234567890");
     expect(telepon.readOnly).toBe(true);
 
-    // Endpoint profil cabang dipanggil tepat sekali; tidak ada request tulis.
-    expect(panggilan.filter((p) => p.url.endsWith("/me/branch"))).toHaveLength(1);
+    // Data cabang dibaca dari /me/branch (halaman + menu shell); tidak ada
+    // request tulis.
+    expect(panggilan.some((p) => p.url.endsWith("/me/branch"))).toBe(true);
     expect(panggilan.every((p) => !p.init || (p.init.method ?? "GET") === "GET")).toBe(true);
     // Semua panggilan RELATIF (/api/v1/...) supaya cookie sesi tetap host-only
     // pada host portal yang sedang dibuka — tidak ada URL absolut antar portal.
