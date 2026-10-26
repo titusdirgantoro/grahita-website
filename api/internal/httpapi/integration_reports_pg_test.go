@@ -146,30 +146,28 @@ func (l *laporanPG) seedPesanan(t *testing.T, o pesananLaporan) string {
 	}
 
 	if o.Status != "draft" {
+		status := o.Status
+		if status == "done" {
+			status = "submitted"
+		}
 		if _, err := l.pool.Exec(ctx,
 			`UPDATE orders
 			    SET status = $2::order_status,
 			        nomor = $3,
 			        tanggal = $4::date,
-			        submitted_at = now(),
-			        done_at = CASE WHEN $2::text = 'done' THEN now() END
+			        submitted_at = now()
 			  WHERE id = $1`,
-			id, o.Status, o.Nomor, o.Tanggal); err != nil {
+			id, status, o.Nomor, o.Tanggal); err != nil {
 			t.Fatalf("pindahkan pesanan %s ke %s: %v", o.Nomor, o.Status, err)
 		}
 	}
 
 	if o.Status == "done" {
-		metode := o.Metode
-		if metode == "" {
-			metode = "manual"
+		var total int64
+		if err := l.pool.QueryRow(ctx, `SELECT total FROM orders WHERE id=$1`, id).Scan(&total); err != nil {
+			t.Fatal(err)
 		}
-		if _, err := l.pool.Exec(ctx,
-			`INSERT INTO verification_logs (order_id, metode, total_pesanan, hasil, admin_id)
-			 SELECT id, $2::verify_method, total, 'cocok', $3 FROM orders WHERE id = $1`,
-			id, metode, l.adminSA); err != nil {
-			t.Fatalf("seed log verifikasi pesanan %s: %v", o.Nomor, err)
-		}
+		pasangPointerVerifikasiDone(t, l.pool, l.adminSA, l.bankDefault, id, o.Nomor, total)
 	}
 	return id
 }
@@ -486,19 +484,19 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	// (satu baris per order line, AP-REP-01).
 	jenisTampil := map[string]int{}
 	for _, b := range barisEkspor[1:] {
-		if b[14] != "done" {
+		if b[13] != "done" {
 			t.Errorf("baris ekspor harus berstatus done (sesuai filter): %v", b)
 		}
 		if b[3] != "Grahita Cabang B" {
 			t.Errorf("baris ekspor harus milik cabang B (sesuai filter): %v", b)
 		}
-		jenisTampil[b[9]]++
+		jenisTampil[b[8]]++
 	}
 	if jenisTampil["product"] != 2 || jenisTampil["packaging"] != 1 {
 		t.Errorf("ekspor cabang B harus memuat 2 baris produk + 1 packaging, dapat %v", jenisTampil)
 	}
-	// Format Rupiah pada kolom harga satuan (M).
-	idGaya, err := f.GetCellStyle(report.SheetLaporan, "M2")
+	// Format Rupiah pada kolom harga satuan (L).
+	idGaya, err := f.GetCellStyle(report.SheetLaporan, "L2")
 	if err != nil {
 		t.Fatalf("gaya sel harga: %v", err)
 	}

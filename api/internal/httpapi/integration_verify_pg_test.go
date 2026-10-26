@@ -509,11 +509,8 @@ func TestPGDokumenDoneFailClosedUntukSnapshotParsialDanPointerHilang(t *testing.
 	if status != http.StatusOK {
 		t.Fatalf("prasyarat C&C Done gagal: %d %v", status, body)
 	}
-	if _, err := f.pool.Exec(ctx, `UPDATE orders SET done_verification_log_id=NULL WHERE id=$1`, cncID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.OrderForDocument(ctx, cncID); err == nil || !strings.Contains(err.Error(), "tanpa pointer verifikasi") {
-		t.Fatalf("C&C Done tanpa pointer harus fail closed, dapat %v", err)
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET done_verification_log_id=NULL WHERE id=$1`, cncID); err == nil {
+		t.Fatal("constraint database harus menolak Done tanpa pointer verifikasi")
 	}
 
 	// Pointer ke attempt sukses milik order lain tidak boleh diterima.
@@ -525,11 +522,8 @@ func TestPGDokumenDoneFailClosedUntukSnapshotParsialDanPointerHilang(t *testing.
 	if status, body = verifyHTTP(t, f, cookies, csrf, rightID, bodyVerifikasiCocok(t, f, rightID, &rightTotal, "")); status != http.StatusOK {
 		t.Fatalf("prasyarat right Done gagal: %d %v", status, body)
 	}
-	if _, err := f.pool.Exec(ctx, `UPDATE orders SET done_verification_log_id=(SELECT done_verification_log_id FROM orders WHERE id=$2) WHERE id=$1`, leftID, rightID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.OrderForDocument(ctx, leftID); err == nil || !strings.Contains(err.Error(), "bukan attempt sukses milik pesanan") {
-		t.Fatalf("pointer lintas order harus fail closed, dapat %v", err)
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET done_verification_log_id=(SELECT done_verification_log_id FROM orders WHERE id=$2) WHERE id=$1`, leftID, rightID); err == nil {
+		t.Fatal("foreign key database harus menolak pointer verifikasi lintas pesanan")
 	}
 
 	// Jumlah snapshot sama tidak cukup bila UUID bukti berasal dari order lain.

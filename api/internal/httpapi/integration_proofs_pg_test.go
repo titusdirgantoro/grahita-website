@@ -198,10 +198,7 @@ func insertOrder(t *testing.T, f *pgFixture, branchID, status, nomor string) str
 		t.Fatalf("seed baris pesanan: %v", err)
 	}
 	if status == "done" {
-		if _, err := f.pool.Exec(ctx,
-			`UPDATE orders SET status = 'done', done_at = now(), verif_status = 'cocok' WHERE id = $1`, id); err != nil {
-			t.Fatalf("tandai pesanan done: %v", err)
-		}
+		pasangPointerVerifikasiDone(t, f.pool, f.adminSA, f.bankDefault, id, nomor, 100000)
 	}
 	return id
 }

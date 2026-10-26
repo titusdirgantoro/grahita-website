@@ -387,8 +387,8 @@ func TestPGSubmitHargaDanNamaMasterBerubah(t *testing.T) {
 		t.Fatalf("harga draft harus 2×100000, dapat %v", draft["total"])
 	}
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, '\\x01', 'branch')`, id); err != nil {
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, '\\x01', 'branch')`, id); err != nil {
 		t.Fatalf("seed bukti: %v", err)
 	}
 
@@ -595,8 +595,8 @@ func TestPGSubmitPackagingTanpaSerial(t *testing.T) {
 	draft := buatDraftHTTP(t, f, cookiesA, csrfA, sertifikat, 1)
 	id, _ := draft["id"].(string)
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, '\\x03', 'branch')`, id); err != nil {
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, '\\x03', 'branch')`, id); err != nil {
 		t.Fatalf("seed bukti: %v", err)
 	}
 	// Setelan biaya packaging berubah sebelum submit: nilai final harus 5000.
@@ -673,8 +673,8 @@ func TestPGSubmit100ParalelNomorDanSerialUnik(t *testing.T) {
 		}
 		// Bukti transfer unik per pesanan (submit non-C&C wajib punya bukti).
 		if _, err := f.pool.Exec(ctx,
-			`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-			 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, digest($2::text, 'sha256'), 'branch')`, id, fmt.Sprintf("bukti-%d", i)); err != nil {
+			`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+			 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, digest($2::text, 'sha256'), 'branch')`, id, fmt.Sprintf("bukti-%d", i)); err != nil {
 			t.Fatalf("seed bukti ke-%d: %v", i, err)
 		}
 		pesanan[i] = id
@@ -784,8 +784,8 @@ func TestPGRollbackSubmitTidakMemakaiNomor(t *testing.T) {
 	draft := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 3)
 	id, _ := draft["id"].(string)
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, '\\x04', 'branch')`, id); err != nil {
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, '\\x04', 'branch')`, id); err != nil {
 		t.Fatalf("seed bukti: %v", err)
 	}
 
@@ -860,8 +860,8 @@ func TestPGSubmitBalapanSatuPesananSatuNomor(t *testing.T) {
 	draft := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 1)
 	id, _ := draft["id"].(string)
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, '\\x06', 'branch')`, id); err != nil {
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, '\\x06', 'branch')`, id); err != nil {
 		t.Fatalf("seed bukti: %v", err)
 	}
 
@@ -918,8 +918,8 @@ func TestPGSubmitProdukNonaktifDitolak(t *testing.T) {
 	draft := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 1)
 	id, _ := draft["id"].(string)
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, '\\x07', 'branch')`, id); err != nil {
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, '\\x07', 'branch')`, id); err != nil {
 		t.Fatalf("seed bukti: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx, `UPDATE products SET is_active = false WHERE id = $1`, produk); err != nil {
@@ -956,8 +956,8 @@ func TestPGSubmitDigitInvoiceMelebar(t *testing.T) {
 		draft := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 1)
 		id, _ := draft["id"].(string)
 		if _, err := f.pool.Exec(ctx,
-			`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-			 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, digest($2::text, 'sha256'), 'branch')`, id, fmt.Sprintf("melebar-%d", i)); err != nil {
+			`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+			 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, digest($2::text, 'sha256'), 'branch')`, id, fmt.Sprintf("melebar-%d", i)); err != nil {
 			t.Fatalf("seed bukti ke-%d: %v", i, err)
 		}
 		resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", cookiesA, csrfA, nil, "")
@@ -984,8 +984,8 @@ func TestPGSubmitIsolasiCabangDanAdmin(t *testing.T) {
 	draft := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 1)
 	id, _ := draft["id"].(string)
 	if _, err := f.pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
-		 VALUES ($1, 'k', 'b.jpg', 'image/jpeg', 10, '\\x05', 'branch')`, id); err != nil {
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'k', 'b.jpg', 'image/jpeg', 10, '\\x05', 'branch')`, id); err != nil {
 		t.Fatalf("seed bukti: %v", err)
 	}
 
