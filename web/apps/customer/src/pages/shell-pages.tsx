@@ -54,6 +54,7 @@ interface Cabang {
   telepon: string;
   is_cnc: boolean;
   is_tempo?: boolean;
+  allow_transfer?: boolean;
   tanggal_bayar?: number;
   pajak_in?: boolean;
   is_active: boolean;
@@ -157,6 +158,7 @@ export function ProfilPage() {
                 <Badge tone={data.is_active ? "success" : "danger"}>
                   {data.is_active ? "Aktif" : "Nonaktif"}
                 </Badge>
+                {(data.allow_transfer ?? (!data.is_cnc && !data.is_tempo)) ? <Badge tone="neutral">Transfer di muka</Badge> : null}
                 {data.is_cnc ? <Badge tone="cnc">Cash &amp; Carry</Badge> : null}
                 {data.is_tempo ? <Badge tone="info">Tempo · bayar tanggal {data.tanggal_bayar}</Badge> : null}
                 {data.pajak_in ? <Badge tone="info">PI</Badge> : null}
