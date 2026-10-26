@@ -183,6 +183,7 @@ type InvoiceRow struct {
 	Status     string `json:"status"`
 	Versi      int    `json:"versi"`
 	IsCNC      bool   `json:"is_cnc"`
+	IsTempo    bool   `json:"is_tempo"`
 	Total      int64  `json:"total"`
 	JumlahItem int64  `json:"jumlah_item"`
 	// DokumenID adalah dokumen invoice versi baris ini; kosong bila belum ada.
@@ -234,6 +235,8 @@ type Order struct {
 	Versi        int
 	BranchID     string
 	IsCNC        bool
+	IsTempo      bool
+	TempoDueDate time.Time
 	IsSertifikat bool
 	Total        int64
 	Catatan      string
@@ -455,7 +458,7 @@ func (s *Service) Invoices(ctx context.Context, actor auth.Actor, f InvoiceFilte
 		// Baris tanpa dokumen tidak pernah bisa diunduh; dokumen hanya lahir
 		// untuk pesanan Done (PRD §6.1), jadi syarat status di sini bersifat
 		// sabuk pengaman terhadap data yang tidak konsisten.
-		r.DapatDiunduh = r.DokumenID != "" && r.Status == StatusDone
+		r.DapatDiunduh = r.DokumenID != "" && (r.Status == StatusDone || r.Status == "approved_unpaid")
 		r.Terbaru = r.VersiDokumen != nil && *r.VersiDokumen == r.Versi
 	}
 	if rows == nil {
@@ -538,7 +541,7 @@ func (s *Service) ensure(ctx context.Context, orderID string, kinds []string) ([
 	if err != nil {
 		return nil, err
 	}
-	if order.Status != StatusDone {
+	if order.Status != StatusDone && order.Status != "approved_unpaid" {
 		return nil, fmt.Errorf("%w: pesanan %s berstatus %s", ErrNotDone, order.Nomor, order.Status)
 	}
 	if err := validSnapshot(order); err != nil {

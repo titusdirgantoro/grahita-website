@@ -159,6 +159,7 @@ export function DashboardPage() {
 
   const path = `/admin/dashboard?periode=${encodeURIComponent(periode)}` + (cabang ? `&cabang=${encodeURIComponent(cabang)}` : "");
   const { data, memuat, galat, muatUlang } = useApi<DashboardData>(path);
+  const { data: tempo } = useApi<{overdue:number;total_receivable:number;items:Array<{status:string;remaining:number}>}>("/admin/tempo/overview");
 
   // Chip yang disembunyikan pengguna HANYA state tampilan (AP-DSH-03), tidak
   // dikirim ke server: menyembunyikan chip tidak mengubah datanya.
@@ -188,7 +189,7 @@ export function DashboardPage() {
             />
             {memuat && !data ? (
               <span className="muted small">Memuat…</span>
-            ) : chips.length === 0 ? (
+            ) : chips.length === 0 && !tempo?.overdue ? (
               <span className="muted small">Tidak ada. Semua pesanan sudah ditangani.</span>
             ) : (
               chips.map((c) => (
@@ -202,6 +203,7 @@ export function DashboardPage() {
                 </Chip>
               ))
             )}
+            {tempo && tempo.overdue>0 && !disembunyikan.tempo ? <Chip removeLabel="Sembunyikan tagihan lewat jatuh tempo" onToggle={()=>void navigate({to:"/tagihan"})} onRemove={()=>setDisembunyikan(s=>({...s,tempo:true}))}>{`${tempo.items.filter(x=>x.status==="lewat_jatuh_tempo"&&x.remaining>0).length} tagihan lewat jatuh tempo · ${rupiah(tempo.overdue)}`}</Chip>:null}
           </div>
         </div>
       </section>

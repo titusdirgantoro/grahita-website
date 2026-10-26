@@ -31,6 +31,8 @@ var TabelInti = []string{
 	"password_reset_tokens", "sessions", "products", "branch_prices",
 	"bank_accounts", "orders", "order_lines", "payment_proofs", "documents",
 	"order_events", "verification_logs", "invoice_revisions", "cnc_reminders",
+	"tempo_receipts", "tempo_hold_grace", "tempo_credit_entries", "tempo_charges",
+	"tempo_allocations", "tempo_adjustments", "tempo_statements", "tempo_statement_lines", "tempo_reminders",
 	"email_outbox", "settings", "audit_logs", "numbering_counters", "river_job",
 }
 

@@ -111,6 +111,8 @@ SELECT o.id,
        o.versi,
        o.branch_id::text                 AS branch_id,
        o.is_cnc,
+       o.is_tempo,
+       o.tempo_due_date,
        o.is_sertifikat,
        o.total,
        COALESCE(o.catatan, '')::text     AS catatan,
@@ -131,6 +133,8 @@ type GetOrderForDocumentRow struct {
 	Versi         int32      `json:"versi"`
 	BranchID      string     `json:"branch_id"`
 	IsCnc         bool       `json:"is_cnc"`
+	IsTempo       bool       `json:"is_tempo"`
+	TempoDueDate  *time.Time `json:"tempo_due_date"`
 	IsSertifikat  bool       `json:"is_sertifikat"`
 	Total         int64      `json:"total"`
 	Catatan       string     `json:"catatan"`
@@ -160,6 +164,8 @@ func (q *Queries) GetOrderForDocument(ctx context.Context, id string) (GetOrderF
 		&i.Versi,
 		&i.BranchID,
 		&i.IsCnc,
+		&i.IsTempo,
+		&i.TempoDueDate,
 		&i.IsSertifikat,
 		&i.Total,
 		&i.Catatan,
@@ -288,6 +294,7 @@ SELECT o.id::text                     AS order_id,
        o.status::text                 AS status,
        o.versi,
        o.is_cnc,
+       o.is_tempo,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
                   WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
@@ -319,6 +326,7 @@ type ListInvoicesForBranchRow struct {
 	Status           string     `json:"status"`
 	Versi            int32      `json:"versi"`
 	IsCnc            bool       `json:"is_cnc"`
+	IsTempo          bool       `json:"is_tempo"`
 	Total            int64      `json:"total"`
 	JumlahItem       int64      `json:"jumlah_item"`
 	DokumenID        string     `json:"dokumen_id"`
@@ -352,6 +360,7 @@ func (q *Queries) ListInvoicesForBranch(ctx context.Context, arg ListInvoicesFor
 			&i.Status,
 			&i.Versi,
 			&i.IsCnc,
+			&i.IsTempo,
 			&i.Total,
 			&i.JumlahItem,
 			&i.DokumenID,

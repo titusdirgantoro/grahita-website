@@ -177,8 +177,8 @@ func TestPGBankRekeningTransaksionalDanNonaktif(t *testing.T) {
 		t.Fatalf("unggah bukti tanpa rekening efektif harus 409, dapat %d", status)
 	}
 	if _, err := f.pool.Exec(ctx, `INSERT INTO payment_proofs
-		(order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
-		VALUES ($1,'proofs/sintetis','bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$2)`, orderID, f.userA); err != nil {
+		(order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind, uploaded_by_id)
+		VALUES ($1,$2,'proofs/sintetis','bukti.jpg','image/jpeg',4,decode('01020304','hex'),'branch',$3)`, orderID, f.branchA, f.userA); err != nil {
 		t.Fatalf("seed bukti untuk uji submit fail-closed: %v", err)
 	}
 	resp, submitBody := multipartSubmit(t, base+"/orders/"+orderID+"/submit", cabangCookies, cabangCsrf, nil, "")

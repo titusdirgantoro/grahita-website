@@ -106,7 +106,7 @@ func (r *Repo) KunciProofs(ctx context.Context) ([]string, error) {
 	return rows, nil
 }
 
-// KunciDokumen mengembalikan storage_key baris documents.
+// KunciDokumen mengembalikan storage_key dokumen pesanan dan Surat Tagihan Tempo.
 func (r *Repo) KunciDokumen(ctx context.Context) ([]string, error) {
 	rows, err := r.q.ListKunciDokumen(ctx)
 	if err != nil {

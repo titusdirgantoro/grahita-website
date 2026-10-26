@@ -19,8 +19,8 @@ const (
 // LayoutVerifikasi adalah bentuk waktu verifikasi pada berkas laporan (WIB).
 const LayoutVerifikasi = "2006-01-02 15:04"
 
-// kolomLaporan adalah urutan kolom laporan (PRD §4.7 AP-REP-03 + kolom Special
-// dari AP-REP-02). Urutan ini tidak boleh diubah tanpa mengubah pengujian dan
+// kolomLaporan adalah urutan kolom laporan (PRD §4.7 AP-REP-03).
+// Urutan ini tidak boleh diubah tanpa mengubah pengujian dan
 // kontrak OpenAPI.
 var kolomLaporan = []struct {
 	judul string
@@ -32,7 +32,6 @@ var kolomLaporan = []struct {
 	{"Cabang", 26},
 	{"Kepala Cabang", 22},
 	{"C&C", 6},
-	{"Special", 9},
 	{"PI", 6},
 	{"Produk", 34},
 	{"Jenis", 10},
@@ -205,7 +204,6 @@ func (p *penulisXLSX) TulisBaris(l Line) error {
 		l.Cabang,
 		l.KepalaCabang,
 		yaTidak(l.IsCNC),
-		yaTidak(l.IsSpecial),
 		yaTidak(l.PajakIn),
 		l.Produk,
 		l.Jenis,

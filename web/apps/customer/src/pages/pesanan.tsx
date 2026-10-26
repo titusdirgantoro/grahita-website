@@ -31,7 +31,7 @@ const rupiah = new Intl.NumberFormat("id-ID", {
 });
 
 /** Status pesanan (Database.md §3). Tidak ada status Batal di sistem. */
-export type StatusPesanan = "draft" | "submitted" | "done";
+export type StatusPesanan = "draft" | "submitted" | "approved_unpaid" | "done";
 
 export interface ProdukKatalog {
   id: string;
@@ -61,6 +61,9 @@ export interface Pesanan {
   verif_status?: string;
   versi?: number;
   is_cnc: boolean;
+  is_tempo?: boolean;
+  tempo_due_date?: string;
+  tempo_paid_amount?: number;
   is_sertifikat?: boolean;
   tanggal?: string;
   catatan?: string;
@@ -122,6 +125,7 @@ const FILTER_STATUS = [
   { value: "semua", label: "Semua" },
   { value: "draft", label: "Draft" },
   { value: "submitted", label: "Menunggu" },
+  { value: "approved_unpaid", label: "Disetujui — belum lunas" },
   { value: "done", label: "Selesai" },
 ] as const;
 
@@ -129,12 +133,14 @@ const FILTER_STATUS = [
 function labelStatus(status: StatusPesanan, verif?: string): string {
   if (status === "draft") return "Draft";
   if (status === "done") return "Selesai";
+  if (status === "approved_unpaid") return "Disetujui — belum lunas";
   return verif === "perlu_review" ? "Perlu review" : "Menunggu verifikasi";
 }
 
 function toneStatus(status: StatusPesanan, verif?: string): "draft" | "warning" | "success" | "danger" {
   if (status === "draft") return "draft";
   if (status === "done") return "success";
+  if (status === "approved_unpaid") return "warning";
   return verif === "perlu_review" ? "danger" : "warning";
 }
 
@@ -250,6 +256,7 @@ export function PesananPage({ statusAwal }: { statusAwal?: string }) {
                       {judulPesanan(o)}
                     </Link>
                     {o.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
+                    {o.is_tempo ? <Badge tone="info">Tempo</Badge> : null}
                   </td>
                   <td className={styles.muted}>
                     {o.status === "draft" ? `Dibuat ${tanggalTampil(o)}` : tanggalTampil(o)}
@@ -382,9 +389,13 @@ export function PesananDetailPage({ id }: { id: string }) {
               {labelStatus(data.status, data.verif_status)}
             </Badge>
             {data.is_cnc ? <Badge tone="cnc">Cash &amp; Carry</Badge> : null}
+            {data.is_tempo ? <Badge tone="info">Tempo</Badge> : null}
             {data.versi ? <Badge tone="rev">Revisi {data.versi}</Badge> : null}
             {data.is_sertifikat ? <Badge tone="info">Sertifikat</Badge> : null}
           </div>
+          {data.is_tempo && data.status !== "submitted" ? <Notice tone={data.status === "done" ? "success" : "info"}>
+            {data.status === "done" ? "Lunas" : `Dibayar sebagian ${rupiah.format(data.tempo_paid_amount ?? 0)} dari ${rupiah.format(data.total)}`} · Jatuh tempo {data.tempo_due_date ?? "—"}. Pelunasan dikelola di menu Tagihan.
+          </Notice> : null}
 
           <Card>
             <dl className={styles.metaGrid}>
@@ -498,6 +509,7 @@ export function PesananDetailPage({ id }: { id: string }) {
 /** CabangRingkas adalah bagian data cabang yang dipakai modal kirim. */
 interface CabangRingkas {
   is_cnc: boolean;
+  is_tempo?: boolean;
 }
 
 const EVENT_REKENING_TIDAK_SEGAR = "grahita:rekening-tidak-segar";
@@ -562,6 +574,7 @@ function ModalKirim({
 }) {
   const { data: cabang, memuat: memuatCabang, galat: galatCabang } = useApi<CabangRingkas>("/me/branch", open);
   const cnc = cabang?.is_cnc === true;
+  const tempo = cabang?.is_tempo === true;
   const saldo = useApi<RingkasanDeposit>("/deposit", open && cnc);
   const { data: rekening, memuat: memuatRekening, galat: galatRekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", open);
   const [berkas, setBerkas] = useState<File[]>([]);
@@ -570,7 +583,7 @@ function ModalKirim({
 
   const potong = cnc && saldo.data ? Math.max(0, Math.min(saldo.data.available_balance, pesanan.total)) : 0;
   const sisa = Math.max(0, pesanan.total - potong);
-  const wajibBukti = !cnc || sisa > 0;
+  const wajibBukti = !tempo && (!cnc || sisa > 0);
   const transferTersedia = !memuatRekening && !galatRekening && (rekening?.length ?? 0) > 0;
   const siap = cabang !== null && (!cnc || saldo.data !== null);
 
@@ -644,6 +657,7 @@ function ModalKirim({
           Setelah dikirim, nomor pesanan dan serial number dibuat, harga dikunci sesuai daftar harga
           cabang saat ini, dan pesanan tidak dapat diubah atau dihapus lagi dari portal cabang.
         </Notice>
+        {tempo ? <Notice tone="info">Pesanan Tempo dikirim tanpa bukti transfer. Setelah admin menyetujui, invoice dan surat jalan terbit; pembayaran dilakukan melalui menu Tagihan.</Notice> : null}
         {galat ? <Notice tone="danger">{galat}</Notice> : null}
         {galatCabang || saldo.galat ? <Notice tone="danger">{galatCabang ?? saldo.galat}</Notice> : null}
         {memuatCabang || saldo.memuat ? <SkeletonList rows={2} /> : null}

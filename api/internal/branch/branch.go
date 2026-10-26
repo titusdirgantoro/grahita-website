@@ -13,8 +13,7 @@
 //     terpakai (PRD AP-CAB-02) dan nilai aslinya hanya tampil sekali.
 //   - setiap mutasi dicatat ke audit_logs DI DALAM transaksi yang sama.
 //
-// Flag Special dan PI saat ini hanya atribut + filter laporan: sesuai
-// keputusan user, keduanya tidak mengubah harga, pajak, maupun invoice.
+// PI adalah atribut laporan dan tidak mengubah harga maupun invoice.
 package branch
 
 import (
@@ -77,7 +76,9 @@ type Branch struct {
 	IdentityStatus            string     `json:"identity_status"`
 	Telepon                   string     `json:"telepon,omitempty"`
 	IsCNC                     bool       `json:"is_cnc"`
-	IsSpecial                 bool       `json:"is_special"`
+	IsTempo                   bool       `json:"is_tempo"`
+	TanggalBayar              int        `json:"tanggal_bayar,omitempty"`
+	TahanBilaTelat            bool       `json:"tahan_bila_telat"`
 	PajakIn                   bool       `json:"pajak_in"`
 	IsActive                  bool       `json:"is_active"`
 	BankAllowlistVersion      int64      `json:"bank_allowlist_version"`
@@ -92,34 +93,38 @@ type Filter struct {
 	Q       string
 	Active  *bool
 	CNC     *bool
-	Special *bool
+	Tempo   *bool
 }
 
 // NewBranch adalah permintaan pembuatan cabang.
 type NewBranch struct {
-	Nama          string
-	NamaKepala    string
-	Email         string
-	JabatanKepala string
-	Telepon       string
-	IsCNC         bool
-	IsSpecial     bool
-	PajakIn       bool
+	Nama           string
+	NamaKepala     string
+	Email          string
+	JabatanKepala  string
+	Telepon        string
+	IsCNC          bool
+	IsTempo        bool
+	TanggalBayar   int
+	TahanBilaTelat bool
+	PajakIn        bool
 	// IsActive nil berarti cabang baru aktif (default kolom).
 	IsActive *bool
 }
 
 // Patch adalah perubahan sebagian cabang. Field nil berarti tidak diubah.
 type Patch struct {
-	Nama          *string
-	NamaKepala    *string
-	Email         *string
-	JabatanKepala *string
-	Telepon       *string
-	IsCNC         *bool
-	IsSpecial     *bool
-	PajakIn       *bool
-	IsActive      *bool
+	Nama           *string
+	NamaKepala     *string
+	Email          *string
+	JabatanKepala  *string
+	Telepon        *string
+	IsCNC          *bool
+	IsTempo        *bool
+	TanggalBayar   *int
+	TahanBilaTelat *bool
+	PajakIn        *bool
+	IsActive       *bool
 }
 
 // IssuedToken adalah token registrasi yang baru dibuat. Token hanya ada di
@@ -211,21 +216,31 @@ func (s *Service) IsCNC(ctx context.Context, branchID string) (bool, error) {
 	return b.IsCNC, nil
 }
 
+// PaymentMode returns the server-owned payment settings used at submit.
+func (s *Service) PaymentMode(ctx context.Context, branchID string) (Branch, error) {
+	if branchID == "" {
+		return Branch{}, ErrNotFound
+	}
+	return s.repo.Get(ctx, branchID)
+}
+
 // Create menambahkan cabang baru.
 func (s *Service) Create(ctx context.Context, actor auth.Actor, in NewBranch) (Branch, error) {
 	if !actor.Can(auth.CapAdminBranches) {
 		return Branch{}, ErrForbidden
 	}
 	next := Branch{
-		Nama:          strings.TrimSpace(in.Nama),
-		NamaKepala:    strings.TrimSpace(in.NamaKepala),
-		Email:         NormalizeEmail(in.Email),
-		JabatanKepala: strings.TrimSpace(in.JabatanKepala),
-		Telepon:       strings.TrimSpace(in.Telepon),
-		IsCNC:         in.IsCNC,
-		IsSpecial:     in.IsSpecial,
-		PajakIn:       in.PajakIn,
-		IsActive:      true,
+		Nama:           strings.TrimSpace(in.Nama),
+		NamaKepala:     strings.TrimSpace(in.NamaKepala),
+		Email:          NormalizeEmail(in.Email),
+		JabatanKepala:  strings.TrimSpace(in.JabatanKepala),
+		Telepon:        strings.TrimSpace(in.Telepon),
+		IsCNC:          in.IsCNC,
+		IsTempo:        in.IsTempo,
+		TanggalBayar:   in.TanggalBayar,
+		TahanBilaTelat: in.TahanBilaTelat,
+		PajakIn:        in.PajakIn,
+		IsActive:       true,
 	}
 	next.IdentityStatus = identityStatus(next, false)
 	if in.IsActive != nil {
@@ -285,8 +300,18 @@ func ApplyPatch(cur Branch, p Patch, hasAccount bool) (Branch, error) {
 	if p.IsCNC != nil {
 		next.IsCNC = *p.IsCNC
 	}
-	if p.IsSpecial != nil {
-		next.IsSpecial = *p.IsSpecial
+	if p.IsTempo != nil {
+		next.IsTempo = *p.IsTempo
+	}
+	if p.TanggalBayar != nil {
+		next.TanggalBayar = *p.TanggalBayar
+	}
+	if p.TahanBilaTelat != nil {
+		next.TahanBilaTelat = *p.TahanBilaTelat
+	}
+	if !next.IsTempo {
+		next.TanggalBayar = 0
+		next.TahanBilaTelat = false
 	}
 	if p.PajakIn != nil {
 		next.PajakIn = *p.PajakIn
@@ -450,6 +475,12 @@ func validate(b Branch) error {
 		return fmt.Errorf("%w: telepon terlalu panjang", ErrInvalidData)
 	case len([]rune(b.JabatanKepala)) > 120:
 		return fmt.Errorf("%w: jabatan kepala terlalu panjang", ErrInvalidData)
+	case b.IsCNC && b.IsTempo:
+		return fmt.Errorf("%w: Cash & Carry dan Tempo tidak dapat aktif bersamaan", ErrInvalidData)
+	case b.IsTempo && (b.TanggalBayar < 1 || b.TanggalBayar > 28):
+		return fmt.Errorf("%w: tanggal bayar Tempo harus 1–28", ErrInvalidData)
+	case !b.IsTempo && (b.TanggalBayar != 0 || b.TahanBilaTelat):
+		return fmt.Errorf("%w: tanggal bayar dan penahanan hanya untuk Tempo", ErrInvalidData)
 	}
 	return nil
 }

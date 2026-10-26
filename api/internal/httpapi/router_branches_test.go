@@ -46,7 +46,7 @@ func newBranchesServer(t *testing.T, tune func(*Deps)) *branchesServer {
 
 	repo := branch.NewMemory()
 	repo.Put(branch.Branch{ID: "br-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A", Email: "a@example.test", Telepon: "0221", IsActive: true, IsCNC: true})
-	repo.Put(branch.Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IsActive: false, IsSpecial: true})
+	repo.Put(branch.Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IsActive: false, IsTempo: true, TanggalBayar: 5})
 	repo.PutOrder("br-a") // cabang A sudah punya pesanan → tidak boleh dihapus
 	repo.PutAccount("br-b")
 	repo.PutAdminEmail("pusat@example.test")
@@ -135,7 +135,7 @@ func TestApiDaftardanFilterCabang(t *testing.T) {
 		t.Errorf("cabang tanpa token aktif tidak boleh menyertakan token_prefix: %v", pertama)
 	}
 
-	// Filter aktif, special, dan pencarian nama/email.
+	// Filter aktif, tempo, dan pencarian nama/email.
 	for _, k := range []struct {
 		query string
 		mau   int
@@ -143,7 +143,7 @@ func TestApiDaftardanFilterCabang(t *testing.T) {
 		{"?aktif=true", 1},
 		{"?aktif=false", 1},
 		{"?cnc=true", 1},
-		{"?special=true", 1},
+		{"?tempo=true", 1},
 		{"?q=CABANG+B", 1},
 		{"?q=b%40example.test", 1},
 		{"?q=tidak-ada", 0},
@@ -230,12 +230,12 @@ func TestApiCrudCabang(t *testing.T) {
 
 	// ---- update ----
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, bs.srv.URL+"/api/v1/admin/branches/"+id,
-		`{"telepon":"0899","is_active":false,"is_special":true}`, cookies, csrf)
+		`{"telepon":"0899","is_active":false,"pajak_in":true}`, cookies, csrf)
 	if status != http.StatusOK {
 		t.Fatalf("ubah cabang harus 200, dapat %d (%v)", status, body)
 	}
 	diubah := body["data"].(map[string]any)
-	if diubah["telepon"] != "0899" || diubah["is_active"] != false || diubah["is_special"] != true {
+	if diubah["telepon"] != "0899" || diubah["is_active"] != false || diubah["pajak_in"] != true {
 		t.Errorf("perubahan tidak diterapkan: %v", diubah)
 	}
 	// Field yang tidak dikirim tetap.

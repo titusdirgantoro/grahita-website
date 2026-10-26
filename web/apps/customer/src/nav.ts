@@ -17,11 +17,13 @@ export const NAV_CUSTOMER: NavItem[] = [
   { to: "/pesanan", label: "Pesanan", icon: "receipt", bottomLabel: "Pesanan" },
   { to: "/invoice", label: "Riwayat invoice", icon: "file-text", bottomLabel: "Invoice" },
   { to: "/deposit", label: "Deposit", icon: "wallet", bottomLabel: "Deposit" },
+  { to: "/tagihan", label: "Tagihan", icon: "file-text", bottomLabel: "Tagihan" },
   { to: "/tutorial", label: "Tutorial", icon: "question" },
   { to: "/profil", label: "Profil", icon: "user-circle", bottomLabel: "Profil", sidebar: false },
 ];
 
 /** navCabang adalah menu cabang sesi: tanpa Deposit untuk cabang non-C&C. */
-export function navCabang(isCNC: boolean): NavItem[] {
-  return isCNC ? NAV_CUSTOMER : NAV_CUSTOMER.filter((item) => item.to !== "/deposit");
+export function navCabang(isCNC: boolean, isTempo = false): NavItem[] {
+  return NAV_CUSTOMER.filter((item) => (item.to !== "/deposit" || isCNC) && (item.to !== "/tagihan" || isTempo))
+    .map((item) => isTempo && item.to === "/invoice" ? { ...item, bottomLabel: undefined } : item);
 }

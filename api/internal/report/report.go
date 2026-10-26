@@ -10,7 +10,7 @@
 //   - Daftar (paginasi) dan ekspor memakai DEFINISI FILTER YANG SAMA, sehingga
 //     "jumlah baris ekspor = jumlah baris query terfilter" (PRD §9 no.10) bukan
 //     kebetulan, melainkan konsekuensi satu query yang dipakai dua jalur.
-//   - Special dan PI murni ATRIBUT cabang (`b.is_special`, `b.pajak_in`): hanya
+//   - PI adalah atribut cabang (`b.pajak_in`): hanya
 //     tampil sebagai kolom dan bisa difilter. Keduanya TIDAK pernah mengubah
 //     harga, subtotal, atau pajak.
 //   - Ekspor berjalan ASINKRON lewat antrean pekerjaan (River). Permintaan
@@ -110,8 +110,7 @@ type Filter struct {
 	Status     string   `json:"status,omitempty"`
 	Jenis      string   `json:"jenis,omitempty"`
 	Cnc        *bool    `json:"cnc,omitempty"`
-	Special    *bool    `json:"special,omitempty"`
-	Pi         *bool    `json:"pi,omitempty"`
+		Pi         *bool    `json:"pi,omitempty"`
 	Halaman    int      `json:"halaman,omitempty"`
 	PerHalaman int      `json:"per_halaman,omitempty"`
 }
@@ -124,8 +123,7 @@ type Query struct {
 	Status         string
 	Jenis          string
 	IsCNC          *bool
-	IsSpecial      *bool
-	PajakIn        *bool
+		PajakIn        *bool
 	Batch          int
 	Offset         int
 	SetelahTanggal *time.Time
@@ -142,8 +140,7 @@ type Line struct {
 	Cabang            string `json:"cabang"`
 	KepalaCabang      string `json:"kepala_cabang"`
 	IsCNC             bool   `json:"is_cnc"`
-	IsSpecial         bool   `json:"is_special"`
-	PajakIn           bool   `json:"pajak_in"`
+		PajakIn           bool   `json:"pajak_in"`
 	LineNo            int    `json:"line_no"`
 	Produk            string `json:"produk"`
 	Jenis             string `json:"jenis"`
@@ -497,7 +494,6 @@ func (s *Service) query(f Filter) (Filter, Query, error) {
 		Status:  strings.ToLower(strings.TrimSpace(f.Status)),
 		Jenis:   strings.ToLower(strings.TrimSpace(f.Jenis)),
 		Cnc:     f.Cnc,
-		Special: f.Special,
 		Pi:      f.Pi,
 	}
 	if err := normCabangID(norm.Cabang); err != nil {
@@ -506,11 +502,11 @@ func (s *Service) query(f Filter) (Filter, Query, error) {
 	switch norm.Status {
 	case "", "semua":
 		norm.Status = ""
-	case "submitted", "done":
+	case "submitted", "approved_unpaid", "done":
 	case "draft":
 		return Filter{}, Query{}, fmt.Errorf("%w: pesanan draft tidak pernah masuk laporan", ErrFilterInvalid)
 	default:
-		return Filter{}, Query{}, fmt.Errorf("%w: status %q tidak dikenal (submitted|done)", ErrFilterInvalid, f.Status)
+		return Filter{}, Query{}, fmt.Errorf("%w: status %q tidak dikenal (submitted|approved_unpaid|done)", ErrFilterInvalid, f.Status)
 	}
 	switch norm.Jenis {
 	case "", "semua":
@@ -557,8 +553,7 @@ func (s *Service) query(f Filter) (Filter, Query, error) {
 		Status:    norm.Status,
 		Jenis:     norm.Jenis,
 		IsCNC:     f.Cnc,
-		IsSpecial: f.Special,
-		PajakIn:   f.Pi,
+				PajakIn:   f.Pi,
 		Batch:     per,
 		Offset:    (halaman - 1) * per,
 	}
@@ -612,8 +607,7 @@ func queryDariFilter(f Filter, batch int) (Query, error) {
 		Status:    f.Status,
 		Jenis:     f.Jenis,
 		IsCNC:     f.Cnc,
-		IsSpecial: f.Special,
-		PajakIn:   f.Pi,
+				PajakIn:   f.Pi,
 		Batch:     batch,
 	}, nil
 }

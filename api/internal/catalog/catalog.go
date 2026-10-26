@@ -105,7 +105,9 @@ type Branch struct {
 	Email      string `json:"email"`
 	Telepon    string `json:"telepon"`
 	IsCNC      bool   `json:"is_cnc"`
-	IsSpecial  bool   `json:"is_special"`
+	IsTempo    bool   `json:"is_tempo"`
+	TanggalBayar int `json:"tanggal_bayar,omitempty"`
+	TahanBilaTelat bool `json:"tahan_bila_telat"`
 	PajakIn    bool   `json:"pajak_in"`
 	IsActive   bool   `json:"is_active"`
 }

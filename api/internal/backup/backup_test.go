@@ -606,6 +606,36 @@ func TestRingkasanMenandaiPerluTindakan(t *testing.T) {
 
 // ---------- sinkronisasi objek ----------
 
+func TestSinkronObjekTempoMasukManifest(t *testing.T) {
+	recipient, identity := kunciUji(t)
+	proofKey := "tempo-proof/cabang-1/bukti"
+	statementKey := "tempo-statement/tagihan-1.pdf"
+	repo := &repoPalsu{proofs: []string{proofKey}, dokumen: []string{statementKey}}
+	objek := storage.NewMemory("")
+	for key, body := range map[string][]byte{proofKey: {0xff, 0xd8, 0xff}, statementKey: []byte("%PDF-1.7 surat tagihan")} {
+		if err := objek.Put(context.Background(), key, bytes.NewReader(body), int64(len(body)), "application/octet-stream"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target, err := backup.NewDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := serviceUji(t, repo, target, objek, backup.Config{Kerja: t.TempDir(), Recipient: recipient, Identity: identity})
+	if run := svc.Jalankan(context.Background(), backup.JenisStorage); !run.Sukses {
+		t.Fatalf("cadangan objek Tempo gagal: %v (%s)", run.Err, run.Pesan)
+	}
+	manifest, err := backup.MuatManifest(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{proofKey, statementKey} {
+		if manifest.Objek[key].Nama != backup.NamaCadanganObjek(key) {
+			t.Fatalf("objek Tempo %s tidak ada dalam manifest: %+v", key, manifest.Objek[key])
+		}
+	}
+}
+
 // TestSinkronObjekInkrementalDanByteUtuh memastikan bukti/dokumen tersalin
 // terenkripsi, inkremental, dan byte-nya utuh saat didekripsi kembali.
 func TestSinkronObjekInkrementalDanByteUtuh(t *testing.T) {

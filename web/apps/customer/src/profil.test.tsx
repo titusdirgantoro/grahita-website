@@ -34,7 +34,7 @@ const cabangBandung = {
   email: "bandung@example.test",
   telepon: "081234567890",
   is_cnc: true,
-  is_special: false,
+  is_tempo: false,
   pajak_in: false,
   is_active: true,
 };

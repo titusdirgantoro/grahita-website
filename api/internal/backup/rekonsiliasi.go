@@ -98,7 +98,7 @@ func (s *Service) Rekonsiliasi(ctx context.Context, opsi OpsiRekonsiliasi) (Lapo
 	}
 
 	objekStorage := []string{}
-	for _, prefix := range []string{"proofs/", "documents/"} {
+	for _, prefix := range []string{"proofs/", "documents/", "tempo-proof/", "tempo-statement/"} {
 		daftar, err := s.objek.List(ctx, prefix)
 		if err != nil {
 			return LaporanRekonsiliasi{}, fmt.Errorf("daftar objek %s: %w", prefix, err)
@@ -142,7 +142,7 @@ func (s *Service) Rekonsiliasi(ctx context.Context, opsi OpsiRekonsiliasi) (Lapo
 			continue
 		}
 		laporan.ObjekTanpaBaris = append(laporan.ObjekTanpaBaris, key)
-		if strings.HasPrefix(key, "proofs/") {
+		if strings.HasPrefix(key, "proofs/") || strings.HasPrefix(key, "tempo-proof/") {
 			// Retensi bukti tanpa batas: dilaporkan, TIDAK pernah disapu.
 			laporan.ProofsTanpaBaris = append(laporan.ProofsTanpaBaris, key)
 			laporan.Dilewati = append(laporan.Dilewati, DilewatiSapu{

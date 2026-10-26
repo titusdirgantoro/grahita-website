@@ -500,8 +500,20 @@ func TestPGDokumenVersiBaruTidakMenimpaBerkasLama(t *testing.T) {
 	isiV0 := f.isiBerkas(t, kunciV0)
 
 	// Revisi invoice: versi pesanan naik dan isinya berubah (kartu F2-25).
+	var verificationID string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO verification_logs
+ (order_id,metode,total_pesanan,total_terbaca,hasil,admin_id,order_version,deposit_amount,transfer_amount,
+ destination_results,branch_allowlist_version)
+ SELECT o.id,'manual',350000,350000,'cocok',$2,1,0,350000,
+ v.destination_results,v.branch_allowlist_version
+ FROM orders o JOIN verification_logs v ON v.id=o.done_verification_log_id
+ WHERE o.id=$1 RETURNING id`,
+		pesanan.ID, f.adminSA).Scan(&verificationID); err != nil {
+		t.Fatalf("semai verifikasi versi baru: %v", err)
+	}
 	if _, err := f.pool.Exec(ctx,
-		`UPDATE orders SET versi = 1, total = 300000 WHERE id = $1`, pesanan.ID); err != nil {
+		`UPDATE orders SET versi = 1, total = 350000, done_order_version=1,
+ done_verification_log_id=$2, done_transfer_amount = 350000 WHERE id = $1`, pesanan.ID, verificationID); err != nil {
 		t.Fatalf("naikkan versi pesanan: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx,

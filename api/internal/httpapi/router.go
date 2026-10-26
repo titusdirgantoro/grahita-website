@@ -121,6 +121,12 @@ func NewRouter(d Deps) http.Handler {
 			// ketersediaan PDF-nya — selalu dibatasi branch_id SESI dan
 			// dapat difilter periode.
 			r.Get("/invoices", a.adapt(a.invoices))
+			r.Get("/tempo/repayments", a.adapt(a.tempoRepayments))
+			r.Get("/tempo/repayments/{id}/proof", a.adapt(a.tempoRepaymentProof))
+			r.Post("/tempo/repayments", a.adapt(a.tempoUploadRepayment))
+			r.Get("/tempo/statements", a.adapt(a.tempoStatements))
+			r.Get("/tempo/overview", a.adapt(a.tempoOverview))
+			r.Get("/tempo/statements/{id}/download", a.adapt(a.tempoStatementDownload))
 			// Rekening AKTIF untuk instruksi pembayaran & referensi OCR
 			// (PRD §4.6, §5); nonaktif tidak pernah muncul di sini.
 			r.Get("/bank-accounts", a.adapt(a.bankAccountsPublic))
@@ -184,6 +190,14 @@ func NewRouter(d Deps) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminVerify))
 					r.Post("/orders/{id}/verify", a.adapt(a.adminOrderVerify))
+					r.Post("/orders/{id}/approve-tempo", a.adapt(a.adminApproveTempo))
+					r.Get("/tempo/repayments", a.adapt(a.adminTempoRepayments))
+					r.Get("/tempo/repayments/{id}/proof", a.adapt(a.tempoRepaymentProof))
+					r.Get("/tempo/statements", a.adapt(a.tempoStatements))
+					r.Get("/tempo/overview", a.adapt(a.tempoOverview))
+					r.Get("/tempo/export", a.adapt(a.adminTempoExport))
+					r.Get("/tempo/statements/{id}/download", a.adapt(a.tempoStatementDownload))
+					r.Post("/tempo/repayments/{id}/decision", a.adapt(a.adminTempoDecision))
 					r.Get("/orders/{id}/bank-accounts", a.adapt(a.adminOrderBankAccounts))
 					r.Post("/orders/{id}/verification/reevaluate-destination", a.adapt(a.adminOrderReevaluateDestination))
 					// Deposit cabang (D3 C2, §6.2): antrean dan saldo, keputusan

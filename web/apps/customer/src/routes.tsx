@@ -20,6 +20,7 @@ import { BerandaPage } from "./pages/beranda";
 import { InvoicePage } from "./pages/invoice";
 import { TutorialPage } from "./pages/tutorial";
 import { DepositPage } from "./pages/deposit";
+import { TagihanPage } from "./pages/tagihan";
 import {
   PesananDetailPage,
   PesananEditorPage,
@@ -45,8 +46,8 @@ function ShellLayout() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // Menu Deposit hanya untuk cabang Cash & Carry; flag dibaca dari server.
-  const { data: cabang } = useApi<{ is_cnc: boolean }>("/me/branch", !!pengguna);
-  const nav = useMemo(() => navCabang(cabang?.is_cnc === true), [cabang]);
+  const { data: cabang } = useApi<{ is_cnc: boolean; is_tempo: boolean }>("/me/branch", !!pengguna);
+  const nav = useMemo(() => navCabang(cabang?.is_cnc === true, cabang?.is_tempo === true), [cabang]);
 
   useEffect(() => {
     if (status === "belum") void navigate({ to: "/masuk", replace: true });
@@ -177,6 +178,7 @@ const invoiceRoute = createRoute({
   },
 });
 const depositRoute = createRoute({ getParentRoute: () => shellRoute, path: "/deposit", component: DepositPage });
+const tagihanRoute = createRoute({ getParentRoute: () => shellRoute, path: "/tagihan", component: TagihanPage });
 const tutorialRoute = createRoute({ getParentRoute: () => shellRoute, path: "/tutorial", component: TutorialPage });
 const profilRoute = createRoute({ getParentRoute: () => shellRoute, path: "/profil", component: ProfilPage });
 
@@ -194,6 +196,7 @@ const routeTree = rootRoute.addChildren([
     pesananDetailRoute,
     invoiceRoute,
     depositRoute,
+    tagihanRoute,
     tutorialRoute,
     profilRoute,
   ]),

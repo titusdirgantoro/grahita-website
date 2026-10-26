@@ -56,6 +56,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/platform/storage"
+	"github.com/grahita/portal/api/internal/receivable"
 	"github.com/grahita/portal/api/internal/registration"
 	registrationpg "github.com/grahita/portal/api/internal/registration/postgres"
 	"github.com/grahita/portal/api/internal/settings"
@@ -402,6 +403,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 			order.WithPaymentAccounts(bankSvc), order.WithClock(clock.System()), order.WithAISettings(settingsSvc)),
 		AdminOrders: order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
 		Revise:      f.revise,
+		Receivables: receivable.New(pool, jobQueue),
 		Dashboard: dashboard.NewService(dashboardpg.New(pool),
 			dashboard.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,

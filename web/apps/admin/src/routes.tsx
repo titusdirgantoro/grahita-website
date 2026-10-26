@@ -26,6 +26,7 @@ import { CabangPage } from "./pages/cabang";
 import { KatalogPage } from "./pages/katalog";
 import { RekeningPage } from "./pages/rekening";
 import { DepositAdminPage } from "./pages/deposit";
+import { TagihanAdminPage } from "./pages/tagihan";
 import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
@@ -202,6 +203,7 @@ const cabangRoute = createRoute({
 });
 const katalogRoute = createRoute({ getParentRoute: () => shellRoute, path: "/katalog", component: KatalogPage });
 const depositRoute = createRoute({ getParentRoute: () => shellRoute, path: "/deposit", component: DepositAdminPage });
+const tagihanRoute = createRoute({ getParentRoute: () => shellRoute, path: "/tagihan", component: TagihanAdminPage });
 const rekeningRoute = createRoute({ getParentRoute: () => shellRoute, path: "/rekening", component: RekeningPage });
 const reportingRoute = createRoute({ getParentRoute: () => shellRoute, path: "/reporting", component: ReportingPage });
 const penggunaRoute = createRoute({ getParentRoute: () => shellRoute, path: "/pengguna", component: PenggunaPage });
@@ -235,6 +237,7 @@ const routeTree = rootRoute.addChildren([
     pesananRoute,
     pesananDetailRoute,
     depositRoute,
+    tagihanRoute,
     cabangRoute,
     katalogRoute,
     rekeningRoute,

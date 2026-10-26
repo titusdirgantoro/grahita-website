@@ -167,7 +167,7 @@ type Repo interface {
 	SuperadminEmails(ctx context.Context) ([]string, error)
 	// KunciProofs mengembalikan seluruh storage_key baris payment_proofs.
 	KunciProofs(ctx context.Context) ([]string, error)
-	// KunciDokumen mengembalikan seluruh storage_key baris documents.
+	// KunciDokumen mengembalikan storage_key dokumen pesanan dan Surat Tagihan Tempo.
 	KunciDokumen(ctx context.Context) ([]string, error)
 	// Audit menyimpan satu entri audit (SystemDesign.md §5.4).
 	Audit(ctx context.Context, e audit.Entry) error

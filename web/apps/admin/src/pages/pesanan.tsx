@@ -70,6 +70,9 @@ export interface PesananAdmin {
   status: string;
   verif_status: string;
   is_cnc: boolean;
+  is_tempo?: boolean;
+  tempo_due_date?: string;
+  tempo_paid_amount?: number;
   is_sertifikat: boolean;
   total: number;
   jumlah_item: number;
@@ -155,6 +158,9 @@ export interface PesananDetail {
   verif_status: string;
   alasan_review?: string;
   is_cnc: boolean;
+  is_tempo?: boolean;
+  tempo_due_date?: string;
+  tempo_paid_amount?: number;
   is_sertifikat: boolean;
   tanggal?: string;
   submitted_at?: string;
@@ -270,11 +276,13 @@ const tanggalPanjang = new Intl.DateTimeFormat("id-ID", {
 const LABEL_STATUS: Record<string, string> = {
   draft: "Draft",
   submitted: "Submitted",
+  approved_unpaid: "Disetujui — belum lunas",
   done: "Selesai",
 };
 const TONE_STATUS: Record<string, BadgeTone> = {
   draft: "neutral",
   submitted: "warning",
+  approved_unpaid: "warning",
   done: "success",
 };
 const LABEL_VERIF: Record<string, string> = {
@@ -455,7 +463,7 @@ function pesanRevisi(err: unknown): string {
       return "Invoice versi berjalan belum selesai dirender, jadi revisi belum bisa menaikkan versi. Tunggu proses dokumen selesai, lalu kirim ulang manual. Detail & dokumen dimuat ulang.";
     }
     if (err.status === 409 && err.code === "ORDER_NOT_DONE") {
-      return "Revisi hanya untuk pesanan yang sudah selesai (Done). Selesaikan verifikasi pembayaran lebih dulu.";
+      return "Revisi tersedia untuk pesanan Selesai dan Tempo yang sudah disetujui.";
     }
     if (err.status === 403) {
       return `Anda tidak diizinkan merevisi invoice ini. ${err.message}`;
@@ -566,6 +574,7 @@ export function PesananAdminPage() {
                 <option value="draft">Draft</option>
                 <option value="submitted">Submitted</option>
                 <option value="done">Selesai</option>
+                <option value="approved_unpaid">Disetujui — belum lunas</option>
               </Select>
             </Field>
             <Field label="Verifikasi" htmlFor="ord-verif">
@@ -699,6 +708,7 @@ export function PesananAdminPage() {
                       <Badge tone={statusPesanan(p).tone}>{statusPesanan(p).label}</Badge>
                       {p.email_gagal ? <Badge tone="danger">Email gagal</Badge> : null}
                       {p.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
+                      {p.is_tempo ? <Badge tone="info">Tempo</Badge> : null}
                       {p.is_sertifikat ? <Badge tone="neutral">Sertifikat</Badge> : null}
                       {p.versi > 0 ? <Badge tone="rev">{`R${p.versi}`}</Badge> : null}
                     </span>
@@ -751,6 +761,7 @@ export function PesananAdminPage() {
 export function statusPesanan(p: Pick<PesananAdmin, "status" | "verif_status">): { label: string; tone: BadgeTone } {
   if (p.status === "draft") return { label: "Draft", tone: "draft" };
   if (p.status === "done") return { label: "Selesai", tone: "success" };
+  if (p.status === "approved_unpaid") return { label: "Disetujui — belum lunas", tone: "warning" };
   if (p.verif_status === "perlu_review") return { label: "Perlu review", tone: "danger" };
   return { label: "Menunggu verifikasi", tone: "warning" };
 }
@@ -776,7 +787,7 @@ export function PesananDetailAdminPage() {
   // versi dan journal_version untuk koreksi.
   const { data: bayar, muatUlang: muatBayar } = useApi<PembayaranPesanan>(
     `/admin/orders/${id}/payment`,
-    Boolean(data) && data?.status !== "draft",
+    Boolean(data) && data?.status !== "draft" && !data?.is_tempo,
   );
   const [split, setSplit] = useState<Record<string, SplitBukti>>({});
   const [rincianManual, setRincianManual] = useState(false);
@@ -794,6 +805,7 @@ export function PesananDetailAdminPage() {
   const [zoom, setZoom] = useState<{ url: string; nama: string } | null>(null);
   const [sibukEmail, setSibukEmail] = useState<string | null>(null);
   const [sibukDokumen, setSibukDokumen] = useState(false);
+  const [sibukTempo, setSibukTempo] = useState(false);
   const { tampilkan } = useToast();
   const { peran } = useSesi();
   const bolehVerif = bolehVerifikasi(peran);
@@ -928,6 +940,16 @@ export function PesananDetailAdminPage() {
       setSibukDokumen(false);
     }
   }, [id, muatUlang, tampilkan]);
+
+  const setujuiTempo = useCallback(async () => {
+    setSibukTempo(true);
+    try {
+      const result = await api.post<{tempo_due_date:string}>(`/admin/orders/${id}/approve-tempo`,{});
+      tampilkan(`Pesanan Tempo disetujui. Jatuh tempo ${result.tempo_due_date}; dokumen sedang diterbitkan.`);
+      muatUlang();muatEmail();
+    } catch(err) { tampilkan(pesanGalat(err)); }
+    finally { setSibukTempo(false); }
+  },[id,muatUlang,muatEmail,tampilkan]);
 
   /** bukaVerifikasi menyiapkan modal verifikasi dari keadaan bersih. */
   const bukaVerifikasi = useCallback(() => {
@@ -1267,6 +1289,7 @@ export function PesananDetailAdminPage() {
             <Badge tone={TONE_STATUS[data.status] ?? "neutral"}>{LABEL_STATUS[data.status] ?? data.status}</Badge>
             {data.versi > 0 ? <Badge tone="rev">{`Revisi R${data.versi}`}</Badge> : null}
             {data.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
+            {data.is_tempo ? <Badge tone="info">Tempo</Badge> : null}
             {data.is_sertifikat ? <Badge tone="neutral">Sertifikat</Badge> : null}
             {data.email_gagal ? <Badge tone="danger">Email gagal</Badge> : null}
           </div>
@@ -1304,6 +1327,7 @@ export function PesananDetailAdminPage() {
                 <div className="muted small">Total</div>
                 <div className="tabular">{rupiah.format(data.total)}</div>
               </div>
+              {data.is_tempo && data.tempo_due_date ? <div><div className="muted small">Pelunasan Tempo</div><div>{rupiah.format(data.tempo_paid_amount??0)} terbayar · Jatuh tempo {data.tempo_due_date}</div></div> : null}
               <div>
                 <div className="muted small">Jumlah item</div>
                 <div className="tabular">{data.jumlah_item}</div>
@@ -1367,7 +1391,7 @@ export function PesananDetailAdminPage() {
             <CardHead
               title="Dokumen"
               tools={
-                data.status === "done" ? (
+                data.status === "done" || data.status === "approved_unpaid" ? (
                   <Button
                     variant="secondary"
                     icon="arrows-clockwise"
@@ -1452,7 +1476,12 @@ export function PesananDetailAdminPage() {
               }}
             />
           ) : null}
-          {data.status === "submitted" && bolehVerif ? (
+          {data.status === "submitted" && data.is_tempo && bolehVerif ? <Card>
+            <CardHead title="Persetujuan Tempo" />
+            <p>Pesanan akan disetujui tanpa pembayaran di muka. Invoice dan surat jalan diterbitkan setelah persetujuan.</p>
+            <Button variant="primary" block disabled={sibukTempo} onClick={()=>void setujuiTempo()}>{sibukTempo?"Memproses…":"Setujui (tempo)"}</Button>
+          </Card> : null}
+          {data.status === "submitted" && !data.is_tempo && bolehVerif ? (
             <Card>
               <CardHead title="Verifikasi pembayaran" />
               {rekeningPerluDinilaiUlang ? (
@@ -1498,7 +1527,7 @@ export function PesananDetailAdminPage() {
             </Card>
           ) : null}
 
-          {data.status === "done" && bolehRev ? (
+          {(data.status === "done" || data.status === "approved_unpaid") && bolehRev ? (
             <Card>
               <CardHead title="Revisi invoice" />
               <p className="muted small" style={{ marginBottom: 8 }}>

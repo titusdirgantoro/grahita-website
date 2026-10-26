@@ -25,7 +25,7 @@ const CABANG = [
     email: "bandung@example.test",
     telepon: "+6281200000001",
     is_cnc: true,
-    is_special: false,
+    is_tempo: false,
     pajak_in: false,
     is_active: true,
   },
@@ -36,7 +36,8 @@ const CABANG = [
     email: "bekasi@example.test",
     telepon: "",
     is_cnc: false,
-    is_special: true,
+    is_tempo: true,
+    tanggal_bayar: 5,
     pajak_in: true,
     is_active: true,
     token_prefix: "GRH-7K4Q",
@@ -49,7 +50,7 @@ const CABANG = [
     email: "cimahi@example.test",
     telepon: "",
     is_cnc: false,
-    is_special: false,
+    is_tempo: false,
     pajak_in: false,
     is_active: false,
   },
@@ -134,9 +135,9 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     expect(screen.getByText("Grahita Bekasi")).toBeDefined();
     expect(screen.getByText("Grahita Cimahi")).toBeDefined();
 
-    // Flag tampil sebagai badge (prototype: C&C, Special, PI).
+    // Cara pembayaran dan PI tampil pada kartu cabang.
     expect(screen.getAllByText("C&C").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Special").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Tempo · bayar tanggal 5/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("PI").length).toBeGreaterThanOrEqual(1);
 
     // Status akun per kartu: satu cabang sudah berakun, dua belum registrasi.
@@ -144,7 +145,7 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     expect(screen.getAllByText("Akun: Belum registrasi").length).toBe(2);
 
     // Tab filter tersedia; ringkasan header menyebut jumlah cabang + akun aktif.
-    for (const label of ["Semua", "C&C", "Special", "Nonaktif"]) {
+    for (const label of ["Semua", "C&C", "Tempo", "Nonaktif"]) {
       expect(screen.getByRole("button", { name: label })).toBeDefined();
     }
     expect(screen.getByText(/3 cabang · 1 akun aktif/)).toBeDefined();
@@ -259,7 +260,7 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     fireEvent.change(screen.getByLabelText("Email cabang"), {
       target: { value: "solo@example.test" },
     });
-    fireEvent.click(screen.getByRole("switch", { name: "Cash and Carry" }));
+    fireEvent.change(screen.getByLabelText("Cara pembayaran"), { target: { value: "deposit" } });
     fireEvent.click(screen.getByRole("switch", { name: "Pajak In (PI)" }));
     fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
 
@@ -275,7 +276,9 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
         email: "solo@example.test",
         telepon: "",
         is_cnc: true,
-        is_special: false,
+        is_tempo: false,
+        tanggal_bayar: 0,
+        tahan_bila_telat: false,
         pajak_in: true,
         is_active: true,
       });

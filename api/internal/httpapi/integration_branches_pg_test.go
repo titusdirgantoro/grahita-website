@@ -275,14 +275,15 @@ func tungguPutRevokasiTertahan(t *testing.T, f *pgFixture) {
 		if err := f.pool.QueryRow(ctx, `SELECT EXISTS (
 SELECT 1 FROM pg_stat_activity
  WHERE pid <> pg_backend_pid() AND wait_event_type='Lock'
-   AND query LIKE '%SELECT id, nama, nama_kepala%FROM branches WHERE id = $1 FOR UPDATE%')`).Scan(&blocked); err != nil {
+   AND (query LIKE '%SELECT id, nama, nama_kepala%FROM branches WHERE id = $1 FOR UPDATE%'
+     OR query LIKE '%pg_advisory_xact_lock(22102, 2)%'))`).Scan(&blocked); err != nil {
 			t.Fatalf("periksa PUT revokasi tertahan: %v", err)
 		}
 		if blocked {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("PUT revokasi tidak mencapai lock cabang pada jalur produksi")
+			t.Fatal("PUT revokasi tidak tertahan pada lock serialisasi cabang")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -412,7 +413,7 @@ func TestPGCrudCabangKonflikEmailDanAudit(t *testing.T) {
 
 	// ---- create ----
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/branches",
-		`{"nama":"Grahita Cabang F","nama_kepala":"Kepala F","email":"Cabang-F@Example.Test","telepon":"0812","is_cnc":true,"is_special":true,"pajak_in":true}`,
+		`{"nama":"Grahita Cabang F","nama_kepala":"Kepala F","email":"Cabang-F@Example.Test","telepon":"0812","is_cnc":true,"pajak_in":true}`,
 		cookiesMgr, csrfMgr)
 	if status != http.StatusCreated {
 		t.Fatalf("buat cabang harus 201, dapat %d (%v)", status, body)
@@ -423,17 +424,17 @@ func TestPGCrudCabangKonflikEmailDanAudit(t *testing.T) {
 		t.Errorf("email tersimpan harus huruf kecil (citext), dapat %v", dibuat["email"])
 	}
 
-	// Baris benar-benar ada di database, flag PI/Special tersimpan sebagai
+	// Baris benar-benar ada di database, flag PI tersimpan sebagai
 	// atribut (tanpa efek harga sesuai keputusan user).
 	var nama, email string
-	var cnc, special, pi, aktif bool
+	var cnc, pi, aktif bool
 	if err := f.pool.QueryRow(ctx,
-		`SELECT nama, email::text, is_cnc, is_special, pajak_in, is_active FROM branches WHERE id = $1`, id).
-		Scan(&nama, &email, &cnc, &special, &pi, &aktif); err != nil {
+		`SELECT nama, email::text, is_cnc, pajak_in, is_active FROM branches WHERE id = $1`, id).
+		Scan(&nama, &email, &cnc, &pi, &aktif); err != nil {
 		t.Fatalf("baca cabang baru: %v", err)
 	}
-	if nama != "Grahita Cabang F" || email != "cabang-f@example.test" || !cnc || !special || !pi || !aktif {
-		t.Errorf("baris cabang tidak sesuai: %s %s %v %v %v %v", nama, email, cnc, special, pi, aktif)
+	if nama != "Grahita Cabang F" || email != "cabang-f@example.test" || !cnc || !pi || !aktif {
+		t.Errorf("baris cabang tidak sesuai: %s %s %v %v %v", nama, email, cnc, pi, aktif)
 	}
 
 	// Audit create tercatat dengan aktor, IP, dan snapshot "after" lengkap
@@ -684,7 +685,7 @@ func TestPGPutNonIdentitasMempertahankanStatusIncompleteDenganAtributLengkap(t *
 
 		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut,
 			f.srv.URL+"/api/v1/admin/branches/"+f.branchA,
-			`{"is_special":true}`, cookiesAdmin, csrfAdmin)
+			`{"pajak_in":true}`, cookiesAdmin, csrfAdmin)
 		if status != http.StatusOK {
 			t.Fatalf("PUT non-identitas harus 200, dapat %d (%v)", status, body)
 		}
@@ -734,7 +735,7 @@ func TestPGPutNonIdentitasMempertahankanStatusIncompleteDenganAtributLengkap(t *
 		cookiesAdmin, csrfAdmin := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut,
 			f.srv.URL+"/api/v1/admin/branches/"+branchID,
-			`{"is_special":true}`, cookiesAdmin, csrfAdmin)
+			`{"pajak_in":true}`, cookiesAdmin, csrfAdmin)
 		if status != http.StatusOK {
 			t.Fatalf("PUT non-identitas harus 200, dapat %d (%v)", status, body)
 		}
@@ -975,7 +976,7 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 		entered := make(chan struct{}, 1)
 		proceed := make(chan struct{})
 		barrierServer := serverDenganBarrierUpdateCabang(t, f, entered, proceed)
-		parsial := mulaiPutCabang(t, barrierServer.URL, f.branchA, `{"is_special":true}`, cookiesAdmin, csrfAdmin)
+		parsial := mulaiPutCabang(t, barrierServer.URL, f.branchA, `{"pajak_in":true}`, cookiesAdmin, csrfAdmin)
 		select {
 		case <-entered:
 		case <-time.After(5 * time.Second):
@@ -1000,10 +1001,10 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 
 		var namaKepala, email *string
 		var identityStatus, hash string
-		var special, userAktif bool
+		var pajakFlag, userAktif bool
 		var tokenRegistrasiAktif, tokenResetAktif, sesiAktif int
-		if err := f.pool.QueryRow(ctx, `SELECT nama_kepala, email::text, identity_status::text, is_special
- FROM branches WHERE id=$1`, f.branchA).Scan(&namaKepala, &email, &identityStatus, &special); err != nil {
+		if err := f.pool.QueryRow(ctx, `SELECT nama_kepala, email::text, identity_status::text, pajak_in
+ FROM branches WHERE id=$1`, f.branchA).Scan(&namaKepala, &email, &identityStatus, &pajakFlag); err != nil {
 			t.Fatalf("baca state cabang akhir: %v", err)
 		}
 		if err := f.pool.QueryRow(ctx, `SELECT password_hash, is_active FROM branch_users WHERE id=$1`, f.userA).Scan(&hash, &userAktif); err != nil {
@@ -1016,10 +1017,10 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 			Scan(&tokenRegistrasiAktif, &tokenResetAktif, &sesiAktif); err != nil {
 			t.Fatalf("hitung artefak auth aktif: %v", err)
 		}
-		if namaKepala != nil || email != nil || identityStatus != branch.IdentityIncomplete || !special ||
+		if namaKepala != nil || email != nil || identityStatus != branch.IdentityIncomplete || !pajakFlag ||
 			userAktif || hash != "!identity-revoked!" || tokenRegistrasiAktif != 0 || tokenResetAktif != 0 || sesiAktif != 0 {
-			t.Fatalf("PUT parsial menghidupkan kembali state pra-revokasi: kepala=%v email=%v status=%s special=%v user=%v hash=%q reg=%d reset=%d sesi=%d",
-				namaKepala, email, identityStatus, special, userAktif, hash, tokenRegistrasiAktif, tokenResetAktif, sesiAktif)
+			t.Fatalf("PUT parsial menghidupkan kembali state pra-revokasi: kepala=%v email=%v status=%s pajakFlag=%v user=%v hash=%q reg=%d reset=%d sesi=%d",
+				namaKepala, email, identityStatus, pajakFlag, userAktif, hash, tokenRegistrasiAktif, tokenResetAktif, sesiAktif)
 		}
 		status, _, _ = apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/auth/me", "", cookiesCabang, "")
 		if status != http.StatusUnauthorized {
@@ -1035,7 +1036,7 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 		var auditBeforeStatus, auditBeforeEmail, auditAfterStatus string
 		if err := f.pool.QueryRow(ctx, `SELECT before->>'identity_status', COALESCE(before->>'email',''), after->>'identity_status'
  FROM audit_logs WHERE entity='branch' AND action='update' AND entity_id=$1
-   AND after->>'is_special'='true' ORDER BY id DESC LIMIT 1`, f.branchA).
+   AND after->>'pajak_in'='true' ORDER BY id DESC LIMIT 1`, f.branchA).
 			Scan(&auditBeforeStatus, &auditBeforeEmail, &auditAfterStatus); err != nil {
 			t.Fatalf("baca audit PUT parsial: %v", err)
 		}
@@ -1085,7 +1086,7 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 		if _, err := blocker.Exec(ctx, `LOCK TABLE audit_logs IN ACCESS EXCLUSIVE MODE`); err != nil {
 			t.Fatalf("kunci tabel audit: %v", err)
 		}
-		parsial := mulaiPutCabang(t, f.srv.URL, f.branchA, `{"is_special":true}`, cookiesAdmin, csrfAdmin)
+		parsial := mulaiPutCabang(t, f.srv.URL, f.branchA, `{"pajak_in":true}`, cookiesAdmin, csrfAdmin)
 		deadline := time.Now().Add(5 * time.Second)
 		for {
 			var blocked bool
@@ -1132,11 +1133,11 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 
 		var namaKepala, email *string
 		var identityStatus, hash string
-		var special, userAktif bool
+		var pajakFlag, userAktif bool
 		var tokenRegistrasiAktif, tokenResetAktif, sesiAktif int
 		if err := f.pool.QueryRow(ctx, `SELECT b.nama_kepala, b.email::text, b.identity_status::text,
- b.is_special, u.password_hash, u.is_active FROM branches b JOIN branch_users u ON u.branch_id=b.id WHERE b.id=$1`, f.branchA).
-			Scan(&namaKepala, &email, &identityStatus, &special, &hash, &userAktif); err != nil {
+ b.pajak_in, u.password_hash, u.is_active FROM branches b JOIN branch_users u ON u.branch_id=b.id WHERE b.id=$1`, f.branchA).
+			Scan(&namaKepala, &email, &identityStatus, &pajakFlag, &hash, &userAktif); err != nil {
 			t.Fatalf("baca state akhir urutan kedua: %v", err)
 		}
 		if err := f.pool.QueryRow(ctx, `SELECT
@@ -1146,10 +1147,10 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 			Scan(&tokenRegistrasiAktif, &tokenResetAktif, &sesiAktif); err != nil {
 			t.Fatalf("hitung artefak auth akhir urutan kedua: %v", err)
 		}
-		if namaKepala != nil || email != nil || identityStatus != branch.IdentityIncomplete || !special ||
+		if namaKepala != nil || email != nil || identityStatus != branch.IdentityIncomplete || !pajakFlag ||
 			userAktif || hash != "!identity-revoked!" || tokenRegistrasiAktif != 0 || tokenResetAktif != 0 || sesiAktif != 0 {
-			t.Fatalf("revokasi akhir tidak fail-closed: kepala=%v email=%v status=%s special=%v user=%v hash=%q reg=%d reset=%d sesi=%d",
-				namaKepala, email, identityStatus, special, userAktif, hash,
+			t.Fatalf("revokasi akhir tidak fail-closed: kepala=%v email=%v status=%s pajakFlag=%v user=%v hash=%q reg=%d reset=%d sesi=%d",
+				namaKepala, email, identityStatus, pajakFlag, userAktif, hash,
 				tokenRegistrasiAktif, tokenResetAktif, sesiAktif)
 		}
 		status, _, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/auth/me", "", cookiesCabang, "")
@@ -1164,23 +1165,23 @@ func TestPGPutParsialMemakaiStateTerkiniSetelahRevokasiIdentitas(t *testing.T) {
 		assertErrorShape(t, body, "BRANCH_IDENTITY_INCOMPLETE")
 
 		var latestBefore, latestAfter, previousBefore, previousAfter string
-		var latestSpecial, previousSpecial bool
+		var latestPajakFlag, previousPajakFlag bool
 		if err := f.pool.QueryRow(ctx, `SELECT before->>'identity_status', after->>'identity_status',
- (after->>'is_special')::boolean FROM audit_logs
+ (after->>'pajak_in')::boolean FROM audit_logs
  WHERE entity='branch' AND action='update' AND entity_id=$1 ORDER BY id DESC LIMIT 1`, f.branchA).
-			Scan(&latestBefore, &latestAfter, &latestSpecial); err != nil {
+			Scan(&latestBefore, &latestAfter, &latestPajakFlag); err != nil {
 			t.Fatalf("baca audit revokasi: %v", err)
 		}
 		if err := f.pool.QueryRow(ctx, `SELECT before->>'identity_status', after->>'identity_status',
- (after->>'is_special')::boolean FROM audit_logs
+ (after->>'pajak_in')::boolean FROM audit_logs
  WHERE entity='branch' AND action='update' AND entity_id=$1 ORDER BY id DESC LIMIT 1 OFFSET 1`, f.branchA).
-			Scan(&previousBefore, &previousAfter, &previousSpecial); err != nil {
+			Scan(&previousBefore, &previousAfter, &previousPajakFlag); err != nil {
 			t.Fatalf("baca audit PUT parsial: %v", err)
 		}
-		if previousBefore != branch.IdentityRegistered || previousAfter != branch.IdentityRegistered || !previousSpecial ||
-			latestBefore != branch.IdentityRegistered || latestAfter != branch.IdentityIncomplete || !latestSpecial {
+		if previousBefore != branch.IdentityRegistered || previousAfter != branch.IdentityRegistered || !previousPajakFlag ||
+			latestBefore != branch.IdentityRegistered || latestAfter != branch.IdentityIncomplete || !latestPajakFlag {
 			t.Fatalf("urutan audit tidak mencerminkan commit parsial lalu revokasi: partial=%s->%s/%v revoke=%s->%s/%v",
-				previousBefore, previousAfter, previousSpecial, latestBefore, latestAfter, latestSpecial)
+				previousBefore, previousAfter, previousPajakFlag, latestBefore, latestAfter, latestPajakFlag)
 		}
 	})
 }
@@ -1240,7 +1241,7 @@ func TestPGRegistrasiDanPutParsialTidakMenurunkanIdentityStatus(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	partialResult := mulaiPutCabang(t, f.srv.URL, branchID, `{"is_special":true}`, cookiesAdmin, csrfAdmin)
+	partialResult := mulaiPutCabang(t, f.srv.URL, branchID, `{"pajak_in":true}`, cookiesAdmin, csrfAdmin)
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		var blocked int
@@ -1279,15 +1280,15 @@ func TestPGRegistrasiDanPutParsialTidakMenurunkanIdentityStatus(t *testing.T) {
 	}
 
 	var status string
-	var special bool
+	var pajakFlag bool
 	var accounts int
-	if err := f.pool.QueryRow(ctx, `SELECT identity_status::text, is_special,
+	if err := f.pool.QueryRow(ctx, `SELECT identity_status::text, pajak_in,
  (SELECT count(*) FROM branch_users WHERE branch_id=$1) FROM branches WHERE id=$1`, branchID).
-		Scan(&status, &special, &accounts); err != nil {
+		Scan(&status, &pajakFlag, &accounts); err != nil {
 		t.Fatalf("baca state akhir registrasi-vs-PUT: %v", err)
 	}
-	if status != branch.IdentityRegistered || !special || accounts != 1 {
-		t.Fatalf("state akhir harus registered + patch parsial: status=%s special=%v accounts=%d", status, special, accounts)
+	if status != branch.IdentityRegistered || !pajakFlag || accounts != 1 {
+		t.Fatalf("state akhir harus registered + patch parsial: status=%s pajakFlag=%v accounts=%d", status, pajakFlag, accounts)
 	}
 }
 

@@ -8,8 +8,7 @@
 -- "jumlah baris export == jumlah baris query terfilter" bukan kebetulan
 -- melainkan konsekuensi satu definisi filter (Database.md §7.3).
 --
--- Special/PI murni ATRIBUT cabang (b.is_special, b.pajak_in): hanya tampil dan
--- bisa difilter, tidak pernah mengubah harga maupun pajak.
+-- PI adalah atribut cabang yang tampil dan bisa difilter pada laporan.
 
 -- name: ListReportOrderLines :many
 -- Satu batch baris laporan (AP-REP-01/02/03), diurutkan STABIL menurut
@@ -34,7 +33,6 @@ SELECT o.tanggal,
        b.nama                                                       AS cabang,
        COALESCE(b.nama_kepala, '')                                  AS nama_kepala,
        o.is_cnc,
-       b.is_special,
        b.pajak_in,
        l.line_no,
        l.nama_snapshot                                              AS produk,
@@ -61,7 +59,6 @@ SELECT o.tanggal,
    AND (sqlc.arg(status)::text = '' OR o.status::text = sqlc.arg(status)::text)
    AND (sqlc.arg(jenis)::text  = '' OR l.jenis::text  = sqlc.arg(jenis)::text)
    AND (sqlc.narg(is_cnc)::bool     IS NULL OR o.is_cnc     = sqlc.narg(is_cnc)::bool)
-   AND (sqlc.narg(is_special)::bool IS NULL OR b.is_special = sqlc.narg(is_special)::bool)
    AND (sqlc.narg(pajak_in)::bool   IS NULL OR b.pajak_in   = sqlc.narg(pajak_in)::bool)
    AND (sqlc.arg(setelah_tanggal)::text = ''
         OR (o.tanggal, COALESCE(o.nomor, ''), l.line_no)
@@ -86,7 +83,6 @@ SELECT count(*)::bigint            AS jumlah_baris,
    AND (sqlc.arg(status)::text = '' OR o.status::text = sqlc.arg(status)::text)
    AND (sqlc.arg(jenis)::text  = '' OR l.jenis::text  = sqlc.arg(jenis)::text)
    AND (sqlc.narg(is_cnc)::bool     IS NULL OR o.is_cnc     = sqlc.narg(is_cnc)::bool)
-   AND (sqlc.narg(is_special)::bool IS NULL OR b.is_special = sqlc.narg(is_special)::bool)
    AND (sqlc.narg(pajak_in)::bool   IS NULL OR b.pajak_in   = sqlc.narg(pajak_in)::bool);
 
 -- name: InsertReportJob :one

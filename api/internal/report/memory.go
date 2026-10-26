@@ -200,9 +200,6 @@ func barisCocok(l Line, q Query) bool {
 	if q.IsCNC != nil && l.IsCNC != *q.IsCNC {
 		return false
 	}
-	if q.IsSpecial != nil && l.IsSpecial != *q.IsSpecial {
-		return false
-	}
 	if q.PajakIn != nil && l.PajakIn != *q.PajakIn {
 		return false
 	}

@@ -91,6 +91,9 @@ var (
 	// ErrDepositVersionRequired dikembalikan bila cabang Cash & Carry mengirim
 	// pesanan tanpa menyebut versi saldo deposit yang ia lihat.
 	ErrDepositVersionRequired = fmt.Errorf("%w: versi saldo deposit yang ditampilkan wajib dikirim", ErrInvalidData)
+	ErrOrderHeld              = errors.New("pesanan ditahan karena tagihan Tempo lewat jatuh tempo")
+	ErrPaymentModeChanged     = errors.New("cara pembayaran cabang berubah; muat ulang pesanan")
+	ErrTempoCreditSuperadmin  = errors.New("revisi Tempo yang menghasilkan kredit membutuhkan Superadmin")
 )
 
 // Status pesanan (Database.md §3, enum order_status).
@@ -98,9 +101,10 @@ var (
 // Sengaja TIDAK ada StatusBatal: pembatalan pesanan Submitted masih pertanyaan
 // terbuka PRD §8 no.4 dan keputusan kartu F1-11 adalah belum menyediakannya.
 const (
-	StatusDraft     = "draft"
-	StatusSubmitted = "submitted"
-	StatusDone      = "done"
+	StatusDraft          = "draft"
+	StatusSubmitted      = "submitted"
+	StatusApprovedUnpaid = "approved_unpaid"
+	StatusDone           = "done"
 )
 
 // Jenis baris pesanan (Database.md §3, enum line_kind).
@@ -149,15 +153,18 @@ type Line struct {
 // BranchID dan CreatedBy tidak pernah dikirim ke klien: keduanya dipakai
 // internal untuk menegakkan isolasi cabang dan jejak pembuat draft.
 type Order struct {
-	ID           string `json:"id"`
-	BranchID     string `json:"-"`
-	CreatedBy    string `json:"-"`
-	Nomor        string `json:"nomor,omitempty"`
-	Status       string `json:"status"`
-	VerifStatus  string `json:"verif_status"`
-	Versi        int    `json:"versi"`
-	IsCNC        bool   `json:"is_cnc"`
-	IsSertifikat bool   `json:"is_sertifikat"`
+	ID              string `json:"id"`
+	BranchID        string `json:"-"`
+	CreatedBy       string `json:"-"`
+	Nomor           string `json:"nomor,omitempty"`
+	Status          string `json:"status"`
+	VerifStatus     string `json:"verif_status"`
+	Versi           int    `json:"versi"`
+	IsCNC           bool   `json:"is_cnc"`
+	IsTempo         bool   `json:"is_tempo"`
+	TempoDueDate    string `json:"tempo_due_date,omitempty"`
+	TempoPaidAmount int64  `json:"tempo_paid_amount"`
+	IsSertifikat    bool   `json:"is_sertifikat"`
 	// Tanggal adalah tanggal submit (WIB) dalam bentuk YYYY-MM-DD; kosong
 	// selama masih draft (BR-04).
 	Tanggal     string    `json:"tanggal,omitempty"`
@@ -517,7 +524,7 @@ func branchActor(actor auth.Actor) (string, error) {
 func normStatus(s string) (string, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case "", "semua", StatusDraft, StatusSubmitted, StatusDone:
+	case "", "semua", StatusDraft, StatusSubmitted, StatusApprovedUnpaid, StatusDone:
 		if s == "semua" {
 			return "", nil
 		}

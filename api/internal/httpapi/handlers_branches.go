@@ -14,14 +14,16 @@ import (
 
 // createBranchRequest adalah body POST /api/v1/admin/branches (PRD §4.4).
 type createBranchRequest struct {
-	Nama          string `json:"nama" validate:"required,min=2,max=120"`
-	NamaKepala    string `json:"nama_kepala" validate:"omitempty,min=2,max=120"`
-	Email         string `json:"email" validate:"omitempty,email,max=254"`
-	JabatanKepala string `json:"jabatan_kepala" validate:"omitempty,max=120"`
-	Telepon       string `json:"telepon" validate:"omitempty,max=40"`
-	IsCNC         bool   `json:"is_cnc"`
-	IsSpecial     bool   `json:"is_special"`
-	PajakIn       bool   `json:"pajak_in"`
+	Nama           string `json:"nama" validate:"required,min=2,max=120"`
+	NamaKepala     string `json:"nama_kepala" validate:"omitempty,min=2,max=120"`
+	Email          string `json:"email" validate:"omitempty,email,max=254"`
+	JabatanKepala  string `json:"jabatan_kepala" validate:"omitempty,max=120"`
+	Telepon        string `json:"telepon" validate:"omitempty,max=40"`
+	IsCNC          bool   `json:"is_cnc"`
+	IsTempo        bool   `json:"is_tempo"`
+	TanggalBayar   int    `json:"tanggal_bayar"`
+	TahanBilaTelat bool   `json:"tahan_bila_telat"`
+	PajakIn        bool   `json:"pajak_in"`
 	// IsActive kosong berarti aktif (default cabang baru).
 	IsActive *bool `json:"is_active"`
 }
@@ -29,20 +31,22 @@ type createBranchRequest struct {
 // updateBranchRequest adalah body PUT /api/v1/admin/branches/{id}.
 // Semua field opsional: yang dikirim saja yang diubah.
 type updateBranchRequest struct {
-	Nama          *string `json:"nama"`
-	NamaKepala    *string `json:"nama_kepala"`
-	Email         *string `json:"email"`
-	JabatanKepala *string `json:"jabatan_kepala"`
-	Telepon       *string `json:"telepon"`
-	IsCNC         *bool   `json:"is_cnc"`
-	IsSpecial     *bool   `json:"is_special"`
-	PajakIn       *bool   `json:"pajak_in"`
-	IsActive      *bool   `json:"is_active"`
+	Nama           *string `json:"nama"`
+	NamaKepala     *string `json:"nama_kepala"`
+	Email          *string `json:"email"`
+	JabatanKepala  *string `json:"jabatan_kepala"`
+	Telepon        *string `json:"telepon"`
+	IsCNC          *bool   `json:"is_cnc"`
+	IsTempo        *bool   `json:"is_tempo"`
+	TanggalBayar   *int    `json:"tanggal_bayar"`
+	TahanBilaTelat *bool   `json:"tahan_bila_telat"`
+	PajakIn        *bool   `json:"pajak_in"`
+	IsActive       *bool   `json:"is_active"`
 }
 
 // adminBranches adalah master cabang: daftar + filter (PRD §4.4).
 //
-// Filter: q (cari nama/email), aktif, cnc, special — semuanya opsional.
+// Filter: q (cari nama/email), aktif, cnc, tempo — semuanya opsional.
 func (a *API) adminBranches(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Branches == nil {
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Layanan master cabang belum tersedia.")
@@ -82,15 +86,17 @@ func (a *API) adminBranchCreate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	b, err := a.d.Branches.Create(r.Context(), auth.ActorFrom(r.Context()), branch.NewBranch{
-		Nama:          req.Nama,
-		NamaKepala:    req.NamaKepala,
-		Email:         req.Email,
-		JabatanKepala: req.JabatanKepala,
-		Telepon:       req.Telepon,
-		IsCNC:         req.IsCNC,
-		IsSpecial:     req.IsSpecial,
-		PajakIn:       req.PajakIn,
-		IsActive:      req.IsActive,
+		Nama:           req.Nama,
+		NamaKepala:     req.NamaKepala,
+		Email:          req.Email,
+		JabatanKepala:  req.JabatanKepala,
+		Telepon:        req.Telepon,
+		IsCNC:          req.IsCNC,
+		IsTempo:        req.IsTempo,
+		TanggalBayar:   req.TanggalBayar,
+		TahanBilaTelat: req.TahanBilaTelat,
+		PajakIn:        req.PajakIn,
+		IsActive:       req.IsActive,
 	})
 	if err != nil {
 		return mapDomainErr(err)
@@ -111,15 +117,17 @@ func (a *API) adminBranchUpdate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	b, err := a.d.Branches.Update(r.Context(), auth.ActorFrom(r.Context()), chi.URLParam(r, "id"), branch.Patch{
-		Nama:          req.Nama,
-		NamaKepala:    req.NamaKepala,
-		Email:         req.Email,
-		JabatanKepala: req.JabatanKepala,
-		Telepon:       req.Telepon,
-		IsCNC:         req.IsCNC,
-		IsSpecial:     req.IsSpecial,
-		PajakIn:       req.PajakIn,
-		IsActive:      req.IsActive,
+		Nama:           req.Nama,
+		NamaKepala:     req.NamaKepala,
+		Email:          req.Email,
+		JabatanKepala:  req.JabatanKepala,
+		Telepon:        req.Telepon,
+		IsCNC:          req.IsCNC,
+		IsTempo:        req.IsTempo,
+		TanggalBayar:   req.TanggalBayar,
+		TahanBilaTelat: req.TahanBilaTelat,
+		PajakIn:        req.PajakIn,
+		IsActive:       req.IsActive,
 	})
 	if err != nil {
 		return mapDomainErr(err)
@@ -170,7 +178,7 @@ func branchFilter(r *http.Request) (branch.Filter, error) {
 	if f.CNC, err = boolQuery(r, "cnc"); err != nil {
 		return f, err
 	}
-	if f.Special, err = boolQuery(r, "special"); err != nil {
+	if f.Tempo, err = boolQuery(r, "tempo"); err != nil {
 		return f, err
 	}
 	return f, nil

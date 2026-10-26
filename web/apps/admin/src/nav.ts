@@ -17,6 +17,7 @@ export const NAV_ADMIN: NavGroup[] = [
       { to: "/", label: "Dashboard", icon: "squares-four" },
       { to: "/pesanan", label: "Riwayat pemesanan", icon: "receipt" },
       { to: "/deposit", label: "Deposit cabang", icon: "wallet" },
+      { to: "/tagihan", label: "Tagihan cabang", icon: "file-text" },
     ],
   },
   {

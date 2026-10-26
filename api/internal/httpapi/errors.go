@@ -148,6 +148,12 @@ func mapDomainErr(err error) error {
 			map[string]string{"lines": "minimal satu baris produk"})
 	case errors.Is(err, order.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
+	case errors.Is(err, order.ErrOrderHeld):
+		return apierr.Conflict("TEMPO_ORDER_HELD", "Pengiriman pesanan ditahan karena tagihan Tempo lewat jatuh tempo. Lihat menu Tagihan.")
+	case errors.Is(err, order.ErrPaymentModeChanged):
+		return apierr.Conflict("PAYMENT_MODE_CHANGED", "Cara pembayaran cabang berubah. Muat ulang lalu kirim pesanan lagi.")
+	case errors.Is(err, order.ErrTempoCreditSuperadmin):
+		return apierr.Conflict("TEMPO_CREDIT_SUPERADMIN", "Revisi ini menghasilkan saldo kredit Tempo dan membutuhkan Superadmin.")
 	case errors.Is(err, order.ErrDepositVersionRequired):
 		// Cabang C&C wajib menyebut versi saldo deposit yang ia lihat supaya
 		// potongan tidak pernah berubah diam-diam (CP-CNC-02).

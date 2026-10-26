@@ -106,7 +106,7 @@ func (m *Memory) List(_ context.Context, f Filter) ([]Branch, error) {
 			continue
 		case f.CNC != nil && b.IsCNC != *f.CNC:
 			continue
-		case f.Special != nil && b.IsSpecial != *f.Special:
+		case f.Tempo != nil && b.IsTempo != *f.Tempo:
 			continue
 		}
 		out = append(out, b)

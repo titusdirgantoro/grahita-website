@@ -51,7 +51,28 @@ func (r *Repo) OrderForDocument(ctx context.Context, orderID string) (document.O
 	}
 	type historicalAccount struct{ ID, Bank, Owner, Number string }
 	rekening := []historicalAccount{}
-	if row.Status == "done" {
+	if row.IsTempo {
+		accounts, err := r.pool.Query(ctx, `SELECT ba.id::text,ba.bank::text,ba.nama_pemilik,ba.nomor
+FROM branch_bank_accounts bba JOIN bank_accounts ba ON ba.id=bba.bank_account_id
+WHERE bba.branch_id=$1 AND bba.is_allowed AND ba.is_active ORDER BY ba.bank,ba.id`, row.BranchID)
+		if err != nil {
+			return document.Order{}, fmt.Errorf("baca rekening Tempo: %w", err)
+		}
+		for accounts.Next() {
+			var a historicalAccount
+			if err := accounts.Scan(&a.ID, &a.Bank, &a.Owner, &a.Number); err != nil {
+				accounts.Close()
+				return document.Order{}, err
+			}
+			rekening = append(rekening, a)
+		}
+		if err := accounts.Err(); err != nil {
+			accounts.Close()
+			return document.Order{}, err
+		}
+		accounts.Close()
+	}
+	if row.Status == "done" && !row.IsTempo {
 		var pointer *string
 		var destinationJSON []byte
 		var logOrderID, logResult *string
@@ -137,6 +158,7 @@ func (r *Repo) OrderForDocument(ctx context.Context, orderID string) (document.O
 		Versi:        int(row.Versi),
 		BranchID:     row.BranchID,
 		IsCNC:        row.IsCnc,
+		IsTempo:      row.IsTempo,
 		IsSertifikat: row.IsSertifikat,
 		Total:        row.Total,
 		Catatan:      row.Catatan,
@@ -149,6 +171,9 @@ func (r *Repo) OrderForDocument(ctx context.Context, orderID string) (document.O
 	}
 	if row.Tanggal != nil {
 		out.Tanggal = *row.Tanggal
+	}
+	if row.TempoDueDate != nil {
+		out.TempoDueDate = *row.TempoDueDate
 	}
 
 	out.Lines = make([]document.Line, 0, len(lines))
@@ -285,6 +310,7 @@ func (r *Repo) ListInvoices(ctx context.Context, branchID string, dari, sampai *
 			Status:     row.Status,
 			Versi:      int(row.Versi),
 			IsCNC:      row.IsCnc,
+			IsTempo:    row.IsTempo,
 			Total:      row.Total,
 			JumlahItem: row.JumlahItem,
 			UkuranByte: row.UkuranByte,

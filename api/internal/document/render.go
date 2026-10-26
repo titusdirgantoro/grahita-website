@@ -57,6 +57,9 @@ func FormatRupiah(n int64) string { return "Rp " + FormatAngka(n) }
 // baru lahir saat pesanan selesai diverifikasi, jadi semuanya LUNAS; pesanan
 // Cash & Carry (dibayar dari deposit cabang) diberi keterangan tambahan.
 func penandaPembayaran(o Order) string {
+	if o.IsTempo {
+		return "PEMBAYARAN TEMPO — jatuh tempo " + FormatTanggal(o.TempoDueDate)
+	}
 	if o.IsCNC {
 		return "LUNAS — CASH & CARRY"
 	}

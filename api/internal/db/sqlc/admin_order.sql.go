@@ -78,6 +78,9 @@ SELECT o.id,
        o.verif_status::text                                        AS verif_status,
        COALESCE(o.alasan_review::text, '')::text                   AS alasan_review,
        o.is_cnc,
+       o.is_tempo,
+       o.tempo_due_date,
+       o.tempo_paid_amount,
        o.is_sertifikat,
        o.tanggal,
        COALESCE(o.catatan, '')                                     AS catatan,
@@ -101,29 +104,32 @@ type GetAdminOrderParams struct {
 }
 
 type GetAdminOrderRow struct {
-	ID           string     `json:"id"`
-	Nomor        string     `json:"nomor"`
-	Versi        int32      `json:"versi"`
-	BranchID     string     `json:"branch_id"`
-	BranchNama   string     `json:"branch_nama"`
-	BranchKepala string     `json:"branch_kepala"`
-	BranchEmail  string     `json:"branch_email"`
-	BranchCnc    bool       `json:"branch_cnc"`
-	Status       string     `json:"status"`
-	VerifStatus  string     `json:"verif_status"`
-	AlasanReview string     `json:"alasan_review"`
-	IsCnc        bool       `json:"is_cnc"`
-	IsSertifikat bool       `json:"is_sertifikat"`
-	Tanggal      *time.Time `json:"tanggal"`
-	Catatan      string     `json:"catatan"`
-	NoteAdmin    string     `json:"note_admin"`
-	Total        int64      `json:"total"`
-	JumlahItem   int64      `json:"jumlah_item"`
-	EmailGagal   bool       `json:"email_gagal"`
-	SubmittedAt  *time.Time `json:"submitted_at"`
-	DoneAt       *time.Time `json:"done_at"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID              string     `json:"id"`
+	Nomor           string     `json:"nomor"`
+	Versi           int32      `json:"versi"`
+	BranchID        string     `json:"branch_id"`
+	BranchNama      string     `json:"branch_nama"`
+	BranchKepala    string     `json:"branch_kepala"`
+	BranchEmail     string     `json:"branch_email"`
+	BranchCnc       bool       `json:"branch_cnc"`
+	Status          string     `json:"status"`
+	VerifStatus     string     `json:"verif_status"`
+	AlasanReview    string     `json:"alasan_review"`
+	IsCnc           bool       `json:"is_cnc"`
+	IsTempo         bool       `json:"is_tempo"`
+	TempoDueDate    *time.Time `json:"tempo_due_date"`
+	TempoPaidAmount int64      `json:"tempo_paid_amount"`
+	IsSertifikat    bool       `json:"is_sertifikat"`
+	Tanggal         *time.Time `json:"tanggal"`
+	Catatan         string     `json:"catatan"`
+	NoteAdmin       string     `json:"note_admin"`
+	Total           int64      `json:"total"`
+	JumlahItem      int64      `json:"jumlah_item"`
+	EmailGagal      bool       `json:"email_gagal"`
+	SubmittedAt     *time.Time `json:"submitted_at"`
+	DoneAt          *time.Time `json:"done_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // Header detail satu pesanan mana pun (AP-ORD-04); tidak dibatasi cabang.
@@ -143,6 +149,9 @@ func (q *Queries) GetAdminOrder(ctx context.Context, arg GetAdminOrderParams) (G
 		&i.VerifStatus,
 		&i.AlasanReview,
 		&i.IsCnc,
+		&i.IsTempo,
+		&i.TempoDueDate,
+		&i.TempoPaidAmount,
 		&i.IsSertifikat,
 		&i.Tanggal,
 		&i.Catatan,
@@ -262,6 +271,9 @@ SELECT o.id,
        o.status::text                                              AS status,
        o.verif_status::text                                        AS verif_status,
        o.is_cnc,
+       o.is_tempo,
+       o.tempo_due_date,
+       o.tempo_paid_amount,
        o.is_sertifikat,
        o.total,
        COALESCE((SELECT sum(l.qty) FROM order_lines l
@@ -319,22 +331,25 @@ type ListAdminOrdersParams struct {
 }
 
 type ListAdminOrdersRow struct {
-	ID           string     `json:"id"`
-	Nomor        string     `json:"nomor"`
-	Versi        int32      `json:"versi"`
-	BranchID     string     `json:"branch_id"`
-	BranchNama   string     `json:"branch_nama"`
-	Tanggal      *time.Time `json:"tanggal"`
-	Status       string     `json:"status"`
-	VerifStatus  string     `json:"verif_status"`
-	IsCnc        bool       `json:"is_cnc"`
-	IsSertifikat bool       `json:"is_sertifikat"`
-	Total        int64      `json:"total"`
-	JumlahItem   int64      `json:"jumlah_item"`
-	EmailGagal   bool       `json:"email_gagal"`
-	SubmittedAt  *time.Time `json:"submitted_at"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID              string     `json:"id"`
+	Nomor           string     `json:"nomor"`
+	Versi           int32      `json:"versi"`
+	BranchID        string     `json:"branch_id"`
+	BranchNama      string     `json:"branch_nama"`
+	Tanggal         *time.Time `json:"tanggal"`
+	Status          string     `json:"status"`
+	VerifStatus     string     `json:"verif_status"`
+	IsCnc           bool       `json:"is_cnc"`
+	IsTempo         bool       `json:"is_tempo"`
+	TempoDueDate    *time.Time `json:"tempo_due_date"`
+	TempoPaidAmount int64      `json:"tempo_paid_amount"`
+	IsSertifikat    bool       `json:"is_sertifikat"`
+	Total           int64      `json:"total"`
+	JumlahItem      int64      `json:"jumlah_item"`
+	EmailGagal      bool       `json:"email_gagal"`
+	SubmittedAt     *time.Time `json:"submitted_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // Riwayat & detail pesanan untuk admin (F1-15, PRD §4.2 AP-ORD-01..05).
@@ -391,6 +406,9 @@ func (q *Queries) ListAdminOrders(ctx context.Context, arg ListAdminOrdersParams
 			&i.Status,
 			&i.VerifStatus,
 			&i.IsCnc,
+			&i.IsTempo,
+			&i.TempoDueDate,
+			&i.TempoPaidAmount,
 			&i.IsSertifikat,
 			&i.Total,
 			&i.JumlahItem,

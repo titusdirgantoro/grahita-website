@@ -26,8 +26,7 @@ SELECT count(*)::bigint            AS jumlah_baris,
    AND ($4::text = '' OR o.status::text = $4::text)
    AND ($5::text  = '' OR l.jenis::text  = $5::text)
    AND ($6::bool     IS NULL OR o.is_cnc     = $6::bool)
-   AND ($7::bool IS NULL OR b.is_special = $7::bool)
-   AND ($8::bool   IS NULL OR b.pajak_in   = $8::bool)
+   AND ($7::bool   IS NULL OR b.pajak_in   = $7::bool)
 `
 
 type CountReportOrderLinesParams struct {
@@ -37,7 +36,6 @@ type CountReportOrderLinesParams struct {
 	Status    string      `json:"status"`
 	Jenis     string      `json:"jenis"`
 	IsCnc     pgtype.Bool `json:"is_cnc"`
-	IsSpecial pgtype.Bool `json:"is_special"`
 	PajakIn   pgtype.Bool `json:"pajak_in"`
 }
 
@@ -57,7 +55,6 @@ func (q *Queries) CountReportOrderLines(ctx context.Context, arg CountReportOrde
 		arg.Status,
 		arg.Jenis,
 		arg.IsCnc,
-		arg.IsSpecial,
 		arg.PajakIn,
 	)
 	var i CountReportOrderLinesRow
@@ -175,7 +172,6 @@ SELECT o.tanggal,
        b.nama                                                       AS cabang,
        COALESCE(b.nama_kepala, '')                                  AS nama_kepala,
        o.is_cnc,
-       b.is_special,
        b.pajak_in,
        l.line_no,
        l.nama_snapshot                                              AS produk,
@@ -202,13 +198,12 @@ SELECT o.tanggal,
    AND ($4::text = '' OR o.status::text = $4::text)
    AND ($5::text  = '' OR l.jenis::text  = $5::text)
    AND ($6::bool     IS NULL OR o.is_cnc     = $6::bool)
-   AND ($7::bool IS NULL OR b.is_special = $7::bool)
-   AND ($8::bool   IS NULL OR b.pajak_in   = $8::bool)
-   AND ($9::text = ''
+   AND ($7::bool   IS NULL OR b.pajak_in   = $7::bool)
+   AND ($8::text = ''
         OR (o.tanggal, COALESCE(o.nomor, ''), l.line_no)
-           > ($9::date, $10::text, $11::int))
+           > ($8::date, $9::text, $10::int))
  ORDER BY o.tanggal, o.nomor, l.line_no
- LIMIT $13::int OFFSET $12::int
+ LIMIT $12::int OFFSET $11::int
 `
 
 type ListReportOrderLinesParams struct {
@@ -218,7 +213,6 @@ type ListReportOrderLinesParams struct {
 	Status         string      `json:"status"`
 	Jenis          string      `json:"jenis"`
 	IsCnc          pgtype.Bool `json:"is_cnc"`
-	IsSpecial      pgtype.Bool `json:"is_special"`
 	PajakIn        pgtype.Bool `json:"pajak_in"`
 	SetelahTanggal string      `json:"setelah_tanggal"`
 	SetelahNomor   string      `json:"setelah_nomor"`
@@ -235,7 +229,6 @@ type ListReportOrderLinesRow struct {
 	Cabang           string     `json:"cabang"`
 	NamaKepala       string     `json:"nama_kepala"`
 	IsCnc            bool       `json:"is_cnc"`
-	IsSpecial        bool       `json:"is_special"`
 	PajakIn          bool       `json:"pajak_in"`
 	LineNo           int32      `json:"line_no"`
 	Produk           string     `json:"produk"`
@@ -259,8 +252,7 @@ type ListReportOrderLinesRow struct {
 // "jumlah baris export == jumlah baris query terfilter" bukan kebetulan
 // melainkan konsekuensi satu definisi filter (Database.md §7.3).
 //
-// Special/PI murni ATRIBUT cabang (b.is_special, b.pajak_in): hanya tampil dan
-// bisa difilter, tidak pernah mengubah harga maupun pajak.
+// PI adalah atribut cabang yang tampil dan bisa difilter pada laporan.
 // Satu batch baris laporan (AP-REP-01/02/03), diurutkan STABIL menurut
 // (tanggal, nomor, line_no) sehingga ekspor bisa berjalan dengan kursor
 // bertahap tanpa melewatkan/mengulang baris (Database.md §7.3, cursor/FETCH).
@@ -284,7 +276,6 @@ func (q *Queries) ListReportOrderLines(ctx context.Context, arg ListReportOrderL
 		arg.Status,
 		arg.Jenis,
 		arg.IsCnc,
-		arg.IsSpecial,
 		arg.PajakIn,
 		arg.SetelahTanggal,
 		arg.SetelahNomor,
@@ -307,7 +298,6 @@ func (q *Queries) ListReportOrderLines(ctx context.Context, arg ListReportOrderL
 			&i.Cabang,
 			&i.NamaKepala,
 			&i.IsCnc,
-			&i.IsSpecial,
 			&i.PajakIn,
 			&i.LineNo,
 			&i.Produk,

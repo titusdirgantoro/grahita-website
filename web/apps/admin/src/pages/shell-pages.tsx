@@ -30,7 +30,9 @@ export interface Cabang {
   identity_status?: "identity_incomplete" | "ready" | "registered";
   telepon?: string;
   is_cnc: boolean;
-  is_special?: boolean;
+  is_tempo?: boolean;
+  tanggal_bayar?: number;
+  tahan_bila_telat?: boolean;
   pajak_in?: boolean;
   is_active: boolean;
   bank_allowlist_version?: number;

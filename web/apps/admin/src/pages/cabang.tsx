@@ -67,12 +67,12 @@ interface AssignmentCabang {
 }
 
 /** TabCabang adalah tab filter daftar (prototype `S.cabF`). */
-type TabCabang = "semua" | "cnc" | "special" | "nonaktif";
+type TabCabang = "semua" | "cnc" | "tempo" | "nonaktif";
 
 const TAB: ReadonlyArray<{ value: TabCabang; label: string }> = [
   { value: "semua", label: "Semua" },
   { value: "cnc", label: "C&C" },
-  { value: "special", label: "Special" },
+  { value: "tempo", label: "Tempo" },
   { value: "nonaktif", label: "Nonaktif" },
 ];
 
@@ -98,7 +98,9 @@ interface FormCabang {
   identity_status: "identity_incomplete" | "ready" | "registered";
   telepon: string;
   is_cnc: boolean;
-  is_special: boolean;
+  is_tempo: boolean;
+  tanggal_bayar: number;
+  tahan_bila_telat: boolean;
   pajak_in: boolean;
   is_active: boolean;
   /** Email saat dialog dibuka: dasar konfirmasi "Ya, ubah email login". */
@@ -118,7 +120,9 @@ const CABANG_BARU: FormCabang = {
   identity_status: "identity_incomplete",
   telepon: "",
   is_cnc: false,
-  is_special: false,
+  is_tempo: false,
+  tanggal_bayar: 5,
+  tahan_bila_telat: false,
   pajak_in: false,
   is_active: true,
   emailAwal: "",
@@ -143,6 +147,9 @@ function validasiForm(f: FormCabang): Record<string, string> {
     err.nama_kepala = "Nama kepala cabang minimal 2 karakter bila diisi.";
   }
   if (f.email.trim() && !POLA_EMAIL.test(f.email.trim())) err.email = "Format email belum benar.";
+  if (f.is_tempo && (!Number.isInteger(f.tanggal_bayar) || f.tanggal_bayar < 1 || f.tanggal_bayar > 28)) {
+    err.tanggal_bayar = "Tanggal bayar harus 1 sampai 28.";
+  }
   return err;
 }
 
@@ -150,7 +157,7 @@ function validasiForm(f: FormCabang): Record<string, string> {
  * CabangPage — /cabang: master data cabang (PRD §4.4 AP-CAB-01..05).
  *
  * Keputusan yang tampak di UI, semuanya ditegakkan server:
- *  - filter tab dijalankan SERVER lewat `?q=&cnc=&special=&aktif=` (F1-06
+ *  - filter tab dijalankan SERVER lewat `?q=&cnc=&tempo=&aktif=` (F1-06
  *    menyediakan filternya, jadi daftar tidak perlu dimuat seluruhnya),
  *  - satu akun per cabang: blok "Akun & token registrasi" hanya menawarkan
  *    token untuk cabang yang BELUM punya akun; cabang nonaktif tidak boleh
@@ -194,7 +201,7 @@ export function CabangPage() {
     const p = new URLSearchParams();
     if (q.trim()) p.set("q", q.trim());
     if (tab === "cnc") p.set("cnc", "true");
-    if (tab === "special") p.set("special", "true");
+    if (tab === "tempo") p.set("tempo", "true");
     if (tab === "nonaktif") p.set("aktif", "false");
     const s = p.toString();
     return s ? `?${s}` : "";
@@ -266,7 +273,9 @@ export function CabangPage() {
       identity_status: row.identity_status ?? (row.email && row.nama_kepala ? "ready" : "identity_incomplete"),
       telepon: row.telepon ?? "",
       is_cnc: row.is_cnc,
-      is_special: Boolean(row.is_special),
+      is_tempo: Boolean(row.is_tempo),
+      tanggal_bayar: row.tanggal_bayar ?? 5,
+      tahan_bila_telat: Boolean(row.tahan_bila_telat),
       pajak_in: Boolean(row.pajak_in),
       is_active: row.is_active,
       emailAwal: row.email,
@@ -317,7 +326,9 @@ export function CabangPage() {
       email: form.email.trim(),
       telepon: form.telepon.trim(),
       is_cnc: form.is_cnc,
-      is_special: form.is_special,
+      is_tempo: form.is_tempo,
+      tanggal_bayar: form.is_tempo ? form.tanggal_bayar : 0,
+      tahan_bila_telat: form.is_tempo && form.tahan_bila_telat,
       pajak_in: form.pajak_in,
       is_active: form.is_active,
     };
@@ -553,7 +564,7 @@ export function CabangPage() {
                       {rekening > 0 ? `${rekening} rekening tujuan` : "Belum ada rekening"}
                     </Badge>
                     {c.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
-                    {c.is_special ? <Badge tone="info">Special</Badge> : null}
+                    {c.is_tempo ? <Badge tone="info">Tempo · bayar tanggal {c.tanggal_bayar}</Badge> : null}
                     {c.pajak_in ? <Badge tone="neutral">PI</Badge> : null}
                   </>
                 }
@@ -695,18 +706,25 @@ export function CabangPage() {
                 onChange={(e) => setForm({ ...form, telepon: e.target.value })}
               />
             </Field>
-            <SwitchRow
-              checked={form.is_cnc}
-              onChange={(v) => setForm({ ...form, is_cnc: v })}
-              label="Cash and Carry"
-              hint="Pesanan cabang dibayar dari saldo deposit; sisanya ditransfer dengan bukti."
-            />
-            <SwitchRow
-              checked={form.is_special}
-              onChange={(v) => setForm({ ...form, is_special: v })}
-              label="Special"
-              hint="Disimpan sebagai atribut & filter; efeknya belum ditentukan (PRD AP-CAB-05)."
-            />
+            <Field label="Cara pembayaran" htmlFor="cf-pembayaran">
+              <select
+                id="cf-pembayaran"
+                value={form.is_tempo ? "tempo" : form.is_cnc ? "deposit" : "transfer"}
+                onChange={(e) => setForm({ ...form, is_cnc: e.target.value === "deposit", is_tempo: e.target.value === "tempo" })}
+              >
+                <option value="transfer">Transfer di muka</option>
+                <option value="deposit">Deposit (Cash &amp; Carry)</option>
+                <option value="tempo">Tempo</option>
+              </select>
+            </Field>
+            {form.is_tempo ? (
+              <>
+                <Field label="Tanggal bayar tiap bulan" htmlFor="cf-tanggal-bayar" error={errorFields.tanggal_bayar} hint="Tanggal 1–28. Perubahan hanya berlaku untuk pesanan yang dikirim setelah perubahan.">
+                  <Input id="cf-tanggal-bayar" type="number" min={1} max={28} value={form.tanggal_bayar} onChange={(e) => setForm({ ...form, tanggal_bayar: Number(e.target.value) })} />
+                </Field>
+                <SwitchRow checked={form.tahan_bila_telat} onChange={(v) => setForm({ ...form, tahan_bila_telat: v })} label="Tahan pesanan bila tagihan lewat jatuh tempo" hint="Draft tetap bisa dibuat. Pengiriman pesanan ditahan sampai tunggakan dibayar atau bukti pelunasan sedang diperiksa." />
+              </>
+            ) : null}
             <SwitchRow
               checked={form.pajak_in}
               onChange={(v) => setForm({ ...form, pajak_in: v })}

@@ -55,7 +55,9 @@ const (
 	// JenisReminderCNC adalah pengingat jatuh tempo C&C lama. Sejak C&C dibayar
 	// dari deposit (2026-10-18) tidak ada lagi yang mengantrenya; template-nya
 	// dipertahankan supaya baris outbox lama tetap bisa dirender/dikirim ulang.
-	JenisReminderCNC = "reminder_cnc"
+	JenisReminderCNC    = "reminder_cnc"
+	JenisTempoStatement = "tempo_statement"
+	JenisTempoReminder  = "tempo_reminder"
 )
 
 // Status email (enum email_status, Database.md §3).
@@ -547,7 +549,8 @@ func (s *Service) EnqueueOrderEmailSekaliVersi(ctx context.Context, in OrderEmai
 func validJenis(jenis string) bool {
 	switch jenis {
 	case JenisResetPassword, JenisUndanganAdmin, JenisInvoiceCabang,
-		JenisInvoiceAdmin, JenisSuratJalanAdmin, JenisReminderCNC:
+		JenisInvoiceAdmin, JenisSuratJalanAdmin, JenisReminderCNC,
+		JenisTempoStatement, JenisTempoReminder:
 		return true
 	}
 	return false

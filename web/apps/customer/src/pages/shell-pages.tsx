@@ -53,7 +53,8 @@ interface Cabang {
   email: string;
   telepon: string;
   is_cnc: boolean;
-  is_special?: boolean;
+  is_tempo?: boolean;
+  tanggal_bayar?: number;
   pajak_in?: boolean;
   is_active: boolean;
 }
@@ -157,7 +158,7 @@ export function ProfilPage() {
                   {data.is_active ? "Aktif" : "Nonaktif"}
                 </Badge>
                 {data.is_cnc ? <Badge tone="cnc">Cash &amp; Carry</Badge> : null}
-                {data.is_special ? <Badge tone="info">Special</Badge> : null}
+                {data.is_tempo ? <Badge tone="info">Tempo · bayar tanggal {data.tanggal_bayar}</Badge> : null}
                 {data.pajak_in ? <Badge tone="info">PI</Badge> : null}
               </div>
               <div className={styles.tools}>

@@ -74,6 +74,9 @@ SELECT o.id,
        o.status::text       AS status,
        o.verif_status::text AS verif_status,
        o.is_cnc,
+       o.is_tempo,
+       o.tempo_due_date,
+       o.tempo_paid_amount,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
@@ -95,21 +98,24 @@ type GetOrderForBranchParams struct {
 }
 
 type GetOrderForBranchRow struct {
-	ID           string      `json:"id"`
-	BranchID     string      `json:"branch_id"`
-	Nomor        pgtype.Text `json:"nomor"`
-	Status       string      `json:"status"`
-	VerifStatus  string      `json:"verif_status"`
-	IsCnc        bool        `json:"is_cnc"`
-	IsSertifikat bool        `json:"is_sertifikat"`
-	Versi        int32       `json:"versi"`
-	Tanggal      *time.Time  `json:"tanggal"`
-	Catatan      string      `json:"catatan"`
-	Total        int64       `json:"total"`
-	JumlahItem   int64       `json:"jumlah_item"`
-	SubmittedAt  *time.Time  `json:"submitted_at"`
-	CreatedAt    time.Time   `json:"created_at"`
-	UpdatedAt    time.Time   `json:"updated_at"`
+	ID              string      `json:"id"`
+	BranchID        string      `json:"branch_id"`
+	Nomor           pgtype.Text `json:"nomor"`
+	Status          string      `json:"status"`
+	VerifStatus     string      `json:"verif_status"`
+	IsCnc           bool        `json:"is_cnc"`
+	IsTempo         bool        `json:"is_tempo"`
+	TempoDueDate    *time.Time  `json:"tempo_due_date"`
+	TempoPaidAmount int64       `json:"tempo_paid_amount"`
+	IsSertifikat    bool        `json:"is_sertifikat"`
+	Versi           int32       `json:"versi"`
+	Tanggal         *time.Time  `json:"tanggal"`
+	Catatan         string      `json:"catatan"`
+	Total           int64       `json:"total"`
+	JumlahItem      int64       `json:"jumlah_item"`
+	SubmittedAt     *time.Time  `json:"submitted_at"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
 }
 
 // Detail satu pesanan milik cabang tersebut. Pesanan cabang lain tidak
@@ -124,6 +130,9 @@ func (q *Queries) GetOrderForBranch(ctx context.Context, arg GetOrderForBranchPa
 		&i.Status,
 		&i.VerifStatus,
 		&i.IsCnc,
+		&i.IsTempo,
+		&i.TempoDueDate,
+		&i.TempoPaidAmount,
 		&i.IsSertifikat,
 		&i.Versi,
 		&i.Tanggal,
@@ -352,6 +361,9 @@ SELECT o.id,
        o.status::text       AS status,
        o.verif_status::text AS verif_status,
        o.is_cnc,
+       o.is_tempo,
+       o.tempo_due_date,
+       o.tempo_paid_amount,
        o.is_sertifikat,
        o.versi,
        o.tanggal,
@@ -374,20 +386,23 @@ type ListOrdersForBranchParams struct {
 }
 
 type ListOrdersForBranchRow struct {
-	ID           string      `json:"id"`
-	Nomor        pgtype.Text `json:"nomor"`
-	Status       string      `json:"status"`
-	VerifStatus  string      `json:"verif_status"`
-	IsCnc        bool        `json:"is_cnc"`
-	IsSertifikat bool        `json:"is_sertifikat"`
-	Versi        int32       `json:"versi"`
-	Tanggal      *time.Time  `json:"tanggal"`
-	Catatan      string      `json:"catatan"`
-	Total        int64       `json:"total"`
-	JumlahItem   int64       `json:"jumlah_item"`
-	SubmittedAt  *time.Time  `json:"submitted_at"`
-	CreatedAt    time.Time   `json:"created_at"`
-	UpdatedAt    time.Time   `json:"updated_at"`
+	ID              string      `json:"id"`
+	Nomor           pgtype.Text `json:"nomor"`
+	Status          string      `json:"status"`
+	VerifStatus     string      `json:"verif_status"`
+	IsCnc           bool        `json:"is_cnc"`
+	IsTempo         bool        `json:"is_tempo"`
+	TempoDueDate    *time.Time  `json:"tempo_due_date"`
+	TempoPaidAmount int64       `json:"tempo_paid_amount"`
+	IsSertifikat    bool        `json:"is_sertifikat"`
+	Versi           int32       `json:"versi"`
+	Tanggal         *time.Time  `json:"tanggal"`
+	Catatan         string      `json:"catatan"`
+	Total           int64       `json:"total"`
+	JumlahItem      int64       `json:"jumlah_item"`
+	SubmittedAt     *time.Time  `json:"submitted_at"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
 }
 
 // Pesanan cabang: draft, editor order line, daftar dan detail (F1-11).
@@ -419,6 +434,9 @@ func (q *Queries) ListOrdersForBranch(ctx context.Context, arg ListOrdersForBran
 			&i.Status,
 			&i.VerifStatus,
 			&i.IsCnc,
+			&i.IsTempo,
+			&i.TempoDueDate,
+			&i.TempoPaidAmount,
 			&i.IsSertifikat,
 			&i.Versi,
 			&i.Tanggal,

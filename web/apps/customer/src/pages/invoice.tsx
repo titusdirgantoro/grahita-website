@@ -41,9 +41,10 @@ export interface Invoice {
   order_id: string;
   nomor: string;
   tanggal?: string;
-  status: "submitted" | "done";
+  status: "submitted" | "approved_unpaid" | "done";
   versi: number;
   is_cnc: boolean;
+  is_tempo?: boolean;
   total: number;
   jumlah_item: number;
   dokumen_id?: string;
@@ -231,6 +232,7 @@ export function InvoicePage({ dari, sampai }: { dari?: string; sampai?: string }
                       <td>
                         <b className="tabular">{inv.nomor}</b>
                         {inv.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
+                        {inv.is_tempo ? <Badge tone="info">Tempo</Badge> : null}
                       </td>
                       <td className="tabular muted">{tanggalWIB(inv.tanggal)}</td>
                       <td className="num">
@@ -239,7 +241,7 @@ export function InvoicePage({ dari, sampai }: { dari?: string; sampai?: string }
                       <td>{labelVersi(inv)}</td>
                       <td>
                         <Badge tone={inv.status === "done" ? "success" : "warning"}>
-                          {inv.status === "done" ? "Selesai" : "Menunggu verifikasi"}
+                          {inv.status === "done" ? "Selesai" : inv.status === "approved_unpaid" ? "Disetujui — belum lunas" : "Menunggu verifikasi"}
                         </Badge>
                       </td>
                       <td className="num">

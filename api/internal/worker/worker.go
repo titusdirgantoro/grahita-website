@@ -24,6 +24,9 @@ import (
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/jobs"
+	"github.com/grahita/portal/api/internal/platform/pdf"
+	"github.com/grahita/portal/api/internal/platform/storage"
+	"github.com/grahita/portal/api/internal/receivable"
 	"github.com/grahita/portal/api/internal/report"
 )
 
@@ -54,6 +57,22 @@ func (PingWorker) Work(ctx context.Context, job *river.Job[PingArgs]) error {
 // job yang terlewat/tergandakan tidak pernah membuat email terkirim dua kali
 // (klaim baris memakai FOR UPDATE SKIP LOCKED).
 type EmailScanArgs struct{}
+
+type TempoDailyArgs struct{}
+
+func (TempoDailyArgs) Kind() string { return "tempo_daily" }
+
+type TempoDailyWorker struct {
+	river.WorkerDefaults[TempoDailyArgs]
+	svc      *receivable.Service
+	store    storage.Store
+	renderer pdf.Renderer
+}
+
+func (w *TempoDailyWorker) Timeout(*river.Job[TempoDailyArgs]) time.Duration { return 30 * time.Minute }
+func (w *TempoDailyWorker) Work(ctx context.Context, _ *river.Job[TempoDailyArgs]) error {
+	return w.svc.Daily(ctx, w.store, w.renderer, time.Now().UTC())
+}
 
 // Kind mengidentifikasi job pemindai email di tabel River.
 func (EmailScanArgs) Kind() string { return "email_outbox_pindai" }
@@ -338,10 +357,17 @@ type PencatatJob interface {
 type Opsi func(*konfigurasiWorker)
 
 type konfigurasiWorker struct {
-	pencatat PencatatJob
+	pencatat      PencatatJob
+	tempo         *receivable.Service
+	tempoStore    storage.Store
+	tempoRenderer pdf.Renderer
 	// ocr membaca seluruh bukti satu pesanan dengan AI/OCR (F2-26). Boleh
 	// nil: tanpa layanan ini job "ocr_bukti" gagal terang-terangan.
 	ocr PembacaBuktiAI
+}
+
+func DenganPiutang(svc *receivable.Service, store storage.Store, renderer pdf.Renderer) Opsi {
+	return func(k *konfigurasiWorker) { k.tempo = svc; k.tempoStore = store; k.tempoRenderer = renderer }
 }
 
 // DenganPencatatJob memasang pencatat metrik pekerjaan (Architecture.md §8).
@@ -424,6 +450,9 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 	if konf.ocr != nil {
 		river.AddWorker(workers, NewOCRBuktiWorker(konf.ocr))
 	}
+	if konf.tempo != nil {
+		river.AddWorker(workers, &TempoDailyWorker{svc: konf.tempo, store: konf.tempoStore, renderer: konf.tempoRenderer})
+	}
 
 	queues := map[string]river.QueueConfig{}
 	for name, max := range cfg.WorkerQueues {
@@ -465,6 +494,11 @@ func New(pool *database.Pool, cfg config.Config, notif *notification.Service, bk
 			func() (river.JobArgs, *river.InsertOpts) { return BackupArgs{}, nil },
 			&river.PeriodicJobOpts{ID: "backup-harian", RunOnStart: true},
 		))
+	}
+	if konf.tempo != nil {
+		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return TempoDailyArgs{}, nil },
+			&river.PeriodicJobOpts{ID: "tempo-daily", RunOnStart: true}))
 	}
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{

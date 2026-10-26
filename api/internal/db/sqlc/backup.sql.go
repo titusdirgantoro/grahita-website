@@ -136,6 +136,10 @@ func (q *Queries) ListKunciBukti(ctx context.Context) ([]string, error) {
 const listKunciDokumen = `-- name: ListKunciDokumen :many
 SELECT storage_key
 FROM documents
+UNION ALL
+SELECT storage_key
+FROM tempo_statements
+WHERE storage_key IS NOT NULL
 ORDER BY storage_key
 `
 

@@ -137,11 +137,11 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	}
 
 	// 2. Revisi hanya untuk pesanan yang sudah selesai.
-	if row.Status != order.StatusDone {
+	if row.Status != order.StatusDone && !(row.IsTempo && row.Status == order.StatusApprovedUnpaid) {
 		return order.ReviseOutcome{}, order.ErrNotDone
 	}
-	if !row.DoneVerificationLogID.Valid || !row.DoneOrderVersion.Valid ||
-		!row.DoneDepositAmount.Valid || !row.DoneTransferAmount.Valid || row.DoneAt == nil {
+	if !row.IsTempo && (!row.DoneVerificationLogID.Valid || !row.DoneOrderVersion.Valid ||
+		!row.DoneDepositAmount.Valid || !row.DoneTransferAmount.Valid || row.DoneAt == nil) {
 		return order.ReviseOutcome{}, fmt.Errorf("%w: snapshot settlement Done tidak lengkap", order.ErrInvalidData)
 	}
 	if row.Tanggal == nil {
@@ -197,6 +197,9 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	final, err := r.susunBarisFinal(ctx, q, row, lama, req)
 	if err != nil {
 		return order.ReviseOutcome{}, err
+	}
+	if row.IsTempo {
+		return r.reviseTempo(ctx, tx, q, row, lama, final, req)
 	}
 
 	// 6. Lepas pointer settlement aktif dan naikkan versi sebelum trigger total

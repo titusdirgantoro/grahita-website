@@ -79,7 +79,8 @@ func (q *Queries) BranchHasOrders(ctx context.Context, branchID string) (bool, e
 }
 
 const createBranchDetail = `-- name: CreateBranchDetail :one
-INSERT INTO branches (nama, nama_kepala, email, jabatan_kepala, identity_status, telepon, is_cnc, is_special, pajak_in, is_active)
+INSERT INTO branches (nama, nama_kepala, email, jabatan_kepala, identity_status, telepon,
+                      is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat, pajak_in, is_active)
 VALUES (
     $1,
     $2,
@@ -89,8 +90,10 @@ VALUES (
     $6,
     $7,
     $8,
-    $9,
-    $10
+    $9::smallint,
+    $10,
+    $11,
+    $12
 )
 RETURNING id
 `
@@ -103,7 +106,9 @@ type CreateBranchDetailParams struct {
 	IdentityStatus BranchIdentityStatus `json:"identity_status"`
 	Telepon        pgtype.Text          `json:"telepon"`
 	IsCnc          bool                 `json:"is_cnc"`
-	IsSpecial      bool                 `json:"is_special"`
+	IsTempo        bool                 `json:"is_tempo"`
+	TanggalBayar   pgtype.Int2          `json:"tanggal_bayar"`
+	TahanBilaTelat bool                 `json:"tahan_bila_telat"`
 	PajakIn        bool                 `json:"pajak_in"`
 	IsActive       bool                 `json:"is_active"`
 }
@@ -117,7 +122,9 @@ func (q *Queries) CreateBranchDetail(ctx context.Context, arg CreateBranchDetail
 		arg.IdentityStatus,
 		arg.Telepon,
 		arg.IsCnc,
-		arg.IsSpecial,
+		arg.IsTempo,
+		arg.TanggalBayar,
+		arg.TahanBilaTelat,
 		arg.PajakIn,
 		arg.IsActive,
 	)
@@ -206,23 +213,25 @@ const getBranch = `-- name: GetBranch :one
 SELECT id, nama, COALESCE(nama_kepala, '') AS nama_kepala,
        COALESCE(email::text, ''::text)::text AS email, COALESCE(jabatan_kepala, '') AS jabatan_kepala,
        identity_status::text AS identity_status, COALESCE(telepon, '') AS telepon,
-       is_cnc, is_special, pajak_in, is_active
+       is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat, pajak_in, is_active
   FROM branches
  WHERE id = $1
 `
 
 type GetBranchRow struct {
-	ID             string `json:"id"`
-	Nama           string `json:"nama"`
-	NamaKepala     string `json:"nama_kepala"`
-	Email          string `json:"email"`
-	JabatanKepala  string `json:"jabatan_kepala"`
-	IdentityStatus string `json:"identity_status"`
-	Telepon        string `json:"telepon"`
-	IsCnc          bool   `json:"is_cnc"`
-	IsSpecial      bool   `json:"is_special"`
-	PajakIn        bool   `json:"pajak_in"`
-	IsActive       bool   `json:"is_active"`
+	ID             string      `json:"id"`
+	Nama           string      `json:"nama"`
+	NamaKepala     string      `json:"nama_kepala"`
+	Email          string      `json:"email"`
+	JabatanKepala  string      `json:"jabatan_kepala"`
+	IdentityStatus string      `json:"identity_status"`
+	Telepon        string      `json:"telepon"`
+	IsCnc          bool        `json:"is_cnc"`
+	IsTempo        bool        `json:"is_tempo"`
+	TanggalBayar   pgtype.Int2 `json:"tanggal_bayar"`
+	TahanBilaTelat bool        `json:"tahan_bila_telat"`
+	PajakIn        bool        `json:"pajak_in"`
+	IsActive       bool        `json:"is_active"`
 }
 
 // Master cabang (SystemDesign §6, PRD §4.4).
@@ -241,7 +250,9 @@ func (q *Queries) GetBranch(ctx context.Context, id string) (GetBranchRow, error
 		&i.IdentityStatus,
 		&i.Telepon,
 		&i.IsCnc,
-		&i.IsSpecial,
+		&i.IsTempo,
+		&i.TanggalBayar,
+		&i.TahanBilaTelat,
 		&i.PajakIn,
 		&i.IsActive,
 	)
@@ -257,7 +268,9 @@ SELECT b.id,
        b.identity_status::text       AS identity_status,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
-       b.is_special,
+       b.is_tempo,
+       b.tanggal_bayar,
+       b.tahan_bila_telat,
        b.pajak_in,
        b.is_active,
        b.bank_allowlist_version,
@@ -278,21 +291,23 @@ SELECT b.id,
 `
 
 type GetBranchDetailRow struct {
-	ID                        string     `json:"id"`
-	Nama                      string     `json:"nama"`
-	NamaKepala                string     `json:"nama_kepala"`
-	Email                     string     `json:"email"`
-	JabatanKepala             string     `json:"jabatan_kepala"`
-	IdentityStatus            string     `json:"identity_status"`
-	Telepon                   string     `json:"telepon"`
-	IsCnc                     bool       `json:"is_cnc"`
-	IsSpecial                 bool       `json:"is_special"`
-	PajakIn                   bool       `json:"pajak_in"`
-	IsActive                  bool       `json:"is_active"`
-	BankAllowlistVersion      int64      `json:"bank_allowlist_version"`
-	EffectiveBankAccountCount int64      `json:"effective_bank_account_count"`
-	TokenPrefix               string     `json:"token_prefix"`
-	TokenExpiresAt            *time.Time `json:"token_expires_at"`
+	ID                        string      `json:"id"`
+	Nama                      string      `json:"nama"`
+	NamaKepala                string      `json:"nama_kepala"`
+	Email                     string      `json:"email"`
+	JabatanKepala             string      `json:"jabatan_kepala"`
+	IdentityStatus            string      `json:"identity_status"`
+	Telepon                   string      `json:"telepon"`
+	IsCnc                     bool        `json:"is_cnc"`
+	IsTempo                   bool        `json:"is_tempo"`
+	TanggalBayar              pgtype.Int2 `json:"tanggal_bayar"`
+	TahanBilaTelat            bool        `json:"tahan_bila_telat"`
+	PajakIn                   bool        `json:"pajak_in"`
+	IsActive                  bool        `json:"is_active"`
+	BankAllowlistVersion      int64       `json:"bank_allowlist_version"`
+	EffectiveBankAccountCount int64       `json:"effective_bank_account_count"`
+	TokenPrefix               string      `json:"token_prefix"`
+	TokenExpiresAt            *time.Time  `json:"token_expires_at"`
 }
 
 func (q *Queries) GetBranchDetail(ctx context.Context, id string) (GetBranchDetailRow, error) {
@@ -307,7 +322,9 @@ func (q *Queries) GetBranchDetail(ctx context.Context, id string) (GetBranchDeta
 		&i.IdentityStatus,
 		&i.Telepon,
 		&i.IsCnc,
-		&i.IsSpecial,
+		&i.IsTempo,
+		&i.TanggalBayar,
+		&i.TahanBilaTelat,
 		&i.PajakIn,
 		&i.IsActive,
 		&i.BankAllowlistVersion,
@@ -328,7 +345,9 @@ SELECT b.id,
        b.identity_status::text       AS identity_status,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
-       b.is_special,
+       b.is_tempo,
+       b.tanggal_bayar,
+       b.tahan_bila_telat,
        b.pajak_in,
        b.is_active,
        b.bank_allowlist_version,
@@ -350,33 +369,35 @@ SELECT b.id,
         OR COALESCE(b.email::text, ''::text)::text ILIKE $1::text)
    AND ($2::boolean IS NULL OR b.is_active = $2::boolean)
    AND ($3::boolean IS NULL OR b.is_cnc = $3::boolean)
-   AND ($4::boolean IS NULL OR b.is_special = $4::boolean)
+   AND ($4::boolean IS NULL OR b.is_tempo = $4::boolean)
  ORDER BY b.nama
 `
 
 type ListBranchDetailsParams struct {
-	Q       pgtype.Text `json:"q"`
-	Aktif   pgtype.Bool `json:"aktif"`
-	Cnc     pgtype.Bool `json:"cnc"`
-	Special pgtype.Bool `json:"special"`
+	Q     pgtype.Text `json:"q"`
+	Aktif pgtype.Bool `json:"aktif"`
+	Cnc   pgtype.Bool `json:"cnc"`
+	Tempo pgtype.Bool `json:"tempo"`
 }
 
 type ListBranchDetailsRow struct {
-	ID                        string     `json:"id"`
-	Nama                      string     `json:"nama"`
-	NamaKepala                string     `json:"nama_kepala"`
-	Email                     string     `json:"email"`
-	JabatanKepala             string     `json:"jabatan_kepala"`
-	IdentityStatus            string     `json:"identity_status"`
-	Telepon                   string     `json:"telepon"`
-	IsCnc                     bool       `json:"is_cnc"`
-	IsSpecial                 bool       `json:"is_special"`
-	PajakIn                   bool       `json:"pajak_in"`
-	IsActive                  bool       `json:"is_active"`
-	BankAllowlistVersion      int64      `json:"bank_allowlist_version"`
-	EffectiveBankAccountCount int64      `json:"effective_bank_account_count"`
-	TokenPrefix               string     `json:"token_prefix"`
-	TokenExpiresAt            *time.Time `json:"token_expires_at"`
+	ID                        string      `json:"id"`
+	Nama                      string      `json:"nama"`
+	NamaKepala                string      `json:"nama_kepala"`
+	Email                     string      `json:"email"`
+	JabatanKepala             string      `json:"jabatan_kepala"`
+	IdentityStatus            string      `json:"identity_status"`
+	Telepon                   string      `json:"telepon"`
+	IsCnc                     bool        `json:"is_cnc"`
+	IsTempo                   bool        `json:"is_tempo"`
+	TanggalBayar              pgtype.Int2 `json:"tanggal_bayar"`
+	TahanBilaTelat            bool        `json:"tahan_bila_telat"`
+	PajakIn                   bool        `json:"pajak_in"`
+	IsActive                  bool        `json:"is_active"`
+	BankAllowlistVersion      int64       `json:"bank_allowlist_version"`
+	EffectiveBankAccountCount int64       `json:"effective_bank_account_count"`
+	TokenPrefix               string      `json:"token_prefix"`
+	TokenExpiresAt            *time.Time  `json:"token_expires_at"`
 }
 
 // ---------- Master cabang: Admin Portal (F1-06) ----------
@@ -385,13 +406,13 @@ type ListBranchDetailsRow struct {
 // token registrasi yang MASIH berlaku (belum terpakai dan belum kedaluwarsa)
 // untuk ditampilkan di halaman Cabang (PRD §4.4).
 // Filter opsional memakai sqlc.narg: q (pola ILIKE nama/email), aktif, cnc,
-// special. q dikirim sudah berbentuk pola '%kata%'.
+// tempo. q dikirim sudah berbentuk pola '%kata%'.
 func (q *Queries) ListBranchDetails(ctx context.Context, arg ListBranchDetailsParams) ([]ListBranchDetailsRow, error) {
 	rows, err := q.db.Query(ctx, listBranchDetails,
 		arg.Q,
 		arg.Aktif,
 		arg.Cnc,
-		arg.Special,
+		arg.Tempo,
 	)
 	if err != nil {
 		return nil, err
@@ -409,7 +430,9 @@ func (q *Queries) ListBranchDetails(ctx context.Context, arg ListBranchDetailsPa
 			&i.IdentityStatus,
 			&i.Telepon,
 			&i.IsCnc,
-			&i.IsSpecial,
+			&i.IsTempo,
+			&i.TanggalBayar,
+			&i.TahanBilaTelat,
 			&i.PajakIn,
 			&i.IsActive,
 			&i.BankAllowlistVersion,
@@ -449,11 +472,13 @@ UPDATE branches
        identity_status = $5::branch_identity_status,
        telepon     = $6,
        is_cnc      = $7,
-       is_special  = $8,
-       pajak_in    = $9,
-       is_active   = $10,
+       is_tempo    = $8,
+       tanggal_bayar = $9::smallint,
+       tahan_bila_telat = $10,
+       pajak_in    = $11,
+       is_active   = $12,
        updated_at  = now()
- WHERE id = $11
+ WHERE id = $13
 `
 
 type UpdateBranchDetailParams struct {
@@ -464,7 +489,9 @@ type UpdateBranchDetailParams struct {
 	IdentityStatus BranchIdentityStatus `json:"identity_status"`
 	Telepon        pgtype.Text          `json:"telepon"`
 	IsCnc          bool                 `json:"is_cnc"`
-	IsSpecial      bool                 `json:"is_special"`
+	IsTempo        bool                 `json:"is_tempo"`
+	TanggalBayar   pgtype.Int2          `json:"tanggal_bayar"`
+	TahanBilaTelat bool                 `json:"tahan_bila_telat"`
 	PajakIn        bool                 `json:"pajak_in"`
 	IsActive       bool                 `json:"is_active"`
 	ID             string               `json:"id"`
@@ -481,7 +508,9 @@ func (q *Queries) UpdateBranchDetail(ctx context.Context, arg UpdateBranchDetail
 		arg.IdentityStatus,
 		arg.Telepon,
 		arg.IsCnc,
-		arg.IsSpecial,
+		arg.IsTempo,
+		arg.TanggalBayar,
+		arg.TahanBilaTelat,
 		arg.PajakIn,
 		arg.IsActive,
 		arg.ID,

@@ -40,6 +40,10 @@ func DefaultSubject(jenis string) string {
 		return "Surat Jalan — Grahita Indonesia"
 	case JenisReminderCNC:
 		return "Pengingat pembayaran pesanan Cash & Carry"
+	case JenisTempoStatement:
+		return "Surat Tagihan Tempo — Grahita Indonesia"
+	case JenisTempoReminder:
+		return "Pengingat jatuh tempo tagihan — Grahita Indonesia"
 	default:
 		return "Grahita Indonesia"
 	}
@@ -90,6 +94,18 @@ func renderTemplate(nama string, payload map[string]any) (string, string, error)
 		return tplSuratJalan(payload), tplSuratJalanHTML(payload), nil
 	case JenisReminderCNC:
 		return tplReminder(payload), tplReminderHTML(payload), nil
+	case JenisTempoStatement:
+		body := "Surat Tagihan " + str(payload, "periode") + " versi " + str(payload, "versi") +
+			" untuk " + str(payload, "cabang") + ". Rincian jatuh tempo tercantum per invoice pada PDF terlampir."
+		return body, "<p>" + esc(body) + "</p>", nil
+	case JenisTempoReminder:
+		body := "Pengingat tagihan Tempo jatuh tempo " + str(payload, "due_date") + "."
+		if str(payload, "generic") != "true" {
+			body += " Sisa yang tercatat: Rp " + str(payload, "amount") + "."
+		} else {
+			body += " Rincian final tersedia setelah Surat Tagihan diterbitkan."
+		}
+		return body, "<p>" + esc(body) + "</p>", nil
 	default:
 		return "", "", fmt.Errorf("%w: template %q", ErrKindInvalid, nama)
 	}

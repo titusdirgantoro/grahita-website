@@ -9,6 +9,7 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/bank"
+	"github.com/grahita/portal/api/internal/branch"
 	"github.com/grahita/portal/api/internal/catalog"
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/settings"
@@ -79,6 +80,12 @@ type BranchFlags interface {
 	IsCNC(ctx context.Context, branchID string) (bool, error)
 }
 
+// TempoMode is implemented by the branch service. The repository reads the
+// same settings under a row lock before committing the submit snapshot.
+type TempoMode interface {
+	PaymentMode(ctx context.Context, branchID string) (branch.Branch, error)
+}
+
 type PaymentAccountSource interface {
 	PaymentAvailable(ctx context.Context, branchID string) (bool, error)
 }
@@ -125,7 +132,9 @@ type SubmitRequest struct {
 	ActorID string
 	// IsCNC adalah flag cabang yang dibaca server: pesanan dibayar dari saldo
 	// deposit sebanyak PotonganDeposit (CP-CNC-02).
-	IsCNC bool
+	IsCNC        bool
+	IsTempo      bool
+	TanggalBayar int
 	// ExpectedJournalVersion adalah versi saldo deposit yang dilihat cabang;
 	// hanya berarti bila IsCNC.
 	ExpectedJournalVersion int64
@@ -295,8 +304,16 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 	// Flag cabang dibaca server (bukan dari klien); bila sumbernya tidak
 	// tersedia, cabang diperlakukan non-C&C (fail closed: wajib bukti).
 	var cabangCNC bool
+	var cabangTempo bool
+	var tanggalBayar int
 	if s.flags != nil {
-		cabangCNC, err = s.flags.IsCNC(ctx, branchID)
+		if modes, ok := s.flags.(TempoMode); ok {
+			var b branch.Branch
+			b, err = modes.PaymentMode(ctx, branchID)
+			cabangCNC, cabangTempo, tanggalBayar = b.IsCNC, b.IsTempo, b.TanggalBayar
+		} else {
+			cabangCNC, err = s.flags.IsCNC(ctx, branchID)
+		}
 		if err != nil {
 			return Order{}, fmt.Errorf("baca flag Cash & Carry cabang: %w", err)
 		}
@@ -311,7 +328,7 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 	// Pra-cek rekening hanya untuk cabang non-C&C. Pesanan C&C baru butuh
 	// rekening bila deposit tidak menutup totalnya; itu diputuskan repository
 	// setelah total final diketahui.
-	if !cabangCNC && s.banks != nil {
+	if !cabangCNC && !cabangTempo && s.banks != nil {
 		available, err := s.banks.PaymentAvailable(ctx, branchID)
 		if err != nil {
 			return Order{}, fmt.Errorf("baca rekening pembayaran cabang: %w", err)
@@ -344,6 +361,8 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 		BranchID:               branchID,
 		ActorID:                actor.UserID,
 		IsCNC:                  cabangCNC,
+		IsTempo:                cabangTempo,
+		TanggalBayar:           tanggalBayar,
 		ExpectedJournalVersion: expectedJournal,
 		Tanggal:                tanggal,
 		BiayaPackaging:         biaya,
@@ -358,7 +377,7 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 		if err != nil {
 			return Order{}, fmt.Errorf("baca setelan %s: %w", settings.AI, err)
 		}
-		req.EnqueueOCR = ai.Aktif
+		req.EnqueueOCR = ai.Aktif && !cabangTempo
 	}
 	return s.repo.Submit(ctx, req)
 }

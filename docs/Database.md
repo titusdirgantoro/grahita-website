@@ -48,7 +48,7 @@ CREATE TYPE actor_kind    AS ENUM ('branch','admin','system');
 CREATE TYPE admin_role    AS ENUM ('superadmin','manager');
 CREATE TYPE product_kind  AS ENUM ('reguler','sertifikat');
 CREATE TYPE branch_identity_status AS ENUM ('identity_incomplete','ready','registered');
-CREATE TYPE order_status  AS ENUM ('draft','submitted','done');
+CREATE TYPE order_status  AS ENUM ('draft','submitted','done'); -- 0015 menambah approved_unpaid
 CREATE TYPE verif_status  AS ENUM ('belum','cocok','perlu_review');
 CREATE TYPE review_reason AS ENUM ('kurang_bayar','lebih_bayar','tidak_terbaca','rekening_beda','lainnya');
 CREATE TYPE line_kind     AS ENUM ('product','packaging');
@@ -76,7 +76,7 @@ CREATE TABLE branches (
     identity_status branch_identity_status NOT NULL DEFAULT 'identity_incomplete',
     telepon         text,
     is_cnc          boolean     NOT NULL DEFAULT false,   -- Cash and Carry
-    is_special      boolean     NOT NULL DEFAULT false,   -- flag "Special" (lihat PRD §8 no.1)
+    is_special      boolean     NOT NULL DEFAULT false,   -- kolom warisan dorman; API tidak memakainya
     pajak_in        boolean     NOT NULL DEFAULT false,   -- "PI" (lihat PRD §8 no.2)
     is_active       boolean     NOT NULL DEFAULT true,
     created_at      timestamptz NOT NULL DEFAULT now(),
@@ -503,7 +503,7 @@ WHERE ($1::uuid IS NULL OR branch_id = $1);
 
 ```sql
 SELECT o.tanggal, o.nomor, o.versi, b.nama AS cabang, b.nama_kepala,
-       o.is_cnc, b.pajak_in, b.is_special,
+       o.is_cnc, b.pajak_in,
        l.nama_snapshot AS produk, l.jenis, l.serial_number,
        l.qty, l.harga_satuan, l.subtotal,
        o.status, o.done_at,
@@ -578,3 +578,11 @@ Bila dalam beberapa tahun `orders`/`order_lines` tumbuh besar, partisi `RANGE` p
 | `grahita_backup` | `pg_read_all_data` untuk `pg_dump` |
 
 Pemisahan data antar cabang ditegakkan di layer aplikasi (`branch_id` dari sesi). Row Level Security dapat ditambahkan sebagai lapisan kedua bila kelak ada akses langsung ke database di luar API.
+
+## 11. Tambahan skema Tempo (migrasi 0015–0016)
+
+Migrasi 0015 menambah enum `approved_unpaid`, `tempo_repayment`, `tempo_statement`, dan `tempo_reminder`. Migrasi 0016 menambah `branches.is_tempo`, `tanggal_bayar`, `tahan_bila_telat` dengan constraint eksklusif terhadap `is_cnc`; `orders.is_tempo`, `tanggal_bayar_snapshot`, `tempo_due_date`, `tempo_approved_at`, dan `tempo_paid_amount`. Constraint settlement lama dipertahankan untuk pesanan non-Tempo dan diperluas secara eksplisit untuk status Tempo.
+
+Ledger Tempo memakai `tempo_charges` per invoice/koreksi, `tempo_receipts` per bukti, `tempo_allocations` per alokasi pembayaran/kredit, `tempo_credit_entries` untuk saldo kredit Tempo yang terpisah dari jurnal deposit C&C, dan `tempo_adjustments` untuk delta revisi. `tempo_statements` dan `tempo_statement_lines` menyimpan versi PDF Surat Tagihan tanpa menimpa versi lama. `tempo_reminders` mencatat tahap pengingat yang sudah diantre agar job berulang tidak mengirim ganda. `tempo_hold_grace` menyimpan awal dan akhir satu masa tenggang penahanan; unggah ulang tidak memperpanjangnya.
+
+Tanggal periode berasal dari `orders.tanggal` (tanggal submit WIB). Tanggal bayar cabang disalin saat submit ke `orders.tanggal_bayar_snapshot`; perubahan master tidak merombak pesanan lama. Piutang dan umur piutang dibaca dari saldo ledger aktif, sedangkan PDF lama adalah snapshot saat terbit. Kolom `branches.is_special` tetap ada hanya untuk kompatibilitas migrasi lama dan tidak dibaca/ditulis oleh aplikasi.

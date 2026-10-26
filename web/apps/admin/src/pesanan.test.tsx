@@ -1025,7 +1025,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
 
     const pesan = await screen.findByRole("alert");
-    expect(pesan.textContent).toMatch(/sudah selesai \(Done\)/);
+    expect(pesan.textContent).toMatch(/Selesai dan Tempo yang sudah disetujui/);
     expect(screen.queryByText("Revisi R1")).toBeNull();
     expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
   });

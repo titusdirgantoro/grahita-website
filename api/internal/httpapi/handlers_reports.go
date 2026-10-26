@@ -26,7 +26,6 @@ type exportLaporanRequest struct {
 	Status  string   `json:"status"`
 	Jenis   string   `json:"jenis"`
 	Cnc     *bool    `json:"cnc"`
-	Special *bool    `json:"special"`
 	Pi      *bool    `json:"pi"`
 }
 
@@ -39,7 +38,6 @@ func (r exportLaporanRequest) Filter() report.Filter {
 		Status:  r.Status,
 		Jenis:   r.Jenis,
 		Cnc:     r.Cnc,
-		Special: r.Special,
 		Pi:      r.Pi,
 	}
 }
@@ -127,9 +125,6 @@ func filterLaporanQuery(r *http.Request) (report.Filter, error) {
 	}
 	var err error
 	if f.Cnc, err = boolParam(q.Get("cnc"), "cnc"); err != nil {
-		return report.Filter{}, err
-	}
-	if f.Special, err = boolParam(q.Get("special"), "special"); err != nil {
 		return report.Filter{}, err
 	}
 	if f.Pi, err = boolParam(q.Get("pi"), "pi"); err != nil {

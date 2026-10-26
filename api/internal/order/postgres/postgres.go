@@ -72,21 +72,24 @@ func (r *Repo) List(ctx context.Context, branchID, status string) ([]order.Order
 	out := make([]order.Order, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, order.Order{
-			ID:           row.ID,
-			BranchID:     branchID,
-			Nomor:        pgtypes.TextOr(row.Nomor),
-			Status:       row.Status,
-			VerifStatus:  row.VerifStatus,
-			Versi:        int(row.Versi),
-			IsCNC:        row.IsCnc,
-			IsSertifikat: row.IsSertifikat,
-			Tanggal:      tanggalOr(row.Tanggal),
-			Catatan:      row.Catatan,
-			Total:        row.Total,
-			JumlahItem:   row.JumlahItem,
-			SubmittedAt:  waktuOr(row.SubmittedAt),
-			CreatedAt:    row.CreatedAt,
-			UpdatedAt:    row.UpdatedAt,
+			ID:              row.ID,
+			BranchID:        branchID,
+			Nomor:           pgtypes.TextOr(row.Nomor),
+			Status:          row.Status,
+			VerifStatus:     row.VerifStatus,
+			Versi:           int(row.Versi),
+			IsCNC:           row.IsCnc,
+			IsTempo:         row.IsTempo,
+			TempoDueDate:    tanggalOr(row.TempoDueDate),
+			TempoPaidAmount: row.TempoPaidAmount,
+			IsSertifikat:    row.IsSertifikat,
+			Tanggal:         tanggalOr(row.Tanggal),
+			Catatan:         row.Catatan,
+			Total:           row.Total,
+			JumlahItem:      row.JumlahItem,
+			SubmittedAt:     waktuOr(row.SubmittedAt),
+			CreatedAt:       row.CreatedAt,
+			UpdatedAt:       row.UpdatedAt,
 		})
 	}
 	return out, nil
@@ -257,6 +260,37 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
 		return order.Order{}, fmt.Errorf("kunci kebijakan rekening: %w", err)
 	}
+	var modeCNC, modeTempo, tahan bool
+	var payDay *int16
+	if err := tx.QueryRow(ctx, `SELECT is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat
+FROM branches WHERE id=$1 FOR SHARE`, req.BranchID).Scan(&modeCNC, &modeTempo, &payDay, &tahan); err != nil {
+		return order.Order{}, fmt.Errorf("baca cara pembayaran cabang: %w", err)
+	}
+	if modeCNC != req.IsCNC || modeTempo != req.IsTempo ||
+		(modeTempo && (payDay == nil || int(*payDay) != req.TanggalBayar)) {
+		return order.Order{}, order.ErrPaymentModeChanged
+	}
+	if modeTempo && tahan {
+		var overdue, pending int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount-paid_amount),0)::bigint
+FROM tempo_charges WHERE branch_id=$1 AND due_date<$2::date`, req.BranchID, req.Tanggal).Scan(&overdue); err != nil {
+			return order.Order{}, err
+		}
+		if overdue > 0 {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(declared_amount),0)::bigint
+FROM tempo_receipts WHERE branch_id=$1 AND status='pending'`, req.BranchID).Scan(&pending); err != nil {
+				return order.Order{}, err
+			}
+			var grace bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tempo_hold_grace
+WHERE branch_id=$1 AND ends_on >= $2::date)`, req.BranchID, req.Tanggal).Scan(&grace); err != nil {
+				return order.Order{}, err
+			}
+			if pending < overdue || !grace {
+				return order.Order{}, order.ErrOrderHeld
+			}
+		}
+	}
 	var akun deposit.Account
 	if req.IsCNC {
 		akun, err = depositpg.LockAccount(ctx, tx, req.BranchID)
@@ -279,7 +313,7 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	if status != order.StatusDraft {
 		return order.Order{}, order.ErrLocked
 	}
-	if !req.IsCNC {
+	if !req.IsCNC && !req.IsTempo {
 		// Serialisasi submit dengan perubahan policy rekening. Dengan demikian
 		// rekening yang dicabut serentak tidak bisa lolos lewat pra-cek service.
 		if err := wajibRekeningEfektif(ctx, tx, req.BranchID); err != nil {
@@ -316,7 +350,7 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	}
 
 	// 3. Bukti transfer untuk pesanan non-C&C (PRD CP-ORD-04, BR-08).
-	if !req.IsCNC {
+	if !req.IsCNC && !req.IsTempo {
 		jumlah, err := q.CountPaymentProofs(ctx, req.ID)
 		if err != nil {
 			return order.Order{}, fmt.Errorf("query CountPaymentProofs: %w", err)
@@ -445,6 +479,12 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 		// Berpindah status setelah penguncian (mis. submit paralel lain).
 		return order.Order{}, order.ErrLocked
 	}
+	if req.IsTempo {
+		if _, err := tx.Exec(ctx, `UPDATE orders SET is_tempo=true, tanggal_bayar_snapshot=$2
+WHERE id=$1 AND branch_id=$3 AND status='submitted'`, req.ID, req.TanggalBayar, req.BranchID); err != nil {
+			return order.Order{}, fmt.Errorf("simpan snapshot Tempo: %w", err)
+		}
+	}
 
 	if err := q.InsertOrderEvent(ctx, sqlc.InsertOrderEventParams{
 		OrderID:   req.ID,
@@ -556,21 +596,24 @@ func loadOrder(ctx context.Context, q *sqlc.Queries, id, branchID string) (order
 		return order.Order{}, fmt.Errorf("query ListOrderLines: %w", err)
 	}
 	out := order.Order{
-		ID:           row.ID,
-		Nomor:        pgtypes.TextOr(row.Nomor),
-		Status:       row.Status,
-		VerifStatus:  row.VerifStatus,
-		Versi:        int(row.Versi),
-		IsCNC:        row.IsCnc,
-		IsSertifikat: row.IsSertifikat,
-		Tanggal:      tanggalOr(row.Tanggal),
-		Catatan:      row.Catatan,
-		Total:        row.Total,
-		JumlahItem:   row.JumlahItem,
-		SubmittedAt:  waktuOr(row.SubmittedAt),
-		CreatedAt:    row.CreatedAt,
-		UpdatedAt:    row.UpdatedAt,
-		Lines:        make([]order.Line, 0, len(lines)),
+		ID:              row.ID,
+		Nomor:           pgtypes.TextOr(row.Nomor),
+		Status:          row.Status,
+		VerifStatus:     row.VerifStatus,
+		Versi:           int(row.Versi),
+		IsCNC:           row.IsCnc,
+		IsTempo:         row.IsTempo,
+		TempoDueDate:    tanggalOr(row.TempoDueDate),
+		TempoPaidAmount: row.TempoPaidAmount,
+		IsSertifikat:    row.IsSertifikat,
+		Tanggal:         tanggalOr(row.Tanggal),
+		Catatan:         row.Catatan,
+		Total:           row.Total,
+		JumlahItem:      row.JumlahItem,
+		SubmittedAt:     waktuOr(row.SubmittedAt),
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
+		Lines:           make([]order.Line, 0, len(lines)),
 	}
 	for _, l := range lines {
 		out.Lines = append(out.Lines, order.Line{

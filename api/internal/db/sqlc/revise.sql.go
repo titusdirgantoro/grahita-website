@@ -341,6 +341,10 @@ SELECT o.id,
        o.tanggal,
        o.is_sertifikat,
        o.is_cnc,
+       o.is_tempo,
+       o.tempo_paid_amount,
+       o.tanggal_bayar_snapshot,
+       o.tempo_due_date,
        COALESCE(o.catatan, '')::text      AS catatan,
        o.done_verification_log_id,
        o.done_order_version,
@@ -362,6 +366,10 @@ type LockOrderForReviseRow struct {
 	Tanggal               *time.Time  `json:"tanggal"`
 	IsSertifikat          bool        `json:"is_sertifikat"`
 	IsCnc                 bool        `json:"is_cnc"`
+	IsTempo               bool        `json:"is_tempo"`
+	TempoPaidAmount       int64       `json:"tempo_paid_amount"`
+	TanggalBayarSnapshot  pgtype.Int2 `json:"tanggal_bayar_snapshot"`
+	TempoDueDate          *time.Time  `json:"tempo_due_date"`
 	Catatan               string      `json:"catatan"`
 	DoneVerificationLogID pgtype.UUID `json:"done_verification_log_id"`
 	DoneOrderVersion      pgtype.Int4 `json:"done_order_version"`
@@ -387,6 +395,10 @@ func (q *Queries) LockOrderForRevise(ctx context.Context, id string) (LockOrderF
 		&i.Tanggal,
 		&i.IsSertifikat,
 		&i.IsCnc,
+		&i.IsTempo,
+		&i.TempoPaidAmount,
+		&i.TanggalBayarSnapshot,
+		&i.TempoDueDate,
 		&i.Catatan,
 		&i.DoneVerificationLogID,
 		&i.DoneOrderVersion,

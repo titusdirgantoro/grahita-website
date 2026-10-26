@@ -87,7 +87,6 @@ func (r *Repo) CountLines(ctx context.Context, q report.Query) (int64, int64, er
 		Status:    p.Status,
 		Jenis:     p.Jenis,
 		IsCnc:     p.IsCnc,
-		IsSpecial: p.IsSpecial,
 		PajakIn:   p.PajakIn,
 	})
 	if err != nil {
@@ -200,7 +199,6 @@ func paramLines(q report.Query) sqlc.ListReportOrderLinesParams {
 		Status:         q.Status,
 		Jenis:          q.Jenis,
 		IsCnc:          pgtypes.BoolPtr(q.IsCNC),
-		IsSpecial:      pgtypes.BoolPtr(q.IsSpecial),
 		PajakIn:        pgtypes.BoolPtr(q.PajakIn),
 		SetelahTanggal: tanggalParam(q.SetelahTanggal),
 		SetelahNomor:   q.SetelahNomor,
@@ -228,7 +226,6 @@ func keLine(row sqlc.ListReportOrderLinesRow) report.Line {
 		Cabang:           row.Cabang,
 		KepalaCabang:     row.NamaKepala,
 		IsCNC:            row.IsCnc,
-		IsSpecial:        row.IsSpecial,
 		PajakIn:          row.PajakIn,
 		LineNo:           int(row.LineNo),
 		Produk:           row.Produk,

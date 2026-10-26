@@ -64,6 +64,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/observability"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
+	"github.com/grahita/portal/api/internal/receivable"
 	"github.com/grahita/portal/api/internal/registration"
 	registrationpg "github.com/grahita/portal/api/internal/registration/postgres"
 	"github.com/grahita/portal/api/internal/report"
@@ -277,7 +278,8 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 		}
 
 		client, err := worker.New(pool, cfg, notif, bk, selesai, reportSvc,
-			worker.DenganPencatatJob(metrik), worker.DenganPembacaBukti(ocrSvc))
+			worker.DenganPencatatJob(metrik), worker.DenganPembacaBukti(ocrSvc),
+			worker.DenganPiutang(receivable.New(pool, nil), store, renderer))
 		if err != nil {
 			return err
 		}
@@ -513,6 +515,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 	verifySvc := payment.NewVerificationService(paymentRepo)
 	reevaluateSvc := payment.NewReevaluateService(paymentRepo, settingsSvc)
 	depositSvc := deposit.NewService(depositpg.New(pool), depositwire.Proofs(paymentSvc), depositwire.Banks(bankSvc))
+	receivableSvc := receivable.New(pool, jobQueue)
 
 	// Revisi invoice berversi (F2-25): repository pesanan dengan penjadwal
 	// River supaya transaksi revisi menitipkan pekerjaan "render invoice versi
@@ -561,6 +564,7 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Verify:              verifySvc,
 		Reevaluate:          reevaluateSvc,
 		Deposits:            depositSvc,
+		Receivables:         receivableSvc,
 		Documents:           documentSvc,
 		Reports:             reportSvc,
 		Users:               usersSvc,

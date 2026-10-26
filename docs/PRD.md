@@ -4,7 +4,7 @@
 |---|---|
 | **Produk** | Portal Pemesanan Cabang (Customer Portal + Admin Portal) |
 | **Domain** | grahitaindonesia.com |
-| **Versi** | 2.0 (selaras dengan prototype `customer_v2.html` & `admin_v2.html`) |
+| **Versi** | 2.1 (tambahan pembayaran Tempo dan piutang cabang) |
 | **Tanggal** | 8 Oktober 2026 |
 | **Status** | Draft untuk review |
 | **Dokumen terkait** | `SystemDesign.md`, `Architecture.md`, `Database.md` |
@@ -198,7 +198,7 @@ Navigasi sesuai prototype: **Menu** (Dashboard, Riwayat pemesanan) · **Data mas
 
 ### 4.4 Cabang
 
-Field: Nama Cabang, Nama Kepala Cabang, Email Cabang, Telepon, **Cash & Carry** (bool), **Special** (bool), **Pajak In / PI** (bool), Aktif (bool), Token registrasi + tombol **Generate token** (menampilkan token & masa berlaku, tombol salin).
+Field: Nama Cabang, Nama Kepala Cabang, Email Cabang, Telepon, **Cara pembayaran** (Transfer di muka / Deposit Cash & Carry / Tempo), **tanggal bayar** 1–28 dan **tahan bila telat** untuk Tempo, **Pajak In / PI** (bool), Aktif (bool), Token registrasi + tombol **Generate token**.
 
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
@@ -206,7 +206,7 @@ Field: Nama Cabang, Nama Kepala Cabang, Email Cabang, Telepon, **Cash & Carry** 
 | AP-CAB-02 | Generate token menggantikan token lama yang belum terpakai. | Must |
 | AP-CAB-03 | Cabang nonaktif: user tidak bisa login dan tidak muncul di pilihan aktif. | Must |
 | AP-CAB-04 | Cabang tidak dapat dihapus bila sudah punya pesanan — hanya dinonaktifkan. | Must |
-| AP-CAB-05 | Perilaku flag **Special** dan **PI** terhadap invoice/harga perlu dikonfirmasi (lihat §8). Sementara disimpan sebagai atribut & filter laporan. | Must |
+| AP-CAB-05 | Flag Special dihapus dari aplikasi. Kolom lama `is_special` tetap dorman untuk kompatibilitas migrasi. Efek PI terhadap invoice/harga masih perlu diputuskan (lihat §8). | Must |
 
 ### 4.5 Katalog product & matriks harga
 
@@ -228,7 +228,7 @@ Field: Bank (BCA / BRI), Nama di rekening, Nomor rekening, Aktif. Rekening aktif
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
 | AP-REP-01 | Baris laporan = order line dari seluruh pesanan (bukan per pesanan). | Must |
-| AP-REP-02 | Filter: rentang tanggal, cabang (multi), status, jenis produk, C&C, Special/PI. | Must |
+| AP-REP-02 | Filter: rentang tanggal, cabang (multi), status, jenis produk, C&C, PI. | Must |
 | AP-REP-03 | Kolom: tanggal, nomor invoice, versi, cabang, kepala cabang, C&C, PI, produk, jenis, serial number, qty, harga satuan, subtotal, status, tanggal verifikasi, metode verifikasi. | Must |
 | AP-REP-04 | Ekspor Excel (.xlsx) dengan header ter-freeze dan format angka Rupiah; ekspor besar diproses asinkron lalu diunduh. | Must |
 | AP-REP-05 | Ringkasan bulanan per cabang (rekap) sebagai sheet kedua. | Should |
@@ -352,7 +352,7 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 
 | No | Pertanyaan | Dampak |
 |---|---|---|
-| 1 | Apa efek flag **Special** pada cabang (harga? termin? template invoice?) | Logika harga & invoice |
+| 1 | Selesai: flag Special dihapus; termin pembayaran menggunakan cara pembayaran **Tempo** yang memiliki aturan tersendiri pada §11. | Logika harga & invoice |
 | 2 | Apa efek **Pajak In (PI)** — apakah invoice perlu baris PPN/materai? | Perhitungan total & layout invoice |
 | 3 | ~~Apakah C&C otomatis Done saat jatuh tempo lewat tanpa bayar?~~ Diputus 2026-10-18: C&C adalah sistem deposit tanpa jatuh tempo; pesanan tetap diverifikasi admin (CP-CNC-05). | State machine |
 | 4 | Apakah cabang boleh membatalkan pesanan Submitted (status Batal)? | State machine & penomoran |
@@ -388,3 +388,18 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 | **F1 — MVP (inti)** | Auth & token, master cabang/produk/harga/rekening, pesanan + sertifikat + C&C, unggah bukti, verifikasi manual, Invoice & Surat Jalan, email outbox, riwayat pemesanan, dashboard, user management, pengaturan, backup harian. |
 | **F2 — Otomasi** | Verifikasi AI/OCR, reporting lanjutan + ekspor asinkron, revisi invoice, halaman tutorial dinamis, audit log UI. |
 | **F3 — Pembayaran** | Virtual Account BCA (lalu BRI), rekonsiliasi otomatis, laporan pembayaran. |
+
+---
+
+## 11. Pembayaran Tempo dan piutang cabang (keputusan 26 Oktober 2026)
+
+1. **Periode** memakai bulan kalender dari tanggal pesanan **dikirim** menurut WIB. Pesanan yang dikirim 31 Oktober dan disetujui 2 November tetap masuk tagihan Oktober. Surat Tagihan terbit tanggal 1 bulan berikutnya; persetujuan terlambat dan revisi menghasilkan versi baru tanpa menimpa PDF lama.
+2. **Jatuh tempo** setiap invoice adalah tanggal bayar cabang (1–28) di bulan berikutnya, yang disalin ke pesanan saat dikirim. Perubahan tanggal bayar cabang berlaku hanya untuk pesanan yang dikirim sesudah perubahan, termasuk jika masih dalam bulan yang sama. Bila approval terjadi setelah tanggal jatuh tempo asli, invoice memakai tanggal bayar berikutnya setelah approval. Hari libur tidak menggeser jatuh tempo. Status lewat jatuh tempo dimulai keesokan harinya.
+3. **Persetujuan pesanan** Tempo tidak memerlukan bukti transfer. Manager/Superadmin menyetujui pesanan dan status menjadi `approved_unpaid` (Disetujui — belum lunas), lalu Invoice dan Surat Jalan terbit. `done` tetap berarti lunas penuh. Invoice dikirim ke cabang dan admin dengan `notif_invoice`; Surat Jalan hanya ke admin dengan `notif_surat_jalan`.
+4. **Pelunasan** boleh sebagian. Bukti diunggah cabang dengan nominal dan rekening tujuan; Manager/Superadmin memverifikasi atau menolak. Nominal terverifikasi dialokasikan ke invoice tertua menurut tanggal kirim pesanan, lintas periode. Kelebihan bayar harus diputuskan Superadmin dan dicatat sebagai saldo kredit piutang Tempo terpisah dari deposit C&C; saldo itu otomatis memotong invoice berikutnya. Tidak ada batas piutang.
+5. **Revisi** invoice Tempo boleh setelah sebagian/lunas. Koreksi positif menambah tagihan; jika jatuh tempo asli telah lewat, koreksi memakai tanggal bayar berikutnya. Koreksi negatif mengurangi sisa tagihan terlebih dahulu; nilai yang sudah dibayar menjadi saldo kredit Tempo dengan persetujuan Superadmin. Versi koreksi tercatat dan Surat Tagihan diterbitkan ulang sebagai versi baru.
+6. **Pengingat** H-3, H, H+1, H+7 dikirim menurut jatuh tempo. Untuk tanggal bayar 1–3, H-3 terjadi sebelum Surat Tagihan terbit sehingga email H-3 bersifat umum tanpa nominal final; tidak dilewati. Email berikutnya memakai saldo aktual.
+7. **Tahan pesanan** hanya jika toggle cabang aktif dan masih ada tagihan lewat jatuh tempo. Draft tetap boleh dibuat; submit ditolak. Bukti pelunasan pending yang nominalnya menutup seluruh tunggakan menunda penahanan paling lama dua hari kerja. Unggahan ulang tidak memperpanjang jendela. Setelah tunggakan lunas, penahanan lepas otomatis. Superadmin dapat mematikan toggle dengan jejak audit.
+8. **Pemantauan** menampilkan total piutang per cabang, tagihan lewat jatuh tempo, umur piutang 0–30/31–60/>60 hari dari tanggal jatuh tempo, dan ekspor XLSX. Surat Tagihan dikirim ke cabang dan admin yang menerima email invoice.
+
+Perubahan ini menggunakan migrasi tambahan dan mengaktifkan mode Tempo bersama alur pelunasan; cabang lama tidak otomatis berubah cara pembayarannya.

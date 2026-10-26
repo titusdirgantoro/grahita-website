@@ -206,13 +206,13 @@ func (l *laporanPG) produkA(t *testing.T) string {
 	return id
 }
 
-// tandaiCabang mengatur flag cabang (C&C/Special/PI) yang dipakai filter
-// laporan (b.is_special, b.pajak_in).
-func (l *laporanPG) tandaiCabang(t *testing.T, branchID string, cnc, special, pajakIn bool) {
+// tandaiCabang mengatur flag cabang (C&C/PI) yang dipakai filter
+// laporan (b.pajak_in).
+func (l *laporanPG) tandaiCabang(t *testing.T, branchID string, cnc, pajakIn bool) {
 	t.Helper()
 	if _, err := l.pool.Exec(context.Background(),
-		`UPDATE branches SET is_cnc=$2, is_special=$3, pajak_in=$4 WHERE id=$1`,
-		branchID, cnc, special, pajakIn); err != nil {
+		`UPDATE branches SET is_cnc=$2, pajak_in=$3 WHERE id=$1`,
+		branchID, cnc, pajakIn); err != nil {
 		t.Fatalf("tandai cabang: %v", err)
 	}
 }
@@ -236,7 +236,7 @@ func (l *laporanPG) lajur(t *testing.T, cookies []*http.Cookie, query string) ma
 
 // TestPGReportLaporanOrderLine menjalankan seluruh perilaku laporan order line
 // di atas PostgreSQL nyata: kolom, pengecualian draft, filter (tanggal, cabang
-// multi, status, jenis, C&C, Special, PI), otorisasi Superadmin, dan ekspor
+// multi, status, jenis, C&C, PI), otorisasi Superadmin, dan ekspor
 // asinkron yang jumlah barisnya sama dengan query terfilter.
 func TestPGReportLaporanOrderLine(t *testing.T) {
 	l := newLaporanPG(t)
@@ -245,9 +245,9 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	produkID := l.produkA(t)
 	sertifikatID := l.seedProdukSertifikat(t, l.branchA)
 
-	// Cabang A: Special + PI. Cabang B: tanpa flag.
-	l.tandaiCabang(t, l.branchA, true, true, true)
-	l.tandaiCabang(t, l.branchB, false, false, false)
+	// Cabang A: PI. Cabang B: tanpa flag.
+	l.tandaiCabang(t, l.branchA, true, true)
+	l.tandaiCabang(t, l.branchB, false, false)
 
 	// Pesanan submitted cabang A (2 baris produk, C&C).
 	l.seedPesanan(t, pesananLaporan{
@@ -312,8 +312,8 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	if satu["cabang"] != "Grahita Cabang A" || satu["kepala_cabang"] != "Kepala A" {
 		t.Errorf("identitas cabang salah: %v", satu)
 	}
-	if satu["is_cnc"] != true || satu["is_special"] != true || satu["pajak_in"] != true {
-		t.Errorf("atribut C&C/Special/PI cabang A harus true: %v", satu)
+	if satu["is_cnc"] != true || satu["pajak_in"] != true {
+		t.Errorf("atribut C&C/PI cabang A harus true: %v", satu)
 	}
 	if satu["produk"] != "Bio Magnetik" || satu["jenis"] != "product" || satu["qty"] != float64(2) ||
 		satu["harga_satuan"] != float64(100000) || satu["subtotal"] != float64(200000) {
@@ -322,9 +322,9 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	if satu["status"] != "submitted" {
 		t.Errorf("status baris pertama harus submitted: %v", satu)
 	}
-	// Special/PI hanya atribut: subtotal tetap qty × harga cabang, tanpa efek pajak/harga.
+	// PI hanya atribut: subtotal tetap qty × harga cabang, tanpa efek pajak/harga.
 	if got := satu["subtotal"].(float64); got != 2*100000 {
-		t.Errorf("Special/PI tidak boleh mengubah harga: subtotal %v", got)
+		t.Errorf("PI tidak boleh mengubah harga: subtotal %v", got)
 	}
 
 	done := baris["2026-10-02#1"]
@@ -353,9 +353,8 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 		{"jenis packaging", "?jenis=packaging", 1},
 		{"jenis product", "?jenis=product", 4},
 		{"C&C", "?cnc=true", 2},
-		{"Special", "?special=true", 2},
 		{"PI", "?pi=true", 2},
-		{"Special cabang B (false)", "?special=false", 3},
+		{"PI cabang B (false)", "?pi=false", 3},
 		{"tanggal satu hari", "?dari=2026-10-02&sampai=2026-10-02", 1},
 		{"rentang dua hari", "?dari=2026-10-02&sampai=2026-10-03", 3},
 		{"gabungan cabang+status+jenis", "?cabang=" + l.branchB + "&status=done&jenis=product", 2},

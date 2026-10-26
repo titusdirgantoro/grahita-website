@@ -51,7 +51,7 @@ func newUji(t *testing.T) (*Service, *Memory) {
 
 func seedDuaCabang(m *Memory) {
 	m.Put(Branch{ID: "br-a", Nama: "Grahita Cabang A", NamaKepala: "Kepala A", Email: "a@example.test", IdentityStatus: IdentityReady, IsActive: true, IsCNC: true})
-	m.Put(Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IdentityStatus: IdentityReady, IsActive: false, IsSpecial: true})
+	m.Put(Branch{ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B", Email: "b@example.test", IdentityStatus: IdentityReady, IsActive: false, PajakIn: true, IsTempo: true, TanggalBayar: 5})
 }
 
 // TestIsCNCFlagCabang memverifikasi pembacaan flag Cash & Carry lintas-domain
@@ -238,12 +238,12 @@ func TestUbahCabangMenonaktifkanDanMencatatPerubahan(t *testing.T) {
 	ctx := ctxUji("10.0.0.9")
 
 	b, err := svc.Update(ctx, adminAktor(), "br-a", Patch{
-		IsActive: ptr(false), IsSpecial: ptr(true), Telepon: ptr("0812"),
+		IsActive: ptr(false), PajakIn: ptr(true), Telepon: ptr("0812"),
 	})
 	if err != nil {
 		t.Fatalf("ubah cabang: %v", err)
 	}
-	if b.IsActive || !b.IsSpecial || b.Telepon != "0812" {
+	if b.IsActive || !b.PajakIn || b.Telepon != "0812" {
 		t.Errorf("perubahan tidak diterapkan: %+v", b)
 	}
 	// Field yang tidak dikirim tidak berubah.
@@ -282,14 +282,14 @@ func TestUbahCabangBolehMengosongkanIdentitasDanMenjadiIncomplete(t *testing.T) 
 }
 
 func TestApplyPatchParsialTerhadapStateTerkiniTidakMemulihkanIdentitas(t *testing.T) {
-	special := true
+	pajakIn := true
 	for _, tc := range []struct {
 		nama       string
 		hasAccount bool
 		patch      Patch
 	}{
-		{nama: "non-identitas dengan akun nonaktif", hasAccount: true, patch: Patch{IsSpecial: &special}},
-		{nama: "non-identitas tanpa akun", hasAccount: false, patch: Patch{IsSpecial: &special}},
+		{nama: "non-identitas dengan akun nonaktif", hasAccount: true, patch: Patch{PajakIn: &pajakIn}},
+		{nama: "non-identitas tanpa akun", hasAccount: false, patch: Patch{PajakIn: &pajakIn}},
 		{nama: "email sama dengan akun nonaktif", hasAccount: true, patch: Patch{Email: ptr(" A@EXAMPLE.TEST ")}},
 		{nama: "nama kepala sama tanpa akun", hasAccount: false, patch: Patch{NamaKepala: ptr(" Kepala A ")}},
 		{nama: "email berbeda dengan akun revoked", hasAccount: true, patch: Patch{Email: ptr("baru-a@example.test")}},
@@ -307,7 +307,7 @@ func TestApplyPatchParsialTerhadapStateTerkiniTidakMemulihkanIdentitas(t *testin
 			if err != nil {
 				t.Fatalf("apply patch parsial: %v", err)
 			}
-			if tc.patch.IsSpecial != nil && !next.IsSpecial {
+			if tc.patch.PajakIn != nil && !next.PajakIn {
 				t.Fatal("field parsial yang diminta harus berubah")
 			}
 			if tc.patch.NamaKepala == nil && next.NamaKepala != cur.NamaKepala {
@@ -326,7 +326,7 @@ func TestApplyPatchParsialTerhadapStateTerkiniTidakMemulihkanIdentitas(t *testin
 		ID: "br-b", Nama: "Grahita Cabang B", NamaKepala: "Kepala B",
 		Email: "b@example.test", IdentityStatus: IdentityRegistered, IsActive: true,
 	}
-	next, err := ApplyPatch(registered, normalizePatch(Patch{IsSpecial: &special}), true)
+	next, err := ApplyPatch(registered, normalizePatch(Patch{PajakIn: &pajakIn}), true)
 	if err != nil {
 		t.Fatalf("apply patch pada cabang registered: %v", err)
 	}
@@ -478,8 +478,8 @@ func TestDaftarCabangDapatDisaring(t *testing.T) {
 	if cnc, _ := svc.List(ctx, managerAktor(), Filter{CNC: ptr(true)}); len(cnc) != 1 || cnc[0].ID != "br-a" {
 		t.Errorf("filter cnc=true harus menyisakan br-a: %+v", cnc)
 	}
-	if sp, _ := svc.List(ctx, managerAktor(), Filter{Special: ptr(true)}); len(sp) != 1 || sp[0].ID != "br-b" {
-		t.Errorf("filter special=true harus menyisakan br-b: %+v", sp)
+	if sp, _ := svc.List(ctx, managerAktor(), Filter{Tempo: ptr(true)}); len(sp) != 1 || sp[0].ID != "br-b" {
+		t.Errorf("filter tempo=true harus menyisakan br-b: %+v", sp)
 	}
 	if q, _ := svc.List(ctx, managerAktor(), Filter{Q: "B@EXAMPLE"}); len(q) != 1 || q[0].ID != "br-b" {
 		t.Errorf("pencarian harus mencakup email tanpa peka huruf besar: %+v", q)

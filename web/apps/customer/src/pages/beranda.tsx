@@ -98,6 +98,7 @@ export function BerandaPage() {
   const navigate = useNavigate();
   const { pengguna } = useSesi();
   const { data, memuat, galat } = useApi<Pesanan[]>("/orders");
+  const { data: tempo } = useApi<{hold_active:boolean;overdue:number;total_receivable:number;items:Array<{period_month:string;status:string;remaining:number}>}>("/tempo/overview");
 
   const hariIniStr = hariIni();
   const bulan = bulanDari(hariIniStr);
@@ -147,6 +148,7 @@ export function BerandaPage() {
           </Button>
         }
       />
+      {tempo?.hold_active ? <Notice tone="warning">Tagihan {tempo.items.find(x=>x.status==="lewat_jatuh_tempo"&&x.remaining>0)?.period_month??"Tempo"} lewat jatuh tempo, sisa {rupiah.format(tempo.overdue)}. Draft masih bisa dibuat, tetapi pengiriman pesanan ditahan. Lihat menu Tagihan untuk mengunggah bukti pelunasan.</Notice> : null}
 
       {memuat ? (
         <Card>

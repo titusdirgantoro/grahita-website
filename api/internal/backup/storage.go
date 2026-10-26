@@ -165,7 +165,7 @@ func (s *Service) sinkronObjek(ctx context.Context, kunci []string, manifest *Ma
 
 	// Peta objek nyata di storage (metadata saja).
 	infoDiStorage := map[string]storage.Info{}
-	for _, prefix := range []string{"proofs/", "documents/"} {
+	for _, prefix := range []string{"proofs/", "documents/", "tempo-proof/", "tempo-statement/"} {
 		daftar, err := s.objek.List(ctx, prefix)
 		if err != nil {
 			return hasil, fmt.Errorf("daftar objek %s: %w", prefix, err)

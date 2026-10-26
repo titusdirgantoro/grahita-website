@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/grahita/portal/api/internal/audit"
 	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
@@ -33,12 +34,19 @@ type Repo struct {
 // New membuat repository master cabang.
 func New(pool *database.Pool) *Repo { return &Repo{pool: pool, q: sqlc.New(pool)} }
 
+func tempoDay(day int) pgtype.Int2 {
+	if day == 0 {
+		return pgtype.Int2{}
+	}
+	return pgtype.Int2{Int16: int16(day), Valid: true}
+}
+
 // List memuat cabang sesuai filter.
 func (r *Repo) List(ctx context.Context, f branch.Filter) ([]branch.Branch, error) {
 	arg := sqlc.ListBranchDetailsParams{
-		Aktif:   pgtypes.BoolPtr(f.Active),
-		Cnc:     pgtypes.BoolPtr(f.CNC),
-		Special: pgtypes.BoolPtr(f.Special),
+		Aktif: pgtypes.BoolPtr(f.Active),
+		Cnc:   pgtypes.BoolPtr(f.CNC),
+		Tempo: pgtypes.BoolPtr(f.Tempo),
 	}
 	if f.Q != "" {
 		arg.Q = pgtypes.Text("%" + f.Q + "%")
@@ -52,7 +60,8 @@ func (r *Repo) List(ctx context.Context, f branch.Filter) ([]branch.Branch, erro
 		out = append(out, branch.Branch{
 			ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
 			JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
-			Telepon: row.Telepon, IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
+			Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo,
+			TanggalBayar: int(row.TanggalBayar.Int16), TahanBilaTelat: row.TahanBilaTelat,
 			PajakIn: row.PajakIn, IsActive: row.IsActive,
 			BankAllowlistVersion:      row.BankAllowlistVersion,
 			EffectiveBankAccountCount: row.EffectiveBankAccountCount,
@@ -74,7 +83,8 @@ func (r *Repo) Get(ctx context.Context, id string) (branch.Branch, error) {
 	return branch.Branch{
 		ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
 		JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
-		Telepon: row.Telepon, IsCNC: row.IsCnc, IsSpecial: row.IsSpecial,
+		Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo,
+		TanggalBayar: int(row.TanggalBayar.Int16), TahanBilaTelat: row.TahanBilaTelat,
 		PajakIn: row.PajakIn, IsActive: row.IsActive,
 		BankAllowlistVersion:      row.BankAllowlistVersion,
 		EffectiveBankAccountCount: row.EffectiveBankAccountCount,
@@ -98,7 +108,9 @@ func (r *Repo) Create(ctx context.Context, in branch.Branch, rec audit.Entry) (s
 		IdentityStatus: sqlc.BranchIdentityStatus(in.IdentityStatus),
 		Telepon:        pgtypes.Text(in.Telepon),
 		IsCnc:          in.IsCNC,
-		IsSpecial:      in.IsSpecial,
+		IsTempo:        in.IsTempo,
+		TanggalBayar:   tempoDay(in.TanggalBayar),
+		TahanBilaTelat: in.TahanBilaTelat,
 		PajakIn:        in.PajakIn,
 		IsActive:       in.IsActive,
 	})
@@ -152,12 +164,15 @@ func (r *Repo) Update(ctx context.Context, id string, p branch.Patch, actor auth
 
 	var cur branch.Branch
 	var namaKepala, email, jabatanKepala *string
+	var day *int16
 	err = tx.QueryRow(ctx, `SELECT id, nama, nama_kepala, email::text, jabatan_kepala,
-       COALESCE(telepon, ''), is_cnc, is_special, pajak_in, is_active,
+       COALESCE(telepon, ''), is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat,
+       pajak_in, is_active,
        identity_status::text
   FROM branches WHERE id = $1 FOR UPDATE`, id).Scan(
 		&cur.ID, &cur.Nama, &namaKepala, &email, &jabatanKepala, &cur.Telepon,
-		&cur.IsCNC, &cur.IsSpecial, &cur.PajakIn, &cur.IsActive, &cur.IdentityStatus,
+		&cur.IsCNC, &cur.IsTempo, &day, &cur.TahanBilaTelat,
+		&cur.PajakIn, &cur.IsActive, &cur.IdentityStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return branch.Branch{}, branch.ErrNotFound
@@ -168,6 +183,9 @@ func (r *Repo) Update(ctx context.Context, id string, p branch.Patch, actor auth
 	cur.NamaKepala = textOrEmpty(namaKepala)
 	cur.Email = textOrEmpty(email)
 	cur.JabatanKepala = textOrEmpty(jabatanKepala)
+	if day != nil {
+		cur.TanggalBayar = int(*day)
+	}
 
 	rows, err := tx.Query(ctx, `SELECT id FROM branch_users WHERE branch_id=$1 FOR UPDATE`, id)
 	if err != nil {
@@ -205,7 +223,9 @@ func (r *Repo) Update(ctx context.Context, id string, p branch.Patch, actor auth
 		IdentityStatus: sqlc.BranchIdentityStatus(next.IdentityStatus),
 		Telepon:        pgtypes.Text(next.Telepon),
 		IsCnc:          next.IsCNC,
-		IsSpecial:      next.IsSpecial,
+		IsTempo:        next.IsTempo,
+		TanggalBayar:   tempoDay(next.TanggalBayar),
+		TahanBilaTelat: next.TahanBilaTelat,
 		PajakIn:        next.PajakIn,
 		IsActive:       next.IsActive,
 		ID:             next.ID,

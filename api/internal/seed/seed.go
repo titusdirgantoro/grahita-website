@@ -25,7 +25,7 @@ type produk struct {
 
 type cabang struct {
 	nama, kepala, email string
-	cnc, special, pi    bool
+	cnc, pi             bool
 }
 
 // Run mengisi data contoh.
@@ -56,17 +56,17 @@ func Run(ctx context.Context, pool *database.Pool) error {
 	}
 
 	cabangs := []cabang{
-		{"Grahita Bandung", "Dra. Sri Wahyuni", "bandung@grahitaindonesia.com", true, false, false},
-		{"Grahita Bekasi", "Agus Pratama, S.Psi.", "bekasi@grahitaindonesia.com", false, false, true},
-		{"Grahita Yogyakarta", "Bambang Sutrisno", "yogyakarta@grahitaindonesia.com", true, true, false},
-		{"Grahita Surabaya", "Indah Permatasari", "surabaya@grahitaindonesia.com", false, false, false},
+		{"Grahita Bandung", "Dra. Sri Wahyuni", "bandung@grahitaindonesia.com", true, false},
+		{"Grahita Bekasi", "Agus Pratama, S.Psi.", "bekasi@grahitaindonesia.com", false, true},
+		{"Grahita Yogyakarta", "Bambang Sutrisno", "yogyakarta@grahitaindonesia.com", true, false},
+		{"Grahita Surabaya", "Indah Permatasari", "surabaya@grahitaindonesia.com", false, false},
 	}
 	for _, c := range cabangs {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO branches (nama, nama_kepala, email, is_cnc, is_special, pajak_in)
-			VALUES ($1,$2,$3,$4,$5,$6)
+			INSERT INTO branches (nama, nama_kepala, email, is_cnc, pajak_in)
+			VALUES ($1,$2,$3,$4,$5)
 			ON CONFLICT (email) DO NOTHING`,
-			c.nama, c.kepala, c.email, c.cnc, c.special, c.pi); err != nil {
+			c.nama, c.kepala, c.email, c.cnc, c.pi); err != nil {
 			return fmt.Errorf("seed cabang %s: %w", c.nama, err)
 		}
 	}

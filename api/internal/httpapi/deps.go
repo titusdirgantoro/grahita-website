@@ -33,6 +33,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/observability"
 	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
+	"github.com/grahita/portal/api/internal/receivable"
 	"github.com/grahita/portal/api/internal/registration"
 	"github.com/grahita/portal/api/internal/report"
 	"github.com/grahita/portal/api/internal/settings"
@@ -95,7 +96,8 @@ type Deps struct {
 	Reevaluate *payment.ReevaluateService
 	// Deposits melayani deposit cabang (D3 C2): saldo, journal, top-up
 	// pending, keputusan admin, alokasi ke order, dan reversal.
-	Deposits *deposit.Service
+	Deposits    *deposit.Service
+	Receivables *receivable.Service
 
 	// Payments melayani bukti transfer: unggah multi-berkas, daftar, dan
 	// tautan unduh berumur pendek (F1-13).

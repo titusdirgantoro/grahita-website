@@ -363,11 +363,13 @@ func TestPGAdminRiwayatDetailDanCatatan(t *testing.T) {
 	}
 	d2 := dataMap(t, body)
 	verif, _ := d2["verifikasi"].([]any)
-	if len(verif) != 1 {
+	if len(verif) != 2 {
 		t.Fatalf("log verifikasi tidak tampil: %v", d2["verifikasi"])
 	}
-	if verif[0].(map[string]any)["admin_nama"] != "Rina" {
-		t.Fatalf("nama admin verifikator salah: %v", verif[0])
+	for _, log := range verif {
+		if log.(map[string]any)["admin_nama"] != "Rina" {
+			t.Fatalf("nama admin verifikator salah: %v", log)
+		}
 	}
 
 	// Id bukan UUID dijawab 404 (bukan 500).

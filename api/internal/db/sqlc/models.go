@@ -327,6 +327,8 @@ const (
 	EmailKindInvoiceAdmin    EmailKind = "invoice_admin"
 	EmailKindSuratJalanAdmin EmailKind = "surat_jalan_admin"
 	EmailKindReminderCnc     EmailKind = "reminder_cnc"
+	EmailKindTempoStatement  EmailKind = "tempo_statement"
+	EmailKindTempoReminder   EmailKind = "tempo_reminder"
 )
 
 func (e *EmailKind) Scan(src interface{}) error {
@@ -453,9 +455,10 @@ func (ns NullLineKind) Value() (driver.Value, error) {
 type OrderStatus string
 
 const (
-	OrderStatusDraft     OrderStatus = "draft"
-	OrderStatusSubmitted OrderStatus = "submitted"
-	OrderStatusDone      OrderStatus = "done"
+	OrderStatusDraft          OrderStatus = "draft"
+	OrderStatusSubmitted      OrderStatus = "submitted"
+	OrderStatusDone           OrderStatus = "done"
+	OrderStatusApprovedUnpaid OrderStatus = "approved_unpaid"
 )
 
 func (e *OrderStatus) Scan(src interface{}) error {
@@ -496,8 +499,9 @@ func (ns NullOrderStatus) Value() (driver.Value, error) {
 type PaymentProofPurpose string
 
 const (
-	PaymentProofPurposeOrderPayment PaymentProofPurpose = "order_payment"
-	PaymentProofPurposeDepositTopup PaymentProofPurpose = "deposit_topup"
+	PaymentProofPurposeOrderPayment   PaymentProofPurpose = "order_payment"
+	PaymentProofPurposeDepositTopup   PaymentProofPurpose = "deposit_topup"
+	PaymentProofPurposeTempoRepayment PaymentProofPurpose = "tempo_repayment"
 )
 
 func (e *PaymentProofPurpose) Scan(src interface{}) error {
@@ -903,6 +907,9 @@ type Branch struct {
 	JabatanKepala        pgtype.Text          `json:"jabatan_kepala"`
 	IdentityStatus       BranchIdentityStatus `json:"identity_status"`
 	BankAllowlistVersion int64                `json:"bank_allowlist_version"`
+	IsTempo              bool                 `json:"is_tempo"`
+	TanggalBayar         pgtype.Int2          `json:"tanggal_bayar"`
+	TahanBilaTelat       bool                 `json:"tahan_bila_telat"`
 }
 
 type BranchBankAccount struct {
@@ -1080,6 +1087,7 @@ type InvoiceRevision struct {
 	PreviousDoneAt                *time.Time                    `json:"previous_done_at"`
 	PaymentTransition             NullRevisionPaymentTransition `json:"payment_transition"`
 	SettlementContractVersion     int16                         `json:"settlement_contract_version"`
+	TempoPreviousPaid             pgtype.Int8                   `json:"tempo_previous_paid"`
 }
 
 type MasterImportApplyChange struct {
@@ -1188,6 +1196,11 @@ type Order struct {
 	DoneOrderVersion         pgtype.Int4              `json:"done_order_version"`
 	DoneDepositAmount        pgtype.Int8              `json:"done_deposit_amount"`
 	DoneTransferAmount       pgtype.Int8              `json:"done_transfer_amount"`
+	IsTempo                  bool                     `json:"is_tempo"`
+	TanggalBayarSnapshot     pgtype.Int2              `json:"tanggal_bayar_snapshot"`
+	TempoDueDate             *time.Time               `json:"tempo_due_date"`
+	TempoApprovedAt          *time.Time               `json:"tempo_approved_at"`
+	TempoPaidAmount          int64                    `json:"tempo_paid_amount"`
 }
 
 type OrderEvent struct {
@@ -1333,6 +1346,101 @@ type Setting struct {
 	Value     []byte      `json:"value"`
 	UpdatedBy pgtype.UUID `json:"updated_by"`
 	UpdatedAt time.Time   `json:"updated_at"`
+}
+
+type TempoAdjustment struct {
+	ID          string    `json:"id"`
+	BranchID    string    `json:"branch_id"`
+	OrderID     string    `json:"order_id"`
+	RevisionID  string    `json:"revision_id"`
+	DeltaAmount int64     `json:"delta_amount"`
+	DueDate     time.Time `json:"due_date"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type TempoAllocation struct {
+	ID            string      `json:"id"`
+	BranchID      string      `json:"branch_id"`
+	OrderID       string      `json:"order_id"`
+	ChargeID      string      `json:"charge_id"`
+	ReceiptID     pgtype.UUID `json:"receipt_id"`
+	CreditEntryID pgtype.UUID `json:"credit_entry_id"`
+	Amount        int64       `json:"amount"`
+	CreatedAt     time.Time   `json:"created_at"`
+}
+
+type TempoCharge struct {
+	ID         string      `json:"id"`
+	BranchID   string      `json:"branch_id"`
+	OrderID    string      `json:"order_id"`
+	RevisionID pgtype.UUID `json:"revision_id"`
+	Amount     int64       `json:"amount"`
+	PaidAmount int64       `json:"paid_amount"`
+	DueDate    time.Time   `json:"due_date"`
+	CreatedAt  time.Time   `json:"created_at"`
+}
+
+type TempoCreditEntry struct {
+	ID         string      `json:"id"`
+	BranchID   string      `json:"branch_id"`
+	ReceiptID  pgtype.UUID `json:"receipt_id"`
+	RevisionID pgtype.UUID `json:"revision_id"`
+	Amount     int64       `json:"amount"`
+	Remaining  int64       `json:"remaining"`
+	ApprovedBy string      `json:"approved_by"`
+	CreatedAt  time.Time   `json:"created_at"`
+}
+
+type TempoHoldGrace struct {
+	BranchID  string    `json:"branch_id"`
+	StartedAt time.Time `json:"started_at"`
+	EndsOn    time.Time `json:"ends_on"`
+}
+
+type TempoReceipt struct {
+	ID              string      `json:"id"`
+	BranchID        string      `json:"branch_id"`
+	PaymentProofID  string      `json:"payment_proof_id"`
+	BankAccountID   string      `json:"bank_account_id"`
+	DeclaredAmount  int64       `json:"declared_amount"`
+	VerifiedAmount  pgtype.Int8 `json:"verified_amount"`
+	Status          string      `json:"status"`
+	SubmittedAt     time.Time   `json:"submitted_at"`
+	GraceUntil      *time.Time  `json:"grace_until"`
+	VerifiedBy      pgtype.UUID `json:"verified_by"`
+	VerifiedAt      *time.Time  `json:"verified_at"`
+	RejectionReason pgtype.Text `json:"rejection_reason"`
+}
+
+type TempoReminder struct {
+	BranchID   string    `json:"branch_id"`
+	DueDate    time.Time `json:"due_date"`
+	Stage      string    `json:"stage"`
+	Amount     int64     `json:"amount"`
+	Generic    bool      `json:"generic"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
+}
+
+type TempoStatement struct {
+	ID          string      `json:"id"`
+	BranchID    string      `json:"branch_id"`
+	PeriodMonth time.Time   `json:"period_month"`
+	Version     int32       `json:"version"`
+	IssuedAt    time.Time   `json:"issued_at"`
+	StorageKey  pgtype.Text `json:"storage_key"`
+	Fingerprint []byte      `json:"fingerprint"`
+	TotalAmount int64       `json:"total_amount"`
+	PaidAmount  int64       `json:"paid_amount"`
+}
+
+type TempoStatementLine struct {
+	StatementID  string    `json:"statement_id"`
+	ChargeID     string    `json:"charge_id"`
+	OrderID      string    `json:"order_id"`
+	OrderVersion int32     `json:"order_version"`
+	Amount       int64     `json:"amount"`
+	PaidAmount   int64     `json:"paid_amount"`
+	DueDate      time.Time `json:"due_date"`
 }
 
 type TutorialTopic struct {

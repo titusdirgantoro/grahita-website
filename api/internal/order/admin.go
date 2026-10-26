@@ -102,18 +102,21 @@ type AdminQuery struct {
 
 // AdminRow adalah satu baris daftar riwayat.
 type AdminRow struct {
-	ID           string `json:"id"`
-	Nomor        string `json:"nomor,omitempty"`
-	Versi        int    `json:"versi"`
-	BranchID     string `json:"branch_id"`
-	BranchNama   string `json:"branch_nama"`
-	Tanggal      string `json:"tanggal,omitempty"`
-	Status       string `json:"status"`
-	VerifStatus  string `json:"verif_status"`
-	IsCNC        bool   `json:"is_cnc"`
-	IsSertifikat bool   `json:"is_sertifikat"`
-	Total        int64  `json:"total"`
-	JumlahItem   int64  `json:"jumlah_item"`
+	ID              string `json:"id"`
+	Nomor           string `json:"nomor,omitempty"`
+	Versi           int    `json:"versi"`
+	BranchID        string `json:"branch_id"`
+	BranchNama      string `json:"branch_nama"`
+	Tanggal         string `json:"tanggal,omitempty"`
+	Status          string `json:"status"`
+	VerifStatus     string `json:"verif_status"`
+	IsCNC           bool   `json:"is_cnc"`
+	IsTempo         bool   `json:"is_tempo"`
+	TempoDueDate    string `json:"tempo_due_date,omitempty"`
+	TempoPaidAmount int64  `json:"tempo_paid_amount"`
+	IsSertifikat    bool   `json:"is_sertifikat"`
+	Total           int64  `json:"total"`
+	JumlahItem      int64  `json:"jumlah_item"`
 	// EmailGagal: pesanan punya email berstatus `failed` di outbox.
 	EmailGagal  bool   `json:"email_gagal"`
 	SubmittedAt string `json:"submitted_at,omitempty"`
@@ -182,25 +185,28 @@ type VerifikasiLog struct {
 // punya endpoint sendiri (F1-13/F1-16) dan dipanggil terpisah oleh UI, sehingga
 // satu respons tetap kecil.
 type AdminDetail struct {
-	ID           string `json:"id"`
-	Nomor        string `json:"nomor,omitempty"`
-	Versi        int    `json:"versi"`
-	BranchID     string `json:"branch_id"`
-	BranchNama   string `json:"branch_nama"`
-	BranchKepala string `json:"branch_kepala"`
-	BranchEmail  string `json:"branch_email"`
-	BranchCNC    bool   `json:"branch_cnc"`
-	Status       string `json:"status"`
-	VerifStatus  string `json:"verif_status"`
-	AlasanReview string `json:"alasan_review,omitempty"`
-	IsCNC        bool   `json:"is_cnc"`
-	IsSertifikat bool   `json:"is_sertifikat"`
-	Tanggal      string `json:"tanggal,omitempty"`
-	SubmittedAt  string `json:"submitted_at,omitempty"`
-	DoneAt       string `json:"done_at,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	Catatan      string `json:"catatan"`
+	ID              string `json:"id"`
+	Nomor           string `json:"nomor,omitempty"`
+	Versi           int    `json:"versi"`
+	BranchID        string `json:"branch_id"`
+	BranchNama      string `json:"branch_nama"`
+	BranchKepala    string `json:"branch_kepala"`
+	BranchEmail     string `json:"branch_email"`
+	BranchCNC       bool   `json:"branch_cnc"`
+	Status          string `json:"status"`
+	VerifStatus     string `json:"verif_status"`
+	AlasanReview    string `json:"alasan_review,omitempty"`
+	IsCNC           bool   `json:"is_cnc"`
+	IsTempo         bool   `json:"is_tempo"`
+	TempoDueDate    string `json:"tempo_due_date,omitempty"`
+	TempoPaidAmount int64  `json:"tempo_paid_amount"`
+	IsSertifikat    bool   `json:"is_sertifikat"`
+	Tanggal         string `json:"tanggal,omitempty"`
+	SubmittedAt     string `json:"submitted_at,omitempty"`
+	DoneAt          string `json:"done_at,omitempty"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+	Catatan         string `json:"catatan"`
 	// NoteAdmin adalah catatan internal — hanya ada di respons admin.
 	NoteAdmin  string          `json:"note_admin"`
 	Total      int64           `json:"total"`

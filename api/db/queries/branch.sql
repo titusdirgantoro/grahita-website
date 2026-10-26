@@ -7,7 +7,7 @@
 SELECT id, nama, COALESCE(nama_kepala, '') AS nama_kepala,
        COALESCE(email::text, ''::text)::text AS email, COALESCE(jabatan_kepala, '') AS jabatan_kepala,
        identity_status::text AS identity_status, COALESCE(telepon, '') AS telepon,
-       is_cnc, is_special, pajak_in, is_active
+       is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat, pajak_in, is_active
   FROM branches
  WHERE id = $1;
 
@@ -19,7 +19,7 @@ SELECT id, nama, COALESCE(nama_kepala, '') AS nama_kepala,
 
 -- name: ListBranchDetails :many
 -- Filter opsional memakai sqlc.narg: q (pola ILIKE nama/email), aktif, cnc,
--- special. q dikirim sudah berbentuk pola '%kata%'.
+-- tempo. q dikirim sudah berbentuk pola '%kata%'.
 SELECT b.id,
        b.nama,
        COALESCE(b.nama_kepala, '')   AS nama_kepala,
@@ -28,7 +28,9 @@ SELECT b.id,
        b.identity_status::text       AS identity_status,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
-       b.is_special,
+       b.is_tempo,
+       b.tanggal_bayar,
+       b.tahan_bila_telat,
        b.pajak_in,
        b.is_active,
        b.bank_allowlist_version,
@@ -50,7 +52,7 @@ SELECT b.id,
         OR COALESCE(b.email::text, ''::text)::text ILIKE sqlc.narg(q)::text)
    AND (sqlc.narg(aktif)::boolean IS NULL OR b.is_active = sqlc.narg(aktif)::boolean)
    AND (sqlc.narg(cnc)::boolean IS NULL OR b.is_cnc = sqlc.narg(cnc)::boolean)
-   AND (sqlc.narg(special)::boolean IS NULL OR b.is_special = sqlc.narg(special)::boolean)
+   AND (sqlc.narg(tempo)::boolean IS NULL OR b.is_tempo = sqlc.narg(tempo)::boolean)
  ORDER BY b.nama;
 
 -- name: GetBranchDetail :one
@@ -62,7 +64,9 @@ SELECT b.id,
        b.identity_status::text       AS identity_status,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
-       b.is_special,
+       b.is_tempo,
+       b.tanggal_bayar,
+       b.tahan_bila_telat,
        b.pajak_in,
        b.is_active,
        b.bank_allowlist_version,
@@ -82,7 +86,8 @@ SELECT b.id,
  WHERE b.id = $1;
 
 -- name: CreateBranchDetail :one
-INSERT INTO branches (nama, nama_kepala, email, jabatan_kepala, identity_status, telepon, is_cnc, is_special, pajak_in, is_active)
+INSERT INTO branches (nama, nama_kepala, email, jabatan_kepala, identity_status, telepon,
+                      is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat, pajak_in, is_active)
 VALUES (
     sqlc.arg(nama),
     sqlc.narg(nama_kepala),
@@ -91,7 +96,9 @@ VALUES (
     sqlc.arg(identity_status)::branch_identity_status,
     sqlc.arg(telepon),
     sqlc.arg(is_cnc),
-    sqlc.arg(is_special),
+    sqlc.arg(is_tempo),
+    sqlc.narg(tanggal_bayar)::smallint,
+    sqlc.arg(tahan_bila_telat),
     sqlc.arg(pajak_in),
     sqlc.arg(is_active)
 )
@@ -108,7 +115,9 @@ UPDATE branches
        identity_status = sqlc.arg(identity_status)::branch_identity_status,
        telepon     = sqlc.arg(telepon),
        is_cnc      = sqlc.arg(is_cnc),
-       is_special  = sqlc.arg(is_special),
+       is_tempo    = sqlc.arg(is_tempo),
+       tanggal_bayar = sqlc.narg(tanggal_bayar)::smallint,
+       tahan_bila_telat = sqlc.arg(tahan_bila_telat),
        pajak_in    = sqlc.arg(pajak_in),
        is_active   = sqlc.arg(is_active),
        updated_at  = now()
