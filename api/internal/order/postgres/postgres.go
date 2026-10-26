@@ -260,17 +260,18 @@ func (r *Repo) Submit(ctx context.Context, req order.SubmitRequest) (order.Order
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
 		return order.Order{}, fmt.Errorf("kunci kebijakan rekening: %w", err)
 	}
-	var modeCNC, modeTempo, tahan bool
+	var modeCNC, modeTempo, allowTransfer, tahan bool
 	var payDay *int16
-	if err := tx.QueryRow(ctx, `SELECT is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat
-FROM branches WHERE id=$1 FOR SHARE`, req.BranchID).Scan(&modeCNC, &modeTempo, &payDay, &tahan); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT is_cnc, is_tempo, allow_transfer, tanggal_bayar, tahan_bila_telat
+FROM branches WHERE id=$1 FOR SHARE`, req.BranchID).Scan(&modeCNC, &modeTempo, &allowTransfer, &payDay, &tahan); err != nil {
 		return order.Order{}, fmt.Errorf("baca cara pembayaran cabang: %w", err)
 	}
-	if modeCNC != req.IsCNC || modeTempo != req.IsTempo ||
-		(modeTempo && (payDay == nil || int(*payDay) != req.TanggalBayar)) {
+	if (req.IsCNC && !modeCNC) || (req.IsTempo && !modeTempo) ||
+		(!req.IsCNC && !req.IsTempo && !allowTransfer) ||
+		(req.IsTempo && (payDay == nil || int(*payDay) != req.TanggalBayar)) {
 		return order.Order{}, order.ErrPaymentModeChanged
 	}
-	if modeTempo && tahan {
+	if req.IsTempo && tahan {
 		var overdue, pending int64
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount-paid_amount),0)::bigint
 FROM tempo_charges WHERE branch_id=$1 AND due_date<$2::date`, req.BranchID, req.Tanggal).Scan(&overdue); err != nil {

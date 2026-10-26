@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ VALUES($1,1,'product',$2,'Bio Magnetik',1,$3,$4)`, id, productID, total, strings
 func TestPGTempoApprovalFIFOdanKreditTerpisah(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
-	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5,tahan_bila_telat=true WHERE id=$1`, f.branchA); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5,tahan_bila_telat=true WHERE id=$1`, f.branchA); err != nil {
 		t.Fatal(err)
 	}
 	svc := receivable.New(f.pool, f.jobs)
@@ -176,7 +177,7 @@ func TestPGTempoApprovalFIFOdanKreditTerpisah(t *testing.T) {
 func TestPGRevisiTempoSetelahBayarSebagianMenghasilkanKredit(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
-	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
 		t.Fatal(err)
 	}
 	svc := receivable.New(f.pool, f.jobs)
@@ -273,7 +274,7 @@ func TestPGRevisiTempoSetelahBayarSebagianMenghasilkanKredit(t *testing.T) {
 func TestPGTempoSubmitSnapshotDanTahanPesanan(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
-	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5,tahan_bila_telat=true WHERE id=$1`, f.branchA); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5,tahan_bila_telat=true WHERE id=$1`, f.branchA); err != nil {
 		t.Fatal(err)
 	}
 	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
@@ -358,10 +359,70 @@ func TestPGTempoSubmitSnapshotDanTahanPesanan(t *testing.T) {
 	}
 }
 
+func TestPGPilihanPembayaranCampuranDanTahanHanyaTempo(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET allow_transfer=true,is_cnc=true,is_tempo=true,tanggal_bayar=5,tahan_bila_telat=true WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	seedSaldoDeposit(t, f, f.branchA, 200000)
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	product := produkKode(t, f, "P-01")
+	makeDraft := func() string {
+		t.Helper()
+		return buatDraftHTTP(t, f, cookies, csrf, product, 1)["id"].(string)
+	}
+	submit := func(id, mode, version string, proof map[string][]byte) (int, map[string]any) {
+		t.Helper()
+		resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", cookies, csrf, proof, version, mode)
+		return resp.StatusCode, body
+	}
+	first := makeDraft()
+	if status, body := submit(first, "", "", nil); status != http.StatusBadRequest || kodeErrorVerifikasi(body) != "VALIDATION_FAILED" {
+		t.Fatalf("beberapa pilihan wajib dipilih eksplisit: %d %+v", status, body)
+	}
+	if status, body := submit(first, "tempo", "", nil); status != http.StatusOK {
+		t.Fatalf("Tempo pada cabang campuran gagal: %d %+v", status, body)
+	}
+	var tempo, cnc bool
+	if err := f.pool.QueryRow(ctx, `SELECT is_tempo,is_cnc FROM orders WHERE id=$1`, first).Scan(&tempo, &cnc); err != nil || !tempo || cnc {
+		t.Fatalf("snapshot Tempo: %v %v %v", tempo, cnc, err)
+	}
+	svc := receivable.New(f.pool, f.jobs)
+	mgr := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	if _, err := svc.Approve(ctx, mgr, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE tempo_charges SET due_date=CURRENT_DATE-1 WHERE order_id=$1`, first); err != nil {
+		t.Fatal(err)
+	}
+	blocked := makeDraft()
+	if status, body := submit(blocked, "tempo", "", nil); status != http.StatusConflict || kodeErrorVerifikasi(body) != "TEMPO_ORDER_HELD" {
+		t.Fatalf("Tempo harus ditahan: %d %+v", status, body)
+	}
+	if status, body := submit(blocked, "transfer", "", map[string][]byte{"transfer.jpg": berkasJPEGUji("multi-transfer")}); status != http.StatusOK {
+		t.Fatalf("transfer tetap tersedia saat Tempo ditahan: %d %+v", status, body)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT is_tempo,is_cnc FROM orders WHERE id=$1`, blocked).Scan(&tempo, &cnc); err != nil || tempo || cnc {
+		t.Fatalf("snapshot transfer: %v %v %v", tempo, cnc, err)
+	}
+	depositOrder := makeDraft()
+	var version int64
+	if err := f.pool.QueryRow(ctx, `SELECT journal_version FROM branch_deposit_accounts WHERE branch_id=$1`, f.branchA).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := submit(depositOrder, "deposit", strconv.FormatInt(version, 10), nil); status != http.StatusOK {
+		t.Fatalf("deposit tetap tersedia saat Tempo ditahan: %d %+v", status, body)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT is_tempo,is_cnc FROM orders WHERE id=$1`, depositOrder).Scan(&tempo, &cnc); err != nil || tempo || !cnc {
+		t.Fatalf("snapshot deposit: %v %v %v", tempo, cnc, err)
+	}
+}
+
 func TestPGPengingatHMinus3TanggalAwalBulanTetapTerkirim(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
-	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=1 WHERE id=$1`, f.branchA); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=1 WHERE id=$1`, f.branchA); err != nil {
 		t.Fatal(err)
 	}
 	id := tempoSubmitted(t, f, "2026-10-15", 100000)

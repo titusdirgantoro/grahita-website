@@ -7,7 +7,7 @@
 SELECT id, nama, COALESCE(nama_kepala, '') AS nama_kepala,
        COALESCE(email::text, ''::text)::text AS email, COALESCE(jabatan_kepala, '') AS jabatan_kepala,
        identity_status::text AS identity_status, COALESCE(telepon, '') AS telepon,
-       is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat, pajak_in, is_active
+       is_cnc, is_tempo, allow_transfer, tanggal_bayar, tahan_bila_telat, pajak_in, is_active
   FROM branches
  WHERE id = $1;
 
@@ -29,6 +29,7 @@ SELECT b.id,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
        b.is_tempo,
+       b.allow_transfer,
        b.tanggal_bayar,
        b.tahan_bila_telat,
        b.pajak_in,
@@ -65,6 +66,7 @@ SELECT b.id,
        COALESCE(b.telepon, '')       AS telepon,
        b.is_cnc,
        b.is_tempo,
+       b.allow_transfer,
        b.tanggal_bayar,
        b.tahan_bila_telat,
        b.pajak_in,
@@ -87,7 +89,7 @@ SELECT b.id,
 
 -- name: CreateBranchDetail :one
 INSERT INTO branches (nama, nama_kepala, email, jabatan_kepala, identity_status, telepon,
-                      is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat, pajak_in, is_active)
+                      is_cnc, is_tempo, allow_transfer, tanggal_bayar, tahan_bila_telat, pajak_in, is_active)
 VALUES (
     sqlc.arg(nama),
     sqlc.narg(nama_kepala),
@@ -97,6 +99,7 @@ VALUES (
     sqlc.arg(telepon),
     sqlc.arg(is_cnc),
     sqlc.arg(is_tempo),
+    sqlc.arg(allow_transfer),
     sqlc.narg(tanggal_bayar)::smallint,
     sqlc.arg(tahan_bila_telat),
     sqlc.arg(pajak_in),
@@ -116,6 +119,7 @@ UPDATE branches
        telepon     = sqlc.arg(telepon),
        is_cnc      = sqlc.arg(is_cnc),
        is_tempo    = sqlc.arg(is_tempo),
+       allow_transfer = sqlc.arg(allow_transfer),
        tanggal_bayar = sqlc.narg(tanggal_bayar)::smallint,
        tahan_bila_telat = sqlc.arg(tahan_bila_telat),
        pajak_in    = sqlc.arg(pajak_in),

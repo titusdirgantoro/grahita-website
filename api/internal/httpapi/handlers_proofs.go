@@ -88,16 +88,17 @@ func (a *API) bacaBerkas(w http.ResponseWriter, r *http.Request) ([]payment.File
 // `file` (boleh NOL berkas — bukti boleh sudah diunggah lewat
 // /orders/{id}/proofs) dan versi saldo deposit C&C pada field
 // `expected_journal_version`.
-func (a *API) bacaSubmit(w http.ResponseWriter, r *http.Request) ([]payment.FileInput, *int64, func(), error) {
+func (a *API) bacaSubmit(w http.ResponseWriter, r *http.Request) ([]payment.FileInput, *int64, string, func(), error) {
 	files, tutup, err := a.bacaMultipart(w, r, false)
 	if err != nil {
-		return nil, nil, tutup, err
+		return nil, nil, "", tutup, err
 	}
 	expected, err := parseExpectedJournal(r.MultipartForm.Value[fieldExpectedJournal])
 	if err != nil {
-		return nil, nil, tutup, err
+		return nil, nil, "", tutup, err
 	}
-	return files, expected, tutup, nil
+	mode := strings.TrimSpace(r.FormValue("payment_mode"))
+	return files, expected, mode, tutup, nil
 }
 
 // bacaMultipart mengurai badan multipart permintaan bukti. wajibBerkas

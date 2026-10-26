@@ -151,6 +151,9 @@ function fetchPesanan(
     uploadBankUnavailable?: boolean;
     /** Flag cash_and_carry cabang sesi: pesanan dibayar dari saldo deposit. */
     cabangCNC?: boolean;
+    cabangTempo?: boolean;
+    allowTransfer?: boolean;
+    tempoHeld?: boolean;
     /** Saldo deposit cabang sesi (GET /deposit) dan versi journal-nya. */
     saldoDeposit?: number;
     /** submitDepositBerubah menjawab submit pertama dengan 409 DEPOSIT_CHANGED. */
@@ -201,6 +204,9 @@ function fetchPesanan(
           },
         });
       }
+      if (input.endsWith("/tempo/overview")) {
+        return json({ data: { hold_active: opsi.tempoHeld ?? false, overdue: opsi.tempoHeld ? 100000 : 0 } });
+      }
       if (input.endsWith("/me/branch")) {
         return json({
           data: {
@@ -210,6 +216,8 @@ function fetchPesanan(
             email: "a@b.test",
             telepon: "",
             is_cnc: opsi.cabangCNC ?? false,
+            is_tempo: opsi.cabangTempo ?? false,
+            allow_transfer: opsi.allowTransfer ?? !(opsi.cabangCNC || opsi.cabangTempo),
             is_active: true,
           },
         });
@@ -583,6 +591,7 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
     const form = kirim?.init?.body as FormData;
     expect(form.getAll("file").length).toBe(1);
     expect(form.get("expected_journal_version")).toBeNull();
+    expect(form.get("payment_mode")).toBe("transfer");
     // Content-Type tidak disetel manual supaya boundary multipart tetap sah.
     expect((kirim?.init?.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
 
@@ -592,6 +601,27 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
       screen.getByText(/Pesanan sudah dikirim\. Nomor pesanan dan serial number sudah terbit/),
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: "Ubah" })).toBeNull();
+  });
+
+  it("memilih satu cara bayar per pesanan dan tetap mengizinkan transfer saat Tempo ditahan", async () => {
+    const panggilan = fetchPesanan({ cabangCNC: true, cabangTempo: true, allowTransfer: true, tempoHeld: true, saldoDeposit: 500000 });
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).getByRole("radio", { name: /Transfer di muka/ })).toBeDefined();
+    expect(within(dialog).getByRole("radio", { name: /Deposit \(Cash & Carry\)/ })).toBeDefined();
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /Tempo/ }).hasAttribute("disabled")).toBe(true));
+    expect(within(dialog).getByRole("button", { name: "Kirim pesanan" }).hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Deposit \(Cash & Carry\)/ }));
+    await within(dialog).findByTestId("rincian-bayar");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+    await waitFor(() => expect(panggilan.some((p) => p.url.endsWith("/orders/o1/submit"))).toBe(true));
+    const form = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"))?.init?.body as FormData;
+    expect(form.get("payment_mode")).toBe("deposit");
+    expect(form.get("expected_journal_version")).toBe("7");
   });
 
   it("cabang C&C bersaldo cukup dibayar penuh dari deposit tanpa bukti", async () => {

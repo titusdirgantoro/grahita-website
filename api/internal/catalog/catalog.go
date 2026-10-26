@@ -99,17 +99,18 @@ type BranchProduct struct {
 
 // Branch adalah data cabang (master data) untuk /me/branch portal cabang.
 type Branch struct {
-	ID         string `json:"id"`
-	Nama       string `json:"nama"`
-	NamaKepala string `json:"nama_kepala"`
-	Email      string `json:"email"`
-	Telepon    string `json:"telepon"`
-	IsCNC      bool   `json:"is_cnc"`
-	IsTempo    bool   `json:"is_tempo"`
-	TanggalBayar int `json:"tanggal_bayar,omitempty"`
-	TahanBilaTelat bool `json:"tahan_bila_telat"`
-	PajakIn    bool   `json:"pajak_in"`
-	IsActive   bool   `json:"is_active"`
+	ID             string `json:"id"`
+	Nama           string `json:"nama"`
+	NamaKepala     string `json:"nama_kepala"`
+	Email          string `json:"email"`
+	Telepon        string `json:"telepon"`
+	IsCNC          bool   `json:"is_cnc"`
+	IsTempo        bool   `json:"is_tempo"`
+	AllowTransfer  bool   `json:"allow_transfer"`
+	TanggalBayar   int    `json:"tanggal_bayar,omitempty"`
+	TahanBilaTelat bool   `json:"tahan_bila_telat"`
+	PajakIn        bool   `json:"pajak_in"`
+	IsActive       bool   `json:"is_active"`
 }
 
 // Sumber rincian sel matriks harga.

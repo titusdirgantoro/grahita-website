@@ -123,7 +123,7 @@ func kreditCabang(t *testing.T, f *pgFixture, branchCookies []*http.Cookie, bran
 func jadikanCNC(t *testing.T, f *pgFixture, branchIDs ...string) {
 	t.Helper()
 	for _, id := range branchIDs {
-		if _, err := f.pool.Exec(context.Background(), `UPDATE branches SET is_cnc = true WHERE id = $1`, id); err != nil {
+		if _, err := f.pool.Exec(context.Background(), `UPDATE branches SET is_cnc = true, allow_transfer = false WHERE id = $1`, id); err != nil {
 			t.Fatalf("tandai cabang C&C: %v", err)
 		}
 	}

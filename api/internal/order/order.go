@@ -91,7 +91,8 @@ var (
 	// ErrDepositVersionRequired dikembalikan bila cabang Cash & Carry mengirim
 	// pesanan tanpa menyebut versi saldo deposit yang ia lihat.
 	ErrDepositVersionRequired = fmt.Errorf("%w: versi saldo deposit yang ditampilkan wajib dikirim", ErrInvalidData)
-	ErrOrderHeld              = errors.New("pesanan ditahan karena tagihan Tempo lewat jatuh tempo")
+	ErrOrderHeld              = errors.New("pembayaran Tempo ditahan karena tagihan lewat jatuh tempo")
+	ErrPaymentModeRequired    = fmt.Errorf("%w: pilih cara pembayaran pesanan", ErrInvalidData)
 	ErrPaymentModeChanged     = errors.New("cara pembayaran cabang berubah; muat ulang pesanan")
 	ErrTempoCreditSuperadmin  = errors.New("revisi Tempo yang menghasilkan kredit membutuhkan Superadmin")
 )

@@ -579,9 +579,9 @@ Bila dalam beberapa tahun `orders`/`order_lines` tumbuh besar, partisi `RANGE` p
 
 Pemisahan data antar cabang ditegakkan di layer aplikasi (`branch_id` dari sesi). Row Level Security dapat ditambahkan sebagai lapisan kedua bila kelak ada akses langsung ke database di luar API.
 
-## 11. Tambahan skema Tempo (migrasi 0015–0016)
+## 11. Tambahan skema Tempo dan pilihan pembayaran (migrasi 0015–0017)
 
-Migrasi 0015 menambah enum `approved_unpaid`, `tempo_repayment`, `tempo_statement`, dan `tempo_reminder`. Migrasi 0016 menambah `branches.is_tempo`, `tanggal_bayar`, `tahan_bila_telat` dengan constraint eksklusif terhadap `is_cnc`; `orders.is_tempo`, `tanggal_bayar_snapshot`, `tempo_due_date`, `tempo_approved_at`, dan `tempo_paid_amount`. Constraint settlement lama dipertahankan untuk pesanan non-Tempo dan diperluas secara eksplisit untuk status Tempo.
+Migrasi 0015 menambah enum `approved_unpaid`, `tempo_repayment`, `tempo_statement`, dan `tempo_reminder`. Migrasi 0016 menambah `branches.is_tempo`, `tanggal_bayar`, `tahan_bila_telat` dan snapshot Tempo pada pesanan. Migrasi 0017 menambah `branches.allow_transfer` dan membolehkan satu atau lebih dari Transfer, C&C, dan Tempo sekaligus. Constraint mewajibkan setidaknya satu cara pembayaran serta tanggal bayar 1–28 bila Tempo aktif. `orders.is_cnc` dan `orders.is_tempo` adalah snapshot pilihan tunggal per pesanan; keduanya salah berarti Transfer di muka. Constraint settlement lama dipertahankan untuk pesanan non-Tempo dan diperluas secara eksplisit untuk status Tempo.
 
 Ledger Tempo memakai `tempo_charges` per invoice/koreksi, `tempo_receipts` per bukti, `tempo_allocations` per alokasi pembayaran/kredit, `tempo_credit_entries` untuk saldo kredit Tempo yang terpisah dari jurnal deposit C&C, dan `tempo_adjustments` untuk delta revisi. `tempo_statements` dan `tempo_statement_lines` menyimpan versi PDF Surat Tagihan tanpa menimpa versi lama. `tempo_reminders` mencatat tahap pengingat yang sudah diantre agar job berulang tidak mengirim ganda. `tempo_hold_grace` menyimpan awal dan akhir satu masa tenggang penahanan; unggah ulang tidak memperpanjangnya.
 

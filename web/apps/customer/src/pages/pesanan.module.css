@@ -287,6 +287,38 @@
   border-radius: var(--radius-control);
 }
 
+.paymentOptions {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+}
+
+.paymentOptions legend { padding: 0 4px; font-weight: 600; }
+.paymentOptions p { margin: 0 0 4px; }
+
+.paymentOption {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.paymentOption:focus-within { outline: 2px solid var(--brand-500); outline-offset: 2px; }
+.paymentOption:has(input:disabled) { opacity: .65; cursor: not-allowed; }
+.paymentOptionSelected { border-color: var(--brand-500); background: var(--brand-50); }
+.paymentOption input { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--brand-500); }
+.paymentOption span { min-width: 0; }
+.paymentOption small { display: block; margin-top: 2px; color: var(--text-muted); line-height: 1.5; }
+
 .rincianBaris {
   display: flex;
   justify-content: space-between;

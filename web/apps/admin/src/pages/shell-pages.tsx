@@ -31,6 +31,7 @@ export interface Cabang {
   telepon?: string;
   is_cnc: boolean;
   is_tempo?: boolean;
+  allow_transfer?: boolean;
   tanggal_bayar?: number;
   tahan_bila_telat?: boolean;
   pajak_in?: boolean;

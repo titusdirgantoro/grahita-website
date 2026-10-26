@@ -37,6 +37,50 @@ type sessionCreateBarrier struct {
 	proceed <-chan struct{}
 }
 
+func TestPGCabangBeberapaCaraPembayaranLewatAPI(t *testing.T) {
+	f := newPGFixture(t)
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/branches",
+		`{"nama":"Grahita Multi","nama_kepala":"Kepala Multi","email":"multi@example.test","allow_transfer":true,"is_cnc":true,"is_tempo":true,"tanggal_bayar":5,"tahan_bila_telat":true}`,
+		cookies, csrf)
+	if status != http.StatusCreated {
+		t.Fatalf("buat cabang multi: %d %+v", status, body)
+	}
+	created := dataMap(t, body)
+	if created["allow_transfer"] != true || created["is_cnc"] != true || created["is_tempo"] != true {
+		t.Fatalf("opsi pembayaran hilang dari respons: %+v", created)
+	}
+	id := created["id"].(string)
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/branches/"+id,
+		`{"allow_transfer":false,"is_cnc":false}`, cookies, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("ubah opsi cabang: %d %+v", status, body)
+	}
+	updated := dataMap(t, body)
+	if updated["allow_transfer"] != false || updated["is_cnc"] != false || updated["is_tempo"] != true {
+		t.Fatalf("patch opsi pembayaran salah: %+v", updated)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/branches/"+id,
+		`{"is_tempo":false,"allow_transfer":false}`, cookies, csrf)
+	if status != http.StatusBadRequest || kodeErrorVerifikasi(body) != "VALIDATION_FAILED" {
+		t.Fatalf("tanpa opsi pembayaran harus ditolak: %d %+v", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/branches/"+f.branchA,
+		`{"allow_transfer":true,"is_cnc":true,"is_tempo":true,"tanggal_bayar":5}`, cookies, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("aktifkan opsi cabang akun uji: %d %+v", status, body)
+	}
+	branchCookies, _ := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/me/branch", "", branchCookies, "")
+	if status != http.StatusOK {
+		t.Fatalf("profil cabang multi: %d %+v", status, body)
+	}
+	me := dataMap(t, body)
+	if me["allow_transfer"] != true || me["is_cnc"] != true || me["is_tempo"] != true {
+		t.Fatalf("pilihan cabang tidak sampai ke portal cabang: %+v", me)
+	}
+}
+
 func (b sessionCreateBarrier) Create(ctx context.Context, s auth.Session, hash []byte, meta auth.RequestMeta) (auth.Session, error) {
 	b.entered <- struct{}{}
 	if b.proceed != nil {

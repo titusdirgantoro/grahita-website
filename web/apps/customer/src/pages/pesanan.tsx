@@ -510,6 +510,7 @@ export function PesananDetailPage({ id }: { id: string }) {
 interface CabangRingkas {
   is_cnc: boolean;
   is_tempo?: boolean;
+  allow_transfer?: boolean;
 }
 
 const EVENT_REKENING_TIDAK_SEGAR = "grahita:rekening-tidak-segar";
@@ -573,8 +574,23 @@ function ModalKirim({
   onSukses: () => void;
 }) {
   const { data: cabang, memuat: memuatCabang, galat: galatCabang } = useApi<CabangRingkas>("/me/branch", open);
-  const cnc = cabang?.is_cnc === true;
-  const tempo = cabang?.is_tempo === true;
+  const allowDeposit = cabang?.is_cnc === true;
+  const allowTempo = cabang?.is_tempo === true;
+  const allowTransfer = cabang?.allow_transfer ?? (!allowDeposit && !allowTempo);
+  const [paymentMode, setPaymentMode] = useState<"transfer" | "deposit" | "tempo" | "">("");
+  const choices = ([allowTransfer && "transfer", allowDeposit && "deposit", allowTempo && "tempo"]
+    .filter(Boolean)) as Array<"transfer" | "deposit" | "tempo">;
+  const selectedMode = paymentMode && choices.includes(paymentMode)
+    ? paymentMode
+    : choices.length === 1 ? choices[0] : "";
+  useEffect(() => {
+    if (!open) { setPaymentMode(""); return; }
+    if (!cabang) return;
+    setPaymentMode((current) => current && choices.includes(current) ? current : choices.length === 1 ? choices[0] : "");
+  }, [open, cabang, allowTransfer, allowDeposit, allowTempo]);
+  const cnc = selectedMode === "deposit";
+  const tempo = selectedMode === "tempo";
+  const tempoInfo = useApi<{ hold_active: boolean; overdue: number }>("/tempo/overview", open && allowTempo);
   const saldo = useApi<RingkasanDeposit>("/deposit", open && cnc);
   const { data: rekening, memuat: memuatRekening, galat: galatRekening, muatUlang: muatRekening } = useApi<RekeningPembayaran[]>("/bank-accounts", open);
   const [berkas, setBerkas] = useState<File[]>([]);
@@ -583,9 +599,10 @@ function ModalKirim({
 
   const potong = cnc && saldo.data ? Math.max(0, Math.min(saldo.data.available_balance, pesanan.total)) : 0;
   const sisa = Math.max(0, pesanan.total - potong);
-  const wajibBukti = !tempo && (!cnc || sisa > 0);
+  const wajibBukti = selectedMode === "transfer" || (cnc && sisa > 0);
   const transferTersedia = !memuatRekening && !galatRekening && (rekening?.length ?? 0) > 0;
-  const siap = cabang !== null && (!cnc || saldo.data !== null);
+  const tempoSiap = !tempo || (tempoInfo.data !== null && !tempoInfo.memuat && !tempoInfo.galat && !tempoInfo.data.hold_active);
+  const siap = cabang !== null && selectedMode !== "" && (!cnc || saldo.data !== null) && tempoSiap;
 
   function tutup() {
     if (mengirim) return;
@@ -607,6 +624,7 @@ function ModalKirim({
     setGalat(null);
     try {
       const form = new FormData();
+      form.append("payment_mode", selectedMode);
       if (wajibBukti) for (const f of berkas) form.append("file", f);
       if (cnc && saldo.data) form.append("expected_journal_version", String(saldo.data.journal_version));
       await api.postForm<Pesanan>(`/orders/${pesanan.id}/submit`, form);
@@ -657,6 +675,23 @@ function ModalKirim({
           Setelah dikirim, nomor pesanan dan serial number dibuat, harga dikunci sesuai daftar harga
           cabang saat ini, dan pesanan tidak dapat diubah atau dihapus lagi dari portal cabang.
         </Notice>
+        {cabang ? <fieldset className={styles.paymentOptions}>
+          <legend>Cara pembayaran pesanan</legend>
+          <p className="muted small">Pilih satu skema untuk pesanan ini. Pilihan tersimpan setelah pesanan dikirim.</p>
+          {([
+            ["transfer", "Transfer di muka", "Unggah bukti transfer saat mengirim pesanan.", allowTransfer],
+            ["deposit", "Deposit (Cash & Carry)", "Saldo deposit digunakan lebih dulu; sisanya bisa ditransfer.", allowDeposit],
+            ["tempo", "Tempo", tempoInfo.data?.hold_active ? "Ditahan karena ada tagihan lewat jatuh tempo. Lunasi di menu Tagihan untuk memakai Tempo lagi." : "Bayar melalui Tagihan setelah pesanan disetujui admin.", allowTempo],
+          ] as const).filter(([, , , allowed]) => allowed).map(([mode, title, hint]) => (
+            <label key={mode} className={`${styles.paymentOption} ${selectedMode === mode ? styles.paymentOptionSelected : ""}`}>
+              <input type="radio" name="payment_mode" value={mode} checked={selectedMode === mode}
+                disabled={mode === "tempo" && (tempoInfo.data?.hold_active || Boolean(tempoInfo.galat))}
+                onChange={() => { setPaymentMode(mode); setBerkas([]); setGalat(null); }} />
+              <span><b>{title}</b><small>{hint}</small></span>
+            </label>
+          ))}
+        </fieldset> : null}
+        {allowTempo && tempoInfo.galat ? <Notice tone="danger">Status tagihan belum dapat dimuat. Coba tutup dan buka ulang dialog sebelum memilih Tempo.</Notice> : null}
         {tempo ? <Notice tone="info">Pesanan Tempo dikirim tanpa bukti transfer. Setelah admin menyetujui, invoice dan surat jalan terbit; pembayaran dilakukan melalui menu Tagihan.</Notice> : null}
         {galat ? <Notice tone="danger">{galat}</Notice> : null}
         {galatCabang || saldo.galat ? <Notice tone="danger">{galatCabang ?? saldo.galat}</Notice> : null}

@@ -77,6 +77,7 @@ type Branch struct {
 	Telepon                   string     `json:"telepon,omitempty"`
 	IsCNC                     bool       `json:"is_cnc"`
 	IsTempo                   bool       `json:"is_tempo"`
+	AllowTransfer             bool       `json:"allow_transfer"`
 	TanggalBayar              int        `json:"tanggal_bayar,omitempty"`
 	TahanBilaTelat            bool       `json:"tahan_bila_telat"`
 	PajakIn                   bool       `json:"pajak_in"`
@@ -90,10 +91,10 @@ type Branch struct {
 // Filter adalah penyaring daftar cabang. Field nil berarti tidak disaring.
 type Filter struct {
 	// Q mencari pada nama dan email (ILIKE).
-	Q       string
-	Active  *bool
-	CNC     *bool
-	Tempo   *bool
+	Q      string
+	Active *bool
+	CNC    *bool
+	Tempo  *bool
 }
 
 // NewBranch adalah permintaan pembuatan cabang.
@@ -105,6 +106,7 @@ type NewBranch struct {
 	Telepon        string
 	IsCNC          bool
 	IsTempo        bool
+	AllowTransfer  *bool
 	TanggalBayar   int
 	TahanBilaTelat bool
 	PajakIn        bool
@@ -121,6 +123,7 @@ type Patch struct {
 	Telepon        *string
 	IsCNC          *bool
 	IsTempo        *bool
+	AllowTransfer  *bool
 	TanggalBayar   *int
 	TahanBilaTelat *bool
 	PajakIn        *bool
@@ -237,10 +240,14 @@ func (s *Service) Create(ctx context.Context, actor auth.Actor, in NewBranch) (B
 		Telepon:        strings.TrimSpace(in.Telepon),
 		IsCNC:          in.IsCNC,
 		IsTempo:        in.IsTempo,
+		AllowTransfer:  !in.IsCNC && !in.IsTempo,
 		TanggalBayar:   in.TanggalBayar,
 		TahanBilaTelat: in.TahanBilaTelat,
 		PajakIn:        in.PajakIn,
 		IsActive:       true,
+	}
+	if in.AllowTransfer != nil {
+		next.AllowTransfer = *in.AllowTransfer
 	}
 	next.IdentityStatus = identityStatus(next, false)
 	if in.IsActive != nil {
@@ -302,6 +309,12 @@ func ApplyPatch(cur Branch, p Patch, hasAccount bool) (Branch, error) {
 	}
 	if p.IsTempo != nil {
 		next.IsTempo = *p.IsTempo
+	}
+	if p.AllowTransfer != nil {
+		next.AllowTransfer = *p.AllowTransfer
+	} else if !next.IsCNC && !next.IsTempo {
+		// Legacy clients represent transfer by clearing both old flags.
+		next.AllowTransfer = true
 	}
 	if p.TanggalBayar != nil {
 		next.TanggalBayar = *p.TanggalBayar
@@ -475,8 +488,8 @@ func validate(b Branch) error {
 		return fmt.Errorf("%w: telepon terlalu panjang", ErrInvalidData)
 	case len([]rune(b.JabatanKepala)) > 120:
 		return fmt.Errorf("%w: jabatan kepala terlalu panjang", ErrInvalidData)
-	case b.IsCNC && b.IsTempo:
-		return fmt.Errorf("%w: Cash & Carry dan Tempo tidak dapat aktif bersamaan", ErrInvalidData)
+	case !b.AllowTransfer && !b.IsCNC && !b.IsTempo:
+		return fmt.Errorf("%w: pilih minimal satu cara pembayaran", ErrInvalidData)
 	case b.IsTempo && (b.TanggalBayar < 1 || b.TanggalBayar > 28):
 		return fmt.Errorf("%w: tanggal bayar Tempo harus 1–28", ErrInvalidData)
 	case !b.IsTempo && (b.TanggalBayar != 0 || b.TahanBilaTelat):

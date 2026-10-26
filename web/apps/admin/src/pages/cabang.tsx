@@ -99,6 +99,7 @@ interface FormCabang {
   telepon: string;
   is_cnc: boolean;
   is_tempo: boolean;
+  allow_transfer: boolean;
   tanggal_bayar: number;
   tahan_bila_telat: boolean;
   pajak_in: boolean;
@@ -121,6 +122,7 @@ const CABANG_BARU: FormCabang = {
   telepon: "",
   is_cnc: false,
   is_tempo: false,
+  allow_transfer: true,
   tanggal_bayar: 5,
   tahan_bila_telat: false,
   pajak_in: false,
@@ -149,6 +151,9 @@ function validasiForm(f: FormCabang): Record<string, string> {
   if (f.email.trim() && !POLA_EMAIL.test(f.email.trim())) err.email = "Format email belum benar.";
   if (f.is_tempo && (!Number.isInteger(f.tanggal_bayar) || f.tanggal_bayar < 1 || f.tanggal_bayar > 28)) {
     err.tanggal_bayar = "Tanggal bayar harus 1 sampai 28.";
+  }
+  if (!f.allow_transfer && !f.is_cnc && !f.is_tempo) {
+    err.pembayaran = "Pilih minimal satu cara pembayaran.";
   }
   return err;
 }
@@ -274,6 +279,7 @@ export function CabangPage() {
       telepon: row.telepon ?? "",
       is_cnc: row.is_cnc,
       is_tempo: Boolean(row.is_tempo),
+      allow_transfer: row.allow_transfer ?? (!row.is_cnc && !row.is_tempo),
       tanggal_bayar: row.tanggal_bayar ?? 5,
       tahan_bila_telat: Boolean(row.tahan_bila_telat),
       pajak_in: Boolean(row.pajak_in),
@@ -327,6 +333,7 @@ export function CabangPage() {
       telepon: form.telepon.trim(),
       is_cnc: form.is_cnc,
       is_tempo: form.is_tempo,
+      allow_transfer: form.allow_transfer,
       tanggal_bayar: form.is_tempo ? form.tanggal_bayar : 0,
       tahan_bila_telat: form.is_tempo && form.tahan_bila_telat,
       pajak_in: form.pajak_in,
@@ -563,6 +570,7 @@ export function CabangPage() {
                     <Badge tone={rekening > 0 ? "success" : "danger"}>
                       {rekening > 0 ? `${rekening} rekening tujuan` : "Belum ada rekening"}
                     </Badge>
+                    {(c.allow_transfer ?? (!c.is_cnc && !c.is_tempo)) ? <Badge tone="neutral">Transfer</Badge> : null}
                     {c.is_cnc ? <Badge tone="cnc">C&amp;C</Badge> : null}
                     {c.is_tempo ? <Badge tone="info">Tempo · bayar tanggal {c.tanggal_bayar}</Badge> : null}
                     {c.pajak_in ? <Badge tone="neutral">PI</Badge> : null}
@@ -706,23 +714,20 @@ export function CabangPage() {
                 onChange={(e) => setForm({ ...form, telepon: e.target.value })}
               />
             </Field>
-            <Field label="Cara pembayaran" htmlFor="cf-pembayaran">
-              <select
-                id="cf-pembayaran"
-                value={form.is_tempo ? "tempo" : form.is_cnc ? "deposit" : "transfer"}
-                onChange={(e) => setForm({ ...form, is_cnc: e.target.value === "deposit", is_tempo: e.target.value === "tempo" })}
-              >
-                <option value="transfer">Transfer di muka</option>
-                <option value="deposit">Deposit (Cash &amp; Carry)</option>
-                <option value="tempo">Tempo</option>
-              </select>
-            </Field>
+            <fieldset className={styles.paymentMethods} aria-describedby={errorFields.pembayaran ? "cf-pembayaran-hint cf-pembayaran-error" : "cf-pembayaran-hint"}>
+              <legend>Cara pembayaran yang diizinkan</legend>
+              <p id="cf-pembayaran-hint" className="muted small">Pilih satu atau lebih. Cabang memilih satu skema untuk setiap pesanan saat mengirim.</p>
+              <SwitchRow checked={form.allow_transfer} onChange={(v) => setForm({ ...form, allow_transfer: v })} label="Transfer di muka" hint="Bukti transfer wajib saat pesanan dikirim." />
+              <SwitchRow checked={form.is_cnc} onChange={(v) => setForm({ ...form, is_cnc: v })} label="Deposit (Cash & Carry)" hint="Saldo deposit digunakan lebih dulu; kekurangannya dibayar transfer." />
+              <SwitchRow checked={form.is_tempo} onChange={(v) => setForm({ ...form, is_tempo: v })} label="Tempo" hint="Tagihan dibayar setelah invoice disetujui." />
+              {errorFields.pembayaran ? <p id="cf-pembayaran-error" role="alert" className={styles.paymentError}>{errorFields.pembayaran}</p> : null}
+            </fieldset>
             {form.is_tempo ? (
               <>
                 <Field label="Tanggal bayar tiap bulan" htmlFor="cf-tanggal-bayar" error={errorFields.tanggal_bayar} hint="Tanggal 1–28. Perubahan hanya berlaku untuk pesanan yang dikirim setelah perubahan.">
                   <Input id="cf-tanggal-bayar" type="number" min={1} max={28} value={form.tanggal_bayar} onChange={(e) => setForm({ ...form, tanggal_bayar: Number(e.target.value) })} />
                 </Field>
-                <SwitchRow checked={form.tahan_bila_telat} onChange={(v) => setForm({ ...form, tahan_bila_telat: v })} label="Tahan pesanan bila tagihan lewat jatuh tempo" hint="Draft tetap bisa dibuat. Pengiriman pesanan ditahan sampai tunggakan dibayar atau bukti pelunasan sedang diperiksa." />
+                <SwitchRow checked={form.tahan_bila_telat} onChange={(v) => setForm({ ...form, tahan_bila_telat: v })} label="Tahan pilihan Tempo bila tagihan lewat jatuh tempo" hint="Cara bayar di muka yang diizinkan tetap tersedia; Tempo dibuka lagi setelah tunggakan lunas atau masuk masa tenggang pemeriksaan." />
               </>
             ) : null}
             <SwitchRow

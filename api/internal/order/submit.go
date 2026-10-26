@@ -62,10 +62,13 @@ func ribuan(n int64) string {
 // yang tidak tertutup saldo deposit (PRD CP-ORD-04, CP-CNC-02).
 var ErrProofRequired = fmt.Errorf("%w: pesanan wajib disertai minimal satu bukti transfer", ErrInvalidData)
 
-// SubmitInput adalah pilihan yang datang dari klien saat submit. Harga, biaya,
-// total, dan status Cash & Carry TIDAK pernah dari klien (SystemDesign §3,
-// BR-10).
+// SubmitInput adalah pilihan yang datang dari klien saat submit. Server
+// memeriksa apakah cara pembayaran itu diizinkan master cabang; harga, biaya,
+// total, dan snapshot pembayaran ditentukan dalam transaksi (BR-10).
 type SubmitInput struct {
+	// PaymentMode dipilih untuk satu pesanan: transfer, deposit, atau tempo.
+	// Kosong hanya diterima bila cabang punya tepat satu opsi (klien lama).
+	PaymentMode string
 	// ExpectedJournalVersion adalah versi saldo deposit yang dilihat cabang
 	// C&C saat menekan Kirim (GET /deposit); wajib untuk cabang C&C dan
 	// diabaikan untuk cabang lain. Bila saldo sudah berubah, submit ditolak
@@ -73,9 +76,8 @@ type SubmitInput struct {
 	ExpectedJournalVersion *int64
 }
 
-// BranchFlags membaca flag `cash_and_carry` cabang. Implementasinya adalah
-// branch.Service; nilainya dibaca SERVER dari master cabang sehingga cabang
-// tidak bisa memilih sendiri jalur pembayaran deposit (PRD CP-CNC-01).
+// BranchFlags adalah kontrak lama untuk membaca flag Cash & Carry cabang.
+// Implementasinya dapat menyediakan TempoMode untuk membaca seluruh pilihan.
 type BranchFlags interface {
 	IsCNC(ctx context.Context, branchID string) (bool, error)
 }
@@ -303,21 +305,53 @@ func (s *Service) Submit(ctx context.Context, actor auth.Actor, id string, in Su
 
 	// Flag cabang dibaca server (bukan dari klien); bila sumbernya tidak
 	// tersedia, cabang diperlakukan non-C&C (fail closed: wajib bukti).
-	var cabangCNC bool
-	var cabangTempo bool
+	var allowCNC bool
+	var allowTempo bool
+	var allowTransfer bool
 	var tanggalBayar int
 	if s.flags != nil {
 		if modes, ok := s.flags.(TempoMode); ok {
 			var b branch.Branch
 			b, err = modes.PaymentMode(ctx, branchID)
-			cabangCNC, cabangTempo, tanggalBayar = b.IsCNC, b.IsTempo, b.TanggalBayar
+			allowCNC, allowTempo, allowTransfer, tanggalBayar = b.IsCNC, b.IsTempo, b.AllowTransfer, b.TanggalBayar
 		} else {
-			cabangCNC, err = s.flags.IsCNC(ctx, branchID)
+			allowCNC, err = s.flags.IsCNC(ctx, branchID)
 		}
 		if err != nil {
 			return Order{}, fmt.Errorf("baca flag Cash & Carry cabang: %w", err)
 		}
 	}
+	// Sumber flag lama dan fixture tanpa opsi transfer tetap memakai kontrak
+	// historis: bukan C&C atau Tempo berarti transfer di muka.
+	if !allowCNC && !allowTempo {
+		allowTransfer = true
+	}
+	mode := strings.TrimSpace(in.PaymentMode)
+	if mode == "" {
+		count := 0
+		if allowTransfer {
+			count++
+			mode = "transfer"
+		}
+		if allowCNC {
+			count++
+			mode = "deposit"
+		}
+		if allowTempo {
+			count++
+			mode = "tempo"
+		}
+		if count != 1 {
+			return Order{}, ErrPaymentModeRequired
+		}
+	}
+	if (mode == "transfer" && !allowTransfer) ||
+		(mode == "deposit" && !allowCNC) ||
+		(mode == "tempo" && !allowTempo) ||
+		(mode != "transfer" && mode != "deposit" && mode != "tempo") {
+		return Order{}, ErrPaymentModeChanged
+	}
+	cabangCNC, cabangTempo := mode == "deposit", mode == "tempo"
 	var expectedJournal int64
 	if cabangCNC {
 		if in.ExpectedJournalVersion == nil || *in.ExpectedJournalVersion < 0 {

@@ -125,8 +125,9 @@ func (a *API) orderDelete(w http.ResponseWriter, r *http.Request) error {
 // transfer pada field `file` (boleh NOL berkas — bukti boleh sudah diunggah
 // lewat POST /orders/{id}/proofs) dan, untuk cabang Cash & Carry, versi saldo
 // deposit yang dilihat cabang pada field `expected_journal_version`
-// (PRD CP-CNC-02). Status C&C, harga, biaya packaging, dan total tidak pernah
-// diterima dari klien; semuanya dibaca server.
+// (PRD CP-CNC-02). Field `payment_mode` memilih satu dari cara yang diizinkan
+// pada master cabang. Status C&C/Tempo, harga, biaya packaging, dan total
+// ditentukan dan disimpan server.
 //
 // Urutan dua langkah ini disengaja dan tidak diklaim atomik lintas sistem:
 // berkas bukti disimpan lebih dulu lewat domain bukti (transaksinya sendiri),
@@ -138,7 +139,7 @@ func (a *API) orderSubmit(w http.ResponseWriter, r *http.Request) error {
 	if a.d.Orders == nil {
 		return ordersUnavailable()
 	}
-	files, expectedJournal, tutup, err := a.bacaSubmit(w, r)
+	files, expectedJournal, paymentMode, tutup, err := a.bacaSubmit(w, r)
 	if err != nil {
 		return err
 	}
@@ -160,7 +161,7 @@ func (a *API) orderSubmit(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	o, err := a.d.Orders.Submit(r.Context(), actor, orderID, order.SubmitInput{ExpectedJournalVersion: expectedJournal})
+	o, err := a.d.Orders.Submit(r.Context(), actor, orderID, order.SubmitInput{ExpectedJournalVersion: expectedJournal, PaymentMode: paymentMode})
 	if err != nil {
 		return mapDomainErr(err)
 	}

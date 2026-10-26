@@ -60,7 +60,7 @@ func (r *Repo) List(ctx context.Context, f branch.Filter) ([]branch.Branch, erro
 		out = append(out, branch.Branch{
 			ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
 			JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
-			Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo,
+			Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo, AllowTransfer: row.AllowTransfer,
 			TanggalBayar: int(row.TanggalBayar.Int16), TahanBilaTelat: row.TahanBilaTelat,
 			PajakIn: row.PajakIn, IsActive: row.IsActive,
 			BankAllowlistVersion:      row.BankAllowlistVersion,
@@ -83,7 +83,7 @@ func (r *Repo) Get(ctx context.Context, id string) (branch.Branch, error) {
 	return branch.Branch{
 		ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
 		JabatanKepala: row.JabatanKepala, IdentityStatus: row.IdentityStatus,
-		Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo,
+		Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo, AllowTransfer: row.AllowTransfer,
 		TanggalBayar: int(row.TanggalBayar.Int16), TahanBilaTelat: row.TahanBilaTelat,
 		PajakIn: row.PajakIn, IsActive: row.IsActive,
 		BankAllowlistVersion:      row.BankAllowlistVersion,
@@ -109,6 +109,7 @@ func (r *Repo) Create(ctx context.Context, in branch.Branch, rec audit.Entry) (s
 		Telepon:        pgtypes.Text(in.Telepon),
 		IsCnc:          in.IsCNC,
 		IsTempo:        in.IsTempo,
+		AllowTransfer:  in.AllowTransfer,
 		TanggalBayar:   tempoDay(in.TanggalBayar),
 		TahanBilaTelat: in.TahanBilaTelat,
 		PajakIn:        in.PajakIn,
@@ -166,12 +167,12 @@ func (r *Repo) Update(ctx context.Context, id string, p branch.Patch, actor auth
 	var namaKepala, email, jabatanKepala *string
 	var day *int16
 	err = tx.QueryRow(ctx, `SELECT id, nama, nama_kepala, email::text, jabatan_kepala,
-       COALESCE(telepon, ''), is_cnc, is_tempo, tanggal_bayar, tahan_bila_telat,
+	       COALESCE(telepon, ''), is_cnc, is_tempo, allow_transfer, tanggal_bayar, tahan_bila_telat,
        pajak_in, is_active,
        identity_status::text
   FROM branches WHERE id = $1 FOR UPDATE`, id).Scan(
 		&cur.ID, &cur.Nama, &namaKepala, &email, &jabatanKepala, &cur.Telepon,
-		&cur.IsCNC, &cur.IsTempo, &day, &cur.TahanBilaTelat,
+		&cur.IsCNC, &cur.IsTempo, &cur.AllowTransfer, &day, &cur.TahanBilaTelat,
 		&cur.PajakIn, &cur.IsActive, &cur.IdentityStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -224,6 +225,7 @@ func (r *Repo) Update(ctx context.Context, id string, p branch.Patch, actor auth
 		Telepon:        pgtypes.Text(next.Telepon),
 		IsCnc:          next.IsCNC,
 		IsTempo:        next.IsTempo,
+		AllowTransfer:  next.AllowTransfer,
 		TanggalBayar:   tempoDay(next.TanggalBayar),
 		TahanBilaTelat: next.TahanBilaTelat,
 		PajakIn:        next.PajakIn,

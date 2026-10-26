@@ -149,7 +149,9 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, order.ErrNoBranch):
 		return apierr.New(http.StatusConflict, "BRANCH_MISSING", "Akun ini belum terhubung ke cabang mana pun.")
 	case errors.Is(err, order.ErrOrderHeld):
-		return apierr.Conflict("TEMPO_ORDER_HELD", "Pengiriman pesanan ditahan karena tagihan Tempo lewat jatuh tempo. Lihat menu Tagihan.")
+		return apierr.Conflict("TEMPO_ORDER_HELD", "Pilihan Tempo ditahan karena tagihan lewat jatuh tempo. Pilih pembayaran di muka atau lihat menu Tagihan.")
+	case errors.Is(err, order.ErrPaymentModeRequired):
+		return apierr.Validation("Pilih cara pembayaran untuk pesanan ini.", map[string]string{"payment_mode": "wajib dipilih"})
 	case errors.Is(err, order.ErrPaymentModeChanged):
 		return apierr.Conflict("PAYMENT_MODE_CHANGED", "Cara pembayaran cabang berubah. Muat ulang lalu kirim pesanan lagi.")
 	case errors.Is(err, order.ErrTempoCreditSuperadmin):

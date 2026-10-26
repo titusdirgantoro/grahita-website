@@ -910,6 +910,7 @@ type Branch struct {
 	IsTempo              bool                 `json:"is_tempo"`
 	TanggalBayar         pgtype.Int2          `json:"tanggal_bayar"`
 	TahanBilaTelat       bool                 `json:"tahan_bila_telat"`
+	AllowTransfer        bool                 `json:"allow_transfer"`
 }
 
 type BranchBankAccount struct {

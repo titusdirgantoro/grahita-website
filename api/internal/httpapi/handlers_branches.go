@@ -21,6 +21,7 @@ type createBranchRequest struct {
 	Telepon        string `json:"telepon" validate:"omitempty,max=40"`
 	IsCNC          bool   `json:"is_cnc"`
 	IsTempo        bool   `json:"is_tempo"`
+	AllowTransfer  *bool  `json:"allow_transfer"`
 	TanggalBayar   int    `json:"tanggal_bayar"`
 	TahanBilaTelat bool   `json:"tahan_bila_telat"`
 	PajakIn        bool   `json:"pajak_in"`
@@ -38,6 +39,7 @@ type updateBranchRequest struct {
 	Telepon        *string `json:"telepon"`
 	IsCNC          *bool   `json:"is_cnc"`
 	IsTempo        *bool   `json:"is_tempo"`
+	AllowTransfer  *bool   `json:"allow_transfer"`
 	TanggalBayar   *int    `json:"tanggal_bayar"`
 	TahanBilaTelat *bool   `json:"tahan_bila_telat"`
 	PajakIn        *bool   `json:"pajak_in"`
@@ -93,6 +95,7 @@ func (a *API) adminBranchCreate(w http.ResponseWriter, r *http.Request) error {
 		Telepon:        req.Telepon,
 		IsCNC:          req.IsCNC,
 		IsTempo:        req.IsTempo,
+		AllowTransfer:  req.AllowTransfer,
 		TanggalBayar:   req.TanggalBayar,
 		TahanBilaTelat: req.TahanBilaTelat,
 		PajakIn:        req.PajakIn,
@@ -124,6 +127,7 @@ func (a *API) adminBranchUpdate(w http.ResponseWriter, r *http.Request) error {
 		Telepon:        req.Telepon,
 		IsCNC:          req.IsCNC,
 		IsTempo:        req.IsTempo,
+		AllowTransfer:  req.AllowTransfer,
 		TanggalBayar:   req.TanggalBayar,
 		TahanBilaTelat: req.TahanBilaTelat,
 		PajakIn:        req.PajakIn,

@@ -923,7 +923,7 @@ func TestPGVerifikasiTransferOnlyMenolakAlokasiDepositAktifManualDanAI(t *testin
 func TestPGCnCDibayarDepositSampaiDone(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
-	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_cnc = true WHERE id = $1`, f.branchA); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_cnc = true, allow_transfer = false WHERE id = $1`, f.branchA); err != nil {
 		t.Fatalf("tandai cabang C&C: %v", err)
 	}
 	seedSaldoDeposit(t, f, f.branchA, 500000)

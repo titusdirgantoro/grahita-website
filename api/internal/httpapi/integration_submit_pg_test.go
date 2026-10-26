@@ -32,7 +32,7 @@ import (
 // multipartSubmit mengirim POST /orders/{id}/submit sebagai multipart:
 // berkas bukti (boleh kosong) dan versi saldo deposit yang dilihat cabang C&C
 // (kosong = tidak dikirim).
-func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf string, berkas map[string][]byte, versiSaldo string) (*http.Response, map[string]any) {
+func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf string, berkas map[string][]byte, versiSaldo string, paymentMode ...string) (*http.Response, map[string]any) {
 	t.Helper()
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
@@ -48,6 +48,11 @@ func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf stri
 	if versiSaldo != "" {
 		if err := w.WriteField("expected_journal_version", versiSaldo); err != nil {
 			t.Fatalf("tulis field expected_journal_version: %v", err)
+		}
+	}
+	if len(paymentMode) > 0 {
+		if err := w.WriteField("payment_mode", paymentMode[0]); err != nil {
+			t.Fatalf("tulis field payment_mode: %v", err)
 		}
 	}
 	if err := w.Close(); err != nil {
@@ -441,7 +446,7 @@ func TestPGSubmitHargaDanNamaMasterBerubah(t *testing.T) {
 func TestPGSubmitCNCMemotongDepositAtomik(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
-	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_cnc = true WHERE id = $1`, f.branchA); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_cnc = true, allow_transfer = false WHERE id = $1`, f.branchA); err != nil {
 		t.Fatalf("aktifkan flag C&C cabang A: %v", err)
 	}
 	seedSaldoDeposit(t, f, f.branchA, 300000)

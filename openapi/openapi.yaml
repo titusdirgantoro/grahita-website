@@ -659,15 +659,19 @@ paths:
 
         Badan permintaan `multipart/form-data`:
 
+        - `payment_mode` — `transfer`, `deposit`, atau `tempo`; wajib bila
+          cabang memiliki lebih dari satu cara pembayaran yang diizinkan.
+          Server memeriksa izin pada saat submit dan menyimpan pilihannya
+          pada pesanan. Klien lama boleh mengosongkannya bila hanya ada satu
+          pilihan;
         - `file` — bukti transfer (JPG/PNG/PDF), boleh diulang dan boleh
           TIDAK DIISI bila buktinya sudah diunggah lewat
           `POST /orders/{id}/proofs`. Aturan jenis/ukuran/jumlah sama dengan
           unggahan bukti (`max_file` × `max_mb`, CP-ORD-04);
         - `expected_journal_version` — versi saldo deposit (`journal_version`
           dari `GET /deposit`) yang dilihat cabang saat menekan Kirim. WAJIB
-          untuk cabang Cash & Carry, diabaikan untuk cabang lain (CP-CNC-02).
-          Status C&C pesanan TIDAK diterima dari klien: server membacanya dari
-          flag `cash_and_carry` cabang sesi.
+          untuk pilihan Deposit, diabaikan untuk pilihan lain (CP-CNC-02).
+          Server memverifikasi pilihan terhadap izin cabang.
 
         Aturan yang ditegakkan server di dalam SATU transaksi:
 
@@ -710,6 +714,10 @@ paths:
             schema:
               type: object
               properties:
+                payment_mode:
+                  type: string
+                  enum: [transfer, deposit, tempo]
+                  description: Wajib bila cabang memiliki lebih dari satu pilihan.
                 file:
                   type: array
                   items: { type: string, format: binary }
@@ -5702,7 +5710,7 @@ components:
         portal cabang: nama, kepala cabang, email, dan telepon adalah data
         master yang dikelola admin Pusat (PRD §3.8), dan API tidak menyediakan
         rute tulis untuknya.
-      required: [id, nama, nama_kepala, jabatan_kepala, email, identity_status, telepon, is_cnc, is_tempo, tahan_bila_telat, pajak_in, is_active]
+      required: [id, nama, nama_kepala, jabatan_kepala, email, identity_status, telepon, is_cnc, is_tempo, allow_transfer, tahan_bila_telat, pajak_in, is_active]
       properties:
         id: { type: string, format: uuid }
         nama: { type: string }
@@ -5713,6 +5721,7 @@ components:
         telepon: { type: string }
         is_cnc: { type: boolean }
         is_tempo: { type: boolean }
+        allow_transfer: { type: boolean, description: Transfer di muka boleh dipilih pada pesanan. }
         tanggal_bayar: { type: integer, minimum: 1, maximum: 28, description: Wajib bila is_tempo true. }
         tahan_bila_telat: { type: boolean }
         pajak_in: { type: boolean }
@@ -5735,6 +5744,7 @@ components:
         telepon: { type: string, maxLength: 40 }
         is_cnc: { type: boolean }
         is_tempo: { type: boolean }
+        allow_transfer: { type: boolean, description: Boleh digabung dengan is_cnc atau is_tempo; minimal satu opsi harus aktif. }
         tanggal_bayar: { type: integer, minimum: 1, maximum: 28 }
         tahan_bila_telat: { type: boolean }
         pajak_in: { type: boolean }
@@ -5754,6 +5764,7 @@ components:
         telepon: { type: string, maxLength: 40 }
         is_cnc: { type: boolean }
         is_tempo: { type: boolean }
+        allow_transfer: { type: boolean, description: Boleh digabung dengan is_cnc atau is_tempo; minimal satu opsi harus aktif. }
         tanggal_bayar: { type: integer, minimum: 1, maximum: 28 }
         tahan_bila_telat: { type: boolean }
         pajak_in: { type: boolean }

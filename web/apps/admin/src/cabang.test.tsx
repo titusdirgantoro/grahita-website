@@ -260,7 +260,8 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     fireEvent.change(screen.getByLabelText("Email cabang"), {
       target: { value: "solo@example.test" },
     });
-    fireEvent.change(screen.getByLabelText("Cara pembayaran"), { target: { value: "deposit" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Transfer di muka" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Deposit (Cash & Carry)" }));
     fireEvent.click(screen.getByRole("switch", { name: "Pajak In (PI)" }));
     fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
 
@@ -275,6 +276,7 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
         jabatan_kepala: "",
         email: "solo@example.test",
         telepon: "",
+        allow_transfer: false,
         is_cnc: true,
         is_tempo: false,
         tanggal_bayar: 0,
@@ -292,6 +294,25 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
         panggilan.filter((p) => p.url.includes("/admin/branches") && p.init?.method === "GET").length,
       ).toBeGreaterThan(1),
     );
+  });
+
+  it("cabang dapat mengizinkan beberapa cara bayar sekaligus", async () => {
+    const panggilan = stubFetch();
+    render(<RouterProvider router={buatRouter("/cabang")} />);
+    expect(await screen.findByText("Grahita Bandung")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: /Tambah cabang/ }));
+    fireEvent.change(await screen.findByLabelText("Nama cabang"), { target: { value: "Grahita Bogor" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Deposit (Cash & Carry)" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Tempo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
+
+    await waitFor(() => {
+      const post = panggilan.find((p) => p.url.endsWith("/admin/branches") && p.init?.method === "POST");
+      expect(post).toBeDefined();
+      const body = JSON.parse(String(post?.init?.body));
+      expect([body.allow_transfer, body.is_cnc, body.is_tempo, body.tanggal_bayar]).toEqual([true, true, true, 5]);
+    });
   });
 
   it("EMAIL_TAKEN dari server ditampilkan pada input email", async () => {
