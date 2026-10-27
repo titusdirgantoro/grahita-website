@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { api, ApiClientError } from "@grahita/api-client";
-import { Badge, Button, Card, CardHead, EmptyState, Field, Input, Notice, PageHead, SkeletonList, Table } from "@grahita/ui";
+import { Badge, Button, Card, CardHead, EmptyState, Field, Input, Notice, PageHead, Select, SkeletonList, Table } from "@grahita/ui";
 import { useApi } from "../useApi";
 
 const uang = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
@@ -56,7 +56,7 @@ export function TagihanPage() {
     <Card><CardHead title="Unggah bukti pelunasan"/><p>Nominal yang diverifikasi dialokasikan ke invoice terlama. Kelebihan pembayaran menjadi saldo Tempo setelah persetujuan Superadmin.</p>
       <form onSubmit={(e)=>void kirim(e)}>
         <Field label="Nominal yang ditransfer (Rp)" htmlFor="tempo-amount"><Input id="tempo-amount" type="number" min="1" step="1" value={nominal} onChange={e=>setNominal(e.target.value)}/></Field>
-        <Field label="Rekening tujuan" htmlFor="tempo-bank"><select id="tempo-bank" value={rekeningID} onChange={e=>setRekeningID(e.target.value)} required><option value="">Pilih rekening</option>{(rekening.data??[]).map(r=><option key={r.id} value={r.id}>{r.bank} · {r.nomor} · {r.nama_pemilik}</option>)}</select></Field>
+        <Field label="Rekening tujuan" htmlFor="tempo-bank"><Select id="tempo-bank" value={rekeningID} onChange={e=>setRekeningID(e.target.value)} required><option value="">Pilih rekening</option>{(rekening.data??[]).map(r=><option key={r.id} value={r.id}>{r.bank} · {r.nomor} · {r.nama_pemilik}</option>)}</Select></Field>
         {rekening.galat ? <Notice tone="danger">{rekening.galat}</Notice> : null}
         <Field label="Bukti transfer (JPG, PNG, PDF; maks. 10 MB)" htmlFor="tempo-file"><Input id="tempo-file" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={e=>setBerkas(e.target.files?.[0]??null)}/></Field>
         <Button variant="primary" type="submit" disabled={sibuk || rekening.memuat || !rekening.data?.length}>{sibuk?"Mengunggah…":"Kirim bukti pelunasan"}</Button>

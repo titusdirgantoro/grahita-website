@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/platform/pdf"
 	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/report"
 	"github.com/grahita/portal/api/internal/settings"
@@ -43,6 +45,10 @@ type fakeHealth struct {
 func (f fakeHealth) Ping(context.Context) error { return f.pingErr }
 
 func (f fakeHealth) MigrationVersion(context.Context) (int64, error) { return f.migrasi, f.migrasiE }
+
+type storageTidakSehat struct{ storage.Store }
+
+func (storageTidakSehat) Health(context.Context) error { return errors.New("storage QA terputus") }
 
 type fakeSettingsRepo struct {
 	values map[string]string
@@ -359,6 +365,46 @@ func TestReadyzTidakSiapTanpaMigrasi(t *testing.T) {
 	resp, _ := doJSON(t, http.MethodGet, srv.URL+"/readyz", "", nil, "")
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("readyz harus 503 saat belum ada migrasi, dapat %d", resp.StatusCode)
+	}
+}
+
+func TestReadyzTidakSiapSaatStorageAtauRendererTerputus(t *testing.T) {
+	kasus := []struct {
+		nama, dependency string
+		storage          storage.Store
+		renderer         pdf.Renderer
+	}{
+		{
+			nama: "storage", dependency: "storage",
+			storage:  storageTidakSehat{Store: storage.NewMemory("/files")},
+			renderer: pdf.Disabled{},
+		},
+		{
+			nama: "renderer", dependency: "gotenberg",
+			storage:  storage.NewMemory("/files"),
+			renderer: pdf.NewGotenberg("http://127.0.0.1:1"),
+		},
+	}
+	for _, k := range kasus {
+		t.Run(k.nama, func(t *testing.T) {
+			srv := httptest.NewServer(NewRouter(Deps{
+				Config: testConfig(), Health: fakeHealth{migrasi: 19},
+				Storage: k.storage, Gotenberg: k.renderer,
+			}))
+			defer srv.Close()
+			live, _ := doJSON(t, http.MethodGet, srv.URL+"/healthz", "", nil, "")
+			if live.StatusCode != http.StatusOK {
+				t.Fatalf("liveness harus tetap 200, dapat %d", live.StatusCode)
+			}
+			ready, body := doJSON(t, http.MethodGet, srv.URL+"/readyz", "", nil, "")
+			if ready.StatusCode != http.StatusServiceUnavailable || body["status"] != "not ready" {
+				t.Fatalf("readiness harus 503 saat %s terputus: %d %+v", k.dependency, ready.StatusCode, body)
+			}
+			checks, ok := body["checks"].(map[string]any)
+			if !ok || !strings.HasPrefix(checks[k.dependency].(string), "gagal:") {
+				t.Fatalf("detail %s tidak menunjukkan kegagalan: %+v", k.dependency, body)
+			}
+		})
 	}
 }
 

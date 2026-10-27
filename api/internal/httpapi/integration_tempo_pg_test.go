@@ -1288,6 +1288,33 @@ func TestPGTempoDailyMenerbitkanSuratTanggalSatuTepatSekali(t *testing.T) {
 	if version != 1 || total != 110000 || key == "" {
 		t.Fatalf("versi/total/PDF tagihan salah: %d %d %q", version, total, key)
 	}
+	var nomor string
+	var amount, paid int64
+	var due time.Time
+	if err := f.pool.QueryRow(ctx, `SELECT o.nomor,sl.amount,sl.paid_amount,sl.due_date
+		FROM tempo_statement_lines sl JOIN orders o ON o.id=sl.order_id
+		JOIN tempo_statements st ON st.id=sl.statement_id
+		WHERE st.branch_id=$1 AND st.period_month='2099-10-01'`, f.branchA).
+		Scan(&nomor, &amount, &paid, &due); err != nil {
+		t.Fatalf("isi tagihan Oktober: %v", err)
+	}
+	if nomor != "TEMPO-2099-10-20" || amount != 110000 || paid != 0 || due.Format("2006-01-02") != "2099-11-05" {
+		t.Fatalf("invoice/due/nominal tagihan salah: nomor=%s amount=%d paid=%d due=%s", nomor, amount, paid, due.Format("2006-01-02"))
+	}
+	file, err := f.objek.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("PDF Surat Tagihan tidak tersimpan: %v", err)
+	}
+	pdfBytes, readErr := io.ReadAll(file)
+	_ = file.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, isi := range []string{"TEMPO-2099-10-20", "05-11-2099", "Rp 110000", "Rp 0"} {
+		if !bytes.Contains(pdfBytes, []byte(isi)) {
+			t.Fatalf("PDF Surat Tagihan tidak memuat %q", isi)
+		}
+	}
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_statements WHERE branch_id=$1`, f.branchA).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("pengulangan job menggandakan surat: %d %v", count, err)
 	}
@@ -1296,6 +1323,136 @@ func TestPGTempoDailyMenerbitkanSuratTanggalSatuTepatSekali(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("tagihan perlu satu email cabang dan satu admin, dapat %d", count)
+	}
+	if hasil := f.kirimAntrean(t); hasil.Terkirim != 2 || f.kirim.jumlah() != 2 {
+		t.Fatalf("email Surat Tagihan harus benar-benar dikirim ke dua penerima: %+v", hasil)
+	}
+	var sent, branchMail, adminMail int
+	if err := f.pool.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE status='sent'),
+		count(*) FILTER (WHERE 'cabang-a@example.test'=ANY(to_addr)),
+		count(*) FILTER (WHERE 'rina@example.test'=ANY(to_addr))
+		FROM email_outbox WHERE jenis='tempo_statement'`).
+		Scan(&sent, &branchMail, &adminMail); err != nil {
+		t.Fatal(err)
+	}
+	if sent != 2 || branchMail != 1 || adminMail != 1 {
+		t.Fatalf("status/penerima email tagihan salah: sent=%d cabang=%d admin=%d", sent, branchMail, adminMail)
+	}
+}
+
+// TMP-07: pekerjaan harian yang diulang harus menjaga PDF lama ketika order
+// periode tertutup baru disetujui dan ketika invoice kemudian dikoreksi.
+func TestPGTempoDailyMemversikanPersetujuanLamaDanKoreksi(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE admin_users SET notif_invoice=(id=$1) WHERE id IN ($1,$2)`, f.adminSA, f.adminMgr); err != nil {
+		t.Fatal(err)
+	}
+	wib := time.FixedZone("WIB", 7*3600)
+	jam := clock.Fixed(time.Date(2099, 10, 25, 9, 0, 0, 0, wib))
+	svc := receivable.New(f.pool, f.jobs, receivable.WithClock(jam))
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	pertama := tempoSubmitted(t, f, "2099-10-20", 100000)
+	if _, err := svc.Approve(ctx, manager, pertama); err != nil {
+		t.Fatalf("persetujuan pertama: %v", err)
+	}
+	if err := jalankanPekerjaanDone(t, f, pertama); err != nil {
+		t.Fatalf("dokumen pesanan pertama: %v", err)
+	}
+
+	terbit := func(waktu time.Time, versi int, total int64, baris int) (string, []byte) {
+		t.Helper()
+		if err := svc.Daily(ctx, f.objek, rendererUji{}, waktu); err != nil {
+			t.Fatalf("pekerjaan harian v%d: %v", versi, err)
+		}
+		var id, key string
+		var gotVersion, gotLines int
+		var gotTotal int64
+		if err := f.pool.QueryRow(ctx, `SELECT id::text,version,total_amount,storage_key,
+			(SELECT count(*) FROM tempo_statement_lines WHERE statement_id=st.id)
+			FROM tempo_statements st WHERE branch_id=$1 AND period_month='2099-10-01'
+			ORDER BY version DESC LIMIT 1`, f.branchA).
+			Scan(&id, &gotVersion, &gotTotal, &key, &gotLines); err != nil {
+			t.Fatalf("baca Surat Tagihan v%d: %v", versi, err)
+		}
+		if gotVersion != versi || gotTotal != total || gotLines != baris || key == "" {
+			t.Fatalf("Surat Tagihan v%d: versi=%d total=%d baris=%d key=%q", versi, gotVersion, gotTotal, gotLines, key)
+		}
+		file, err := f.objek.Get(ctx, key)
+		if err != nil {
+			t.Fatalf("baca PDF v%d: %v", versi, err)
+		}
+		defer file.Close()
+		pdf, err := io.ReadAll(file)
+		if err != nil || len(pdf) == 0 {
+			t.Fatalf("PDF v%d kosong/gagal dibaca: %v", versi, err)
+		}
+		return id, pdf
+	}
+
+	v1, pdfV1 := terbit(time.Date(2099, 11, 1, 9, 0, 0, 0, wib), 1, 100000, 1)
+	// Persetujuan setelah tanggal 1 tetap masuk periode submit Oktober.
+	jam.Set(time.Date(2099, 11, 2, 9, 0, 0, 0, wib))
+	kedua := tempoSubmitted(t, f, "2099-10-21", 200000)
+	if _, err := svc.Approve(ctx, manager, kedua); err != nil {
+		t.Fatalf("persetujuan terlambat: %v", err)
+	}
+	v2, pdfV2 := terbit(time.Date(2099, 11, 2, 10, 0, 0, 0, wib), 2, 300000, 2)
+	if v1 == v2 || bytes.Equal(pdfV1, pdfV2) {
+		t.Fatal("approval terlambat harus membuat versi/PDF baru")
+	}
+
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	status, body := reviseHTTP(t, f, cookies, csrf, pertama,
+		reviseBody("koreksi harga", `{"line_no":1,"qty":1,"harga_satuan":150000}`))
+	if status != http.StatusOK {
+		t.Fatalf("revisi pesanan pertama: %d %+v", status, body)
+	}
+	if err := jalankanPekerjaanRevisi(t, f, pertama, 1); err != nil {
+		t.Fatalf("dokumen revisi: %v", err)
+	}
+	// Koreksi positif disimpan sebagai charge tambahan, sehingga dua invoice
+	// menghasilkan tiga baris charge dalam versi Surat Tagihan berikutnya.
+	v3, pdfV3 := terbit(time.Date(2099, 11, 3, 9, 0, 0, 0, wib), 3, 350000, 3)
+	if v3 == v2 || bytes.Equal(pdfV2, pdfV3) {
+		t.Fatal("koreksi harus membuat versi/PDF baru")
+	}
+	// Ulangi job; fingerprint sama tidak boleh menambah versi atau outbox.
+	if err := svc.Daily(ctx, f.objek, rendererUji{}, time.Date(2099, 11, 3, 10, 0, 0, 0, wib)); err != nil {
+		t.Fatalf("pekerjaan harian berulang: %v", err)
+	}
+	var versions, emails int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_statements WHERE branch_id=$1 AND period_month='2099-10-01'`, f.branchA).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE jenis='tempo_statement'`).Scan(&emails); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 3 || emails != 6 {
+		t.Fatalf("job berulang menggandakan versi/email: versi=%d email=%d", versions, emails)
+	}
+	branchCookies, _ := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	statusUnduh, download, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/tempo/statements/"+v1+"/download", "", branchCookies, "")
+	if statusUnduh != http.StatusOK {
+		t.Fatalf("PDF historis v1 harus tetap dapat diunduh: %d %+v", statusUnduh, download)
+	}
+	link, _ := dataMap(t, download)["url"].(string)
+	if !strings.Contains(link, "tempo-statement/"+v1+".pdf") {
+		t.Fatalf("tautan unduh v1 menunjuk objek salah: %q", link)
+	}
+	fileV1, err := f.objek.Get(ctx, "tempo-statement/"+v1+".pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fileV1.Close()
+	oldPDF, err := io.ReadAll(fileV1)
+	if err != nil || !bytes.Equal(oldPDF, pdfV1) {
+		t.Fatalf("PDF historis v1 berubah sesudah koreksi: %v", err)
 	}
 }
 

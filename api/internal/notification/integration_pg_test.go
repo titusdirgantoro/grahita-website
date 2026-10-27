@@ -390,6 +390,63 @@ func TestPGJadwalRetryTersimpanDanBerhentiSetelahLimaPercobaan(t *testing.T) {
 	}
 }
 
+func TestPGSMTPGagalDuaKaliLaluPulih(t *testing.T) {
+	pool, _ := skemaUji(t)
+	ctx := context.Background()
+	repo := notificationpg.New(pool)
+	m := &hitungMailer{gagal: errors.New("SMTP QA terputus")}
+	clk := clock.Fixed(time.Now().UTC())
+	svc := notification.New(repo, m, notification.WithClock(clk))
+	row, err := repo.Enqueue(ctx, notification.Envelope{
+		Jenis: notification.JenisResetPassword, To: []string{"a@example.test"},
+		Payload: map[string]any{"tautan": "https://cabang.test/lupa?token=x"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Set(time.Now().UTC().Add(time.Minute))
+	for attempt, delay := range []time.Duration{time.Minute, 5 * time.Minute} {
+		hasil, err := svc.ProsesAntrean(ctx, 0)
+		if err != nil || hasil.Ditunda != 1 {
+			t.Fatalf("SMTP gagal percobaan %d: hasil=%+v err=%v", attempt+1, hasil, err)
+		}
+		var status string
+		var attempts int
+		var next time.Time
+		if err := pool.QueryRow(ctx, `SELECT status::text,attempts,next_try_at FROM email_outbox WHERE id=$1`, row.ID).
+			Scan(&status, &attempts, &next); err != nil {
+			t.Fatal(err)
+		}
+		delta := next.Sub(clk.Now().Add(delay))
+		if status != notification.StatusQueued || attempts != attempt+1 || delta > time.Second || delta < -time.Second {
+			t.Fatalf("retry %d: status=%s attempts=%d delay=%s, mau %s", attempt+1, status, attempts, next.Sub(clk.Now()), delay)
+		}
+		clk.Set(next)
+	}
+	m.mu.Lock()
+	m.gagal = nil
+	m.mu.Unlock()
+	hasil, err := svc.ProsesAntrean(ctx, 0)
+	if err != nil || hasil.Terkirim != 1 {
+		t.Fatalf("SMTP pulih harus mengirim: hasil=%+v err=%v", hasil, err)
+	}
+	var status string
+	var attempts, rows int
+	if err := pool.QueryRow(ctx, `SELECT status::text,attempts FROM email_outbox WHERE id=$1`, row.ID).
+		Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if status != notification.StatusSent || attempts != 3 || rows != 1 || m.percobaan() != 3 || m.jumlah() != 1 {
+		t.Fatalf("setelah pulih: status=%s attempts=%d rows=%d percobaan=%d sukses=%d", status, attempts, rows, m.percobaan(), m.jumlah())
+	}
+	if hasil, err := svc.ProsesAntrean(ctx, 0); err != nil || hasil.Diklaim != 0 || m.percobaan() != 3 {
+		t.Fatalf("scan ulang tidak boleh mengirim lagi: hasil=%+v err=%v percobaan=%d", hasil, err, m.percobaan())
+	}
+}
+
 func TestPGBarisSendingYangPercobaannyaHabisMenjadiGagal(t *testing.T) {
 	pool, _ := skemaUji(t)
 	ctx := context.Background()
@@ -835,9 +892,11 @@ func TestPGSisaKlaimDilepasSaatPemindaianDibatalkan(t *testing.T) {
 	ctx, batal := context.WithCancel(context.Background())
 	defer batal()
 	m := &mailerBatal{pada: 2, batal: batal}
-	// Clock sedikit di depan now() database supaya baris baru langsung siap
-	// diklaim (next_try_at defaultnya now() database).
-	svc := notification.New(repo, m, notification.WithClock(clock.Fixed(time.Now().UTC().Add(time.Second))))
+	// Setel clock SETELAH semua enqueue. Saat database lambat, clock yang
+	// ditetapkan sebelum tiga INSERT bisa tertinggal dari next_try_at baris
+	// terakhir sehingga batch kosong dan uji pembatalan menjadi flaky.
+	clk := clock.Fixed(time.Now().UTC())
+	svc := notification.New(repo, m, notification.WithClock(clk))
 
 	for i := 0; i < 3; i++ {
 		if _, err := repo.Enqueue(ctx, notification.Envelope{
@@ -848,6 +907,7 @@ func TestPGSisaKlaimDilepasSaatPemindaianDibatalkan(t *testing.T) {
 			t.Fatalf("enqueue %d: %v", i, err)
 		}
 	}
+	clk.Set(time.Now().UTC().Add(time.Minute))
 
 	if _, err := svc.ProsesAntrean(ctx, 0); err == nil {
 		t.Fatal("pemindaian dengan context yang dibatalkan harus mengembalikan error")

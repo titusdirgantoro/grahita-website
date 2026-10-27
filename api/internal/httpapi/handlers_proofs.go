@@ -95,9 +95,22 @@ func (a *API) bacaSubmit(w http.ResponseWriter, r *http.Request) ([]payment.File
 	}
 	expected, err := parseExpectedJournal(r.MultipartForm.Value[fieldExpectedJournal])
 	if err != nil {
+		tutup()
 		return nil, nil, "", tutup, err
 	}
-	mode := strings.TrimSpace(r.FormValue("payment_mode"))
+	// Payment mode belongs to this multipart body. FormValue silently takes the
+	// first value when a client sends the field twice (or supplies it in the
+	// query string), which would make an ambiguous request change an order.
+	modes := r.MultipartForm.Value["payment_mode"]
+	if len(modes) > 1 || len(r.URL.Query()["payment_mode"]) > 0 {
+		tutup()
+		return nil, nil, "", tutup, apierr.Validation("Pilih tepat satu cara pembayaran.",
+			map[string]string{"payment_mode": "kirim satu nilai pada formulir pesanan"})
+	}
+	mode := ""
+	if len(modes) == 1 {
+		mode = strings.TrimSpace(modes[0])
+	}
 	return files, expected, mode, tutup, nil
 }
 

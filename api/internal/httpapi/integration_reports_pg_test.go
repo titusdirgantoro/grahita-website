@@ -540,6 +540,24 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	if unduh["url"] == "" || unduh["expires_in"] != float64(300) {
 		t.Errorf("tautan unduh tidak sesuai: %v", unduh)
 	}
+	urlUnduh, _ := unduh["url"].(string)
+	if urlUnduh == "" {
+		t.Fatal("ekspor selesai harus punya URL bertanda tangan")
+	}
+	// Uji ID pekerjaan yang BENAR, bukan hanya UUID asing yang tidak ada:
+	// Manager/cabang tidak boleh mengambil status maupun URL hasil Superadmin.
+	for _, aktor := range []struct {
+		nama    string
+		cookies []*http.Cookie
+	}{{"manager", mgrCookies}, {"cabang", userCookies}} {
+		for _, suffix := range []string{"", "/download"} {
+			st, forbidden, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+				l.srv.URL+"/api/v1/admin/reports/export/"+jobID+suffix, "", aktor.cookies, "")
+			if st != http.StatusForbidden || strings.Contains(fmt.Sprint(forbidden), urlUnduh) {
+				t.Fatalf("%s tidak boleh membaca ekspor asli%s: status=%d body=%v", aktor.nama, suffix, st, forbidden)
+			}
+		}
+	}
 
 	// Isi berkas: 3 baris data, header ter-freeze, sheet rekap ada, versi
 	// pesanan ikut dan kolom uang berformat Rupiah.

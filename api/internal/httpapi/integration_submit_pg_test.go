@@ -122,8 +122,8 @@ func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf stri
 			t.Fatalf("tulis field expected_journal_version: %v", err)
 		}
 	}
-	if len(paymentMode) > 0 {
-		if err := w.WriteField("payment_mode", paymentMode[0]); err != nil {
+	for _, mode := range paymentMode {
+		if err := w.WriteField("payment_mode", mode); err != nil {
 			t.Fatalf("tulis field payment_mode: %v", err)
 		}
 	}
@@ -152,6 +152,72 @@ func multipartSubmit(t *testing.T, url string, cookies []*http.Cookie, csrf stri
 		t.Fatalf("body submit bukan JSON (%d): %v", resp.StatusCode, err)
 	}
 	return resp, decoded
+}
+
+// ORD-10: dua pilihan dalam satu request harus ditolak sebelum bukti disimpan
+// dan sebelum nomor/serial/piutang terbentuk. FormValue mengambil nilai pertama
+// secara diam-diam, jadi tes ini mengirim multipart nyata lewat HTTP.
+func TestPGSubmitPaymentModeGandaDitolakTanpaMutasi(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches
+SET is_tempo=true, allow_transfer=true, tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	id := buatDraftHTTP(t, f, cookies, csrf, produkKode(t, f, "P-01"), 1)["id"].(string)
+	base := f.srv.URL + "/api/v1/orders/" + id + "/submit"
+
+	for _, tc := range []struct {
+		name  string
+		url   string
+		modes []string
+		files map[string][]byte
+	}{
+		{"dua mode berbeda dengan berkas", base, []string{"tempo", "transfer"},
+			map[string][]byte{"bukti.jpg": berkasJPEGUji("mode-ganda")}},
+		{"dua mode sama", base, []string{"tempo", "tempo"}, nil},
+		{"mode form dan query", base + "?payment_mode=transfer", []string{"tempo"}, nil},
+		{"mode hanya di query", base + "?payment_mode=tempo", nil, nil},
+		{"tanpa mode pada cabang multimode", base, nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := multipartSubmit(t, tc.url, cookies, csrf, tc.files, "", tc.modes...)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("mode ambigu harus 400, dapat %d (%v)", resp.StatusCode, body)
+			}
+			assertErrorShape(t, body, "VALIDATION_FAILED")
+			fields, _ := body["error"].(map[string]any)["fields"].(map[string]any)
+			if fields["payment_mode"] == nil {
+				t.Fatalf("galat wajib menunjuk payment_mode: %v", body)
+			}
+			var status string
+			var nomor, serial *string
+			if err := f.pool.QueryRow(ctx, `SELECT status::text,nomor FROM orders WHERE id=$1`, id).Scan(&status, &nomor); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.pool.QueryRow(ctx, `SELECT serial_number FROM order_lines WHERE order_id=$1`, id).Scan(&serial); err != nil {
+				t.Fatal(err)
+			}
+			if status != "draft" || nomor != nil || serial != nil {
+				t.Fatalf("draft berubah: status=%s nomor=%v serial=%v", status, nomor, serial)
+			}
+			for _, table := range []string{"numbering_counters", "payment_proofs", "order_events", "tempo_charges"} {
+				var n int
+				if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				if n != 0 {
+					t.Fatalf("%s berubah setelah mode ambigu: %d baris", table, n)
+				}
+			}
+		})
+	}
+
+	resp, body := multipartSubmit(t, base, cookies, csrf, nil, "", "tempo")
+	if resp.StatusCode != http.StatusOK || dataMap(t, body)["is_tempo"] != true {
+		t.Fatalf("mode tunggal sah harus tetap bisa submit: %d (%v)", resp.StatusCode, body)
+	}
 }
 
 // submitParalel adalah submit yang aman dipanggil dari banyak goroutine: tanpa
