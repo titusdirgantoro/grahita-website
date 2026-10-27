@@ -325,7 +325,7 @@ export function PenggunaPage() {
               checked={form.notif_invoice}
               onChange={(v) => setForm({ ...form, notif_invoice: v })}
               label="Terima email invoice"
-              hint="Salinan invoice setiap pesanan selesai atau direvisi."
+              hint="Salinan invoice setelah pesanan disetujui atau direvisi."
             />
             <SwitchRow
               checked={form.notif_surat_jalan}

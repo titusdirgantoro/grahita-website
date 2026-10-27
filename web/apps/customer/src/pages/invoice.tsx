@@ -30,7 +30,7 @@ import styles from "./invoice.module.css";
  * berumur pendek dari `GET /api/v1/documents/{id}/download` lalu membukanya —
  * kunci object storage tidak pernah sampai ke klien (F1-17, SystemDesign.md §8).
  * Tombol unduh hanya aktif bila server menandai `dapat_diunduh`; invoice yang
- * belum selesai (masih Submitted) atau yang dokumennya belum dirender tampil
+ * belum disetujui (masih Submitted) atau yang dokumennya belum dirender tampil
  * tanpa PDF, dan API memang menjawab 404 untuk dokumen yang tidak ada.
  *
  * Filter periode disimpan di URL search param (`?dari=&sampai=`) supaya bisa
@@ -153,7 +153,7 @@ export function InvoicePage({ dari, sampai }: { dari?: string; sampai?: string }
     <>
       <PageHead
         title="Riwayat invoice"
-        sub="Semua versi invoice cabang Anda. Invoice bisa diunduh setelah pesanan selesai."
+        sub="Semua versi invoice cabang Anda. Unduh setelah pesanan disetujui dan dokumen terbit."
       />
 
       <div className={styles.stack}>
@@ -206,8 +206,8 @@ export function InvoicePage({ dari, sampai }: { dari?: string; sampai?: string }
             <Notice tone="danger">{galat}</Notice>
           ) : !data || data.length === 0 ? (
             <EmptyState icon="file-text">
-              Belum ada invoice pada periode ini. Invoice muncul setelah pembayaran pesanan
-              diverifikasi admin Pusat.
+              Belum ada invoice pada periode ini. Invoice muncul setelah pesanan disetujui
+              dan dokumen diterbitkan.
             </EmptyState>
           ) : (
             <>
@@ -269,8 +269,8 @@ export function InvoicePage({ dari, sampai }: { dari?: string; sampai?: string }
                 </tbody>
               </Table>
               <p className="muted small">
-                Tombol Unduh meminta tautan berumur pendek dari server; invoice yang belum selesai
-                belum punya berkas PDF sama sekali.
+                Tombol Unduh meminta tautan berumur pendek dari server. Invoice yang belum
+                disetujui atau belum selesai dibuat belum dapat diunduh.
               </p>
             </>
           )}

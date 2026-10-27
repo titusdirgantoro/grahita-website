@@ -85,12 +85,14 @@ function masukPeriode(tanggal: string | undefined, bulan: string): boolean {
 function labelStatus(status: StatusPesanan, verif?: string): string {
   if (status === "draft") return "Draft";
   if (status === "done") return "Selesai";
+  if (status === "approved_unpaid") return "Disetujui — belum lunas";
   return verif === "perlu_review" ? "Perlu review" : "Menunggu verifikasi";
 }
 
 function toneStatus(status: StatusPesanan, verif?: string): "draft" | "warning" | "success" | "danger" {
   if (status === "draft") return "draft";
   if (status === "done") return "success";
+  if (status === "approved_unpaid") return "warning";
   return verif === "perlu_review" ? "danger" : "warning";
 }
 
@@ -194,7 +196,7 @@ export function BerandaPage() {
                   <p className={`${styles.val} tabular`} data-testid="kpi-menunggu">
                     {r.menunggu.length}
                   </p>
-                  <span className="caption">{r.selesai.length} terverifikasi bulan ini</span>
+                  <span className="caption">{r.selesai.length} selesai bulan ini</span>
                 </div>
               </div>
             </Card>
@@ -245,13 +247,13 @@ export function BerandaPage() {
                 <span className={styles.ttl}>
                   {r.menunggu.length > 0
                     ? "Pesanan menunggu verifikasi"
-                    : "Semua pembayaran sudah terverifikasi"}
+                    : "Tidak ada pesanan menunggu verifikasi"}
                 </span>
                 <br />
                 <span className={styles.sub}>
                   {r.menunggu.length > 0
-                    ? "Admin Pusat sedang memeriksa bukti transfer Anda."
-                    : "Invoice tersedia di Riwayat invoice setelah pesanan selesai."}
+                    ? "Admin Pusat sedang meninjau pesanan Anda."
+                    : "Invoice tersedia di Riwayat invoice setelah pesanan disetujui dan dokumen terbit."}
                 </span>
               </span>
             </button>

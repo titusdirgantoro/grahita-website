@@ -7,6 +7,7 @@ Dokumen ini memperbarui [laporan baseline](hasil-uji-e2e-2026-10-27.md) untuk sk
 - **CAB-09:** `/me/branch` sekarang mengirim `has_tempo_history` dari pesanan Tempo yang pernah dikirim. Menu **Tagihan** tetap muncul setelah izin membuat pesanan Tempo dicabut; akses ke riwayat dan pelunasan tidak bergantung pada pilihan pembayaran saat ini. Pesanan Tempo baru tetap ditolak dengan `PAYMENT_MODE_CHANGED`.
 - **DOC-08:** Surat Jalan dengan banyak baris dibagi ke beberapa tabel cetak. Halaman akhir selalu membawa rincian terakhir bersama total, catatan, dan tanda tangan. Pada hasil lama, 29 baris memenuhi halaman pertama dan tanda tangan terdorong sendirian ke halaman kedua.
 - Tooltip Invoice dan pesan API untuk dokumen/revisi diperbaiki agar sesuai dengan penerbitan invoice Tempo saat `approved_unpaid`.
+- Pemeriksaan browser produksi menemukan teks Riwayat Invoice dan Beranda yang masih menyebut invoice baru terbit setelah `Selesai`. Teks itu diperbaiki agar menyebut persetujuan dan terbitnya dokumen. Beranda kini menampilkan status `Disetujui — belum lunas` untuk pesanan Tempo yang telah disetujui, serta menggunakan pesan umum saat pesanan masih menunggu verifikasi.
 
 ## Regresi dan bukti
 
@@ -40,7 +41,7 @@ Fixture backup/restore kini menyertakan `branch_id` yang diwajibkan database dan
 
 - Seluruh paket Go lulus `go test -p 1 ./...`; `go vet ./...` bersih.
 - Integrasi PostgreSQL QA lulus berurutan dengan `go test -p 1 -count=1 -timeout 60m ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...` (paket HTTP API 1.437,9 detik). Dua tes rekonsiliasi piutang dan batas status yang ditambahkan setelah suite dimulai lulus terarah pada PostgreSQL yang sama.
-- Frontend lulus 248 tes (9 API client, 65 UI, 100 admin, 74 cabang), typecheck, dan build kedua portal.
+- Frontend lulus 249 tes (9 API client, 65 UI, 100 admin, 75 cabang), typecheck, dan build kedua portal.
 - Pemeriksaan migrasi kompatibel mundur, pemindaian rahasia, dan `git diff --check` lulus. Renderer Gotenberg QA menghasilkan 12 PDF untuk enam variasi jumlah baris.
 - Gerbang teknis ini memverifikasi perubahan rilis; status 162 skenario end to end tetap sesuai tabel di atas.
 

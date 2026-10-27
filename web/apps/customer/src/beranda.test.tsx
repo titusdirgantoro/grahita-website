@@ -148,6 +148,24 @@ describe("Customer Portal — Beranda (F1-19)", () => {
     ).toBeDefined();
   });
 
+  it("membedakan Tempo disetujui dari pesanan yang masih menunggu verifikasi", async () => {
+    const bulan = bulanGeser(0);
+    fetchBeranda([
+      pesanan({ id: "tempo", status: "approved_unpaid", tanggal: `${bulan}-05`, is_tempo: true }),
+      pesanan({ id: "pending", status: "submitted", tanggal: `${bulan}-06`, is_tempo: true }),
+    ]);
+
+    render(<RouterProvider router={buatRouter("/")} />);
+
+    const tabel = await screen.findByRole("table", { name: "Lima pesanan terakhir cabang" });
+    const barisTempo = within(tabel).getAllByRole("row")
+      .find((row) => row.textContent?.includes("2026-10-tempo"));
+    expect(barisTempo?.textContent).toContain("Disetujui — belum lunas");
+    expect(barisTempo?.textContent).not.toContain("Menunggu verifikasi");
+    expect(screen.getByTestId("kpi-menunggu").textContent?.trim()).toBe("1");
+    expect(screen.getByText("Admin Pusat sedang meninjau pesanan Anda.")).toBeDefined();
+  });
+
   it("menampilkan galat dari API, bukan angka palsu", async () => {
     vi.stubGlobal(
       "fetch",
