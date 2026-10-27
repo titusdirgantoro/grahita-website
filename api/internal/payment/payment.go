@@ -74,6 +74,8 @@ var (
 	// ErrLocked dikembalikan bila cabang mencoba menambah bukti pada pesanan
 	// yang sudah selesai (PRD BR-07). Admin tetap boleh (revisi/koreksi).
 	ErrLocked = errors.New("pesanan selesai tidak dapat ditambah bukti oleh cabang")
+	// Pelunasan Tempo memakai bukti pada menu Tagihan.
+	ErrTempoOrder = errors.New("bukti pesanan Tempo harus diunggah melalui Tagihan")
 	// ErrNoFile dikembalikan bila permintaan tidak memuat satu berkas pun.
 	ErrNoFile = errors.New("tidak ada berkas bukti yang dikirim")
 	// ErrTooMany dikembalikan bila jumlah bukti pesanan akan melampaui setelan
@@ -168,6 +170,7 @@ type OrderRef struct {
 	BranchID string
 	Status   string
 	Nomor    string
+	IsTempo  bool
 }
 
 // Repository memuat dan menyimpan metadata bukti. Semua pencarian dibatasi
@@ -500,7 +503,8 @@ func (s *Service) presign(ctx context.Context, p Proof) (string, error) {
 // Akun cabang: wajib punya CapOrderWrite dan hanya boleh menyentuh pesanan
 // cabang SESI-nya; menambah bukti pada pesanan Done ditolak (BR-07), sedangkan
 // membaca tetap boleh. Admin: wajib punya CapAdminOrders (Manager maupun
-// Superadmin — PRD §2.1) dan boleh menyentuh pesanan mana pun.
+// Superadmin — PRD §2.1) dan boleh menyentuh pesanan reguler mana pun.
+// Bukti pelunasan Tempo selalu melalui layanan Tagihan.
 func (s *Service) authorize(ctx context.Context, actor auth.Actor, orderID string, tulis bool) (OrderRef, error) {
 	switch {
 	case actor.IsBranch():
@@ -532,9 +536,12 @@ func (s *Service) authorize(ctx context.Context, actor auth.Actor, orderID strin
 			// keberadaannya tidak bocor.
 			return OrderRef{}, ErrNotFound
 		}
-		if tulis && ref.Status == StatusDone {
-			return OrderRef{}, ErrLocked
-		}
+	}
+	if tulis && ref.IsTempo {
+		return OrderRef{}, ErrTempoOrder
+	}
+	if actor.IsBranch() && tulis && ref.Status == StatusDone {
+		return OrderRef{}, ErrLocked
 	}
 	return ref, nil
 }

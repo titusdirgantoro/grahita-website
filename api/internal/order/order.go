@@ -94,6 +94,7 @@ var (
 	ErrOrderHeld              = errors.New("pembayaran Tempo ditahan karena tagihan lewat jatuh tempo")
 	ErrPaymentModeRequired    = fmt.Errorf("%w: pilih cara pembayaran pesanan", ErrInvalidData)
 	ErrPaymentModeChanged     = errors.New("cara pembayaran cabang berubah; muat ulang pesanan")
+	ErrTempoProofConflict     = errors.New("bukti transfer pesanan tidak dapat dipakai untuk pembayaran Tempo")
 	ErrTempoCreditSuperadmin  = errors.New("revisi Tempo yang menghasilkan kredit membutuhkan Superadmin")
 )
 

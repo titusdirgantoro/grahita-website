@@ -37,6 +37,17 @@
   color: var(--text);
 }
 
+.tagihanLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 12px;
+  color: var(--brand-primary);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .nomor {
   font-weight: 600;
   color: var(--ink);

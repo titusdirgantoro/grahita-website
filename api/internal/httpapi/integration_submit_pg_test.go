@@ -24,10 +24,82 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/grahita/portal/api/internal/payment"
+	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/httpx"
+	"github.com/grahita/portal/api/internal/receivable"
 )
+
+// ORD-12 dan TMP-01: jam bisnis disuntikkan ke service agar transisi tepat
+// tengah malam WIB dan akhir tahun diuji terhadap transaksi PostgreSQL nyata.
+func TestPGSubmitBatasTanggalWIBDanPeriodeTempo(t *testing.T) {
+	clk := clock.Fixed(time.Date(2026, time.October, 31, 16, 59, 59, 0, time.UTC))
+	approveClock := clock.Fixed(time.Date(2026, time.November, 2, 3, 0, 0, 0, time.UTC))
+	f := newPGFixture(t, pgFixtureClock{orders: clk, receivables: approveClock})
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	product := produkKode(t, f, "P-01")
+	var octoberID string
+	for _, tc := range []struct {
+		utc, date, invoice, serial string
+	}{
+		{"2026-10-31T16:59:59Z", "2026-10-31", "2026-10-01", "20261031001"},
+		{"2026-10-31T17:00:00Z", "2026-11-01", "2026-11-01", "20261101001"},
+		{"2026-12-31T16:59:59Z", "2026-12-31", "2026-12-01", "20261231001"},
+		{"2026-12-31T17:00:00Z", "2027-01-01", "2027-01-01", "20270101001"},
+	} {
+		at, err := time.Parse(time.RFC3339, tc.utc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clk.Set(at)
+		id := buatDraftHTTP(t, f, cookies, csrf, product, 1)["id"].(string)
+		resp, submitted := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", cookies, csrf, nil, "", "tempo")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("submit %s: %d %+v", tc.utc, resp.StatusCode, submitted)
+		}
+		nomor := dataMap(t, submitted)["nomor"]
+		var date, serial string
+		if err := f.pool.QueryRow(ctx, `SELECT o.tanggal::text,l.serial_number FROM orders o JOIN order_lines l ON l.order_id=o.id WHERE o.id=$1`, id).Scan(&date, &serial); err != nil {
+			t.Fatal(err)
+		}
+		if date != tc.date || nomor != tc.invoice || serial != tc.serial {
+			t.Fatalf("submit %s: date=%s invoice=%s serial=%s; mau %s %s %s", tc.utc,
+				date, nomor, serial, tc.date, tc.invoice, tc.serial)
+		}
+		if tc.date == "2026-10-31" {
+			octoberID = id
+		}
+	}
+
+	tempo := receivable.New(f.pool, f.jobs, receivable.WithClock(approveClock))
+	adminCookies, adminCSRF := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	statusHTTP, approved, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/orders/"+octoberID+"/approve-tempo", `{}`, adminCookies, adminCSRF)
+	if statusHTTP != http.StatusOK || dataMap(t, approved)["tempo_due_date"] != "2026-11-05" {
+		t.Fatalf("approval 2 November atas submit Oktober: status=%d body=%+v", statusHTTP, approved)
+	}
+	var status, dueDB, period string
+	if err := f.pool.QueryRow(ctx, `SELECT status::text,tempo_due_date::text,date_trunc('month',tanggal)::date::text FROM orders WHERE id=$1`, octoberID).
+		Scan(&status, &dueDB, &period); err != nil {
+		t.Fatal(err)
+	}
+	if status != "approved_unpaid" || dueDB != "2026-11-05" || period != "2026-10-01" {
+		t.Fatalf("periode Tempo berubah oleh approval: status=%s due=%s period=%s", status, dueDB, period)
+	}
+	if _, err := tempo.IssueMonth(ctx, f.branchA, time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("tagihan periode Oktober: %v", err)
+	}
+	var statementCount int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_statements WHERE branch_id=$1 AND period_month='2026-10-01'`, f.branchA).Scan(&statementCount); err != nil || statementCount != 1 {
+		t.Fatalf("Tagihan Oktober setelah approve 2 November: count=%d err=%v", statementCount, err)
+	}
+}
 
 // multipartSubmit mengirim POST /orders/{id}/submit sebagai multipart:
 // berkas bukti (boleh kosong) dan versi saldo deposit yang dilihat cabang C&C

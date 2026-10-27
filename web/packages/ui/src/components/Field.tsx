@@ -30,11 +30,20 @@ export interface FieldProps {
  * (lihat Input/Textarea/Select yang menerima prop `error`).
  */
 export function Field({ label, htmlFor, hint, error, children, className }: FieldProps) {
+  const descriptionId = useId();
+  const description = error || hint;
+  const describedBy =
+    isValidElement(children) && typeof children.props === "object" && children.props !== null
+      ? (children.props as { "aria-describedby"?: string })["aria-describedby"]
+      : undefined;
   // Pesan error di Field otomatis menandai kontrol sebagai tidak valid
   // (aria-invalid) tanpa pemanggil harus meneruskan prop `invalid` dua kali.
   const kontrol =
-    error && isValidElement(children)
-      ? cloneElement(children as ReactElement<{ invalid?: boolean }>, { invalid: true })
+    isValidElement(children)
+      ? cloneElement(children as ReactElement<{ invalid?: boolean; "aria-describedby"?: string }>, {
+          ...(error ? { invalid: true } : {}),
+          ...(description ? { "aria-describedby": [describedBy, descriptionId].filter(Boolean).join(" ") } : {}),
+        })
       : children;
 
   return (
@@ -43,9 +52,9 @@ export function Field({ label, htmlFor, hint, error, children, className }: Fiel
         {label}
       </label>
       {kontrol}
-      {hint && !error ? <span className={styles.hint}>{hint}</span> : null}
+      {hint && !error ? <span id={descriptionId} className={styles.hint}>{hint}</span> : null}
       {error ? (
-        <span className={styles.err} role="alert">
+        <span id={descriptionId} className={styles.err} role="alert">
           {error}
         </span>
       ) : null}

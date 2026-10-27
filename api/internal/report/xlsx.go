@@ -198,6 +198,10 @@ func (p *penulisXLSX) tulisKepala() error {
 func (p *penulisXLSX) TulisBaris(l Line) error {
 	p.baris++
 	sel := fmt.Sprintf("A%d", p.baris)
+	instansi := l.NamaInstansi
+	if instansi == "" && l.Jenis == "product" {
+		instansi = "—"
+	}
 	nilai := []any{
 		l.Tanggal,
 		l.Nomor,
@@ -207,7 +211,7 @@ func (p *penulisXLSX) TulisBaris(l Line) error {
 		yaTidak(l.IsCNC),
 		yaTidak(l.PajakIn),
 		l.Produk,
-		l.NamaInstansi,
+		instansi,
 		l.Jenis,
 		serialTampil(l.SerialNumber),
 		excelize.Cell{StyleID: p.gaya.angka, Value: l.Qty},

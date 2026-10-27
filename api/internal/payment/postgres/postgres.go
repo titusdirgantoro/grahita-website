@@ -182,6 +182,13 @@ func (r *Repo) CommitProofs(ctx context.Context, req payment.CommitRequest) ([]p
 		}
 		return nil, fmt.Errorf("query LockOrderForProof: %w", err)
 	}
+	var isTempo bool
+	if err := tx.QueryRow(ctx, `SELECT is_tempo FROM orders WHERE id=$1`, req.OrderID).Scan(&isTempo); err != nil {
+		return nil, fmt.Errorf("baca cara pembayaran pesanan: %w", err)
+	}
+	if isTempo {
+		return nil, payment.ErrTempoOrder
+	}
 	if !locked.IsCnc {
 		var tersedia bool
 		if err := tx.QueryRow(ctx, `
@@ -329,11 +336,16 @@ func (r *Repo) OrderForProof(ctx context.Context, orderID string) (payment.Order
 	if err != nil {
 		return payment.OrderRef{}, fmt.Errorf("query GetOrderForProof: %w", err)
 	}
+	var isTempo bool
+	if err := r.pool.QueryRow(ctx, `SELECT is_tempo FROM orders WHERE id=$1`, orderID).Scan(&isTempo); err != nil {
+		return payment.OrderRef{}, fmt.Errorf("baca cara pembayaran pesanan: %w", err)
+	}
 	return payment.OrderRef{
 		ID:       row.ID,
 		BranchID: row.BranchID,
 		Status:   row.Status,
 		Nomor:    pgtypes.TextOr(row.Nomor),
+		IsTempo:  isTempo,
 	}, nil
 }
 

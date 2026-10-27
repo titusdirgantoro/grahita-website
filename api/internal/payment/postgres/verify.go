@@ -111,6 +111,13 @@ func (r *Repo) MarkVerified(ctx context.Context, req payment.MarkVerifiedRequest
 	if err != nil {
 		return payment.VerifyOutcome{}, fmt.Errorf("query LockOrderForVerify: %w", err)
 	}
+	var isTempo bool
+	if err := tx.QueryRow(ctx, `SELECT is_tempo FROM orders WHERE id=$1`, req.OrderID).Scan(&isTempo); err != nil {
+		return payment.VerifyOutcome{}, fmt.Errorf("baca cara pembayaran pesanan: %w", err)
+	}
+	if isTempo {
+		return payment.VerifyOutcome{}, payment.ErrTempoOrder
+	}
 
 	// 2. Keadaan yang menentukan boleh-tidaknya transisi.
 	switch row.Status {

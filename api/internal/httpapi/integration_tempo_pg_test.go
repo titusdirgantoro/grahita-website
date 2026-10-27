@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"slices"
@@ -15,9 +17,267 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	backuppg "github.com/grahita/portal/api/internal/backup/postgres"
+	"github.com/grahita/portal/api/internal/document"
+	"github.com/grahita/portal/api/internal/fulfillment"
+	"github.com/grahita/portal/api/internal/payment"
+	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/receivable"
+	"github.com/grahita/portal/api/internal/report"
+	reportpg "github.com/grahita/portal/api/internal/report/postgres"
 	"github.com/xuri/excelize/v2"
 )
+
+// Bukti Transfer pesanan dan endpoint verifikasi biasa tidak boleh dipakai
+// untuk menyelesaikan pesanan Tempo. Pelunasannya mempunyai receipt/ledger
+// tersendiri di menu Tagihan; kesalahan harus 409, bukan error constraint 500.
+func TestPGTempoMenolakBuktiPesananDanVerifikasiReguler(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	id := tempoSubmitted(t, f, "2026-10-20", 100000)
+	branch := auth.Actor{UserID: f.userA, Kind: auth.KindBranch, Role: auth.RoleBranch, BranchID: f.branchA, Nama: "Cabang A"}
+	objectsBefore := f.objek.jumlah()
+	branchCookies, branchCSRF := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	respHTTP, uploadBody := multipartUnggah(t, f.srv.URL+"/api/v1/orders/"+id+"/proofs",
+		branchCookies, branchCSRF, map[string][]byte{"tempo.jpg": berkasJPEGUji("tempo-http")})
+	if respHTTP.StatusCode != http.StatusConflict || kodeErrorVerifikasi(uploadBody) != "TEMPO_USE_TAGIHAN" {
+		t.Fatalf("endpoint unggah pesanan Tempo harus 409: %d %+v", respHTTP.StatusCode, uploadBody)
+	}
+	otherCookies, otherCSRF := pgLogin(t, f.srv, "b@example.test", "rahasia123")
+	respHTTP, uploadBody = multipartUnggah(t, f.srv.URL+"/api/v1/orders/"+id+"/proofs",
+		otherCookies, otherCSRF, map[string][]byte{"foreign.jpg": berkasJPEGUji("foreign-tempo")})
+	if respHTTP.StatusCode != http.StatusNotFound {
+		t.Fatalf("cabang lain tidak boleh mengetahui pesanan Tempo: %d %+v", respHTTP.StatusCode, uploadBody)
+	}
+	_, err := f.payments.Upload(ctx, branch, id, []payment.FileInput{{
+		NamaFile: "bukti.jpg", Content: bytes.NewReader(berkasJPEGUji("tempo-order-proof")),
+	}})
+	if !errors.Is(err, payment.ErrTempoOrder) || f.objek.jumlah() != objectsBefore {
+		t.Fatalf("unggah bukti ke pesanan Tempo harus ditolak sebelum storage: %v", err)
+	}
+
+	// Simulasi bukti yang telanjur dibuat oleh versi lama: verifikasi langsung
+	// tetap harus ditolak dan tidak menulis log maupun mengubah status pesanan.
+	var proofID string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO payment_proofs
+(order_id,branch_id,storage_key,nama_file,mime_type,ukuran_byte,sha256,uploaded_by_kind)
+VALUES($1,$2,'qa/legacy-tempo.jpg','legacy.jpg','image/jpeg',4,'\x010203'::bytea,'branch') RETURNING id::text`,
+		id, f.branchA).Scan(&proofID); err != nil {
+		t.Fatal(err)
+	}
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	respHTTP, uploadBody = multipartUnggah(t, f.srv.URL+"/api/v1/admin/orders/"+id+"/proofs",
+		cookies, csrf, map[string][]byte{"tempo-admin.jpg": berkasJPEGUji("tempo-http-admin")})
+	if respHTTP.StatusCode != http.StatusConflict || kodeErrorVerifikasi(uploadBody) != "TEMPO_USE_TAGIHAN" {
+		t.Fatalf("endpoint unggah admin untuk Tempo harus 409: %d %+v", respHTTP.StatusCode, uploadBody)
+	}
+	request := fmt.Sprintf(`{"hasil":"cocok","total_terbaca":100000,"proof_destinations":[{"payment_proof_id":%q,"bank_account_id":%q}]}`,
+		proofID, f.bankDefault)
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/orders/"+id+"/verify", request, cookies, csrf)
+	if status != http.StatusConflict || kodeErrorVerifikasi(body) != "TEMPO_USE_TAGIHAN" {
+		t.Fatalf("verifikasi biasa atas Tempo harus 409 TEMPO_USE_TAGIHAN: %d %+v", status, body)
+	}
+	var orderStatus string
+	var logCount int
+	if err := f.pool.QueryRow(ctx, `SELECT status::text FROM orders WHERE id=$1`, id).Scan(&orderStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, id).Scan(&logCount); err != nil {
+		t.Fatal(err)
+	}
+	if orderStatus != "submitted" || logCount != 0 {
+		t.Fatalf("pesanan Tempo berubah karena verifikasi biasa: status=%s log=%d", orderStatus, logCount)
+	}
+
+	draftID := buatDraftHTTP(t, f, branchCookies, branchCSRF, produkKode(t, f, "P-01"), 1)["id"].(string)
+	if _, err := f.payments.Upload(ctx, branch, draftID, []payment.FileInput{{
+		NamaFile: "draft.jpg", Content: bytes.NewReader(berkasJPEGUji("draft-transfer")),
+	}}); err != nil {
+		t.Fatalf("siapkan bukti draft sebelum memilih mode: %v", err)
+	}
+	resp, submitBody := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+draftID+"/submit",
+		branchCookies, branchCSRF, nil, "", "tempo")
+	if resp.StatusCode != http.StatusConflict || kodeErrorVerifikasi(submitBody) != "TEMPO_PROOF_CONFLICT" {
+		t.Fatalf("draft yang sudah punya bukti tidak boleh dikirim sebagai Tempo: %d %+v", resp.StatusCode, submitBody)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT status::text FROM orders WHERE id=$1`, draftID).Scan(&orderStatus); err != nil || orderStatus != "draft" {
+		t.Fatalf("submit gagal harus tetap draft: status=%s err=%v", orderStatus, err)
+	}
+}
+
+// TMP-27: Sertifikat Tempo dengan packaging Rp0 memang bernilai Rp0. Saat
+// disetujui, status langsung lunas tanpa charge atau saldo negatif, tetapi
+// dokumen tetap menjadi hak pesanan tersebut.
+func TestPGTempoSertifikatNolLangsungLunasDanDokumenTerbit(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	setSetting(t, f, "biaya_packaging", "0")
+	var product string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO products(kode,nama,jenis,harga_default,urutan)
+VALUES('P-SER-TEMPO-0','Sertifikat Tempo Nol','sertifikat',0,99) RETURNING id::text`).Scan(&product); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO branch_prices(branch_id,product_id,harga) VALUES($1,$2,0)`, f.branchA, product); err != nil {
+		t.Fatal(err)
+	}
+	branchCookies, branchCSRF := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	draft := buatDraftHTTP(t, f, branchCookies, branchCSRF, product, 1)
+	id := draft["id"].(string)
+	if draft["total"] != float64(0) {
+		t.Fatalf("Sertifikat + packaging Rp0 harus total Rp0: %+v", draft)
+	}
+	resp, submitted := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", branchCookies, branchCSRF, nil, "", "tempo")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("kirim Sertifikat Tempo Rp0: %d %+v", resp.StatusCode, submitted)
+	}
+	adminCookies, adminCSRF := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	statusHTTP, approved, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/orders/"+id+"/approve-tempo", `{}`, adminCookies, adminCSRF)
+	if statusHTTP != http.StatusOK {
+		t.Fatalf("approve Sertifikat Tempo Rp0: %d %+v", statusHTTP, approved)
+	}
+	var status string
+	var chargeCount int
+	var openAmount int64
+	if err := f.pool.QueryRow(ctx, `SELECT status::text FROM orders WHERE id=$1`, id).Scan(&status); err != nil || status != "done" {
+		t.Fatalf("pesanan Rp0 langsung done: %s %v", status, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*),COALESCE(sum(amount-paid_amount),0)::bigint FROM tempo_charges WHERE order_id=$1`, id).
+		Scan(&chargeCount, &openAmount); err != nil || openAmount != 0 {
+		t.Fatalf("pesanan Rp0 tidak boleh menyisakan piutang: charges=%d sisa=%d err=%v", chargeCount, openAmount, err)
+	}
+	var auditedStatus string
+	if err := f.pool.QueryRow(ctx, `SELECT after->>'status' FROM audit_logs WHERE entity='order' AND entity_id=$1
+ORDER BY at DESC LIMIT 1`, id).Scan(&auditedStatus); err != nil || auditedStatus != "done" {
+		t.Fatalf("audit approval Rp0 harus mencatat status done: %q %v", auditedStatus, err)
+	}
+	if _, err := f.selesai.PesananSelesai(ctx, id); err != nil {
+		t.Fatalf("dokumen pesanan Rp0 harus tetap terbit: %v", err)
+	}
+	var docs int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM documents WHERE order_id=$1`, id).Scan(&docs); err != nil || docs != 3 {
+		t.Fatalf("pesanan Rp0 harus punya invoice dan dua format surat jalan: %d %v", docs, err)
+	}
+}
+
+// MAS-10 / ORD-19: produk yang dinonaktifkan setelah dipakai tidak mengubah
+// snapshot pada pesanan, dokumen, dan laporan. Baris lama boleh tanpa instansi.
+func TestPGPesananHistorisTetapTerbacaSesudahProdukNonaktif(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	id := tempoSubmitted(t, f, "2026-10-20", 100000)
+	var productID string
+	if err := f.pool.QueryRow(ctx, `SELECT product_id::text FROM order_lines WHERE order_id=$1`, id).Scan(&productID); err != nil {
+		t.Fatal(err)
+	}
+	svc := receivable.New(f.pool, f.jobs)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	if _, err := svc.Approve(ctx, manager, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE products SET is_active=false,nama='Produk Diubah Setelah Order' WHERE id=$1`, productID); err != nil {
+		t.Fatal(err)
+	}
+	branchCookies, _ := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/orders/"+id, "", branchCookies, "")
+	if status != http.StatusOK {
+		t.Fatalf("pesanan historis tetap dapat dibuka: %d %+v", status, body)
+	}
+	lines := dataMap(t, body)["lines"].([]any)
+	line := lines[0].(map[string]any)
+	if line["nama"] != "Bio Magnetik" || line["nama_instansi"] != "" {
+		t.Fatalf("snapshot order berubah atau instansi lama diisi otomatis: %+v", line)
+	}
+	if _, err := f.selesai.PesananSelesai(ctx, id); err != nil {
+		t.Fatalf("dokumen historis setelah produk nonaktif: %v", err)
+	}
+	var key string
+	if err := f.pool.QueryRow(ctx, `SELECT storage_key FROM documents WHERE order_id=$1 AND jenis='invoice_pdf'`, id).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	file, err := f.objek.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdfBody, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil || !bytes.Contains(pdfBody, []byte("Bio Magnetik")) || !bytes.Contains(pdfBody, []byte("—")) ||
+		bytes.Contains(pdfBody, []byte("Produk Diubah Setelah Order")) {
+		t.Fatalf("invoice historis kehilangan snapshot atau placeholder instansi: err=%v", err)
+	}
+	var roadPDFKey, roadXLSXKey string
+	if err := f.pool.QueryRow(ctx, `SELECT storage_key FROM documents WHERE order_id=$1 AND jenis='surat_jalan_pdf'`, id).Scan(&roadPDFKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT storage_key FROM documents WHERE order_id=$1 AND jenis='surat_jalan_xlsx'`, id).Scan(&roadXLSXKey); err != nil {
+		t.Fatal(err)
+	}
+	roadPDF, err := f.objek.Get(ctx, roadPDFKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roadPDFBytes, err := io.ReadAll(roadPDF)
+	_ = roadPDF.Close()
+	if err != nil || !bytes.Contains(roadPDFBytes, []byte("Bio Magnetik")) || !bytes.Contains(roadPDFBytes, []byte("—")) {
+		t.Fatalf("Surat Jalan PDF historis kehilangan snapshot/placeholder: %v", err)
+	}
+	roadXLSX, err := f.objek.Get(ctx, roadXLSXKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roadXLSXBytes, err := io.ReadAll(roadXLSX)
+	_ = roadXLSX.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	roadBook, err := excelize.OpenReader(bytes.NewReader(roadXLSXBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instansi, err := roadBook.GetCellValue(document.SheetSuratJalan, "C9"); err != nil || instansi != "—" {
+		t.Fatalf("Surat Jalan XLSX historis harus menampilkan dash: %q %v", instansi, err)
+	}
+	_ = roadBook.Close()
+	reportSvc := report.NewService(reportpg.New(f.pool, reportpg.WithJobQueue(f.jobs)), f.objek)
+	actor := auth.Actor{UserID: f.adminSA, Kind: auth.KindAdmin, Role: auth.RoleSuperadmin, Nama: "Rina"}
+	page, err := reportSvc.List(ctx, actor, report.Filter{})
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].Produk != "Bio Magnetik" || page.Items[0].NamaInstansi != "" {
+		t.Fatalf("laporan historis harus memakai snapshot produk dan instansi kosong: %+v %v", page, err)
+	}
+	reportJob, err := reportSvc.Request(ctx, actor, report.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reportSvc.Jalankan(ctx, reportJob.ID); err != nil {
+		t.Fatalf("ekspor laporan historis: %v", err)
+	}
+	reportFile, err := f.objek.Get(ctx, report.StorageKey(report.JenisOrderLines, reportJob.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportBytes, err := io.ReadAll(reportFile)
+	_ = reportFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportBook, err := excelize.OpenReader(bytes.NewReader(reportBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instansi, err := reportBook.GetCellValue(report.SheetLaporan, "I2"); err != nil || instansi != "—" {
+		t.Fatalf("ekspor laporan historis harus menampilkan dash: %q %v", instansi, err)
+	}
+	_ = reportBook.Close()
+}
 
 func tempoSubmitted(t *testing.T, f *pgFixture, day string, total int64) string {
 	t.Helper()
@@ -563,6 +823,207 @@ func TestPGRevisiTempoSetelahBayarSebagianMenghasilkanKredit(t *testing.T) {
 	}
 }
 
+// TMP-17: bukti yang menutup tunggakan pada Jumat memberi grace pada Senin
+// dan Selasa saja. Unggahan kedua tidak boleh menggeser akhir grace.
+func TestPGTempoGraceJumatDuaHariKerjaTanpaPerpanjangan(t *testing.T) {
+	friday := time.Date(2026, time.October, 23, 3, 0, 0, 0, time.UTC)
+	if friday.In(clock.Jakarta()).Weekday() != time.Friday {
+		t.Fatal("fixture harus dimulai pada Jumat WIB")
+	}
+	clk := clock.Fixed(friday)
+	f := newPGFixture(t, pgFixtureClock{orders: clk, receivables: clk})
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5,tahan_bila_telat=true WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	id := tempoSubmitted(t, f, "2026-09-20", 100000)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	svc := receivable.New(f.pool, f.jobs, receivable.WithClock(clk))
+	clk.Set(time.Date(2026, time.October, 1, 3, 0, 0, 0, time.UTC))
+	if _, err := svc.Approve(ctx, manager, id); err != nil {
+		t.Fatal(err)
+	}
+	clk.Set(friday)
+	var due string
+	if err := f.pool.QueryRow(ctx, `SELECT due_date::text FROM tempo_charges WHERE order_id=$1`, id).Scan(&due); err != nil || due != "2026-10-05" {
+		t.Fatalf("utang harus sudah lewat jatuh tempo pada Jumat: due=%s err=%v", due, err)
+	}
+	branch := auth.Actor{UserID: f.userA, Kind: auth.KindBranch, BranchID: f.branchA, Nama: "Cabang A"}
+	first, err := svc.UploadProof(ctx, branch, f.objek, receivable.UploadInput{
+		Amount: 100000, BankAccountID: f.bankDefault, Filename: "jumat.jpg", Body: []byte{0xff, 0xd8, 0xff, 91},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started time.Time
+	var ends string
+	if err := f.pool.QueryRow(ctx, `SELECT started_at,ends_on::text FROM tempo_hold_grace WHERE branch_id=$1`, f.branchA).Scan(&started, &ends); err != nil {
+		t.Fatal(err)
+	}
+	if !first.SubmittedAt.Equal(friday) || !started.Equal(friday) || ends != "2026-10-27" {
+		t.Fatalf("grace Jumat harus berakhir Selasa: receipt=%v started=%v ends=%s", first.SubmittedAt, started, ends)
+	}
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	product := produkKode(t, f, "P-01")
+	submitAt := func(day int, wantStatus int) {
+		t.Helper()
+		clk.Set(time.Date(2026, time.October, day, 3, 0, 0, 0, time.UTC))
+		draft := buatDraftHTTP(t, f, cookies, csrf, product, 1)["id"].(string)
+		resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+draft+"/submit", cookies, csrf, nil, "", "tempo")
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("submit %d Oktober: dapat %d %+v, mau %d", day, resp.StatusCode, body, wantStatus)
+		}
+		if wantStatus == http.StatusConflict && kodeErrorVerifikasi(body) != "TEMPO_ORDER_HELD" {
+			t.Fatalf("akhir grace harus mengembalikan hold: %+v", body)
+		}
+	}
+	submitAt(26, http.StatusOK) // Senin, hari kerja pertama.
+	_, err = svc.UploadProof(ctx, branch, f.objek, receivable.UploadInput{
+		Amount: 100000, BankAccountID: f.bankDefault, Filename: "senin.jpg", Body: []byte{0xff, 0xd8, 0xff, 92},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after time.Time
+	var endsAfter string
+	if err := f.pool.QueryRow(ctx, `SELECT started_at,ends_on::text FROM tempo_hold_grace WHERE branch_id=$1`, f.branchA).Scan(&after, &endsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !after.Equal(started) || endsAfter != ends {
+		t.Fatalf("unggah Senin tidak boleh memperpanjang grace Jumat: %v %s", after, endsAfter)
+	}
+	submitAt(27, http.StatusOK)       // Selasa, hari kerja kedua.
+	submitAt(28, http.StatusConflict) // Rabu, hold kembali.
+}
+
+// OPS-04 (Surat Tagihan): proses mati saat PDF hendak diunggah. Transaksi
+// dibatalkan; proses baru melanjutkan versi yang sama dan email tidak ganda.
+func TestPGSuratTagihanPulihSesudahWorkerBerhentiSaatUnggah(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	svc := receivable.New(f.pool, f.jobs)
+	id := tempoSubmitted(t, f, "2026-09-20", 100000)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	if _, err := svc.Approve(ctx, manager, id); err != nil {
+		t.Fatal(err)
+	}
+	statementID, err := svc.IssueMonth(ctx, f.branchA, time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || statementID == "" {
+		t.Fatalf("terbitkan versi tagihan: %s %v", statementID, err)
+	}
+	blocked := storageTerhenti{Store: f.objek, mulai: make(chan struct{})}
+	workerCtx, cancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() { result <- svc.RenderStatement(workerCtx, blocked, rendererUji{}, statementID) }()
+	select {
+	case <-blocked.mulai:
+	case <-time.After(30 * time.Second):
+		cancel()
+		t.Fatal("render tagihan tidak mencapai unggah storage")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("worker yang terhenti harus mengembalikan error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker yang terhenti tidak melepaskan transaksi")
+	}
+	var ready bool
+	if err := f.pool.QueryRow(ctx, `SELECT storage_key IS NOT NULL FROM tempo_statements WHERE id=$1`, statementID).Scan(&ready); err != nil || ready {
+		t.Fatalf("unggah terhenti tidak boleh menandai PDF siap: %v %v", ready, err)
+	}
+	var emails int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE jenis='tempo_statement'`).Scan(&emails); err != nil || emails != 0 {
+		t.Fatalf("email tidak boleh antre sebelum PDF siap: %d %v", emails, err)
+	}
+	if err := svc.RenderStatement(ctx, f.objek, rendererUji{}, statementID); err != nil {
+		t.Fatalf("proses baru harus menyelesaikan tagihan: %v", err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT storage_key IS NOT NULL FROM tempo_statements WHERE id=$1`, statementID).Scan(&ready); err != nil || !ready {
+		t.Fatalf("PDF harus siap setelah restart: %v %v", ready, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE jenis='tempo_statement'`).Scan(&emails); err != nil || emails < 1 {
+		t.Fatalf("email tagihan harus diantre setelah PDF siap: %d %v", emails, err)
+	}
+	if err := svc.RenderStatement(ctx, f.objek, rendererUji{}, statementID); err != nil {
+		t.Fatal(err)
+	}
+	var versions, emailsAgain int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_statements WHERE branch_id=$1 AND period_month='2026-09-01'`, f.branchA).Scan(&versions); err != nil || versions != 1 {
+		t.Fatalf("restart tidak boleh membuat versi tambahan: %d %v", versions, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE jenis='tempo_statement'`).Scan(&emailsAgain); err != nil || emailsAgain != emails {
+		t.Fatalf("restart tidak boleh membuat email ganda: %d -> %d (%v)", emails, emailsAgain, err)
+	}
+}
+
+// OPS-04 (dokumen): kegagalan tepat saat upload PDF tidak boleh mengantre
+// email prematur, dan restart menghasilkan satu set versi dokumen yang sama.
+func TestPGDokumenPulihSesudahWorkerBerhentiSaatUnggah(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	id := tempoSubmitted(t, f, "2026-10-20", 100000)
+	svc := receivable.New(f.pool, f.jobs)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	if _, err := svc.Approve(ctx, manager, id); err != nil {
+		t.Fatal(err)
+	}
+	blocked := storageTerhenti{Store: f.objek, mulai: make(chan struct{})}
+	interrupted := fulfillment.NewService(document.NewService(f.docRepo, blocked, rendererUji{}), f.notif)
+	workerCtx, cancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() { _, runErr := interrupted.PesananSelesai(workerCtx, id); result <- runErr }()
+	select {
+	case <-blocked.mulai:
+	case <-time.After(30 * time.Second):
+		cancel()
+		t.Fatal("render dokumen tidak mencapai unggah storage")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("worker yang terhenti harus mengembalikan error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker yang terhenti tidak melepaskan pekerjaan")
+	}
+	var docs, emails int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM documents WHERE order_id=$1`, id).Scan(&docs); err != nil || docs != 0 {
+		t.Fatalf("dokumen terhenti tidak boleh dinyatakan siap: %d %v", docs, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE order_id=$1`, id).Scan(&emails); err != nil || emails != 0 {
+		t.Fatalf("email sebelum dokumen siap: %d %v", emails, err)
+	}
+	if _, err := f.selesai.PesananSelesai(ctx, id); err != nil {
+		t.Fatalf("proses baru harus menyelesaikan dokumen: %v", err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM documents WHERE order_id=$1`, id).Scan(&docs); err != nil || docs != 3 {
+		t.Fatalf("restart harus menghasilkan 3 dokumen: %d %v", docs, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE order_id=$1`, id).Scan(&emails); err != nil || emails < 1 {
+		t.Fatalf("email dokumen harus diantre setelah siap: %d %v", emails, err)
+	}
+	if _, err := f.selesai.PesananSelesai(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	var docsAgain, emailsAgain int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM documents WHERE order_id=$1`, id).Scan(&docsAgain); err != nil || docsAgain != docs {
+		t.Fatalf("restart ulang menggandakan dokumen: %d -> %d (%v)", docs, docsAgain, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE order_id=$1`, id).Scan(&emailsAgain); err != nil || emailsAgain != emails {
+		t.Fatalf("restart ulang menggandakan email: %d -> %d (%v)", emails, emailsAgain, err)
+	}
+}
+
 func TestPGTempoSubmitSnapshotDanTahanPesanan(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
@@ -975,5 +1436,119 @@ func TestPGPengingatTempoTanggalBayarDuaTigaDanLima(t *testing.T) {
 	}
 	if count != 12 {
 		t.Fatalf("setiap pengingat harus tepat satu email, dapat %d", count)
+	}
+}
+
+func TestPGPengingatTempoMengikutiKoreksiDanBerhentiSesudahLunas(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	id := tempoSubmitted(t, f, "2099-10-20", 100000)
+	svc := receivable.New(f.pool, f.jobs)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	branch := auth.Actor{UserID: f.userA, Kind: auth.KindBranch, BranchID: f.branchA, Nama: "Cabang A"}
+	if _, err := svc.Approve(ctx, manager, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatal(err)
+	}
+	day := func(s string) time.Time {
+		t.Helper()
+		parsed, err := time.ParseInLocation("2006-01-02", s, time.FixedZone("WIB", 7*3600))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	for i := 0; i < 2; i++ {
+		if err := svc.SendReminders(ctx, day("2099-11-02")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	status, body := reviseHTTP(t, f, cookies, csrf, id, reviseBody("koreksi harga sebelum jatuh tempo", `{"line_no":1,"qty":1,"harga_satuan":70000}`))
+	if status != http.StatusOK {
+		t.Fatalf("koreksi harus 200: %d %v", status, body)
+	}
+	for i := 0; i < 2; i++ {
+		if err := svc.SendReminders(ctx, day("2099-11-05")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var first, due int64
+	if err := f.pool.QueryRow(ctx, `SELECT
+ COALESCE(max(amount) FILTER (WHERE stage='h_minus_3'),0),
+ COALESCE(max(amount) FILTER (WHERE stage='due'),0)
+ FROM tempo_reminders WHERE branch_id=$1 AND due_date='2099-11-05'`, f.branchA).Scan(&first, &due); err != nil {
+		t.Fatal(err)
+	}
+	if first != 100000 || due != 70000 {
+		t.Fatalf("pengingat harus mengikuti koreksi: H-3=%d H=%d", first, due)
+	}
+	receipt, err := svc.UploadProof(ctx, branch, f.objek, receivable.UploadInput{
+		Amount: 70000, BankAccountID: f.bankDefault, Filename: "lunas.jpg", Body: []byte{0xff, 0xd8, 0xff, 76},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Decide(ctx, manager, receipt.ID, "verify", 70000, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, date := range []string{"2099-11-05", "2099-11-06", "2099-11-12"} {
+		for i := 0; i < 2; i++ {
+			if err := svc.SendReminders(ctx, day(date)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var reminders, emails int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_reminders WHERE branch_id=$1 AND due_date='2099-11-05'`, f.branchA).Scan(&reminders); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox WHERE jenis='tempo_reminder' AND payload->>'branch_id'=$1`, f.branchA).Scan(&emails); err != nil {
+		t.Fatal(err)
+	}
+	if reminders != 2 || emails != 2 {
+		t.Fatalf("setelah lunas dan retry hanya H-3 serta H yang boleh ada: reminder=%d email=%d", reminders, emails)
+	}
+}
+
+func TestPGSuratTagihanCabangLainTidakBocor(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	svc := receivable.New(f.pool, f.jobs)
+	id := tempoSubmitted(t, f, "2026-10-20", 100000)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	if _, err := svc.Approve(ctx, manager, id); err != nil {
+		t.Fatal(err)
+	}
+	statementID, err := svc.IssueMonth(ctx, f.branchA, time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || statementID == "" {
+		t.Fatalf("terbitkan tagihan: %s %v", statementID, err)
+	}
+	if err := svc.RenderStatement(ctx, f.objek, rendererUji{}, statementID); err != nil {
+		t.Fatal(err)
+	}
+	owner, _ := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	other, _ := pgLogin(t, f.srv, "b@example.test", "rahasia123")
+	path := f.srv.URL + "/api/v1/tempo/statements/" + statementID + "/download"
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, path, "", owner, "")
+	if status != http.StatusOK || dataMap(t, body)["url"] == "" {
+		t.Fatalf("pemilik harus dapat tautan Surat Tagihan: %d %v", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, path, "", other, "")
+	if status != http.StatusNotFound {
+		t.Fatalf("cabang lain tidak boleh mengetahui Surat Tagihan: %d %v", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/tempo/statements", "", other, "")
+	if status != http.StatusOK || len(dataList(t, body)) != 0 {
+		t.Fatalf("daftar Surat Tagihan cabang lain harus kosong: %d %v", status, body)
 	}
 }

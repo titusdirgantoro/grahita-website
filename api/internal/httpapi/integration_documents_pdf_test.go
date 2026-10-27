@@ -170,6 +170,54 @@ func TestPGDokumenPDFNyataMelaluiChromium(t *testing.T) {
 	}
 }
 
+func TestPGDokumenPDFTeksHTMLDanInstansiHistorisBisaDiunduh(t *testing.T) {
+	f := newPGFixture(t)
+	shim := serverGotenbergChromium(t)
+	deps := f.deps
+	deps.Documents = document.NewService(f.docRepo, f.objek, pdf.NewGotenberg(shim.URL))
+	srv := httptest.NewServer(NewRouter(deps))
+	t.Cleanup(srv.Close)
+
+	pesanan := f.seedPesananDone(t, f.branchA, "2026-10-0097", false)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE orders SET catatan=$2 WHERE id=$1`,
+		pesanan.ID, `Catatan O'Connor & Mitra <script>alert("catatan")</script>`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE order_lines SET nama_instansi=CASE line_no
+ WHEN 1 THEN $2 ELSE '' END WHERE order_id=$1`,
+		pesanan.ID, `TK Élite & Mitra <script>alert('instansi')</script>`); err != nil {
+		t.Fatal(err)
+	}
+	sa, csrf := pgLogin(t, srv, "rina@example.test", "rahasia123")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+		srv.URL+"/api/v1/admin/orders/"+pesanan.ID+"/documents", "", sa, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("terbitkan dokumen teks khusus: %d %v", status, body)
+	}
+	cabang, _ := pgLogin(t, srv, "a@example.test", "rahasia123")
+	for _, item := range dataList(t, body) {
+		doc := item.(map[string]any)
+		jenis := doc["jenis"].(string)
+		if jenis != "invoice_pdf" && jenis != "surat_jalan_pdf" {
+			continue
+		}
+		pdfBytes := f.isiBerkas(t, document.StorageKey(pesanan.ID, jenis, 0))
+		if !bytes.HasPrefix(pdfBytes, []byte("%PDF-")) || len(pdfBytes) < 3000 || !bytes.Contains(pdfBytes, []byte("%%EOF")) {
+			t.Fatalf("%s teks khusus/historis tidak menghasilkan PDF lengkap", jenis)
+		}
+		pemilik := sa
+		if jenis == "invoice_pdf" {
+			pemilik = cabang
+		}
+		status, download, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+			srv.URL+"/api/v1/documents/"+doc["id"].(string)+"/download", "", pemilik, "")
+		if status != http.StatusOK || !strings.Contains(dataMap(t, download)["url"].(string), document.StorageKey(pesanan.ID, jenis, 0)) {
+			t.Fatalf("tautan unduh %s harus menunjuk PDF nyata: %d %v", jenis, status, download)
+		}
+	}
+}
+
 // TestChromeTersediaUntukUjiPDF mencatat ketersediaan Chromium supaya galat
 // "uji dilewati" tidak diam-diam menyembunyikan hilangnya bukti PDF nyata
 // (dijalankan sebagai catatan, bukan kegagalan).

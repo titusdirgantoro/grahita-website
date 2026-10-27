@@ -154,6 +154,8 @@ func mapDomainErr(err error) error {
 		return apierr.Validation("Pilih cara pembayaran untuk pesanan ini.", map[string]string{"payment_mode": "wajib dipilih"})
 	case errors.Is(err, order.ErrPaymentModeChanged):
 		return apierr.Conflict("PAYMENT_MODE_CHANGED", "Cara pembayaran cabang berubah. Muat ulang lalu kirim pesanan lagi.")
+	case errors.Is(err, order.ErrTempoProofConflict):
+		return apierr.Conflict("TEMPO_PROOF_CONFLICT", "Draft ini sudah memiliki bukti transfer pesanan. Buat draft baru untuk memilih Tempo.")
 	case errors.Is(err, order.ErrTempoCreditSuperadmin):
 		return apierr.Conflict("TEMPO_CREDIT_SUPERADMIN", "Revisi ini menghasilkan saldo kredit Tempo dan membutuhkan Superadmin.")
 	case errors.Is(err, order.ErrDepositVersionRequired):
@@ -202,6 +204,8 @@ func mapDomainErr(err error) error {
 	case errors.Is(err, payment.ErrLocked):
 		return apierr.Conflict("ORDER_LOCKED",
 			"Pesanan yang sudah selesai tidak dapat ditambah bukti oleh cabang. Hubungi admin Pusat.")
+	case errors.Is(err, payment.ErrTempoOrder):
+		return apierr.Conflict("TEMPO_USE_TAGIHAN", "Pembayaran Tempo dikelola melalui menu Tagihan. Unggah bukti pelunasan di sana.")
 	case errors.Is(err, payment.ErrStorageUnavailable):
 		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable,
 			"Penyimpanan berkas belum siap sehingga bukti tidak dapat disimpan.")

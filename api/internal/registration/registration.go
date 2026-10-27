@@ -46,7 +46,7 @@ var (
 	ErrIdentityIncomplete = errors.New("identitas cabang belum lengkap")
 	// ErrEmailTaken: email cabang sudah dipakai akun lain (admin atau cabang).
 	ErrEmailTaken = errors.New("email cabang sudah dipakai akun lain")
-	// ErrTeleponInvalid: nomor telepon kosong atau melebihi batas panjang.
+	// ErrTeleponInvalid: nomor telepon kosong, terlalu panjang, atau berisi karakter tidak sah.
 	ErrTeleponInvalid = errors.New("nomor telepon tidak valid")
 	// ErrPasswordMismatch: konfirmasi kata sandi tidak sama dengan kata sandi.
 	ErrPasswordMismatch = errors.New("konfirmasi kata sandi tidak sama")
@@ -186,6 +186,19 @@ func (s *Service) Register(ctx context.Context, in RegisterInput, meta auth.Requ
 	telepon := strings.TrimSpace(in.Telepon)
 	if telepon == "" || len([]rune(telepon)) > TeleponMaxLen {
 		return Akun{}, fmt.Errorf("%w: wajib diisi, maksimal %d karakter", ErrTeleponInvalid, TeleponMaxLen)
+	}
+	adaAngka := false
+	for i, r := range telepon {
+		if r >= '0' && r <= '9' {
+			adaAngka = true
+		}
+		if r >= '0' && r <= '9' || r == ' ' || r == '-' || r == '(' || r == ')' || i == 0 && r == '+' {
+			continue
+		}
+		return Akun{}, fmt.Errorf("%w: gunakan angka, spasi, tanda hubung, atau awalan +", ErrTeleponInvalid)
+	}
+	if !adaAngka {
+		return Akun{}, fmt.Errorf("%w: masukkan angka telepon", ErrTeleponInvalid)
 	}
 	if in.Password != in.PasswordKonfirmasi {
 		return Akun{}, ErrPasswordMismatch

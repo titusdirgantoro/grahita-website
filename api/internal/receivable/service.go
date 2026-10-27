@@ -17,6 +17,7 @@ import (
 	"github.com/grahita/portal/api/internal/audit"
 	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/platform/clock"
 	"github.com/grahita/portal/api/internal/platform/database"
 	"github.com/grahita/portal/api/internal/platform/jobs"
 )
@@ -38,9 +39,28 @@ type JobInserter interface {
 type Service struct {
 	pool *database.Pool
 	jobs JobInserter
+	clk  clock.Clock
 }
 
-func New(pool *database.Pool, jobs JobInserter) *Service { return &Service{pool: pool, jobs: jobs} }
+type Option func(*Service)
+
+// WithClock allows the business date at approval to be tested at WIB month
+// boundaries without changing the database or system clock.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clk = clk
+		}
+	}
+}
+
+func New(pool *database.Pool, jobs JobInserter, opts ...Option) *Service {
+	s := &Service{pool: pool, jobs: jobs, clk: clock.System()}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
@@ -97,9 +117,11 @@ FROM orders WHERE id=$1 AND branch_id=$2 FOR UPDATE`, orderID, branchID).
 	if !hasAccount {
 		return "", ErrNoBankAccount
 	}
-	now := time.Now().UTC()
+	now := s.clk.Now().UTC()
 	due := DueDate(submitted, now, int(payDay))
+	approvedStatus := "approved_unpaid"
 	if total == 0 {
+		approvedStatus = "done"
 		_, err = tx.Exec(ctx, `UPDATE orders SET status='done',verif_status='cocok',done_at=$2,
  tempo_approved_at=$2,tempo_due_date=$3,updated_at=$2 WHERE id=$1`, orderID, now, due)
 	} else {
@@ -125,7 +147,7 @@ VALUES($1,$2,$3,$4)`, branchID, orderID, total, due); err != nil {
 	}
 	if err := auditpg.Insert(ctx, tx, audit.NewEntry(ctx, actor, audit.EntityOrder, orderID,
 		audit.ActionVerify, map[string]any{"status": "submitted"},
-		map[string]any{"status": "approved_unpaid", "tempo_due_date": due.Format("2006-01-02")})); err != nil {
+		map[string]any{"status": approvedStatus, "tempo_due_date": due.Format("2006-01-02")})); err != nil {
 		return "", err
 	}
 	if _, err := s.jobs.InsertTx(ctx, tx, jobs.RenderDokumenArgs{OrderID: orderID}, nil); err != nil {

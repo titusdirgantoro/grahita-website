@@ -171,13 +171,17 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 		if serial == "" {
 			serial = "-"
 		}
+		instansi := l.NamaInstansi
+		if instansi == "" && l.Jenis == JenisBarisProduk {
+			instansi = "—"
+		}
 		nilai := []struct {
 			kolom string
 			isi   any
 		}{
 			{colNo, l.LineNo},
 			{colNama, l.Nama},
-			{colInstansi, l.NamaInstansi},
+			{colInstansi, instansi},
 			{colQty, l.Qty},
 			{colSerial, serial},
 		}

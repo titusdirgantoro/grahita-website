@@ -197,8 +197,23 @@ func denganSkema(t *testing.T, dsn, skema string) string {
 // per pemanggilan. Ini penting karena uji integrasi lain pada database yang
 // sama (mis. internal/platform/database yang menurunkan seluruh migrasi) bisa
 // berjalan bersamaan; dengan skema terpisah keduanya tidak saling merusak.
-func newPGFixture(t *testing.T) *pgFixture {
+type pgFixtureClock struct {
+	orders      clock.Clock
+	receivables clock.Clock
+}
+
+func newPGFixture(t *testing.T, clocks ...pgFixtureClock) *pgFixture {
 	t.Helper()
+	orderClock := clock.Clock(clock.System())
+	receivableClock := clock.Clock(clock.System())
+	if len(clocks) > 0 {
+		if clocks[0].orders != nil {
+			orderClock = clocks[0].orders
+		}
+		if clocks[0].receivables != nil {
+			receivableClock = clocks[0].receivables
+		}
+	}
 	url := pgEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
@@ -400,10 +415,10 @@ func newPGFixture(t *testing.T) *pgFixture {
 		Settings: settingsSvc,
 		Catalog:  catalogSvc,
 		Orders: order.NewService(orderRepo, catalogSvc, settingsSvc, order.WithBranchFlags(branchSvc),
-			order.WithPaymentAccounts(bankSvc), order.WithClock(clock.System()), order.WithAISettings(settingsSvc)),
+			order.WithPaymentAccounts(bankSvc), order.WithClock(orderClock), order.WithAISettings(settingsSvc)),
 		AdminOrders: order.NewAdminService(orderRepo, order.WithEmailGagal(notifSvc)),
 		Revise:      f.revise,
-		Receivables: receivable.New(pool, jobQueue),
+		Receivables: receivable.New(pool, jobQueue, receivable.WithClock(receivableClock)),
 		Dashboard: dashboard.NewService(dashboardpg.New(pool),
 			dashboard.WithEmailGagal(notifSvc)),
 		Payments:            paySvc,

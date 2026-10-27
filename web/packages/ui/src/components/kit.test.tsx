@@ -66,7 +66,9 @@ describe("Field, Input, Textarea, Select", () => {
     expect(input.getAttribute("type")).toBe("email");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.className).toContain("invalid");
-    expect(screen.getByRole("alert").textContent).toContain("Email wajib diisi.");
+    const error = screen.getByRole("alert");
+    expect(error.textContent).toContain("Email wajib diisi.");
+    expect(input.getAttribute("aria-describedby")).toBe(error.id);
   });
 
   it("menampilkan hint hanya bila tidak ada error", () => {
@@ -75,7 +77,22 @@ describe("Field, Input, Textarea, Select", () => {
         <Input id="pw" type="password" />
       </Field>,
     );
-    expect(screen.getByText("Minimal 8 karakter.")).toBeDefined();
+    const hint = screen.getByText("Minimal 8 karakter.");
+    expect(screen.getByLabelText("Password").getAttribute("aria-describedby")).toBe(hint.id);
+  });
+
+  it("mempertahankan deskripsi tambahan saat menautkan error", () => {
+    render(
+      <>
+        <span id="keterangan-tambahan">Akan dipakai pada invoice.</span>
+        <Field label="Nama instansi" htmlFor="instansi" error="Nama instansi wajib diisi.">
+          <Input id="instansi" aria-describedby="keterangan-tambahan" />
+        </Field>
+      </>,
+    );
+    const input = screen.getByLabelText("Nama instansi");
+    const error = screen.getByRole("alert");
+    expect(input.getAttribute("aria-describedby")).toBe(`keterangan-tambahan ${error.id}`);
   });
 
   it("Textarea dan Select memakai kelas input yang sama", () => {

@@ -46,6 +46,9 @@ func TestPDFBanyakBarisDenganGotenberg(t *testing.T) {
 				instansi = "TK Élite & Mitra <script>alert('uji')</script>"
 				product = "Sertifikat"
 			}
+			if count == 11 && i == 1 {
+				instansi = "" // Order historis sebelum nama instansi diwajibkan.
+			}
 			if i == count/2 {
 				instansi = "Yayasan Pendidikan Anak dan Remaja Grahita – Sekolah Menengah Pertama Bina Kasih Élite & Mitra Cabang Bandung"
 			}
@@ -54,6 +57,7 @@ func TestPDFBanyakBarisDenganGotenberg(t *testing.T) {
 				Subtotal: 27500, SerialNumber: fmt.Sprintf("20261008%03d", i)})
 		}
 		if count == 1 {
+			o.Catatan = `Catatan O'Connor & Mitra <script>alert("catatan")</script> harus dicetak sebagai teks.`
 			o.Total += 4500
 			o.Lines = append(o.Lines, Line{LineNo: 2, Jenis: "packaging", Nama: "Biaya packaging",
 				Qty: 1, HargaSatuan: 4500, Subtotal: 4500})
@@ -68,7 +72,13 @@ func TestPDFBanyakBarisDenganGotenberg(t *testing.T) {
 					t.Fatal(err)
 				}
 				if bytes.Contains(html, []byte("<script>")) {
-					t.Fatal("teks instansi tidak boleh membentuk elemen script")
+					t.Fatal("teks instansi atau catatan tidak boleh membentuk elemen script")
+				}
+				if count == 1 && !bytes.Contains(html, []byte("&lt;script&gt;")) {
+					t.Fatal("teks mirip HTML harus tetap terlihat sebagai teks ter-escape")
+				}
+				if count == 11 && !bytes.Contains(html, []byte("20261008001</td><td>—</td>")) {
+					t.Fatal("nama instansi kosong pada order historis harus tampil sebagai tanda pisah")
 				}
 				for _, line := range o.Lines {
 					if !bytes.Contains(html, []byte(line.SerialNumber)) {

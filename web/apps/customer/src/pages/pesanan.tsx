@@ -394,10 +394,6 @@ export function PesananDetailPage({ id }: { id: string }) {
             {data.versi ? <Badge tone="rev">Revisi {data.versi}</Badge> : null}
             {data.is_sertifikat ? <Badge tone="info">Sertifikat</Badge> : null}
           </div>
-          {data.is_tempo && data.status !== "submitted" ? <Notice tone={data.status === "done" ? "success" : "info"}>
-            {data.status === "done" ? "Lunas" : `Dibayar sebagian ${rupiah.format(data.tempo_paid_amount ?? 0)} dari ${rupiah.format(data.total)}`} · Jatuh tempo {data.tempo_due_date ?? "—"}. Pelunasan dikelola di menu Tagihan.
-          </Notice> : null}
-
           <Card>
             <dl className={styles.metaGrid}>
               <div>
@@ -461,11 +457,33 @@ export function PesananDetailPage({ id }: { id: string }) {
           </Card>
 
           {data.status !== "draft" ? (
-            <>
-              <KartuPembayaranPesanan id={data.id} />
-              <KartuRekeningPembayaran />
-              <KartuBukti id={data.id} bolehUnggah={data.status === "submitted"} />
-            </>
+            data.is_tempo ? (
+              <Card>
+                <CardHead title="Pembayaran Tempo" />
+                {data.status === "submitted" ? (
+                  <Notice tone="info">Pesanan menunggu persetujuan admin. Setelah disetujui, invoice dan tagihan tersedia untuk pelunasan.</Notice>
+                ) : (
+                  <>
+                    <Notice tone={data.status === "done" ? "success" : "info"}>
+                      {data.status === "done" ? "Tagihan pesanan ini sudah lunas." : "Pelunasan pesanan ini dicatat melalui menu Tagihan."}
+                    </Notice>
+                    <dl className={styles.metaGrid}>
+                      <div><dt>Total pesanan</dt><dd>{rupiah.format(data.total)}</dd></div>
+                      <div><dt>Terbayar</dt><dd>{rupiah.format(data.tempo_paid_amount ?? 0)}</dd></div>
+                      <div><dt>Sisa</dt><dd>{rupiah.format(Math.max(0, data.total - (data.tempo_paid_amount ?? 0)))}</dd></div>
+                      <div><dt>Jatuh tempo</dt><dd>{data.tempo_due_date ?? "—"}</dd></div>
+                    </dl>
+                  </>
+                )}
+                <Link to="/tagihan" className={styles.tagihanLink}>Lihat Tagihan</Link>
+              </Card>
+            ) : (
+              <>
+                <KartuPembayaranPesanan id={data.id} />
+                <KartuRekeningPembayaran />
+                <KartuBukti id={data.id} bolehUnggah={data.status === "submitted"} />
+              </>
+            )
           ) : null}
         </div>
       </div>
@@ -1087,7 +1105,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
       <div className={styles.stack}>
         <Card>
           <CardHead title="Item pesanan" />
-          <p className="muted small">Satu baris untuk satu instansi dan produk. Nomor serial dibuat otomatis saat pesanan dikirim.</p>
+          <p className="muted small">Satu baris untuk satu instansi dan produk. Nama instansi maksimal 160 karakter. Nomor serial dibuat otomatis saat pesanan dikirim.</p>
           {katalog.galat ? <Notice tone="danger">{katalog.galat}</Notice> : null}
           {adaSertifikat ? (
             <Notice tone="info">
@@ -1145,11 +1163,10 @@ export function PesananEditorPage({ id }: { id?: string }) {
                         <Input
                           id={`instansi-${b.kunci}`}
                           aria-label={`Nama instansi baris ${i + 1}`}
-                          maxLength={160}
                           required
                           value={b.namaInstansi}
                           placeholder="Contoh: TK Al-Fatih"
-                          onChange={(e) => ubahBaris(b.kunci, { namaInstansi: e.target.value })}
+                          onChange={(e) => ubahBaris(b.kunci, { namaInstansi: Array.from(e.target.value).slice(0, 160).join("") })}
                         />
                       </div>
                       <div className={styles.lQty}>

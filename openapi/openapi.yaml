@@ -400,7 +400,10 @@ paths:
               additionalProperties: false
               properties:
                 token: { type: string, maxLength: 64 }
-                telepon: { type: string, maxLength: 40 }
+                telepon:
+                  type: string
+                  maxLength: 40
+                  description: Nomor berisi angka, spasi, tanda hubung, atau tanda kurung; tanda + hanya boleh di awal.
                 password: { type: string, minLength: 8, maxLength: 200 }
                 password_konfirmasi: { type: string, maxLength: 200 }
       responses:

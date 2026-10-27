@@ -315,6 +315,15 @@ WHERE branch_id=$1 AND ends_on >= $2::date)`, req.BranchID, req.Tanggal).Scan(&g
 	if status != order.StatusDraft {
 		return order.Order{}, order.ErrLocked
 	}
+	if req.IsTempo {
+		var proofCount int64
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM payment_proofs WHERE order_id=$1 AND purpose='order_payment'`, req.ID).Scan(&proofCount); err != nil {
+			return order.Order{}, fmt.Errorf("periksa bukti transfer draft Tempo: %w", err)
+		}
+		if proofCount > 0 {
+			return order.Order{}, order.ErrTempoProofConflict
+		}
+	}
 	if !req.IsCNC && !req.IsTempo {
 		// Serialisasi submit dengan perubahan policy rekening. Dengan demikian
 		// rekening yang dicabut serentak tidak bisa lolos lewat pra-cek service.

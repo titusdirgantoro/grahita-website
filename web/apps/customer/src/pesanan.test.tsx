@@ -738,6 +738,18 @@ describe("Customer Portal — bukti transfer (F1-13)", () => {
     },
   ];
 
+  it("pesanan Tempo mengarahkan pelunasan ke Tagihan tanpa form bukti pesanan", async () => {
+    const panggilan = fetchPesanan({ detail: { ...terkirim, is_tempo: true, status: "submitted" } });
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+
+    expect(await screen.findByRole("heading", { name: "Pembayaran Tempo" })).toBeDefined();
+    expect(screen.getByText(/menunggu persetujuan admin/i)).toBeDefined();
+    expect(screen.getByRole("link", { name: "Lihat Tagihan" })).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Bukti transfer" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unggah bukti" })).toBeNull();
+    expect(panggilan.some((p) => p.url.endsWith("/proofs"))).toBe(false);
+  });
+
   it("menampilkan bukti beserta penanda pengunggah cabang/admin", async () => {
     fetchPesanan({ bukti: buktiDua });
 

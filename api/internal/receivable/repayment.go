@@ -128,11 +128,12 @@ func (s *Service) UploadProof(ctx context.Context, actor auth.Actor, store stora
 		return Repayment{}, fmt.Errorf("simpan bukti Tempo: %w", err)
 	}
 	var out Repayment
+	requestTime := s.clk.Now()
 	err = tx.QueryRow(ctx, `INSERT INTO tempo_receipts
-(branch_id,payment_proof_id,bank_account_id,declared_amount)
-VALUES($1,$2,$3,$4)
+(branch_id,payment_proof_id,bank_account_id,declared_amount,submitted_at)
+VALUES($1,$2,$3,$4,$5)
 RETURNING id::text,branch_id::text,declared_amount,status,submitted_at`,
-		actor.BranchID, proofID, in.BankAccountID, in.Amount).
+		actor.BranchID, proofID, in.BankAccountID, in.Amount, requestTime).
 		Scan(&out.ID, &out.BranchID, &out.DeclaredAmount, &out.Status, &out.SubmittedAt)
 	if err != nil {
 		return Repayment{}, err
@@ -140,7 +141,7 @@ RETURNING id::text,branch_id::text,declared_amount,status,submitted_at`,
 	var overdue int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount-paid_amount),0)::bigint
  FROM tempo_charges WHERE branch_id=$1
- AND due_date<(now() AT TIME ZONE 'Asia/Jakarta')::date`, actor.BranchID).Scan(&overdue); err != nil {
+ AND due_date<$2::date`, actor.BranchID, requestTime.In(jakarta).Format("2006-01-02")).Scan(&overdue); err != nil {
 		return Repayment{}, err
 	}
 	var pending int64

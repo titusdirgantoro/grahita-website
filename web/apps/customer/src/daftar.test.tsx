@@ -294,6 +294,33 @@ describe("/daftar — pesan spesifik per keadaan token (CP-REG-07)", () => {
 });
 
 describe("/daftar — kegagalan di langkah 2", () => {
+  it("menolak telepon bukan angka, password lemah, dan field wajib tanpa memanggil register", async () => {
+    const panggilan = pasangFetch((url) =>
+      url.endsWith("/auth/registration/validate")
+        ? json({ data: DATA_CABANG })
+        : galat("NOT_FOUND", "tidak ada", 404),
+    );
+    render(<RouterProvider router={buatRouter("/daftar")} />);
+    await screen.findByLabelText("Token registrasi");
+    fireEvent.change(screen.getByLabelText("Token registrasi"), { target: { value: TOKEN } });
+    fireEvent.click(screen.getByRole("button", { name: "Lanjutkan" }));
+    await screen.findByLabelText("Nama cabang");
+
+    isiFormulir("nomor-telepon", "Abcdefg1!", "Abcdefg1!");
+    fireEvent.click(screen.getByRole("button", { name: "Buat akun" }));
+    expect(await screen.findByText("Gunakan angka, spasi, tanda hubung, atau awalan +.")).toBeDefined();
+    expect(screen.getByLabelText("Nomor telepon").getAttribute("aria-invalid")).toBe("true");
+
+    isiFormulir("08123456789", "abc1234", "abc1234");
+    fireEvent.click(screen.getByRole("button", { name: "Buat akun" }));
+    expect(screen.getByLabelText("Kata sandi").getAttribute("aria-invalid")).toBe("true");
+
+    isiFormulir("", "Abcdefg1!", "Abcdefg1!");
+    fireEvent.click(screen.getByRole("button", { name: "Buat akun" }));
+    expect(await screen.findByText("Nomor telepon wajib diisi.")).toBeDefined();
+    expect(panggilanKe(panggilan, "/auth/register")).toBeUndefined();
+  });
+
   it("menampilkan pesan server per field tanpa menimpa dengan field read-only", async () => {
     pasangFetch((url) => {
       if (url.endsWith("/auth/registration/validate")) return json({ data: DATA_CABANG });

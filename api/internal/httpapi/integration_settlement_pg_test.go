@@ -76,6 +76,44 @@ func hitungSQL(t *testing.T, f *pgFixture, query string, args ...any) int64 {
 	return n
 }
 
+// VER-05: nominal keputusan satu bukti harus selalu terkonservasi. Bukti
+// milik pesanan pertama tidak boleh dipakai untuk memutuskan pesanan kedua.
+func TestPGSettlementBuktiTidakBolehMenciptaUangAtauPindahOrder(t *testing.T) {
+	f := newPGFixture(t)
+	first, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-601")
+	second, _ := seedPesananSubmitted(t, f, f.branchA, "2026-10-602")
+	proof := buktiOrder(t, f, first, "ver05-proof")
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	invalid := settlementBody(f, 0, nil, []splitUji{{proof, total + 1, total, 0}})
+	status, body := verifyKey(t, f, cookies, csrf, first, invalid, "ver05-invalid")
+	if status < 400 || status >= 500 {
+		t.Fatalf("split tidak seimbang harus 4xx, dapat %d (%v)", status, body)
+	}
+	if n := hitungSQL(t, f, `SELECT count(*) FROM payment_proof_economic_decisions WHERE payment_proof_id=$1`, proof); n != 0 {
+		t.Fatalf("split ditolak tetapi keputusan ekonomi tertulis: %d", n)
+	}
+	if n := hitungSQL(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, first); n != 0 {
+		t.Fatalf("split ditolak tetapi log verifikasi tertulis: %d", n)
+	}
+
+	correct := settlementBody(f, 0, nil, []splitUji{{proof, total, total, 0}})
+	status, body = verifyKey(t, f, cookies, csrf, first, correct, "ver05-correct")
+	if status != http.StatusOK {
+		t.Fatalf("keputusan seimbang harus 200, dapat %d (%v)", status, body)
+	}
+	status, body = verifyKey(t, f, cookies, csrf, second, correct, "ver05-other-order")
+	if status < 400 || status >= 500 {
+		t.Fatalf("bukti order pertama dipakai untuk order kedua harus 4xx, dapat %d (%v)", status, body)
+	}
+	if n := hitungSQL(t, f, `SELECT count(*) FROM payment_proof_economic_decisions WHERE payment_proof_id=$1`, proof); n != 1 {
+		t.Fatalf("bukti harus punya tepat satu keputusan ekonomi: %d", n)
+	}
+	if n := hitungSQL(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, second); n != 0 {
+		t.Fatalf("order kedua berubah setelah memakai bukti asing: %d", n)
+	}
+}
+
 // TestPGSettlementCampuranTepatTotal: deposit + transfer harus tepat total;
 // alokasi yang dilewati, kurang bayar, dan versi basi ditolak tanpa mutasi;
 // Manager boleh menyelesaikan campuran tanpa kredit, dan Done memakai snapshot

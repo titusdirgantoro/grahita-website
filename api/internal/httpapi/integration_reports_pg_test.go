@@ -26,6 +26,7 @@ import (
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/platform/config"
+	"github.com/grahita/portal/api/internal/platform/storage"
 	"github.com/grahita/portal/api/internal/report"
 	reportpg "github.com/grahita/portal/api/internal/report/postgres"
 	"github.com/grahita/portal/api/internal/worker"
@@ -72,6 +73,66 @@ type laporanPG struct {
 	store *objekHitung
 	svc   *report.Service
 	seq   int
+}
+
+// storageTerhenti menahan unggahan hingga context worker dibatalkan. Ini
+// mensimulasikan worker yang mati setelah status ekspor menjadi `proses`.
+type storageTerhenti struct {
+	storage.Store
+	mulai chan struct{}
+}
+
+func (s storageTerhenti) Put(ctx context.Context, _ string, _ io.Reader, _ int64, _ string) error {
+	close(s.mulai)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestPGReportEksporPulihSesudahWorkerBerhentiSaatUnggah(t *testing.T) {
+	l := newLaporanPG(t)
+	produk := l.produkA(t)
+	l.seedPesanan(t, pesananLaporan{
+		BranchID: l.branchA, Nomor: "QA-RESTART-REPORT", Tanggal: "2026-10-27", Status: "submitted",
+		Baris: []barisLaporan{{Jenis: "product", Nama: "Bio Magnetik", Instansi: "QA Restart", Qty: 1, Harga: 100000, ProductID: produk, Serial: l.serialBaru()}},
+	})
+	job, err := l.svc.Request(context.Background(), aktorSAUji(), report.Filter{Status: "submitted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := storageTerhenti{Store: l.store, mulai: make(chan struct{})}
+	interrupted := report.NewService(l.repo, blocked)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { _, runErr := interrupted.Jalankan(ctx, job.ID); result <- runErr }()
+	select {
+	case <-blocked.mulai:
+	case <-time.After(30 * time.Second):
+		cancel()
+		t.Fatal("ekspor tidak mencapai unggah storage")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("worker terhenti harus mengembalikan error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker terhenti tidak melepaskan pekerjaan")
+	}
+	var status string
+	if err := l.pool.QueryRow(context.Background(), `SELECT status::text FROM report_jobs WHERE id=$1`, job.ID).Scan(&status); err != nil || status != report.StatusProses {
+		t.Fatalf("pekerjaan terhenti harus masih dapat diklaim ulang: status=%s err=%v", status, err)
+	}
+	if l.store.jumlah() != 0 {
+		t.Fatal("unggah terhenti tidak boleh meninggalkan objek")
+	}
+	completed, err := l.svc.Jalankan(context.Background(), job.ID)
+	if err != nil || completed.Status != report.StatusSelesai || completed.JumlahBaris != 1 {
+		t.Fatalf("restart harus menuntaskan ekspor yang terhenti: %+v %v", completed, err)
+	}
+	if _, err := l.svc.Jalankan(context.Background(), job.ID); err != nil || l.store.jumlah() != 1 {
+		t.Fatalf("pengulangan setelah selesai harus idempoten: objek=%d err=%v", l.store.jumlah(), err)
+	}
 }
 
 func newLaporanPG(t *testing.T) *laporanPG {
@@ -365,6 +426,32 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 		got := l.lajur(t, cookies, k.query)
 		if got["total"] != k.total {
 			t.Errorf("filter %s: total harus %v, dapat %v", k.nama, k.total, got["total"])
+		}
+	}
+	seenSerial := map[string]bool{}
+	for pageNo, wantItems := range []int{2, 2, 1} {
+		paged := l.lajur(t, cookies, fmt.Sprintf("?halaman=%d&per_halaman=2", pageNo+1))
+		items := paged["items"].([]any)
+		if paged["total"] != float64(5) || len(items) != wantItems {
+			t.Fatalf("halaman %d: total/items salah: %+v", pageNo+1, paged)
+		}
+		for _, item := range items {
+			row := item.(map[string]any)
+			key := fmt.Sprintf("%v/%v/%v", row["nomor"], row["versi"], row["line_no"])
+			if seenSerial[key] {
+				t.Fatalf("paginasi menggandakan baris %s", key)
+			}
+			seenSerial[key] = true
+		}
+	}
+	if len(seenSerial) != 5 {
+		t.Fatalf("paginasi kehilangan baris: %v", seenSerial)
+	}
+	for _, invalid := range []string{"?halaman=dua", "?cabang=bukan-uuid", "?cnc=mungkin", "?dari=2026-10-31&sampai=2026-10-01"} {
+		st, invalidBody, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+			l.srv.URL+"/api/v1/admin/reports/order-lines"+invalid, "", cookies, "")
+		if st != http.StatusBadRequest || kodeErrorVerifikasi(invalidBody) != "VALIDATION_FAILED" {
+			t.Fatalf("filter salah %s harus 400: %d %+v", invalid, st, invalidBody)
 		}
 	}
 

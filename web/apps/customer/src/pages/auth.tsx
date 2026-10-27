@@ -227,6 +227,9 @@ export function HalamanDaftar() {
     });
     if (!telepon) lokal.telepon = "Nomor telepon wajib diisi.";
     else if (telepon.length > 40) lokal.telepon = "Nomor telepon maksimal 40 karakter.";
+    else if (!/^\+?[0-9 ()-]+$/.test(telepon) || !/[0-9]/.test(telepon)) {
+      lokal.telepon = "Gunakan angka, spasi, tanda hubung, atau awalan +.";
+    }
     if (Object.keys(lokal).length > 0) {
       setGalatField(lokal);
       setGalat(null);

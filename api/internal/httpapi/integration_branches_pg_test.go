@@ -2065,6 +2065,17 @@ func TestPGTokenRegistrasiSHA256SekaliPakai(t *testing.T) {
 	if nBaru != 1 || nAktif != 1 {
 		t.Errorf("harus ada tepat 1 token aktif (baru), dapat baru=%d aktif=%d", nBaru, nAktif)
 	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/auth/registration/validate", `{"token":"`+token+`"}`, nil, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("token lama yang dicabut harus 400, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "TOKEN_INVALID")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/auth/registration/validate", `{"token":"`+tokenBaru+`"}`, nil, "")
+	if status != http.StatusOK {
+		t.Fatalf("token pengganti harus dapat divalidasi, dapat %d (%v)", status, body)
+	}
 
 	// Dua mutasi token tercatat audit, yang kedua memuat token lama di before.
 	if n := f.hitungAudit(t, "branch", "token_generate", f.adminMgr); n != 2 {

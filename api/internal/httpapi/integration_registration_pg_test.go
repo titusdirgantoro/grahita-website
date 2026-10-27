@@ -152,6 +152,41 @@ func TestPGPendaftaranAkunCabangLengkapDanBisaLogin(t *testing.T) {
 	}
 }
 
+func TestPGPendaftaranMenolakFieldTidakValidTanpaMembuatAkun(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	branch := insertBranch(t, ctx, f.pool, "Grahita Cabang Validasi", "Kepala Validasi", "cabang-validasi@example.test", true)
+	token := seedToken(t, ctx, f, branch, time.Now().Add(24*time.Hour))
+
+	for _, tc := range []struct{ nama, isi string }{
+		{"password kurang 8 karakter", `"telepon":"08123456789","password":"abc1234","password_konfirmasi":"abc1234"`},
+		{"konfirmasi berbeda", `"telepon":"08123456789","password":"abc12345","password_konfirmasi":"abc12346"`},
+		{"telepon huruf", `"telepon":"nomor-telepon","password":"abc12345","password_konfirmasi":"abc12345"`},
+		{"telepon terlalu panjang", `"telepon":"` + strings.Repeat("1", 41) + `","password":"abc12345","password_konfirmasi":"abc12345"`},
+		{"telepon kosong", `"telepon":"","password":"abc12345","password_konfirmasi":"abc12345"`},
+		{"password kosong", `"telepon":"08123456789","password":"","password_konfirmasi":""`},
+	} {
+		t.Run(tc.nama, func(t *testing.T) {
+			status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+				f.srv.URL+"/api/v1/auth/register", `{"token":"`+token+`",`+tc.isi+`}`, nil, "")
+			if status != http.StatusBadRequest {
+				t.Fatalf("input %s perlu 400, dapat %d: %v", tc.nama, status, body)
+			}
+			assertErrorShape(t, body, "VALIDATION_FAILED")
+		})
+	}
+	var akun, terpakai int
+	if err := f.pool.QueryRow(ctx, `SELECT
+ (SELECT count(*) FROM branch_users WHERE branch_id=$1),
+ (SELECT count(*) FROM registration_tokens WHERE branch_id=$1 AND used_at IS NOT NULL)`, branch).
+		Scan(&akun, &terpakai); err != nil {
+		t.Fatal(err)
+	}
+	if akun != 0 || terpakai != 0 {
+		t.Fatalf("input tidak valid membuat akun atau memakai token: akun=%d token=%d", akun, terpakai)
+	}
+}
+
 func TestPGPendaftaranTidakBisaMemalsukanDataReadOnly(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
