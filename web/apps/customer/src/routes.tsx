@@ -45,9 +45,9 @@ function ShellLayout() {
   const { status, pengguna } = useSesi();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  // Menu Deposit hanya untuk cabang Cash & Carry; flag dibaca dari server.
-  const { data: cabang } = useApi<{ is_cnc: boolean; is_tempo: boolean }>("/me/branch", !!pengguna);
-  const nav = useMemo(() => navCabang(cabang?.is_cnc === true, cabang?.is_tempo === true), [cabang]);
+  // Hak membuat pesanan dan akses ke tagihan lama dibaca terpisah dari server.
+  const { data: cabang } = useApi<{ is_cnc: boolean; is_tempo: boolean; has_tempo_history?: boolean }>("/me/branch", !!pengguna);
+  const nav = useMemo(() => navCabang(cabang?.is_cnc === true, cabang?.is_tempo === true, cabang?.has_tempo_history === true), [cabang]);
 
   useEffect(() => {
     if (status === "belum") void navigate({ to: "/masuk", replace: true });

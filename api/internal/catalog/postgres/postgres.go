@@ -92,8 +92,9 @@ func (r *Repo) GetBranch(ctx context.Context, id string) (catalog.Branch, error)
 	}
 	return catalog.Branch{
 		ID: row.ID, Nama: row.Nama, NamaKepala: row.NamaKepala, Email: row.Email,
-		Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo, AllowTransfer: row.AllowTransfer,
-		TanggalBayar: int(row.TanggalBayar.Int16), TahanBilaTelat: row.TahanBilaTelat,
+		Telepon: row.Telepon, IsCNC: row.IsCnc, IsTempo: row.IsTempo, HasTempoHistory: row.HasTempoHistory,
+		AllowTransfer: row.AllowTransfer,
+		TanggalBayar:  int(row.TanggalBayar.Int16), TahanBilaTelat: row.TahanBilaTelat,
 		PajakIn: row.PajakIn, IsActive: row.IsActive,
 	}, nil
 }

@@ -101,9 +101,9 @@ func terbilang(n int64) string {
 	}
 }
 
-// penandaPembayaran menentukan penanda pembayaran invoice (PRD §6.1). Invoice
-// baru lahir saat pesanan selesai diverifikasi, jadi semuanya LUNAS; pesanan
-// Cash & Carry (dibayar dari deposit cabang) diberi keterangan tambahan.
+// penandaPembayaran menentukan penanda pembayaran invoice (PRD §6.1).
+// Invoice Tempo dapat terbit sebelum lunas, sedangkan Transfer dan C&C
+// terbit setelah settlement lengkap.
 func penandaPembayaran(o Order) string {
 	if o.IsTempo {
 		return "PEMBAYARAN TEMPO — jatuh tempo " + FormatTanggal(o.TempoDueDate)
@@ -156,18 +156,24 @@ type invoiceView struct {
 // suratJalanView adalah model tampilan surat jalan (HTML/PDF). XLSX memakai
 // data yang sama lewat penyusun tersendiri.
 type suratJalanView struct {
-	Logo        template.URL
-	Nomor       string
-	Tanggal     string
-	Cabang      string
-	Kepala      string
-	Email       string
-	Telepon     string
-	Catatan     string
+	Logo     template.URL
+	Nomor    string
+	Tanggal  string
+	Cabang   string
+	Kepala   string
+	Email    string
+	Telepon  string
+	Catatan  string
+	Pages    []suratJalanPage
+	Jumlah   string
+	TotalQty string
+}
+
+type suratJalanPage struct {
 	Lines       []lineView
-	Jumlah      string
-	TotalQty    string
 	BarisKosong []int
+	Continued   bool
+	Last        bool
 }
 
 func barisKosong(jumlah, minimum int) []int {
@@ -245,25 +251,39 @@ func newInvoiceView(o Order) invoiceView {
 
 func newSuratJalanView(o Order) suratJalanView {
 	totalQty := 0
-	var jumlah int
 	for _, l := range o.Lines {
 		totalQty += l.Qty
 	}
-	jumlah = len(o.Lines)
 	return suratJalanView{
-		Logo:        logoGrahitaURL,
-		Nomor:       o.Nomor,
-		Tanggal:     FormatTanggal(o.Tanggal),
-		Cabang:      o.Cabang.Nama,
-		Kepala:      o.Cabang.Kepala,
-		Email:       o.Cabang.Email,
-		Telepon:     o.Cabang.Telepon,
-		Catatan:     strings.TrimSpace(o.Catatan),
-		Lines:       viewLines(o),
-		Jumlah:      fmt.Sprintf("%d", jumlah),
-		TotalQty:    fmt.Sprintf("%d", totalQty),
-		BarisKosong: barisKosong(len(o.Lines), 18),
+		Logo:     logoGrahitaURL,
+		Nomor:    o.Nomor,
+		Tanggal:  FormatTanggal(o.Tanggal),
+		Cabang:   o.Cabang.Nama,
+		Kepala:   o.Cabang.Kepala,
+		Email:    o.Cabang.Email,
+		Telepon:  o.Cabang.Telepon,
+		Catatan:  strings.TrimSpace(o.Catatan),
+		Pages:    suratJalanPages(viewLines(o)),
+		Jumlah:   fmt.Sprintf("%d", len(o.Lines)),
+		TotalQty: fmt.Sprintf("%d", totalQty),
 	}
+}
+
+// Halaman terakhir menyisakan tempat untuk catatan dan tanda tangan. Saat
+// rincian panjang, beberapa baris ikut halaman terakhir agar tanda tangan
+// tidak terdorong sendirian ke lembar berikutnya.
+func suratJalanPages(lines []lineView) []suratJalanPage {
+	if len(lines) <= 22 {
+		return []suratJalanPage{{Lines: lines, BarisKosong: barisKosong(len(lines), 18), Last: true}}
+	}
+	pages := make([]suratJalanPage, 0, (len(lines)+23)/24)
+	for len(lines) > 22 {
+		take := min(24, len(lines)-5)
+		pages = append(pages, suratJalanPage{Lines: lines[:take], Continued: len(pages) > 0})
+		lines = lines[take:]
+	}
+	pages = append(pages, suratJalanPage{Lines: lines, Continued: true, Last: true})
+	return pages
 }
 
 // jumlahItem menjumlahkan qty seluruh baris (prototype menampilkan "jumlah
@@ -426,6 +446,8 @@ body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webk
 .baris tfoot td { background: #fff5c8; color: #33224c; font-weight: bold; }
 .baris thead { display: table-header-group; }
 .baris tfoot { display: table-row-group; }
+.continued { break-before: page; margin: 0 0 8px; color: #4a2879; font-size: 9px; font-weight: bold; }
+.delivery-closing { break-inside: avoid; }
 .notes { margin-top: 15px; break-inside: avoid; }
 .label { color: #4a2879; font-weight: bold; text-transform: uppercase; font-size: 9px; letter-spacing: .4px; }
 .notes .box { border: 1px solid #d9d1e4; border-radius: 4px; min-height: 42px; margin-top: 5px; padding: 8px; white-space: pre-wrap; }
@@ -440,14 +462,19 @@ body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webk
 <div class="rule"></div>
 <section class="info"><div class="recipient"><div class="label">KEPADA YTH.</div><strong>{{.Cabang}}</strong>{{if .Telepon}}<div>Telp. {{.Telepon}}</div>{{end}}{{if .Email}}<div class="minor">{{.Email}}</div>{{end}}</div>
   <div class="transport">Kami kirimkan barang-barang di bawah ini dengan:<div class="row"><span>Kendaraan</span><div class="blank"></div></div><div class="row"><span>No. Polisi</span><div class="blank"></div></div></div></section>
+{{range .Pages}}
+{{if .Continued}}<div class="continued">SURAT JALAN {{$.Nomor}} — lanjutan</div>{{end}}
 <table class="baris" aria-label="Rincian surat jalan"><colgroup><col style="width:5%"><col style="width:17%"><col style="width:29%"><col style="width:15%"><col style="width:16%"><col style="width:8%"><col style="width:10%"></colgroup>
   <thead><tr><th>No</th><th>Serial Number</th><th>Nama Instansi</th><th>Asal Cabang</th><th>Produk</th><th>Jumlah</th><th>Ket</th></tr></thead>
   <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td>{{.Nama}}</td><td class="center">{{.Qty}}</td><td></td></tr>{{end}}
     {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}</tbody>
-  <tfoot><tr><td colspan="5" style="text-align:right">JUMLAH</td><td class="center">{{.TotalQty}}</td><td></td></tr></tfoot></table>
+  {{if .Last}}<tfoot><tr><td colspan="5" style="text-align:right">JUMLAH</td><td class="center">{{$.TotalQty}}</td><td></td></tr></tfoot>{{end}}</table>
+{{end}}
+<section class="delivery-closing">
 <section class="notes"><div class="label">Catatan</div><div class="box">{{.Catatan}}</div></section>
 <div class="ack">Barang telah diterima dalam keadaan baik dan jumlah sesuai. Mohon kembalikan lembar tanda terima yang telah ditandatangani.</div>
 <div class="place">Tangerang, {{.Tanggal}}</div>
 <section class="signatures"><div class="signature">Penerima,<div class="line"></div><div class="hint">Tanda terima &amp; stempel</div></div><div class="signature">Pengemudi,<div class="line"></div><div class="hint">Nama jelas</div></div><div class="signature">Hormat kami,<div class="line"></div><div class="hint">Nama jelas</div></div></section>
 <footer class="footer"><span>Lembar 1: Penerima &nbsp;·&nbsp; Lembar 2: Pengirim (arsip) &nbsp;·&nbsp; Lembar 3: Pengemudi</span><span>PT GRAHITA INDONESIA</span></footer>
+</section>
 </body></html>`

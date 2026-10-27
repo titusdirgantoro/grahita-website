@@ -22,8 +22,9 @@ export const NAV_CUSTOMER: NavItem[] = [
   { to: "/profil", label: "Profil", icon: "user-circle", bottomLabel: "Profil", sidebar: false },
 ];
 
-/** navCabang adalah menu cabang sesi: tanpa Deposit untuk cabang non-C&C. */
-export function navCabang(isCNC: boolean, isTempo = false): NavItem[] {
-  return NAV_CUSTOMER.filter((item) => (item.to !== "/deposit" || isCNC) && (item.to !== "/tagihan" || isTempo))
-    .map((item) => isTempo && item.to === "/invoice" ? { ...item, bottomLabel: undefined } : item);
+/** Tagihan historis tetap terjangkau setelah izin pesanan Tempo dicabut. */
+export function navCabang(isCNC: boolean, isTempo = false, hasTempoHistory = false): NavItem[] {
+  const showTagihan = isTempo || hasTempoHistory;
+  return NAV_CUSTOMER.filter((item) => (item.to !== "/deposit" || isCNC) && (item.to !== "/tagihan" || showTagihan))
+    .map((item) => showTagihan && item.to === "/invoice" ? { ...item, bottomLabel: undefined } : item);
 }

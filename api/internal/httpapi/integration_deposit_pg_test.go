@@ -247,6 +247,14 @@ func TestPGDepositKreditHanyaSuperadmin(t *testing.T) {
 	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != 200000 {
 		t.Fatalf("retry tidak boleh mengkredit dua kali, saldo=%d", saldo)
 	}
+	berbeda := `{"action":"verify","approved_amount":190000,"reason":"Nominal berbeda"}`
+	status, body = depositReq(t, http.MethodPost, url, berbeda, cookiesSA, csrfSA, "sa-v1")
+	if status != http.StatusConflict || errCode(body) != "IDEMPOTENCY_KEY_REUSED" {
+		t.Fatalf("key keputusan sama dengan isi berbeda harus 409, dapat %d (%v)", status, body)
+	}
+	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != 200000 {
+		t.Fatalf("key dipakai ulang tidak boleh mengubah saldo: %d", saldo)
+	}
 	status, body = depositReq(t, http.MethodPost, url, verify, cookiesSA, csrfSA, "sa-v2")
 	if status != http.StatusConflict {
 		t.Fatalf("keputusan kedua harus 409, dapat %d (%v)", status, body)

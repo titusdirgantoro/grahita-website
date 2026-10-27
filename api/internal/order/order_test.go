@@ -292,7 +292,9 @@ func TestValidasiIsiDraft(t *testing.T) {
 		{"qty nol", DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 0}}}, ErrInvalidData},
 		{"qty negatif", DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: -2}}}, ErrInvalidData},
 		{"instansi kosong", DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 1}}}, ErrInvalidData},
+		{"instansi spasi", DraftInput{Lines: []LineInput{{NamaInstansi: " \t ", ProductID: "p1", Qty: 1}}}, ErrInvalidData},
 		{"instansi terlalu panjang", DraftInput{Lines: []LineInput{{NamaInstansi: strings.Repeat("a", MaxNamaInstansi+1), ProductID: "p1", Qty: 1}}}, ErrInvalidData},
+		{"qty melewati batas", DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: maxQty + 1}}}, ErrInvalidData},
 		{"produk kosong", DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "  ", Qty: 1}}}, ErrInvalidData},
 		{"catatan terlalu panjang", DraftInput{Catatan: strings.Repeat("a", 501), Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}}}, ErrInvalidData},
 		{"terlalu banyak baris", DraftInput{Lines: banyakBaris(MaxLines + 1)}, ErrInvalidData},
@@ -304,6 +306,20 @@ func TestValidasiIsiDraft(t *testing.T) {
 	}
 	if repo.Count() != 0 {
 		t.Errorf("tidak boleh ada draft tersimpan saat validasi gagal, dapat %d", repo.Count())
+	}
+}
+
+func TestNamaInstansiBatasSeratusEnamPuluhKarakterUnicode(t *testing.T) {
+	svc, _ := newUjiService()
+	nama := strings.Repeat("É", MaxNamaInstansi)
+	got, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{
+		Lines: []LineInput{{ProductID: "p1", Qty: 1, NamaInstansi: nama}},
+	})
+	if err != nil {
+		t.Fatalf("nama instansi 160 karakter Unicode harus diterima: %v", err)
+	}
+	if len(got.Lines) != 1 || got.Lines[0].NamaInstansi != nama {
+		t.Fatalf("nama instansi berubah sesudah disimpan: %+v", got.Lines)
 	}
 }
 

@@ -277,6 +277,29 @@ func TestSuratJalanHTMLKonsistenDenganXLSX(t *testing.T) {
 	}
 }
 
+func TestSuratJalanPanjangMembawaBarisBersamaTandaTangan(t *testing.T) {
+	for _, jumlah := range []int{23, 29, 100} {
+		lines := make([]lineView, jumlah)
+		for i := range lines {
+			lines[i].No = fmt.Sprint(i + 1)
+		}
+		pages := suratJalanPages(lines)
+		if len(pages) < 2 {
+			t.Fatalf("%d baris harus berlanjut ke halaman lain", jumlah)
+		}
+		total := 0
+		for i, page := range pages {
+			if len(page.Lines) == 0 || len(page.Lines) > 24 || len(page.BarisKosong) != 0 || page.Last != (i == len(pages)-1) {
+				t.Fatalf("%d baris, halaman %d tidak layak: %+v", jumlah, i+1, page)
+			}
+			total += len(page.Lines)
+		}
+		if total != jumlah || len(pages[len(pages)-1].Lines) < 5 {
+			t.Fatalf("%d baris harus lengkap dan halaman akhir punya rincian: %+v", jumlah, pages)
+		}
+	}
+}
+
 // TestVersiRevisi kosmetik kecil: label versi dokumen.
 func TestVersiRevisi(t *testing.T) {
 	if got := versiRevisi(0); got != "" {

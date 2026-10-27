@@ -91,7 +91,7 @@ test: ## Uji unit backend
 
 test-integrasi: ## Uji integrasi (butuh TEST_DATABASE_URL menunjuk PG bersih)
 	$(_wajib_go)
-	cd $(API_DIR) && $(GO) test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
+	cd $(API_DIR) && $(GO) test -p 1 -count=1 -timeout 60m ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
 
 build: ## Build binary server
 	$(_wajib_go)

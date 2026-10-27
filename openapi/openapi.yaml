@@ -5731,6 +5731,7 @@ components:
         telepon: { type: string }
         is_cnc: { type: boolean }
         is_tempo: { type: boolean }
+        has_tempo_history: { type: boolean, description: Ada pada profil cabang sesi bila pernah mengirim pesanan Tempo; akses tagihan lama tetap ada setelah izin Tempo dicabut. }
         allow_transfer: { type: boolean, description: Transfer di muka boleh dipilih pada pesanan. }
         tanggal_bayar: { type: integer, minimum: 1, maximum: 28, description: Wajib bila is_tempo true. }
         tahan_bila_telat: { type: boolean }

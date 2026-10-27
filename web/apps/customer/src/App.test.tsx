@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { describe, expect, it, vi } from "vitest";
 
@@ -28,14 +28,17 @@ const penggunaCabang = {
 
 /**
  * fetchAndalan memasang fetch palsu untuk sesi cabang + katalog. `cnc` adalah
- * flag Cash & Carry cabang sesi (menentukan menu Deposit).
+ * flag pembayaran dan riwayat Tempo cabang sesi (menentukan menu terkait).
  */
-function fetchAndalan(cnc = true) {
+function fetchAndalan(cnc = true, tempo = false, tempoHistory = false) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string) => {
       if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
-      if (input.endsWith("/me/branch")) return json({ data: { id: "b1", nama: "Grahita Bandung", is_cnc: cnc } });
+      if (input.endsWith("/me/branch")) return json({ data: {
+        id: "b1", nama: "Grahita Bandung", is_cnc: cnc,
+        is_tempo: tempo, has_tempo_history: tempoHistory,
+      } });
       if (input.endsWith("/catalog")) {
         return json({
           data: [
@@ -108,6 +111,40 @@ describe("Customer Portal — shell & navigasi", () => {
     const bawah = screen.getByRole("navigation", { name: "Navigasi bawah" });
     expect(within(bawah).getByRole("link", { name: /Pesanan/ })).toBeDefined();
     expect(within(bawah).queryByRole("link", { name: /Deposit/ })).toBeNull();
+  });
+
+  it("menu Tagihan tetap ada setelah izin Tempo dicabut bila ada riwayat pesanan", async () => {
+    fetchAndalan(false, false, true);
+
+    render(<RouterProvider router={buatRouter("/katalog")} />);
+
+    expect(await screen.findByText("Bio Magnetik")).toBeDefined();
+    const sidebar = within(screen.getByRole("complementary")).getByRole("navigation");
+    expect(within(sidebar).getByRole("link", { name: /Tagihan/ })).toBeDefined();
+    const bawah = screen.getByRole("navigation", { name: "Navigasi bawah" });
+    fireEvent.click(within(bawah).getByRole("link", { name: /Tagihan/ }));
+    expect(await screen.findByRole("heading", { name: "Tagihan" })).toBeDefined();
+  });
+
+  it("cabang Deposit dengan riwayat Tempo tetap menemukan kedua menu pembayaran", async () => {
+    fetchAndalan(true, false, true);
+
+    render(<RouterProvider router={buatRouter("/katalog")} />);
+
+    expect(await screen.findByText("Bio Magnetik")).toBeDefined();
+    const bawah = screen.getByRole("navigation", { name: "Navigasi bawah" });
+    expect(within(bawah).getByRole("link", { name: /Deposit/ })).toBeDefined();
+    expect(within(bawah).getByRole("link", { name: /Tagihan/ })).toBeDefined();
+    expect(within(bawah).queryByRole("link", { name: /^Invoice$/ })).toBeNull();
+  });
+
+  it("menu Tagihan tidak muncul untuk cabang yang belum pernah memakai Tempo", async () => {
+    fetchAndalan(false, false, false);
+
+    render(<RouterProvider router={buatRouter("/katalog")} />);
+
+    expect(await screen.findByText("Bio Magnetik")).toBeDefined();
+    expect(within(screen.getByRole("complementary")).queryByRole("link", { name: /Tagihan/ })).toBeNull();
   });
 
   it("rute /tutorial merender shell dan empat topik panduan", async () => {

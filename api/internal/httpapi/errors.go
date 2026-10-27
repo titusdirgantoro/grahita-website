@@ -173,7 +173,7 @@ func mapDomainErr(err error) error {
 			map[string]string{"alasan": "alasan revisi wajib diisi"})
 	case errors.Is(err, order.ErrNotDone):
 		return apierr.Conflict("ORDER_NOT_DONE",
-			"Revisi hanya untuk pesanan yang sudah selesai (Done). Selesaikan verifikasi pembayaran terlebih dahulu.")
+			"Revisi hanya tersedia setelah pesanan Transfer/Deposit lunas atau pesanan Tempo disetujui.")
 	case errors.Is(err, order.ErrRevisiTidakDiizinkan):
 		return apierr.Forbidden("Manager tidak diizinkan merevisi invoice saat ini (setelan manager_boleh_revisi nonaktif).")
 	case errors.Is(err, order.ErrQueueUnavailable):
@@ -345,7 +345,7 @@ func mapDomainErr(err error) error {
 		return apierr.NotFound("Pesanan atau dokumen yang diminta tidak ditemukan.")
 	case errors.Is(err, document.ErrNotDone):
 		return apierr.Conflict("ORDER_NOT_DONE",
-			"Dokumen hanya dibuat untuk pesanan yang sudah selesai (Done). Selesaikan verifikasi pembayaran terlebih dahulu.")
+			"Dokumen terbit setelah pesanan Transfer/Deposit lunas atau pesanan Tempo disetujui.")
 	case errors.Is(err, document.ErrRenderUnavailable):
 		return apierr.New(http.StatusServiceUnavailable, "DOCUMENT_RENDER_UNAVAILABLE",
 			"Mesin pembuat PDF belum siap sehingga invoice/surat jalan belum bisa dibuat. Coba lagi beberapa saat lagi.")

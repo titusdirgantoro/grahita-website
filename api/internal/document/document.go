@@ -3,9 +3,9 @@
 //
 // Aturan yang ditegakkan di sini — bukan hanya disembunyikan di UI:
 //
-//   - Dokumen lahir HANYA untuk pesanan berstatus `done` (PRD §6.1). Permintaan
-//     untuk pesanan draft/submitted dijawab ErrNotDone, sehingga invoice tanpa
-//     nomor/tanggal tidak pernah bisa dibuat.
+//   - Dokumen lahir untuk pesanan `done` atau Tempo `approved_unpaid`.
+//     Permintaan untuk draft/submitted dijawab ErrNotDone, sehingga invoice
+//     tanpa nomor/tanggal tidak pernah bisa dibuat.
 //   - Render IDEMPOTEN dan berkas lama TIDAK pernah ditimpa. Kunci object
 //     storage `documents/{order_id}/{jenis}-{versi}.{ext}` memuat versi, dan
 //     baris `documents` punya unique (order_id, jenis, versi). Menjalankan
@@ -104,9 +104,8 @@ var (
 	// ErrNotFound dikembalikan bila pesanan/dokumen tidak ada ATAU bukan milik
 	// aktor — keduanya dijawab sama supaya keberadaannya tidak bocor.
 	ErrNotFound = errors.New("pesanan atau dokumen tidak ditemukan")
-	// ErrNotDone dikembalikan bila dokumen diminta untuk pesanan yang belum
-	// selesai: dokumen lahir saat status Done (PRD §6.1).
-	ErrNotDone = errors.New("dokumen hanya dibuat untuk pesanan berstatus done")
+	// ErrNotDone dikembalikan bila dokumen diminta sebelum pesanan disetujui.
+	ErrNotDone = errors.New("dokumen hanya dibuat setelah pesanan disetujui")
 	// ErrStorageUnavailable dikembalikan bila object storage belum/tidak bisa
 	// dipakai sehingga berkas tidak mungkin disimpan dengan aman.
 	ErrStorageUnavailable = errors.New("penyimpanan dokumen belum tersedia")
@@ -192,8 +191,8 @@ type InvoiceRow struct {
 	UkuranByte   int64 `json:"ukuran_byte"`
 	// Terbaru menandai dokumen yang versinya sama dengan versi pesanan.
 	Terbaru bool `json:"terbaru"`
-	// DapatDiunduh true hanya bila dokumen invoice-nya benar-benar ada dan
-	// pesanannya sudah Done — invoice yang belum selesai tidak bisa diunduh.
+	// DapatDiunduh true bila dokumen invoice benar-benar ada dan pesanan
+	// berstatus Done atau Tempo yang sudah disetujui.
 	DapatDiunduh bool `json:"dapat_diunduh"`
 }
 

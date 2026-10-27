@@ -337,7 +337,7 @@ func TestPGDokumenGenerateIdempotenDanIsolasi(t *testing.T) {
 		t.Errorf("nomor di surat jalan = %q", v)
 	}
 	for i, s := range pesananA.Serials {
-		sel := fmt.Sprintf("D%d", 9+i)
+		sel := fmt.Sprintf("E%d", 9+i)
 		if v, _ := wb.GetCellValue(document.SheetSuratJalan, sel); v != s {
 			t.Errorf("%s = %q, mau %q", sel, v, s)
 		}

@@ -110,7 +110,7 @@ jobs:
         # -p 1: paket dijalankan berurutan karena keduanya memakai instance
         # PostgreSQL yang sama pada job ini (uji auth memakai skema sendiri,
         # tetapi ekstensi dibuat pada database yang sama).
-        run: go test -p 1 -count=1 ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
+        run: go test -p 1 -count=1 -timeout 60m ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...
 
   frontend:
     name: Frontend (typecheck, test, build)

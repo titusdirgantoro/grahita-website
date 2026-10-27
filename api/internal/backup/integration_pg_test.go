@@ -175,10 +175,10 @@ func TestPGBackupRestoreLingkaranPenuh(t *testing.T) {
 	}
 	hash := sha256.Sum256(isiBukti)
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO payment_proofs (order_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256,
 		                             uploaded_by_kind, uploaded_by_id, uploaded_by_nama)
-		 VALUES ($1, $2, 'bukti-uji.jpg', 'image/jpeg', $3, $4, 'branch', $5, 'Cabang Uji')`,
-		orderID, kunciBukti, len(isiBukti), hash[:], branchID); err != nil {
+		 VALUES ($1, $2, $3, 'bukti-uji.jpg', 'image/jpeg', $4, $5, 'branch', $2, 'Cabang Uji')`,
+		orderID, branchID, kunciBukti, len(isiBukti), hash[:]); err != nil {
 		t.Fatalf("insert bukti: %v", err)
 	}
 	if _, err := pool.Exec(ctx,

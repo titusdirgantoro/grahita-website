@@ -100,6 +100,7 @@ func TestPGSettlementCampuranTepatTotal(t *testing.T) {
 	}{
 		{"tanpa rincian", legacy, http.StatusUnprocessableEntity, "PAYMENT_BREAKDOWN_MISMATCH"},
 		{"kurang bayar", settlementBody(f, 0, []string{alokasi}, []splitUji{{proof, transfer - 1, transfer - 1, 0}}), http.StatusUnprocessableEntity, "PAYMENT_BREAKDOWN_MISMATCH"},
+		{"pecahan bukti melebihi nominal disetujui", settlementBody(f, 0, []string{alokasi}, []splitUji{{proof, transfer, transfer, 1}}), http.StatusBadRequest, "VALIDATION_FAILED"},
 		{"alokasi dilewati", settlementBody(f, 0, nil, []splitUji{{proof, total, total, 0}}), http.StatusUnprocessableEntity, "PAYMENT_BREAKDOWN_MISMATCH"},
 		{"versi basi", settlementBody(f, 1, []string{alokasi}, []splitUji{{proof, transfer, transfer, 0}}), http.StatusConflict, "ORDER_VERSION_CONFLICT"},
 	}

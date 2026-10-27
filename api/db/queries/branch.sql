@@ -4,12 +4,15 @@
 -- Dipakai portal cabang untuk /me/branch (data cabang milik sesi). `telepon`
 -- selalu dikembalikan sebagai string (kosong bila belum diisi) supaya bentuk
 -- respons profil cabang stabil untuk UI (PRD §3.8).
-SELECT id, nama, COALESCE(nama_kepala, '') AS nama_kepala,
+SELECT branches.id, nama, COALESCE(nama_kepala, '') AS nama_kepala,
        COALESCE(email::text, ''::text)::text AS email, COALESCE(jabatan_kepala, '') AS jabatan_kepala,
        identity_status::text AS identity_status, COALESCE(telepon, '') AS telepon,
-       is_cnc, is_tempo, allow_transfer, tanggal_bayar, tahan_bila_telat, pajak_in, is_active
+       is_cnc, branches.is_tempo, allow_transfer, tanggal_bayar, tahan_bila_telat, pajak_in, is_active,
+       EXISTS (SELECT 1 FROM orders o
+                WHERE o.branch_id = branches.id AND o.is_tempo AND o.status <> 'draft')
+         AS has_tempo_history
   FROM branches
- WHERE id = $1;
+ WHERE branches.id = $1;
 
 -- ---------- Master cabang: Admin Portal (F1-06) ----------
 --

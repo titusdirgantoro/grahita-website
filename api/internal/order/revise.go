@@ -46,10 +46,9 @@ import (
 
 // Sentinel error domain revisi.
 var (
-	// ErrNotDone dikembalikan bila revisi diminta untuk pesanan yang belum
-	// selesai (masih draft/submitted). Revisi adalah hak atas invoice yang
-	// sudah terbit (PRD §6.1, §7.1).
-	ErrNotDone = errors.New("revisi hanya untuk pesanan berstatus done")
+	// ErrNotDone dikembalikan bila revisi diminta sebelum pesanan disetujui.
+	// Revisi adalah hak atas invoice yang sudah terbit (PRD §6.1, §7.1).
+	ErrNotDone = errors.New("revisi hanya untuk pesanan yang disetujui")
 	// ErrAlasanWajib dikembalikan bila alasan revisi kosong (AP-REV-01).
 	ErrAlasanWajib = fmt.Errorf("%w: alasan revisi wajib diisi", ErrInvalidData)
 	// ErrRevisiTidakDiizinkan dikembalikan bila Manager mencoba merevisi

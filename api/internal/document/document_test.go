@@ -110,8 +110,8 @@ func isiObjek(t *testing.T, s *storeHitung, key string) []byte {
 	return b
 }
 
-// fixtureOrder adalah pesanan Done satu cabang dengan dua baris produk dan satu
-// baris packaging, lengkap dengan serialnya.
+// fixtureOrder adalah pesanan Done satu cabang dengan dua baris produk
+// lengkap dengan serialnya.
 func fixtureOrder(id string) Order {
 	tanggal := time.Date(2026, time.October, 8, 0, 0, 0, 0, time.UTC)
 	return Order{

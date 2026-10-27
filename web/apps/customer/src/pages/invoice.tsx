@@ -258,7 +258,7 @@ export function InvoicePage({ dari, sampai }: { dari?: string; sampai?: string }
                           <Button
                             variant="secondary"
                             disabled
-                            title="Invoice tersedia setelah pesanan selesai (Done)."
+                            title="Invoice belum tersedia. Tunggu persetujuan pesanan dan penerbitan dokumen."
                           >
                             Belum tersedia
                           </Button>
