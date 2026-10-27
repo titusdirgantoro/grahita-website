@@ -66,7 +66,7 @@
 .linesHead,
 .line {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px 130px 130px 36px;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1.2fr) 110px 120px 120px 36px;
   gap: 12px;
   align-items: center;
 }
@@ -110,6 +110,14 @@
 
 .lQty {
   min-width: 0;
+}
+
+.lInstansi {
+  min-width: 0;
+}
+
+.lInstansi input {
+  width: 100%;
 }
 
 .lHarga,
@@ -223,14 +231,14 @@
   }
 }
 
-/* Editor diukur dari lebar kartunya: grid lima kolom butuh ±640px, jadi di
+/* Editor diukur dari lebar kartunya: grid enam kolom butuh ±800px, jadi di
    kolom isi yang lebih sempit (ponsel, atau tablet/desktop kecil ber-sidebar)
    baris berubah menjadi dua kolom berlabel seperti prototype mobile. */
 .lines {
   container-type: inline-size;
 }
 
-@container (max-width: 639px) {
+@container (max-width: 799px) {
   .linesHead {
     display: none;
   }
@@ -245,6 +253,10 @@
   .lProd {
     grid-column: 1 / -1;
     padding-right: 44px;
+  }
+
+  .lInstansi {
+    grid-column: 1 / -1;
   }
 
   .lDel {

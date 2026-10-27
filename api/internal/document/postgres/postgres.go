@@ -182,6 +182,7 @@ WHERE bba.branch_id=$1 AND bba.is_allowed AND ba.is_active ORDER BY ba.bank,ba.i
 			LineNo:       int(l.LineNo),
 			Jenis:        l.Jenis,
 			Nama:         l.NamaSnapshot,
+			NamaInstansi: l.NamaInstansi,
 			Qty:          int(l.Qty),
 			HargaSatuan:  l.HargaSatuan,
 			Subtotal:     l.Subtotal.Int64,

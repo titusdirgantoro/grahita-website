@@ -1228,6 +1228,7 @@ type OrderLine struct {
 	Subtotal       pgtype.Int8 `json:"subtotal"`
 	SerialNumber   pgtype.Text `json:"serial_number"`
 	CreatedAt      time.Time   `json:"created_at"`
+	NamaInstansi   string      `json:"nama_instansi"`
 }
 
 type PasswordResetToken struct {

@@ -193,10 +193,11 @@ func TestReviseValidasiBaris(t *testing.T) {
 func TestReviseBarisBaruWajibProductID(t *testing.T) {
 	repo := &revRepo{out: ReviseOutcome{Versi: 1}}
 	svc := NewRevisionService(repo, cfgRevisi(true))
+	instansi := "SD B"
 	// Dua baris baru ber-product_id valid + satu baris lama.
 	lines := []ReviseLineInput{
 		{LineNo: 3, Qty: 1, HargaSatuan: 1000},
-		{ProductID: "018f0000-0000-7000-8000-0000000000aa", Qty: 2, HargaSatuan: 500},
+		{ProductID: "018f0000-0000-7000-8000-0000000000aa", NamaInstansi: &instansi, Qty: 2, HargaSatuan: 500},
 	}
 	if _, err := svc.Revise(context.Background(), aktorSA(), idPesanan,
 		ReviseInput{Alasan: "tambah baris", Lines: lines}); err != nil {

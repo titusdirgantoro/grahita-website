@@ -81,6 +81,7 @@ const DETAIL_UJI: PesananDetail = {
       harga_satuan: 100000,
       subtotal: 200000,
       serial_number: "20261001001",
+      nama_instansi: "TK A",
     },
   ],
   timeline: [{ at: "2026-10-01T03:00:00Z", teks: "Pesanan dikirim oleh Grahita Bandung", actor_kind: "branch" }],
@@ -823,7 +824,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     const kirim = posts.find((p) => p.url === URL_REVISE);
     expect(kirim?.body).toEqual({
       alasan: "salah harga jual",
-      lines: [{ line_no: 1, qty: 5, harga_satuan: 120000 }],
+      lines: [{ line_no: 1, nama_instansi: "TK A", qty: 5, harga_satuan: 120000 }],
     });
     expect(kirim?.headers["X-CSRF-Token"]).toBe("uji-csrf");
     expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
@@ -847,6 +848,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     fireEvent.change(pilih, { target: { value: "pr-2" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Tambah baris" }));
     expect(within(dialog).getByLabelText("Qty Kalung Kesehatan")).toBeDefined();
+    fireEvent.change(within(dialog).getByLabelText(/Nama instansi Kalung Kesehatan/), { target: { value: "SD B" } });
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Hapus Bio Magnetik" }));
     expect(within(dialog).queryByLabelText("Qty Bio Magnetik")).toBeNull();
@@ -857,7 +859,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     await waitFor(() => expect(posts.some((p) => p.url === URL_REVISE)).toBe(true));
     expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
       alasan: "ganti produk",
-      lines: [{ product_id: "pr-2", qty: 1, harga_satuan: 150000 }],
+      lines: [{ product_id: "pr-2", nama_instansi: "SD B", qty: 1, harga_satuan: 150000 }],
     });
   });
 
@@ -896,6 +898,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     const tersisa = within(dialog).getAllByLabelText("Qty Kalung Kesehatan");
     expect(tersisa.length).toBe(1);
     expect((tersisa[0] as HTMLInputElement).value).toBe("1");
+    fireEvent.change(within(dialog).getByLabelText(/Nama instansi Kalung Kesehatan/), { target: { value: "TK C" } });
 
     // Payload tetap satu baris produk_id serta tidak pernah dikirim dua kali.
     fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ganti produk" } });
@@ -903,7 +906,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1));
     expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
       alasan: "ganti produk",
-      lines: [{ product_id: "pr-2", qty: 1, harga_satuan: 150000 }],
+      lines: [{ product_id: "pr-2", nama_instansi: "TK C", qty: 1, harga_satuan: 150000 }],
     });
   });
 
@@ -956,7 +959,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1));
     expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
       alasan: "ubah qty",
-      lines: [{ line_no: 1, qty: 2, harga_satuan: 120000 }],
+      lines: [{ line_no: 1, nama_instansi: "TK A", qty: 2, harga_satuan: 120000 }],
     });
   });
 

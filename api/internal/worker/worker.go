@@ -241,7 +241,8 @@ func (w *RenderDokumenWorker) Work(ctx context.Context, job *river.Job[jobs.Rend
 // (baris river_job lama, Versi == 0) tetap diperlakukan sebagai "versi
 // berjalan" seperti sebelumnya.
 //
-// Surat Jalan TIDAK disentuh/dikirim ulang: revisi hanya menyentuh invoice.
+// Surat Jalan versi baru dibuat agar rincian baris tetap sesuai; email Surat
+// Jalan tidak dikirim ulang.
 // Kegagalan render dikembalikan supaya River mengulanginya; email baru diantre
 // setelah invoice versinya benar-benar ada.
 type RevisiInvoiceWorker struct {

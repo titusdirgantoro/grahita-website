@@ -104,10 +104,11 @@ const (
 //   - LineNo == 0 berarti baris produk BARU; ProductID wajib diisi dan baris
 //     itu mendapat serial number baru bertanggal pesanan asli.
 type ReviseLineInput struct {
-	LineNo      int    `json:"line_no"`
-	ProductID   string `json:"product_id"`
-	Qty         int    `json:"qty"`
-	HargaSatuan int64  `json:"harga_satuan"`
+	LineNo       int     `json:"line_no"`
+	ProductID    string  `json:"product_id"`
+	NamaInstansi *string `json:"nama_instansi,omitempty"`
+	Qty          int     `json:"qty"`
+	HargaSatuan  int64   `json:"harga_satuan"`
 }
 
 // ReviseInput adalah isi permintaan revisi satu pesanan Done.
@@ -128,10 +129,11 @@ type ReviseInput struct {
 // ReviseLine adalah baris final yang sudah divalidasi bentuknya dan siap
 // dieksekusi repository (produk/keberadaan diverifikasi di dalam transaksi).
 type ReviseLine struct {
-	LineNo      int
-	ProductID   string
-	Qty         int
-	HargaSatuan int64
+	LineNo       int
+	ProductID    string
+	NamaInstansi *string
+	Qty          int
+	HargaSatuan  int64
 }
 
 // Revision adalah satu baris `invoice_revisions` yang aman dikirim ke klien.
@@ -349,6 +351,13 @@ func validasiBarisRevisi(in []ReviseLineInput) ([]ReviseLine, error) {
 			return nil, fmt.Errorf("%w: harga baris %d tidak boleh negatif", ErrInvalidData, i+1)
 		}
 		pid := strings.TrimSpace(l.ProductID)
+		if l.NamaInstansi != nil {
+			instansi := strings.TrimSpace(*l.NamaInstansi)
+			if instansi == "" || len([]rune(instansi)) > MaxNamaInstansi {
+				return nil, fmt.Errorf("%w: nama instansi baris ke-%d wajib diisi, maksimal %d karakter", ErrInvalidData, i+1, MaxNamaInstansi)
+			}
+			l.NamaInstansi = &instansi
+		}
 		if l.LineNo < 0 {
 			return nil, fmt.Errorf("%w: line_no baris ke-%d tidak boleh negatif", ErrInvalidData, i+1)
 		}
@@ -361,8 +370,10 @@ func validasiBarisRevisi(in []ReviseLineInput) ([]ReviseLine, error) {
 			return nil, fmt.Errorf("%w: baris baru ke-%d belum memilih produk", ErrInvalidData, i+1)
 		} else if !uuidRe.MatchString(pid) {
 			return nil, fmt.Errorf("%w: product_id baris baru ke-%d bukan UUID", ErrInvalidData, i+1)
+		} else if l.NamaInstansi == nil {
+			return nil, fmt.Errorf("%w: nama instansi baris baru ke-%d wajib diisi", ErrInvalidData, i+1)
 		}
-		out = append(out, ReviseLine{LineNo: l.LineNo, ProductID: pid, Qty: l.Qty, HargaSatuan: l.HargaSatuan})
+		out = append(out, ReviseLine{LineNo: l.LineNo, ProductID: pid, NamaInstansi: l.NamaInstansi, Qty: l.Qty, HargaSatuan: l.HargaSatuan})
 	}
 	return out, nil
 }

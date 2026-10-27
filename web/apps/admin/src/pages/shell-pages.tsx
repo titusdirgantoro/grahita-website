@@ -8,7 +8,6 @@ import {
   Card,
   CardHead,
   ChangePasswordForm,
-  EmptyState,
   Field,
   Form,
   Input,
@@ -65,29 +64,6 @@ export function PenjagaSuperadmin({ children }: { children: ReactNode }) {
     );
   }
   return <>{children}</>;
-}
-
-/**
- * pReporting — /reporting (Superadmin): laporan per order line + ekspor XLSX.
- *
- * pDashboard (F1-20) hidup di `./dashboard` karena ia satu kartu tersendiri.
- */
-export function ReportingPage() {
-  return (
-    <PenjagaSuperadmin>
-      <PageHead
-        title="Reporting"
-        sub="Satu baris per order line; ekspor Excel diproses asinkron"
-        actions={<Button variant="secondary" icon="download-simple">Ekspor Excel</Button>}
-      />
-      <Card>
-        <EmptyState icon="chart-line">
-          Belum ada data laporan pada periode ini. Filter tanggal, cabang, dan status akan tersedia
-          di sini.
-        </EmptyState>
-      </Card>
-    </PenjagaSuperadmin>
-  );
 }
 
 /**

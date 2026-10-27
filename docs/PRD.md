@@ -116,7 +116,7 @@ Ringkasan untuk cabang: jumlah pesanan periode berjalan, pesanan menunggu verifi
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
 | CP-ORD-01 | List pesanan menampilkan nomor, tanggal, jumlah item, total, status, penanda C&C; dapat difilter per status. | Must |
-| CP-ORD-02 | Editor pesanan: header (catatan) + order line (produk, qty, harga otomatis, subtotal) dengan total live. | Must |
+| CP-ORD-02 | Editor pesanan: header (catatan) + order line (nama instansi bebas, produk dari master, qty, harga otomatis, subtotal) dengan total live. Nama instansi wajib pada setiap baris produk baru; produk yang sama boleh muncul beberapa kali untuk instansi berbeda dan setiap baris mendapat serial sendiri. | Must |
 | CP-ORD-03 | **Save** → status Draft; draft bisa diubah dan dihapus. | Must |
 | CP-ORD-04 | **Submit** → modal unggah bukti transfer (≥1 file, maks `max_file` file × `max_mb` MB, JPG/PNG/PDF). | Must |
 | CP-ORD-05 | Saat submit: nomor invoice dan serial number per order line ter-generate, status → Submitted, pesanan terkunci. | Must |
@@ -193,7 +193,7 @@ Navigasi sesuai prototype: **Menu** (Dashboard, Riwayat pemesanan) · **Data mas
 | AP-REV-01 | Admin yang berwenang dapat merevisi pesanan ber-status Done: mengubah qty/harga/baris, dengan alasan wajib. | Must |
 | AP-REV-02 | Nomor invoice tetap; versi bertambah (`-R1`, `-R2`) dan tercetak pada PDF. | Must |
 | AP-REV-03 | Versi invoice sebelumnya disimpan (tidak ditimpa) dan dapat diunduh untuk audit. | Must |
-| AP-REV-04 | Revisi menghasilkan Invoice PDF baru, dikirim ulang ke cabang dan admin ber-flag. | Must |
+| AP-REV-04 | Revisi menghasilkan Invoice PDF dan Surat Jalan PDF/XLSX versi baru dengan nama instansi per baris; email invoice dikirim ulang ke cabang dan admin ber-flag. | Must |
 | AP-REV-05 | Seluruh revisi tercatat di timeline dan audit log (siapa, kapan, alasan, delta nilai). | Must |
 
 ### 4.4 Cabang
@@ -227,9 +227,9 @@ Field: Bank (BCA / BRI), Nama di rekening, Nomor rekening, Aktif. Rekening aktif
 
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
-| AP-REP-01 | Baris laporan = order line dari seluruh pesanan (bukan per pesanan). | Must |
+| AP-REP-01 | Baris laporan = order line dari seluruh pesanan (bukan per pesanan), termasuk nama instansi per baris pada API dan ekspor Excel. | Must |
 | AP-REP-02 | Filter: rentang tanggal, cabang (multi), status, jenis produk, C&C, PI. | Must |
-| AP-REP-03 | Kolom: tanggal, nomor invoice, versi, cabang, kepala cabang, C&C, PI, produk, jenis, serial number, qty, harga satuan, subtotal, status, tanggal verifikasi, metode verifikasi. | Must |
+| AP-REP-03 | Kolom: tanggal, nomor invoice, versi, cabang, kepala cabang, C&C, PI, produk, nama instansi, jenis, serial number, qty, harga satuan, subtotal, status, tanggal verifikasi, metode verifikasi. | Must |
 | AP-REP-04 | Ekspor Excel (.xlsx) dengan header ter-freeze dan format angka Rupiah; ekspor besar diproses asinkron lalu diunduh. | Must |
 | AP-REP-05 | Ringkasan bulanan per cabang (rekap) sebagai sheet kedua. | Should |
 

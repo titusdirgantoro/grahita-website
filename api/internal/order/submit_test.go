@@ -61,7 +61,7 @@ func hargaA() map[string]MemoryProduct {
 func draftReguler(t *testing.T, svc *Service, branchID string, qty int) Order {
 	t.Helper()
 	o, err := svc.CreateDraft(context.Background(), aktorCabang(branchID), DraftInput{
-		Lines: []LineInput{{ProductID: "p1", Qty: qty}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: qty}},
 	})
 	if err != nil {
 		t.Fatalf("buat draft: %v", err)
@@ -74,7 +74,7 @@ func draftReguler(t *testing.T, svc *Service, branchID string, qty int) Order {
 // SAAT SUBMIT, bukan angka yang tersimpan di draft.
 func TestSiapkanSubmitMemakaiHargaTerbaru(t *testing.T) {
 	lines := []SubmitLine{{
-		LineNo: 1, Jenis: JenisProduct, Qty: 3,
+		LineNo: 1, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", Qty: 3,
 		NamaLama:  "Nama Lama",
 		ProdukAda: true, ProdukAktif: true,
 		ProdukNama: "Nama Baru", ProdukJenis: catalog.JenisReguler,
@@ -99,15 +99,15 @@ func TestSiapkanSubmitMemakaiHargaTerbaru(t *testing.T) {
 func TestSiapkanSubmitMenolakProdukTakLagiDijual(t *testing.T) {
 	kasus := map[string]SubmitLine{
 		"nonaktif": {
-			LineNo: 1, Jenis: JenisProduct, Qty: 1, ProdukAda: true, ProdukAktif: false,
+			LineNo: 1, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", Qty: 1, ProdukAda: true, ProdukAktif: false,
 			ProdukJenis: catalog.JenisReguler, HargaCabang: 100, AdaHargaCabang: true,
 		},
 		"tanpa harga cabang": {
-			LineNo: 1, Jenis: JenisProduct, Qty: 1, ProdukAda: true, ProdukAktif: true,
+			LineNo: 1, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", Qty: 1, ProdukAda: true, ProdukAktif: true,
 			ProdukJenis: catalog.JenisReguler, AdaHargaCabang: false,
 		},
 		"produk hilang": {
-			LineNo: 1, Jenis: JenisProduct, Qty: 1, ProdukAda: false, AdaHargaCabang: false,
+			LineNo: 1, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", Qty: 1, ProdukAda: false, AdaHargaCabang: false,
 		},
 	}
 	for nama, line := range kasus {
@@ -124,12 +124,12 @@ func TestSiapkanSubmitMenolakProdukTakLagiDijual(t *testing.T) {
 // packaging senilai setelan yang berlaku, dan campuran/packaging liar ditolak.
 func TestSiapkanSubmitAturanSertifikatDanPackaging(t *testing.T) {
 	sertifikat := SubmitLine{
-		LineNo: 1, Jenis: JenisProduct, Qty: 5, ProdukAda: true, ProdukAktif: true,
+		LineNo: 1, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", Qty: 5, ProdukAda: true, ProdukAktif: true,
 		ProdukNama: "Sertifikat", ProdukJenis: catalog.JenisSertifikat,
 		HargaCabang: 25000, AdaHargaCabang: true,
 	}
 	reguler := SubmitLine{
-		LineNo: 1, Jenis: JenisProduct, Qty: 1, ProdukAda: true, ProdukAktif: true,
+		LineNo: 1, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", Qty: 1, ProdukAda: true, ProdukAktif: true,
 		ProdukNama: "Bio", ProdukJenis: catalog.JenisReguler,
 		HargaCabang: 100000, AdaHargaCabang: true,
 	}
@@ -151,7 +151,7 @@ func TestSiapkanSubmitAturanSertifikatDanPackaging(t *testing.T) {
 	kasus := map[string]struct {
 		lines []SubmitLine
 	}{
-		"campuran sertifikat dan reguler": {[]SubmitLine{sertifikat, {LineNo: 2, Jenis: JenisProduct, Qty: 1, ProdukAda: true, ProdukAktif: true, ProdukJenis: catalog.JenisReguler, HargaCabang: 1, AdaHargaCabang: true}}},
+		"campuran sertifikat dan reguler": {[]SubmitLine{sertifikat, {LineNo: 2, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", Qty: 1, ProdukAda: true, ProdukAktif: true, ProdukJenis: catalog.JenisReguler, HargaCabang: 1, AdaHargaCabang: true}}},
 		"sertifikat tanpa packaging":      {[]SubmitLine{sertifikat}},
 		"reguler dengan packaging":        {[]SubmitLine{reguler, packaging}},
 		"dua baris packaging":             {[]SubmitLine{sertifikat, packaging, {LineNo: 3, Jenis: JenisPackaging, Qty: 1}}},
@@ -488,7 +488,7 @@ func TestSubmitSertifikatSnapshotPackagingFinal(t *testing.T) {
 	repo.SetHargaCabang("br-a", hargaA())
 
 	d, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{
-		Lines: []LineInput{{ProductID: "p3", Qty: 4}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 4}},
 	})
 	if err != nil {
 		t.Fatalf("buat draft sertifikat: %v", err)
@@ -563,7 +563,7 @@ func TestSubmitSerialSatuRentangPerBarisProduk(t *testing.T) {
 	repo.SetHargaCabang("br-a", hargaA())
 
 	d, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{
-		Lines: []LineInput{{ProductID: "p1", Qty: 1}, {ProductID: "p4", Qty: 2}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}, {NamaInstansi: "Instansi Uji", ProductID: "p4", Qty: 2}},
 	})
 	if err != nil {
 		t.Fatalf("buat draft: %v", err)

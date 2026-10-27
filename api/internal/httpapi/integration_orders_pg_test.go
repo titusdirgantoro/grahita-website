@@ -34,7 +34,7 @@ func TestPGDraftOrderSiklusLengkap(t *testing.T) {
 	// Buat draft: harga HARUS dari branch_prices cabang A (100000), bukan
 	// harga_default 350000, dan total dihitung server (3×100000).
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"catatan":"dikirim pagi","lines":[{"product_id":%q,"qty":3}]}`, produkA), cookiesA, csrfA)
+		fmt.Sprintf(`{"catatan":"dikirim pagi","lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":3}]}`, produkA), cookiesA, csrfA)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft harus 201, dapat %d (%v)", status, body)
 	}
@@ -95,7 +95,7 @@ func TestPGDraftOrderSiklusLengkap(t *testing.T) {
 	// Ubah draft: baris diganti seluruhnya dan total ikut dihitung ulang —
 	// baik oleh service maupun trigger order_lines_recalc di database.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/orders/"+id,
-		fmt.Sprintf(`{"catatan":"dikirim sore","lines":[{"product_id":%q,"qty":5}]}`, produkA), cookiesA, csrfA)
+		fmt.Sprintf(`{"catatan":"dikirim sore","lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":5}]}`, produkA), cookiesA, csrfA)
 	if status != http.StatusOK {
 		t.Fatalf("ubah draft harus 200, dapat %d (%v)", status, body)
 	}
@@ -164,7 +164,7 @@ func TestPGHargaOrderLineDariBranchPrices(t *testing.T) {
 
 	// 1) Produk tanpa baris harga cabang A ditolak (bukan memakai harga_default).
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1}]}`, tanpaHarga), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1}]}`, tanpaHarga), cookiesA, csrfA)
 	if status != http.StatusBadRequest {
 		t.Fatalf("produk tanpa harga cabang harus 400, dapat %d (%v)", status, body)
 	}
@@ -172,14 +172,14 @@ func TestPGHargaOrderLineDariBranchPrices(t *testing.T) {
 
 	// 2) Produk yang hanya dijual ke cabang lain juga ditolak.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1}]}`, hanyaB), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1}]}`, hanyaB), cookiesA, csrfA)
 	if status != http.StatusBadRequest {
 		t.Fatalf("produk milik cabang lain harus 400, dapat %d (%v)", status, body)
 	}
 
 	// 3) Angka harga/subtotal/total dari klien ditolak dekoder JSON.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"total":1,"lines":[{"product_id":%q,"qty":1,"harga_satuan":1}]}`, produkA), cookiesA, csrfA)
+		fmt.Sprintf(`{"total":1,"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":1}]}`, produkA), cookiesA, csrfA)
 	if status != http.StatusBadRequest {
 		t.Fatalf("harga/total kiriman klien harus 400, dapat %d (%v)", status, body)
 	}
@@ -187,7 +187,7 @@ func TestPGHargaOrderLineDariBranchPrices(t *testing.T) {
 	// 4) Percobaan memalsukan branch_id lewat body juga ditolak: branch_id
 	// hanya datang dari SESI.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"branch_id":%q,"lines":[{"product_id":%q,"qty":1}]}`, f.branchB, produkA), cookiesA, csrfA)
+		fmt.Sprintf(`{"branch_id":%q,"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1}]}`, f.branchB, produkA), cookiesA, csrfA)
 	if status != http.StatusBadRequest {
 		t.Fatalf("branch_id kiriman klien harus 400, dapat %d (%v)", status, body)
 	}
@@ -208,7 +208,7 @@ func TestPGHargaOrderLineDariBranchPrices(t *testing.T) {
 		t.Fatalf("isi harga cabang A: %v", err)
 	}
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":2}]}`, tanpaHarga), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":2}]}`, tanpaHarga), cookiesA, csrfA)
 	if status != http.StatusCreated {
 		t.Fatalf("produk dengan harga cabang harus 201, dapat %d (%v)", status, body)
 	}
@@ -246,7 +246,7 @@ func TestPGIsolasiCabangPesanan(t *testing.T) {
 
 	// Draft milik cabang A.
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1}]}`, produkA), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1}]}`, produkA), cookiesA, csrfA)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft cabang A: %d (%v)", status, body)
 	}
@@ -258,7 +258,7 @@ func TestPGIsolasiCabangPesanan(t *testing.T) {
 		body   string
 	}{
 		{http.MethodGet, ""},
-		{http.MethodPut, fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":9}]}`, produkA)},
+		{http.MethodPut, fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":9}]}`, produkA)},
 		{http.MethodDelete, ""},
 	} {
 		status, body, _ := apiReq(t, http.DefaultClient, k.method, f.srv.URL+"/api/v1/orders/"+id, k.body, cookiesB, csrfB)
@@ -322,7 +322,7 @@ func TestPGPesananSubmittedTidakBisaDiubahCabang(t *testing.T) {
 	}
 
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/orders/"+orderID,
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":9}]}`, produkA), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":9}]}`, produkA), cookiesA, csrfA)
 	if status != http.StatusConflict {
 		t.Fatalf("ubah pesanan Submitted harus 409, dapat %d (%v)", status, body)
 	}
@@ -378,7 +378,7 @@ func TestPGSertifikatPackagingDanSnapshotSetelan(t *testing.T) {
 	// 1) Draft Sertifikat: harga produk 0 (berapa pun qty) + satu baris biaya
 	// packaging 3000 dari setelan server.
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":25}]}`, sertifikat), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":25}]}`, sertifikat), cookiesA, csrfA)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft sertifikat harus 201, dapat %d (%v)", status, body)
 	}
@@ -475,7 +475,7 @@ func TestPGSertifikatPackagingDanSnapshotSetelan(t *testing.T) {
 
 	// Pesanan berikutnya memakai setelan baru.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1}]}`, sertifikat), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1}]}`, sertifikat), cookiesA, csrfA)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft sertifikat berikutnya harus 201, dapat %d (%v)", status, body)
 	}
@@ -489,7 +489,7 @@ func TestPGSertifikatPackagingDanSnapshotSetelan(t *testing.T) {
 
 	// Pencampuran lewat HTTP juga ditolak dan tidak menyisakan pesanan.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1},{"product_id":%q,"qty":1}]}`, sertifikat, produkA), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1},{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1}]}`, sertifikat, produkA), cookiesA, csrfA)
 	if status != http.StatusBadRequest {
 		t.Fatalf("campuran sertifikat+reguler lewat HTTP harus 400, dapat %d (%v)", status, body)
 	}

@@ -153,8 +153,9 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	}{
 		{"A8", "No"},
 		{"B8", "Nama Barang"},
-		{"C8", "Qty"},
-		{"D8", "Serial Number"},
+		{"C8", "Nama Instansi"},
+		{"D8", "Qty"},
+		{"E8", "Serial Number"},
 	}
 	for _, h := range header {
 		if v, _ := f.GetCellValue(sheet, h.sel); v != h.mau {
@@ -164,13 +165,13 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 
 	// Satu baris per order line, urut line_no.
 	mauBaris := [][]string{
-		{"1", "Bio Magnetik", "2", "20261008001"},
-		{"2", "Bio Listrik", "1", "20261008002"},
-		{"3", "Biaya packaging", "1", "-"},
+		{"1", "Bio Magnetik", "TK A", "2", "20261008001"},
+		{"2", "Bio Listrik", "SD B", "1", "20261008002"},
+		{"3", "Biaya packaging", "", "1", "-"},
 	}
 	for i, mau := range mauBaris {
 		row := rowAwal + i
-		for j, kolom := range []string{"A", "B", "C", "D"} {
+		for j, kolom := range []string{"A", "B", "C", "D", "E"} {
 			sel := kolom + itoa(row)
 			v, err := f.GetCellValue(sheet, sel)
 			if err != nil {
@@ -186,12 +187,12 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 		t.Errorf("ada baris data berlebih: %q", v)
 	}
 
-	// Siap cetak: A4 tegak, muat satu halaman ke samping, header dibekukan.
+	// Siap cetak: A4 mendatar, muat satu halaman ke samping, header dibekukan.
 	layout, err := f.GetPageLayout(sheet)
 	if err != nil {
 		t.Fatalf("GetPageLayout: %v", err)
 	}
-	if layout.Orientation == nil || *layout.Orientation != "portrait" {
+	if layout.Orientation == nil || *layout.Orientation != "landscape" {
 		t.Errorf("orientasi halaman = %v", layout.Orientation)
 	}
 	if layout.Size == nil || *layout.Size != 9 {
@@ -211,7 +212,7 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	// Area cetak berhenti di baris data TERAKHIR — bukan satu baris setelahnya,
 	// supaya tidak ada baris kosong yang ikut tercetak.
 	mauName := map[string]string{
-		"_xlnm.Print_Area":   fmt.Sprintf("'%s'!$A$1:$D$%d", sheet, rowAwal+len(mauBaris)-1),
+		"_xlnm.Print_Area":   fmt.Sprintf("'%s'!$A$1:$E$%d", sheet, rowAwal+len(mauBaris)-1),
 		"_xlnm.Print_Titles": fmt.Sprintf("'%s'!$%d:$%d", sheet, rowHeader, rowHeader),
 	}
 	for _, dn := range f.GetDefinedName() {

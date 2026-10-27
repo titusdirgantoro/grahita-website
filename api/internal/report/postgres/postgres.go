@@ -229,6 +229,7 @@ func keLine(row sqlc.ListReportOrderLinesRow) report.Line {
 		PajakIn:          row.PajakIn,
 		LineNo:           int(row.LineNo),
 		Produk:           row.Produk,
+		NamaInstansi:     row.NamaInstansi,
 		Jenis:            row.Jenis,
 		SerialNumber:     row.SerialNumber,
 		Qty:              int(row.Qty),

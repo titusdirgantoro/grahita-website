@@ -206,6 +206,7 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 			LineNo:       int32(l.LineNo),
 			ProductID:    pgtypes.UUID(l.ProductID),
 			NamaSnapshot: l.Nama,
+			NamaInstansi: l.NamaInstansi,
 			Qty:          int32(l.Qty),
 			HargaSatuan:  l.HargaSatuan,
 		}); err != nil {
@@ -337,6 +338,7 @@ WHERE branch_id=$1 AND ends_on >= $2::date)`, req.BranchID, req.Tanggal).Scan(&g
 			Jenis:          row.Jenis,
 			Qty:            int(row.Qty),
 			NamaLama:       row.NamaSnapshot,
+			NamaInstansi:   row.NamaInstansi,
 			ProdukAda:      row.ProdukAda,
 			ProdukAktif:    row.ProdukAktif,
 			ProdukNama:     row.ProdukNama,
@@ -622,6 +624,7 @@ func loadOrder(ctx context.Context, q *sqlc.Queries, id, branchID string) (order
 			Jenis:        l.Jenis,
 			ProductID:    pgtypes.UUIDString(l.ProductID),
 			Nama:         l.NamaSnapshot,
+			NamaInstansi: l.NamaInstansi,
 			Qty:          int(l.Qty),
 			HargaSatuan:  l.HargaSatuan,
 			Subtotal:     l.Subtotal.Int64,

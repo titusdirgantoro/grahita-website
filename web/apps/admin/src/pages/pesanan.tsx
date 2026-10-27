@@ -102,6 +102,7 @@ interface BarisPesanan {
   line_no: number;
   jenis: string;
   nama: string;
+  nama_instansi: string;
   qty: number;
   harga_satuan: number;
   subtotal: number;
@@ -192,6 +193,7 @@ interface BarisRevisi {
   line_no: number;
   product_id?: string;
   nama: string;
+  nama_instansi: string;
   serial_number?: string;
   qty: string;
   harga: string;
@@ -1107,6 +1109,7 @@ export function PesananDetailAdminPage() {
           kunci: `lama-${l.line_no}-${i}`,
           line_no: l.line_no,
           nama: l.nama,
+          nama_instansi: l.nama_instansi ?? "",
           serial_number: l.serial_number,
           qty: String(l.qty),
           harga: String(l.harga_satuan),
@@ -1143,6 +1146,7 @@ export function PesananDetailAdminPage() {
         line_no: 0,
         product_id: p.id,
         nama: p.nama,
+        nama_instansi: "",
         qty: "1",
         harga: String(p.harga),
       },
@@ -1181,10 +1185,14 @@ export function PesananDetailAdminPage() {
         setGalatRevisi(`Harga satuan baris "${b.nama}" harus bilangan bulat non-negatif.`);
         return;
       }
+      if (b.line_no === 0 && !b.nama_instansi.trim()) {
+        setGalatRevisi(`Nama instansi baris "${b.nama}" wajib diisi.`);
+        return;
+      }
       lines.push(
         b.line_no > 0
-          ? { line_no: b.line_no, qty, harga_satuan: harga }
-          : { product_id: b.product_id, qty, harga_satuan: harga },
+          ? { line_no: b.line_no, qty, harga_satuan: harga, ...(b.nama_instansi.trim() ? { nama_instansi: b.nama_instansi.trim() } : {}) }
+          : { product_id: b.product_id, nama_instansi: b.nama_instansi.trim(), qty, harga_satuan: harga },
       );
     }
     const rencanaRev = susunRencanaReversal(rencana);
@@ -1212,7 +1220,7 @@ export function PesananDetailAdminPage() {
       muatUlang();
       muatEmail();
       tampilkan(
-        "Revisi tersimpan. Nomor invoice tetap dan versi baru sedang dirender lalu dikirim ke cabang & admin ber-flag (invoice saja; surat jalan tidak dikirim ulang). Proses render & email berjalan asinkron.",
+        "Revisi tersimpan. Invoice dan surat jalan versi baru sedang dibuat. Email invoice dikirim ke cabang dan admin penerima; proses berjalan asinkron.",
       );
     } catch (err) {
       setGalatRevisi(pesanRevisi(err));
@@ -1345,6 +1353,7 @@ export function PesananDetailAdminPage() {
               <thead>
                 <tr>
                   <th scope="col">Produk</th>
+                  <th scope="col">Nama instansi</th>
                   <th scope="col">Serial number</th>
                   <th scope="col" className="num">
                     Qty
@@ -1361,6 +1370,7 @@ export function PesananDetailAdminPage() {
                 {data.lines.map((l) => (
                   <tr key={l.line_no}>
                     <td>{l.nama}</td>
+                    <td>{l.nama_instansi || "—"}</td>
                     <td className="tabular muted">{l.serial_number || "—"}</td>
                     <td className="num tabular">{l.qty}</td>
                     <td className="num tabular">{rupiah.format(l.harga_satuan)}</td>
@@ -1892,6 +1902,7 @@ export function PesananDetailAdminPage() {
             <thead>
               <tr>
                 <th scope="col">Produk</th>
+                <th scope="col">Nama instansi</th>
                 <th scope="col" className="num">
                   Qty
                 </th>
@@ -1908,6 +1919,15 @@ export function PesananDetailAdminPage() {
                     {b.nama}
                     {b.line_no === 0 ? <Badge tone="rev">Baru</Badge> : null}
                     {b.serial_number ? <div className="muted small">{b.serial_number}</div> : null}
+                  </td>
+                  <td>
+                    <Input
+                      aria-label={`Nama instansi ${b.nama} baris ${b.kunci}`}
+                      maxLength={160}
+                      value={b.nama_instansi}
+                      placeholder={b.line_no > 0 ? "Data lama tanpa instansi" : "Nama instansi"}
+                      onChange={(e) => ubahBaris(b.kunci, { nama_instansi: e.target.value })}
+                    />
                   </td>
                   <td className="num">
                     <Input

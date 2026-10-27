@@ -14,7 +14,8 @@ import { AdminShell, Button, SkeletonList, type ShellLinkProps } from "@grahita/
 import { SessionProvider, useSesi } from "./session";
 import { NAV_ADMIN } from "./nav";
 import { HalamanLupa, HalamanMasuk } from "./pages/auth";
-import { ProfilAdminPage, ReportingPage } from "./pages/shell-pages";
+import { ProfilAdminPage } from "./pages/shell-pages";
+import { ReportingPage } from "./pages/reporting";
 import { DashboardPage, FilterPeriodeDashboard, type FilterDashboard } from "./pages/dashboard";
 import { FilterCabangTopbar } from "./pages/filter-cabang";
 import {

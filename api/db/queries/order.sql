@@ -97,8 +97,8 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- name: InsertOrderLineProduct :exec
 -- subtotal TIDAK diisi: kolomnya GENERATED ALWAYS (qty * harga_satuan).
 -- harga_satuan sudah diambil server dari branch_prices cabang sesi.
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
-VALUES ($1, $2, 'product', $3, $4, $5, $6);
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, qty, harga_satuan)
+VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
 
 -- name: InsertOrderLinePackaging :exec
 -- Baris biaya packaging pesanan sertifikat (PRD CP-SER-02): tanpa product_id,
@@ -110,7 +110,7 @@ INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qt
 VALUES ($1, $2, 'packaging', NULL, $3, 1, $4);
 
 -- name: ListOrderLines :many
-SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot,
+SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instansi,
        qty, harga_satuan, subtotal, serial_number
   FROM order_lines
  WHERE order_id = $1
@@ -148,6 +148,7 @@ SELECT o.status::text AS status
 SELECT l.line_no,
        l.jenis::text          AS jenis,
        l.nama_snapshot,
+       l.nama_instansi,
 
        l.qty,
        (p.id IS NOT NULL)::bool     AS produk_ada,

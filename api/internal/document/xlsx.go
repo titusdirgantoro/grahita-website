@@ -28,12 +28,13 @@ const (
 	rowAwal   = 9 // baris data pertama
 )
 
-// Kolom tetap (A..D): No, Nama Barang, Qty, Serial Number.
+// Kolom tetap (A..E): No, Nama Barang, Nama Instansi, Qty, Serial Number.
 const (
-	colNo     = "A"
-	colNama   = "B"
-	colQty    = "C"
-	colSerial = "D"
+	colNo       = "A"
+	colNama     = "B"
+	colInstansi = "C"
+	colQty      = "D"
+	colSerial   = "E"
 )
 
 // suratJalanXLSX merender Surat Jalan menjadi berkas XLSX yang valid.
@@ -90,10 +91,10 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 	}
 
 	// Kop & identitas dokumen.
-	if err := f.MergeCell(SheetSuratJalan, "A1", "D1"); err != nil {
+	if err := f.MergeCell(SheetSuratJalan, "A1", "E1"); err != nil {
 		return nil, fmt.Errorf("gabung kop: %w", err)
 	}
-	if err := f.MergeCell(SheetSuratJalan, "A2", "D2"); err != nil {
+	if err := f.MergeCell(SheetSuratJalan, "A2", "E2"); err != nil {
 		return nil, fmt.Errorf("gabung judul: %w", err)
 	}
 	if err := f.SetCellValue(SheetSuratJalan, "A1", "PT GRAHITA INDONESIA"); err != nil {
@@ -102,10 +103,10 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 	if err := f.SetCellValue(SheetSuratJalan, "A2", "SURAT JALAN"); err != nil {
 		return nil, fmt.Errorf("tulis judul: %w", err)
 	}
-	if err := f.SetCellStyle(SheetSuratJalan, "A1", "D1", kop); err != nil {
+	if err := f.SetCellStyle(SheetSuratJalan, "A1", "E1", kop); err != nil {
 		return nil, fmt.Errorf("gaya kop: %w", err)
 	}
-	if err := f.SetCellStyle(SheetSuratJalan, "A2", "D2", judul); err != nil {
+	if err := f.SetCellStyle(SheetSuratJalan, "A2", "E2", judul); err != nil {
 		return nil, fmt.Errorf("gaya judul: %w", err)
 	}
 
@@ -149,6 +150,7 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 	}{
 		{colNo, "No"},
 		{colNama, "Nama Barang"},
+		{colInstansi, "Nama Instansi"},
 		{colQty, "Qty"},
 		{colSerial, "Serial Number"},
 	}
@@ -157,7 +159,7 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 			return nil, fmt.Errorf("tulis header: %w", err)
 		}
 	}
-	if err := f.SetCellStyle(SheetSuratJalan, fmt.Sprintf("A%d", rowHeader), fmt.Sprintf("D%d", rowHeader), header); err != nil {
+	if err := f.SetCellStyle(SheetSuratJalan, fmt.Sprintf("A%d", rowHeader), fmt.Sprintf("E%d", rowHeader), header); err != nil {
 		return nil, fmt.Errorf("gaya header: %w", err)
 	}
 
@@ -175,6 +177,7 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 		}{
 			{colNo, l.LineNo},
 			{colNama, l.Nama},
+			{colInstansi, l.NamaInstansi},
 			{colQty, l.Qty},
 			{colSerial, serial},
 		}
@@ -184,7 +187,7 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 				return nil, fmt.Errorf("tulis baris %d: %w", baris, err)
 			}
 		}
-		if err := f.SetCellStyle(SheetSuratJalan, fmt.Sprintf("A%d", baris), fmt.Sprintf("D%d", baris), sel); err != nil {
+		if err := f.SetCellStyle(SheetSuratJalan, fmt.Sprintf("A%d", baris), fmt.Sprintf("E%d", baris), sel); err != nil {
 			return nil, fmt.Errorf("gaya baris %d: %w", baris, err)
 		}
 		if err := f.SetCellStyle(SheetSuratJalan, fmt.Sprintf("%s%d", colQty, baris), fmt.Sprintf("%s%d", colQty, baris), angka); err != nil {
@@ -197,7 +200,7 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 	// diulang, area cetak sebatas isi.
 	if err := f.SetPageLayout(SheetSuratJalan, &excelize.PageLayoutOptions{
 		Size:        intPtr(9), // 9 = A4 (210 mm x 297 mm)
-		Orientation: strPtr("portrait"),
+		Orientation: strPtr("landscape"),
 		FitToWidth:  intPtr(1),
 		FitToHeight: intPtr(0),
 	}); err != nil {
@@ -218,7 +221,7 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 	if err := f.SetDefinedName(&excelize.DefinedName{
 		Name:     "_xlnm.Print_Area",
 		Scope:    SheetSuratJalan,
-		RefersTo: fmt.Sprintf("'%s'!$A$1:$D$%d", SheetSuratJalan, rowDataTerakhir(len(o.Lines))),
+		RefersTo: fmt.Sprintf("'%s'!$A$1:$E$%d", SheetSuratJalan, rowDataTerakhir(len(o.Lines))),
 	}); err != nil {
 		return nil, fmt.Errorf("area cetak: %w", err)
 	}
@@ -235,6 +238,9 @@ func suratJalanXLSX(o Order) ([]byte, error) {
 	}
 	if err := f.SetColWidth(SheetSuratJalan, colNama, colNama, 40); err != nil {
 		return nil, fmt.Errorf("lebar kolom Nama: %w", err)
+	}
+	if err := f.SetColWidth(SheetSuratJalan, colInstansi, colInstansi, 38); err != nil {
+		return nil, fmt.Errorf("lebar kolom Instansi: %w", err)
 	}
 
 	if err := f.SetColWidth(SheetSuratJalan, colQty, colQty, 8); err != nil {

@@ -9,8 +9,8 @@ package httpapi
 //   - SATU transaksi revisi menaikkan versi (nomor tetap), menyimpan snapshot
 //     versi lama + delta nilai di `invoice_revisions`, menulis timeline +
 //     audit, dan MENITIPKAN pekerjaan invoice versi baru pada tabel river_job;
-//   - berkas versi lama TIDAK pernah ditimpa; invoice versi baru dirender
-//     terpisah dan email invoice dikirim ulang (Surat Jalan tidak);
+//   - berkas versi lama TIDAK pernah ditimpa; invoice dan Surat Jalan versi
+//     baru dirender terpisah, sedangkan hanya email invoice dikirim ulang;
 //   - serial baris lama tidak berubah; baris produk baru mendapat serial baru
 //     bertanggal pesanan ASLI;
 //   - dua revisi bersamaan berbaris rapi (baris pesanan dikunci);
@@ -356,7 +356,7 @@ func jalurUtamaRevisi(t *testing.T) (*pgFixture, string, int64, []*http.Cookie, 
 // TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru menjalankan alur
 // utama: revisi -> versi +1 (nomor tetap) -> snapshot versi lama + delta ->
 // timeline + audit + job -> invoice versi baru terunduh, versi lama utuh, dan
-// email invoice dikirim ulang tanpa Surat Jalan.
+// email invoice dikirim ulang tanpa email Surat Jalan.
 func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	f, id, totalLama, cookies, csrf := jalurUtamaRevisi(t)
 	ctx := context.Background()
@@ -402,9 +402,9 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 		f.branchA, produk2, 7000); err != nil {
 		t.Fatalf("seed harga produk baru: %v", err)
 	}
-	body := reviseBody("harga baris 1 salah input", `{"line_no":1,"qty":1,"harga_satuan":172000},`+
-		`{"line_no":2,"qty":1,"harga_satuan":50000},`+
-		`{"product_id":"`+produk2+`","qty":4,"harga_satuan":7000}`)
+	body := reviseBody("harga baris 1 salah input", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":172000},`+
+		`{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000},`+
+		`{"product_id":"`+produk2+`","nama_instansi":"Instansi Uji","qty":4,"harga_satuan":7000}`)
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
 	if status != http.StatusOK {
 		t.Fatalf("revisi harus 200, dapat %d (%v)", status, hasil)
@@ -504,9 +504,14 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 		!strings.Contains(htmlV1, "9999000011") || strings.Contains(htmlV1, "PT Pemilik Baru") {
 		t.Errorf("invoice revisi harus mempertahankan snapshot rekening saat Done: %s", htmlV1)
 	}
-	// Surat Jalan TIDAK dirender ulang untuk versi revisi.
-	if _, ada := docAkhir["surat_jalan_pdf-1"]; ada {
-		t.Error("surat jalan versi revisi tidak boleh dibuat")
+	// Surat Jalan versi baru tersedia dengan nama instansi yang telah direvisi.
+	if kunci, ada := docAkhir["surat_jalan_pdf-1"]; !ada {
+		t.Error("surat jalan PDF versi revisi harus dibuat")
+	} else if !strings.Contains(isiObjek(t, f, kunci), "Instansi Uji") {
+		t.Error("surat jalan PDF revisi harus memuat nama instansi")
+	}
+	if _, ada := docAkhir["surat_jalan_xlsx-1"]; !ada {
+		t.Error("surat jalan XLSX versi revisi harus dibuat")
 	}
 
 	// Email: invoice cabang + admin versi 1 dikirim ulang; surat jalan tidak.
@@ -539,9 +544,9 @@ func TestPGRevisiC1TotalTetapNaikTurunMenjagaSettlementTyped(t *testing.T) {
 		job                                          int
 		pointer                                      bool
 	}{
-		{"tetap", "2026-10-930", reviseBody("UJI-total tetap", `{"line_no":1,"qty":2,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`), "done", "", "total_unchanged", 1, true},
-		{"naik", "2026-10-931", reviseBody("UJI-total naik", `{"line_no":1,"qty":3,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`), "submitted", "revision_underpayment", "underpayment", 0, false},
-		{"turun", "2026-10-932", reviseBody("UJI-total turun", `{"line_no":1,"qty":1,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`), "submitted", "revision_overpayment_pending", "overpayment", 0, false},
+		{"tetap", "2026-10-930", reviseBody("UJI-total tetap", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":2,"harga_satuan":100000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`), "done", "", "total_unchanged", 1, true},
+		{"naik", "2026-10-931", reviseBody("UJI-total naik", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":3,"harga_satuan":100000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`), "submitted", "revision_underpayment", "underpayment", 0, false},
+		{"turun", "2026-10-932", reviseBody("UJI-total turun", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":100000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`), "submitted", "revision_overpayment_pending", "overpayment", 0, false},
 	}
 	for i, tc := range tests {
 		t.Run(tc.nama, func(t *testing.T) {
@@ -593,7 +598,7 @@ func TestPGRevisiTurunMenolakCommittedDepositTanpaReversalPlan(t *testing.T) {
 	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM branch_deposit_transactions WHERE order_id=$1`, id).Scan(&journalAwal); err != nil {
 		t.Fatal(err)
 	}
-	body := reviseBody("UJI-turun butuh reversal", `{"line_no":1,"qty":3,"harga_satuan":100000}`)
+	body := reviseBody("UJI-turun butuh reversal", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":3,"harga_satuan":100000}`)
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
 	if status != http.StatusConflict || errorKode(t, hasil) != "REVISION_REVERSAL_PLAN_REQUIRED" {
 		t.Fatalf("revisi harus ditolak 409, dapat %d %v", status, hasil)
@@ -627,7 +632,7 @@ func TestPGRevisiUnduhVersiLamaDanBaru(t *testing.T) {
 	if err := jalankanPekerjaanDone(t, f, id); err != nil {
 		t.Fatalf("pekerjaan Done: %v", err)
 	}
-	body := reviseBody("koreksi komposisi", `{"line_no":1,"qty":1,"harga_satuan":200000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+	body := reviseBody("koreksi komposisi", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":200000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`)
 	if status, hasil := reviseHTTP(t, f, cookies, csrf, id, body); status != http.StatusOK {
 		t.Fatalf("revisi harus 200, dapat %d (%v)", status, hasil)
 	}
@@ -673,7 +678,7 @@ func TestPGRevisiManagerDitolakSaatToggleMati(t *testing.T) {
 
 	setSetting(t, f, settings.ManagerBolehRevisi, "false")
 	cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
-	body := reviseBody("coba revisi", `{"line_no":1,"qty":2,"harga_satuan":100000}`)
+	body := reviseBody("coba revisi", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":2,"harga_satuan":100000}`)
 	// Larangan Manager ditegakkan SEBELUM pemeriksaan invoice: walau invoice
 	// versi 0 belum dirender, jawabannya tetap 403 (bukan 409).
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
@@ -715,7 +720,7 @@ func TestPGRevisiConcurrentBerurutan(t *testing.T) {
 	if err := jalankanPekerjaanDone(t, f, id); err != nil {
 		t.Fatalf("pekerjaan Done: %v", err)
 	}
-	body := reviseBody("ganti komposisi", `{"line_no":1,"qty":1,"harga_satuan":200000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+	body := reviseBody("ganti komposisi", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":200000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`)
 
 	const n = 2
 	var wg sync.WaitGroup
@@ -813,7 +818,7 @@ func TestPGRevisiPekerjaanDipatokVersiTidakMenghilangkanInvoice(t *testing.T) {
 	if err := jalankanPekerjaanDone(t, f, id); err != nil {
 		t.Fatalf("pekerjaan Done: %v", err)
 	}
-	body := reviseBody("koreksi bertahap", `{"line_no":1,"qty":2,"harga_satuan":100000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+	body := reviseBody("koreksi bertahap", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":2,"harga_satuan":100000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`)
 
 	// Revisi #1 -> 200 versi 1, pekerjaan DIPATOK ke versi 1.
 	if status, hasil := reviseHTTP(t, f, cookies, csrf, id, body); status != http.StatusOK {
@@ -843,7 +848,7 @@ func TestPGRevisiPekerjaanDipatokVersiTidakMenghilangkanInvoice(t *testing.T) {
 	}
 
 	// Pekerjaan versi 1 dijalankan DUA KALI (River at-least-once): invoice v1
-	// lahir sekali, emailnya tidak digandakan, Surat Jalan tidak disentuh.
+	// lahir sekali bersama Surat Jalan, dan emailnya tidak digandakan.
 	for i := 0; i < 2; i++ {
 		if err := jalankanPekerjaanRevisi(t, f, id, 1); err != nil {
 			t.Fatalf("pekerjaan revisi v1 ke-%d: %v", i+1, err)
@@ -853,8 +858,11 @@ func TestPGRevisiPekerjaanDipatokVersiTidakMenghilangkanInvoice(t *testing.T) {
 	if _, ada := docs["invoice_pdf-1"]; !ada {
 		t.Fatalf("invoice versi 1 harus ada sesudah pekerjaan: %v", docs)
 	}
-	if _, ada := docs["surat_jalan_pdf-1"]; ada {
-		t.Error("surat jalan versi revisi tidak boleh dibuat")
+	if _, ada := docs["surat_jalan_pdf-1"]; !ada {
+		t.Error("surat jalan PDF versi revisi harus dibuat")
+	}
+	if _, ada := docs["surat_jalan_xlsx-1"]; !ada {
+		t.Error("surat jalan XLSX versi revisi harus dibuat")
 	}
 	if got := hitungEmail(t, f, id, "invoice_cabang", 1); got != 1 {
 		t.Errorf("email invoice cabang v1 harus tepat satu, dapat %d", got)
@@ -947,7 +955,7 @@ func TestPGRevisiRollbackTidakMenyisakanSerialVersiDanJob(t *testing.T) {
 		t.Fatalf("seed revisi pembuka: %v", err)
 	}
 
-	body := reviseBody("harus gagal", `{"line_no":1,"qty":9,"harga_satuan":120000}`)
+	body := reviseBody("harus gagal", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":9,"harga_satuan":120000}`)
 	status, _ := reviseHTTP(t, f, cookies, csrf, id, body)
 	if status == http.StatusOK {
 		t.Fatalf("revisi harus GAGAL karena bentrok snapshot, tetapi sukses")
@@ -1016,7 +1024,7 @@ func TestPGRevisiMenolakPesananBelumDoneDanIdTakSah(t *testing.T) {
 	}
 
 	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
-	body := reviseBody("coba", `{"line_no":1,"qty":2,"harga_satuan":100000}`)
+	body := reviseBody("coba", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":2,"harga_satuan":100000}`)
 
 	status, hasil := reviseHTTP(t, f, cookies, csrf, idSubmitted, body)
 	if status != http.StatusConflict {
@@ -1079,7 +1087,7 @@ func TestPGRevisiSertifikatPertahankanPackagingDanHargaNol(t *testing.T) {
 	}
 
 	// Coba naikkan harga Sertifikat: server harus memaksanya 0.
-	body := reviseBody("koreksi qty sertifikat", `{"line_no":1,"qty":5,"harga_satuan":999999}`)
+	body := reviseBody("koreksi qty sertifikat", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":5,"harga_satuan":999999}`)
 	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
 	if status != http.StatusOK {
 		t.Fatalf("revisi sertifikat harus 200, dapat %d (%v)", status, hasil)
@@ -1127,8 +1135,8 @@ func TestPGRevisiSertifikatPertahankanPackagingDanHargaNol(t *testing.T) {
 		t.Fatalf("pekerjaan revisi v1: %v", err)
 	}
 	reguler := produkKode(t, f, "P-01")
-	bodyCampur := reviseBody("coba campur", `{"line_no":1,"qty":1,"harga_satuan":0},`+
-		`{"product_id":"`+reguler+`","qty":1,"harga_satuan":1000}`)
+	bodyCampur := reviseBody("coba campur", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":0},`+
+		`{"product_id":"`+reguler+`","nama_instansi":"Instansi Uji","qty":1,"harga_satuan":1000}`)
 	status, hasil = reviseHTTP(t, f, cookies, csrf, id, bodyCampur)
 	if status != http.StatusBadRequest {
 		t.Fatalf("campuran sertifikat+reguler harus 400, dapat %d (%v)", status, hasil)
@@ -1171,7 +1179,7 @@ func TestPGRevisiPDFNyataVersiLamaDanBaru(t *testing.T) {
 
 	// Revisi total tetap agar versi baru tetap Done dan dapat dirender.
 	reqBody := reviseBody("koreksi komposisi versi nyata",
-		`{"line_no":1,"qty":1,"harga_satuan":200000},{"line_no":2,"qty":1,"harga_satuan":50000}`)
+		`{"line_no":1,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":200000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`)
 	st, hasil, _ := apiReq(t, http.DefaultClient, http.MethodPost,
 		srv.URL+"/api/v1/admin/orders/"+pesanan.ID+"/revise", reqBody, sa, csrfSA)
 	if st != http.StatusOK {

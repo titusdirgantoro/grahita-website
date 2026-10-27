@@ -104,7 +104,7 @@ func TestApiDraftCRUDDanTotalServer(t *testing.T) {
 
 	// Tanpa CSRF ditolak.
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p1","qty":3}]}`, cookies, "")
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":3}]}`, cookies, "")
 	if status != http.StatusForbidden {
 		t.Fatalf("POST tanpa CSRF harus 403, dapat %d", status)
 	}
@@ -113,15 +113,15 @@ func TestApiDraftCRUDDanTotalServer(t *testing.T) {
 	// Campuran Sertifikat + reguler ditolak (PRD CP-SER-03) sehingga tidak
 	// pernah berakhir sebagai pelanggaran trigger database.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p1","qty":3},{"product_id":"p3","qty":5}]}`, cookies, csrf)
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":3},{"product_id":"p3","nama_instansi":"Instansi Uji","qty":5}]}`, cookies, csrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("campuran sertifikat+reguler harus 400, dapat %d (%v)", status, body)
 	}
 	assertErrorShape(t, body, "VALIDATION_FAILED")
 
-	// Buat draft: hanya product_id & qty yang dikirim.
+	// Buat draft dengan nama instansi per baris.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"catatan":"dikirim pagi","lines":[{"product_id":"p1","qty":3}]}`, cookies, csrf)
+		`{"catatan":"dikirim pagi","lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":3}]}`, cookies, csrf)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft harus 201, dapat %d (%v)", status, body)
 	}
@@ -193,7 +193,7 @@ func TestApiDraftCRUDDanTotalServer(t *testing.T) {
 
 	// Ubah draft: baris diganti dan total dihitung ulang.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, os.srv.URL+"/api/v1/orders/"+id,
-		`{"catatan":"dikirim sore","lines":[{"product_id":"p1","qty":4}]}`, cookies, csrf)
+		`{"catatan":"dikirim sore","lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":4}]}`, cookies, csrf)
 	if status != http.StatusOK {
 		t.Fatalf("ubah draft harus 200, dapat %d (%v)", status, body)
 	}
@@ -220,10 +220,10 @@ func TestApiHargaDanTotalDariKlienDitolak(t *testing.T) {
 	cookies, csrf := login(t, os.srv, "a@example.test")
 
 	for _, body := range []string{
-		`{"lines":[{"product_id":"p1","qty":1,"harga_satuan":1}]}`,
-		`{"total":1,"lines":[{"product_id":"p1","qty":1}]}`,
-		`{"lines":[{"product_id":"p1","qty":1,"subtotal":1}]}`,
-		`{"lines":[{"product_id":"p1","qty":1,"nama_snapshot":"Palsu"}]}`,
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1,"harga_satuan":1}]}`,
+		`{"total":1,"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1}]}`,
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1,"subtotal":1}]}`,
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1,"nama_snapshot":"Palsu"}]}`,
 	} {
 		status, resp, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders", body, cookies, csrf)
 		if status != http.StatusBadRequest {
@@ -247,7 +247,7 @@ func TestApiProdukTanpaHargaCabangDitolak(t *testing.T) {
 
 	// p2 punya harga_default 999000 tetapi tanpa baris harga cabang.
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p2","qty":1}]}`, cookies, csrf)
+		`{"lines":[{"product_id":"p2","nama_instansi":"Instansi Uji","qty":1}]}`, cookies, csrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("produk tanpa harga cabang harus 400, dapat %d (%v)", status, body)
 	}
@@ -255,7 +255,7 @@ func TestApiProdukTanpaHargaCabangDitolak(t *testing.T) {
 
 	// Produk tidak dikenal juga ditolak.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p-hantu","qty":1}]}`, cookies, csrf)
+		`{"lines":[{"product_id":"p-hantu","nama_instansi":"Instansi Uji","qty":1}]}`, cookies, csrf)
 	if status != http.StatusBadRequest {
 		t.Fatalf("produk tak dikenal harus 400, dapat %d (%v)", status, body)
 	}
@@ -263,7 +263,7 @@ func TestApiProdukTanpaHargaCabangDitolak(t *testing.T) {
 	// Cabang B tidak menjual p3 (sertifikat) sehingga juga ditolak.
 	cookiesB, csrfB := login(t, os.srv, "b@example.test")
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p3","qty":1}]}`, cookiesB, csrfB)
+		`{"lines":[{"product_id":"p3","nama_instansi":"Instansi Uji","qty":1}]}`, cookiesB, csrfB)
 	if status != http.StatusBadRequest {
 		t.Fatalf("produk tanpa harga di cabang B harus 400, dapat %d (%v)", status, body)
 	}
@@ -278,7 +278,7 @@ func TestApiDraftCabangLainTidakTerlihat(t *testing.T) {
 
 	// Draft baru milik cabang A.
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p1","qty":1}]}`, cookiesA, csrfA)
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1}]}`, cookiesA, csrfA)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft cabang A: %d (%v)", status, body)
 	}
@@ -294,7 +294,7 @@ func TestApiDraftCabangLainTidakTerlihat(t *testing.T) {
 	for _, k := range kasus {
 		var payload string
 		if k.method == http.MethodPut {
-			payload = `{"lines":[{"product_id":"p1","qty":9}]}`
+			payload = `{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":9}]}`
 		}
 		status, body, _ := apiReq(t, http.DefaultClient, k.method, k.url, payload, cookiesB, csrfB)
 		if status != http.StatusNotFound {
@@ -321,7 +321,7 @@ func TestApiPesananSubmittedTerkunci(t *testing.T) {
 	cookies, csrf := login(t, os.srv, "a@example.test")
 
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, os.srv.URL+"/api/v1/orders/"+orderSubmittedID,
-		`{"lines":[{"product_id":"p1","qty":9}]}`, cookies, csrf)
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":9}]}`, cookies, csrf)
 	if status != http.StatusConflict {
 		t.Fatalf("ubah pesanan Submitted harus 409, dapat %d (%v)", status, body)
 	}
@@ -346,9 +346,9 @@ func TestApiOrdersHanyaUntukAkunCabang(t *testing.T) {
 
 	kasus := []struct{ method, path, body string }{
 		{http.MethodGet, "/api/v1/orders", ""},
-		{http.MethodPost, "/api/v1/orders", `{"lines":[{"product_id":"p1","qty":1}]}`},
+		{http.MethodPost, "/api/v1/orders", `{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1}]}`},
 		{http.MethodGet, "/api/v1/orders/" + orderSubmittedID, ""},
-		{http.MethodPut, "/api/v1/orders/" + orderSubmittedID, `{"lines":[{"product_id":"p1","qty":1}]}`},
+		{http.MethodPut, "/api/v1/orders/" + orderSubmittedID, `{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1}]}`},
 		{http.MethodDelete, "/api/v1/orders/" + orderSubmittedID, ""},
 	}
 	for _, k := range kasus {
@@ -375,10 +375,10 @@ func TestApiValidasiBodyDraft(t *testing.T) {
 	kasus := []string{
 		`{}`,
 		`{"lines":[]}`,
-		`{"lines":[{"product_id":"p1","qty":0}]}`,
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":0}]}`,
 		`{"lines":[{"qty":1}]}`,
-		`{"lines":[{"product_id":"p1","qty":1},{"product_id":"p1","qty":1}]}`,
-		`{"catatan":"` + strings.Repeat("a", 501) + `","lines":[{"product_id":"p1","qty":1}]}`,
+		`{"lines":[{"product_id":"p1","qty":1}]}`,
+		`{"catatan":"` + strings.Repeat("a", 501) + `","lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1}]}`,
 	}
 	for _, k := range kasus {
 		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders", k, cookies, csrf)
@@ -402,7 +402,7 @@ func TestApiSertifikatBarisPackagingOtomatis(t *testing.T) {
 	cookies, csrf := login(t, os.srv, "a@example.test")
 
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p3","qty":12}]}`, cookies, csrf)
+		`{"lines":[{"product_id":"p3","nama_instansi":"Instansi Uji","qty":12}]}`, cookies, csrf)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft sertifikat harus 201, dapat %d (%v)", status, body)
 	}
@@ -438,7 +438,7 @@ func TestApiSertifikatBarisPackagingOtomatis(t *testing.T) {
 
 	// Ubah draft: baris packaging tetap satu (disusun ulang server).
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, os.srv.URL+"/api/v1/orders/"+id,
-		`{"lines":[{"product_id":"p3","qty":20}]}`, cookies, csrf)
+		`{"lines":[{"product_id":"p3","nama_instansi":"Instansi Uji","qty":20}]}`, cookies, csrf)
 	if status != http.StatusOK {
 		t.Fatalf("ubah draft sertifikat harus 200, dapat %d (%v)", status, body)
 	}
@@ -449,7 +449,7 @@ func TestApiSertifikatBarisPackagingOtomatis(t *testing.T) {
 
 	// Pesanan non-Sertifikat tidak boleh punya baris packaging.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders",
-		`{"lines":[{"product_id":"p1","qty":1}]}`, cookies, csrf)
+		`{"lines":[{"product_id":"p1","nama_instansi":"Instansi Uji","qty":1}]}`, cookies, csrf)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft reguler harus 201, dapat %d (%v)", status, body)
 	}
@@ -468,13 +468,13 @@ func TestApiKlienTidakBisaMenyisipkanBarisPackaging(t *testing.T) {
 
 	kasus := []string{
 		// Baris tanpa produk (bentuk terdekat dengan packaging).
-		`{"lines":[{"product_id":"","qty":1}]}`,
+		`{"lines":[{"product_id":"","nama_instansi":"Instansi Uji","qty":1}]}`,
 		// Id karangan.
-		`{"lines":[{"product_id":"packaging","qty":1}]}`,
+		`{"lines":[{"product_id":"packaging","nama_instansi":"Instansi Uji","qty":1}]}`,
 		// Percobaan menyatakan jenis baris sendiri.
-		`{"lines":[{"product_id":"p3","qty":1,"jenis":"packaging"}]}`,
+		`{"lines":[{"product_id":"p3","nama_instansi":"Instansi Uji","qty":1,"jenis":"packaging"}]}`,
 		// Percobaan mengirim harga baris packaging.
-		`{"lines":[{"product_id":"p3","qty":1,"harga_satuan":0,"subtotal":3000}]}`,
+		`{"lines":[{"product_id":"p3","nama_instansi":"Instansi Uji","qty":1,"harga_satuan":0,"subtotal":3000}]}`,
 	}
 	for _, k := range kasus {
 		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, os.srv.URL+"/api/v1/orders", k, cookies, csrf)

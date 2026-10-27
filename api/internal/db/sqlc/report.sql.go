@@ -175,6 +175,7 @@ SELECT o.tanggal,
        b.pajak_in,
        l.line_no,
        l.nama_snapshot                                              AS produk,
+       l.nama_instansi                                              AS nama_instansi,
        l.jenis::text                                                AS jenis,
        COALESCE(l.serial_number, '')                                AS serial_number,
        l.qty,
@@ -232,6 +233,7 @@ type ListReportOrderLinesRow struct {
 	PajakIn          bool       `json:"pajak_in"`
 	LineNo           int32      `json:"line_no"`
 	Produk           string     `json:"produk"`
+	NamaInstansi     string     `json:"nama_instansi"`
 	Jenis            string     `json:"jenis"`
 	SerialNumber     string     `json:"serial_number"`
 	Qty              int32      `json:"qty"`
@@ -301,6 +303,7 @@ func (q *Queries) ListReportOrderLines(ctx context.Context, arg ListReportOrderL
 			&i.PajakIn,
 			&i.LineNo,
 			&i.Produk,
+			&i.NamaInstansi,
 			&i.Jenis,
 			&i.SerialNumber,
 			&i.Qty,

@@ -41,7 +41,7 @@ func (r *Repo) reviseTempo(ctx context.Context, tx pgx.Tx, q *sqlc.Queries, row 
 		} else {
 			if err := q.InsertOrderLineProductWithSerial(ctx, sqlc.InsertOrderLineProductWithSerialParams{
 				OrderID: req.OrderID, LineNo: int32(l.LineNo), ProductID: pgtypes.UUID(l.ProductID),
-				NamaSnapshot: l.Nama, Qty: int32(l.Qty), HargaSatuan: l.HargaSatuan, SerialNumber: pgtypes.Text(l.Serial)}); err != nil {
+				NamaSnapshot: l.Nama, NamaInstansi: l.NamaInstansi, Qty: int32(l.Qty), HargaSatuan: l.HargaSatuan, SerialNumber: pgtypes.Text(l.Serial)}); err != nil {
 				return order.ReviseOutcome{}, err
 			}
 		}

@@ -110,7 +110,7 @@ type Filter struct {
 	Status     string   `json:"status,omitempty"`
 	Jenis      string   `json:"jenis,omitempty"`
 	Cnc        *bool    `json:"cnc,omitempty"`
-		Pi         *bool    `json:"pi,omitempty"`
+	Pi         *bool    `json:"pi,omitempty"`
 	Halaman    int      `json:"halaman,omitempty"`
 	PerHalaman int      `json:"per_halaman,omitempty"`
 }
@@ -123,7 +123,7 @@ type Query struct {
 	Status         string
 	Jenis          string
 	IsCNC          *bool
-		PajakIn        *bool
+	PajakIn        *bool
 	Batch          int
 	Offset         int
 	SetelahTanggal *time.Time
@@ -140,9 +140,10 @@ type Line struct {
 	Cabang            string `json:"cabang"`
 	KepalaCabang      string `json:"kepala_cabang"`
 	IsCNC             bool   `json:"is_cnc"`
-		PajakIn           bool   `json:"pajak_in"`
+	PajakIn           bool   `json:"pajak_in"`
 	LineNo            int    `json:"line_no"`
 	Produk            string `json:"produk"`
+	NamaInstansi      string `json:"nama_instansi"`
 	Jenis             string `json:"jenis"`
 	SerialNumber      string `json:"serial_number"`
 	Qty               int    `json:"qty"`
@@ -490,11 +491,11 @@ func (s *Service) storageSiap(ctx context.Context) error {
 // diminta Superadmin (tidak pernah dibaca ulang dari klien saat unduh).
 func (s *Service) query(f Filter) (Filter, Query, error) {
 	norm := Filter{
-		Cabang:  normCabang(f.Cabang),
-		Status:  strings.ToLower(strings.TrimSpace(f.Status)),
-		Jenis:   strings.ToLower(strings.TrimSpace(f.Jenis)),
-		Cnc:     f.Cnc,
-		Pi:      f.Pi,
+		Cabang: normCabang(f.Cabang),
+		Status: strings.ToLower(strings.TrimSpace(f.Status)),
+		Jenis:  strings.ToLower(strings.TrimSpace(f.Jenis)),
+		Cnc:    f.Cnc,
+		Pi:     f.Pi,
 	}
 	if err := normCabangID(norm.Cabang); err != nil {
 		return Filter{}, Query{}, err
@@ -547,15 +548,15 @@ func (s *Service) query(f Filter) (Filter, Query, error) {
 	}
 
 	q := Query{
-		Dari:      dari,
-		Sampai:    sampai,
-		Cabang:    norm.Cabang,
-		Status:    norm.Status,
-		Jenis:     norm.Jenis,
-		IsCNC:     f.Cnc,
-				PajakIn:   f.Pi,
-		Batch:     per,
-		Offset:    (halaman - 1) * per,
+		Dari:    dari,
+		Sampai:  sampai,
+		Cabang:  norm.Cabang,
+		Status:  norm.Status,
+		Jenis:   norm.Jenis,
+		IsCNC:   f.Cnc,
+		PajakIn: f.Pi,
+		Batch:   per,
+		Offset:  (halaman - 1) * per,
 	}
 	return norm, q, nil
 }
@@ -601,14 +602,14 @@ func queryDariFilter(f Filter, batch int) (Query, error) {
 		return Query{}, err
 	}
 	return Query{
-		Dari:      dari,
-		Sampai:    sampai,
-		Cabang:    f.Cabang,
-		Status:    f.Status,
-		Jenis:     f.Jenis,
-		IsCNC:     f.Cnc,
-				PajakIn:   f.Pi,
-		Batch:     batch,
+		Dari:    dari,
+		Sampai:  sampai,
+		Cabang:  f.Cabang,
+		Status:  f.Status,
+		Jenis:   f.Jenis,
+		IsCNC:   f.Cnc,
+		PajakIn: f.Pi,
+		Batch:   batch,
 	}, nil
 }
 

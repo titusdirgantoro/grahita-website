@@ -154,7 +154,7 @@ func hitungCounter(t *testing.T, f *pgFixture, scope, periode string) int {
 func buatDraftHTTP(t *testing.T, f *pgFixture, cookies []*http.Cookie, csrf, productID string, qty int) map[string]any {
 	t.Helper()
 	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":%d}]}`, productID, qty), cookies, csrf)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":%d}]}`, productID, qty), cookies, csrf)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft harus 201, dapat %d (%v)", status, body)
 	}
@@ -297,7 +297,7 @@ func TestPGSubmitEndToEndMultipart(t *testing.T) {
 
 	// Pesanan Submitted terkunci untuk cabang: ubah dan hapus ditolak 409.
 	status, body3, _ := apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/orders/"+id,
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"qty":1}]}`, produk), cookiesA, csrfA)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"Instansi Uji","qty":1}]}`, produk), cookiesA, csrfA)
 	if status != http.StatusConflict {
 		t.Errorf("ubah pesanan submitted harus 409, dapat %d (%v)", status, body3)
 	}
@@ -672,8 +672,8 @@ func TestPGSubmit100ParalelNomorDanSerialUnik(t *testing.T) {
 			t.Fatalf("seed draft ke-%d: %v", i, err)
 		}
 		if _, err := f.pool.Exec(ctx,
-			`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
-			 VALUES ($1, 1, 'product', $2, 'Bio Magnetik', 1, 100000)`, id, produk); err != nil {
+			`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, qty, harga_satuan)
+			 VALUES ($1, 1, 'product', $2, 'Bio Magnetik', 'Instansi Uji', 1, 100000)`, id, produk); err != nil {
 			t.Fatalf("seed baris ke-%d: %v", i, err)
 		}
 		// Bukti transfer unik per pesanan (submit non-C&C wajib punya bukti).

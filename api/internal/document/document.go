@@ -203,6 +203,7 @@ type Line struct {
 	LineNo       int
 	Jenis        string
 	Nama         string
+	NamaInstansi string
 	Qty          int
 	HargaSatuan  int64
 	Subtotal     int64
@@ -378,6 +379,72 @@ func (s *Service) EnsureInvoiceVersi(ctx context.Context, orderID string, versi 
 			ErrInvalidData, versi, doc.Versi)
 	}
 	return doc, nil
+}
+
+// EnsureSemuaVersi memastikan invoice dan kedua Surat Jalan tersedia untuk
+// versi revisi yang dipatok. Versi revisi lama yang sudah lewat tetap dapat
+// mengirim ulang invoice tersimpan tanpa mencoba merender snapshot versi lama
+// dari keadaan pesanan terbaru.
+func (s *Service) EnsureSemuaVersi(ctx context.Context, orderID string, versi int) ([]Document, error) {
+	if versi <= 0 {
+		return s.Ensure(ctx, orderID)
+	}
+	id := strings.TrimSpace(orderID)
+	if !uuidRe.MatchString(id) {
+		return nil, ErrNotFound
+	}
+	tersimpan, err := s.repo.ListByOrder(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	ada := make(map[string]Document, len(jenisSaatDone))
+	for _, d := range tersimpan {
+		if d.Versi == versi {
+			ada[d.Jenis] = d
+		}
+	}
+	urut := func() []Document {
+		out := make([]Document, 0, len(jenisSaatDone))
+		for _, jenis := range jenisSaatDone {
+			if d, ok := ada[jenis]; ok {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	lengkap := true
+	for _, jenis := range jenisSaatDone {
+		if _, ok := ada[jenis]; !ok {
+			lengkap = false
+			break
+		}
+	}
+	if lengkap {
+		return urut(), nil
+	}
+	o, err := s.repo.OrderForDocument(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if o.Versi != versi {
+		// Pekerjaan revisi lama mungkin baru dijalankan ulang setelah versi
+		// berikutnya terbit. Dokumen yang sudah tersimpan boleh dipakai;
+		// versi lama tidak boleh dibangun dari baris versi baru.
+		if _, ok := ada[JenisInvoicePDF]; ok {
+			return urut(), nil
+		}
+		return nil, fmt.Errorf("%w: dokumen versi %d belum tersedia (versi berjalan %d)", ErrInvalidData, versi, o.Versi)
+	}
+	docs, err := s.Ensure(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range docs {
+		if d.Versi != versi {
+			return nil, fmt.Errorf("%w: dokumen versi %d berubah saat dirender", ErrInvalidData, versi)
+		}
+	}
+	return docs, nil
 }
 
 // Generate memastikan ketiga dokumen satu pesanan atas permintaan admin

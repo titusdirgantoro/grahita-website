@@ -130,8 +130,8 @@ func fixtureOrder(id string) Order {
 			Telepon: "022-123456",
 		},
 		Lines: []Line{
-			{LineNo: 1, Jenis: "product", Nama: "Bio Magnetik", Qty: 2, HargaSatuan: 2500000, Subtotal: 5000000, SerialNumber: "20261008001"},
-			{LineNo: 2, Jenis: "product", Nama: "Bio Listrik", Qty: 1, HargaSatuan: 3000, Subtotal: 3000, SerialNumber: "20261008002"},
+			{LineNo: 1, Jenis: "product", Nama: "Bio Magnetik", NamaInstansi: "TK A", Qty: 2, HargaSatuan: 2500000, Subtotal: 5000000, SerialNumber: "20261008001"},
+			{LineNo: 2, Jenis: "product", Nama: "Bio Listrik", NamaInstansi: "SD B", Qty: 1, HargaSatuan: 3000, Subtotal: 3000, SerialNumber: "20261008002"},
 		},
 		Rekening: []Rekening{
 			{Bank: "BCA", Nomor: "1234567890", AtasNama: "PT Grahita Indonesia"},
@@ -342,6 +342,36 @@ func TestVersiBaruMemakaiKunciBaru(t *testing.T) {
 	baru := isiObjek(t, store, StorageKey(orderA, JenisInvoicePDF, 1))
 	if len(baru) == 0 {
 		t.Error("berkas versi 1 kosong")
+	}
+}
+
+func TestRevisiMembuatInvoiceDanSuratJalanDenganInstansiBaru(t *testing.T) {
+	repo := NewMemory()
+	repo.SetOrder(fixtureOrder(orderA))
+	store := newStoreHitung()
+	rend := &rendererPalsu{}
+	svc := NewService(repo, store, rend)
+	if _, err := svc.Ensure(context.Background(), orderA); err != nil {
+		t.Fatalf("dokumen asli: %v", err)
+	}
+	revisi := fixtureOrder(orderA)
+	revisi.Versi = 1
+	revisi.Lines[0].NamaInstansi = "TK Baru"
+	repo.SetOrder(revisi)
+	docs, err := svc.EnsureSemuaVersi(context.Background(), orderA, 1)
+	if err != nil {
+		t.Fatalf("dokumen revisi: %v", err)
+	}
+	if len(docs) != 3 || repo.JumlahDokumen() != 6 {
+		t.Fatalf("revisi harus punya tiga dokumen baru: %+v", docs)
+	}
+	for _, d := range docs {
+		if d.Versi != 1 || d.StorageKey != StorageKey(orderA, d.Jenis, 1) {
+			t.Fatalf("dokumen revisi salah: %+v", d)
+		}
+	}
+	if len(rend.html) != 4 || !strings.Contains(rend.html[2], "TK Baru") || !strings.Contains(rend.html[3], "TK Baru") {
+		t.Fatalf("nama instansi revisi harus masuk invoice dan surat jalan PDF")
 	}
 }
 

@@ -18,10 +18,11 @@ func reviseUnavailable() error {
 
 // reviseLineRequest adalah satu baris pada daftar baris FINAL revisi.
 type reviseLineRequest struct {
-	LineNo      int    `json:"line_no"`
-	ProductID   string `json:"product_id"`
-	Qty         int    `json:"qty"`
-	HargaSatuan int64  `json:"harga_satuan"`
+	LineNo       int     `json:"line_no"`
+	ProductID    string  `json:"product_id"`
+	NamaInstansi *string `json:"nama_instansi"`
+	Qty          int     `json:"qty"`
+	HargaSatuan  int64   `json:"harga_satuan"`
 }
 
 // reviseRequest adalah body POST /api/v1/admin/orders/{id}/revise (F2-25).
@@ -50,10 +51,11 @@ func (a *API) adminOrderRevise(w http.ResponseWriter, r *http.Request) error {
 	lines := make([]order.ReviseLineInput, 0, len(req.Lines))
 	for _, l := range req.Lines {
 		lines = append(lines, order.ReviseLineInput{
-			LineNo:      l.LineNo,
-			ProductID:   l.ProductID,
-			Qty:         l.Qty,
-			HargaSatuan: l.HargaSatuan,
+			LineNo:       l.LineNo,
+			ProductID:    l.ProductID,
+			NamaInstansi: l.NamaInstansi,
+			Qty:          l.Qty,
+			HargaSatuan:  l.HargaSatuan,
 		})
 	}
 	out, err := a.d.Revise.Revise(r.Context(), auth.ActorFrom(r.Context()),

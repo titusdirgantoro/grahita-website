@@ -76,6 +76,7 @@ SELECT l.line_no,
        l.jenis::text                    AS jenis,
        COALESCE(l.product_id::text, '')::text AS product_id,
        l.nama_snapshot,
+       l.nama_instansi,
        l.qty,
        l.harga_satuan,
        COALESCE(l.serial_number, '')::text AS serial_number,
@@ -110,8 +111,8 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- Baris lama memakai serial lama apa adanya; baris baru memakai serial dari
 -- counter dengan periode tanggal pesanan asli.
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
-                         qty, harga_satuan, serial_number)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
+                         nama_instansi, qty, harga_satuan, serial_number)
+VALUES ($1, $2, 'product', $3, $4, $5, $6, $7, $8);
 
 -- name: SetOrderVersi :execrows
 -- Menaikkan versi pesanan SATU langkah (0 -> 1, 1 -> 2, ...); nomor invoice

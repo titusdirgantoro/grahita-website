@@ -120,8 +120,9 @@ const NamaBiayaPackaging = "Biaya packaging"
 // Batas satu permintaan editor supaya transaksinya tetap pendek dan
 // perkalian qty × harga tidak meluap.
 const (
-	MaxLines = 100
-	maxQty   = 1_000_000
+	MaxLines        = 100
+	maxQty          = 1_000_000
+	MaxNamaInstansi = 160
 )
 
 // uuidRe dipakai untuk menolak id yang jelas bukan UUID dengan jawaban 404
@@ -137,10 +138,11 @@ const TanggalLayout = "2006-01-02"
 // Jenis "packaging" dipakai untuk baris biaya packaging pesanan Sertifikat:
 // qty 1, tanpa product_id, dan tanpa serial number (PRD CP-SER-02).
 type Line struct {
-	LineNo    int    `json:"line_no"`
-	Jenis     string `json:"jenis"`
-	ProductID string `json:"product_id,omitempty"`
-	Nama      string `json:"nama"`
+	LineNo       int    `json:"line_no"`
+	Jenis        string `json:"jenis"`
+	ProductID    string `json:"product_id,omitempty"`
+	Nama         string `json:"nama"`
+	NamaInstansi string `json:"nama_instansi"`
 
 	Qty          int    `json:"qty"`
 	HargaSatuan  int64  `json:"harga_satuan"`
@@ -178,11 +180,12 @@ type Order struct {
 	Lines       []Line    `json:"lines,omitempty"`
 }
 
-// LineInput adalah satu baris yang dikirim editor: HANYA product_id dan qty.
+// LineInput adalah satu baris yang dikirim editor.
 // Harga satuan, subtotal, dan total tidak pernah diterima dari klien.
 type LineInput struct {
-	ProductID string
-	Qty       int
+	ProductID    string
+	Qty          int
+	NamaInstansi string
 }
 
 // DraftInput adalah isi draft yang dikirim klien.
@@ -406,15 +409,15 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 	}
 
 	lines := make([]Line, 0, len(in.Lines)+1)
-	dipakai := map[string]bool{}
 	var sertifikat, reguler int
 	for i, baris := range in.Lines {
 		pid := strings.TrimSpace(baris.ProductID)
+		instansi := strings.TrimSpace(baris.NamaInstansi)
 		if pid == "" {
 			return "", nil, fmt.Errorf("%w: baris %d belum memilih produk", ErrInvalidData, i+1)
 		}
-		if dipakai[pid] {
-			return "", nil, fmt.Errorf("%w: produk yang sama tidak boleh dipesan dua kali", ErrInvalidData)
+		if instansi == "" || len([]rune(instansi)) > MaxNamaInstansi {
+			return "", nil, fmt.Errorf("%w: nama instansi baris %d wajib diisi, maksimal %d karakter", ErrInvalidData, i+1, MaxNamaInstansi)
 		}
 		p, ok := dijual[pid]
 		if !ok {
@@ -438,12 +441,12 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 		} else {
 			reguler++
 		}
-		dipakai[pid] = true
 		lines = append(lines, Line{
-			LineNo:    i + 1,
-			Jenis:     JenisProduct,
-			ProductID: pid,
-			Nama:      p.Nama,
+			LineNo:       i + 1,
+			Jenis:        JenisProduct,
+			ProductID:    pid,
+			Nama:         p.Nama,
+			NamaInstansi: instansi,
 
 			Qty:         baris.Qty,
 			HargaSatuan: harga,

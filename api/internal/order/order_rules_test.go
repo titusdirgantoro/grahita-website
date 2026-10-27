@@ -39,7 +39,7 @@ func TestSertifikatMenambahTepatSatuBarisPackaging(t *testing.T) {
 	ctx := context.Background()
 
 	o, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{
-		Lines: []LineInput{{ProductID: "p3", Qty: 7}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 7}},
 	})
 	if err != nil {
 		t.Fatalf("buat draft sertifikat: %v", err)
@@ -74,7 +74,7 @@ func TestSertifikatMenambahTepatSatuBarisPackaging(t *testing.T) {
 	// Mengubah draft (editor mengirim daftar baris final) TIDAK boleh
 	// menggandakan baris packaging: baris itu selalu disusun ulang server.
 	ubah, err := svc.UpdateDraft(ctx, aktorCabang("br-a"), o.ID, DraftInput{
-		Lines: []LineInput{{ProductID: "p3", Qty: 9}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 9}},
 	})
 	if err != nil {
 		t.Fatalf("ubah draft sertifikat: %v", err)
@@ -102,7 +102,7 @@ func TestSertifikatHargaSelaluNol(t *testing.T) {
 	svc := NewService(repo, cat, cfgUji())
 
 	o, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{
-		Lines: []LineInput{{ProductID: "p3", Qty: 3}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 3}},
 	})
 	if err != nil {
 		t.Fatalf("buat draft: %v", err)
@@ -124,7 +124,7 @@ func TestBiayaPackagingSnapshotDanPerubahanSetelan(t *testing.T) {
 	ctx := context.Background()
 	aktor := aktorCabang("br-a")
 
-	lama, err := svc.CreateDraft(ctx, aktor, DraftInput{Lines: []LineInput{{ProductID: "p3", Qty: 1}}})
+	lama, err := svc.CreateDraft(ctx, aktor, DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 1}}})
 	if err != nil {
 		t.Fatalf("buat draft lama: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestBiayaPackagingSnapshotDanPerubahanSetelan(t *testing.T) {
 	}
 
 	// Pesanan berikutnya memakai nilai setelan yang baru.
-	baru, err := svc.CreateDraft(ctx, aktor, DraftInput{Lines: []LineInput{{ProductID: "p3", Qty: 1}}})
+	baru, err := svc.CreateDraft(ctx, aktor, DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 1}}})
 	if err != nil {
 		t.Fatalf("buat draft baru: %v", err)
 	}
@@ -171,22 +171,15 @@ func TestKlienTidakBisaMenyisipkanBarisPackaging(t *testing.T) {
 	// product_id kosong (bentuk paling dekat dengan baris packaging tanpa
 	// produk) ditolak.
 	if _, err := svc.CreateDraft(ctx, aktor, DraftInput{
-		Lines: []LineInput{{ProductID: "", Qty: 1}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "", Qty: 1}},
 	}); !errors.Is(err, ErrInvalidData) {
 		t.Errorf("baris tanpa produk harus ditolak, dapat %v", err)
 	}
 	// id yang bukan produk yang dijual cabang juga ditolak (mis. id karangan).
 	if _, err := svc.CreateDraft(ctx, aktor, DraftInput{
-		Lines: []LineInput{{ProductID: "packaging", Qty: 1}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "packaging", Qty: 1}},
 	}); !errors.Is(err, ErrProductNotSold) {
 		t.Errorf("id karangan harus ditolak sebagai produk tak dijual, dapat %v", err)
-	}
-	// Dua baris produk Sertifikat yang sama tetap tidak boleh (baris packaging
-	// pun tidak bisa dibuat dua kali lewat jalur mana pun).
-	if _, err := svc.CreateDraft(ctx, aktor, DraftInput{
-		Lines: []LineInput{{ProductID: "p3", Qty: 1}, {ProductID: "p3", Qty: 1}},
-	}); !errors.Is(err, ErrInvalidData) {
-		t.Errorf("produk sertifikat ganda harus ditolak, dapat %v", err)
 	}
 	if repo.Count() != 0 {
 		t.Errorf("tidak boleh ada draft tersimpan, dapat %d", repo.Count())
@@ -207,7 +200,7 @@ func TestBarisPackagingSatuUntukBeberapaProdukSertifikat(t *testing.T) {
 	svc := NewService(repo, cat, cfgUji())
 
 	o, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{
-		Lines: []LineInput{{ProductID: "p3", Qty: 2}, {ProductID: "p5", Qty: 4}},
+		Lines: []LineInput{{NamaInstansi: "TK A", ProductID: "p3", Qty: 2}, {NamaInstansi: "SD B", ProductID: "p5", Qty: 4}, {NamaInstansi: "TK C", ProductID: "p3", Qty: 1}},
 	})
 	if err != nil {
 		t.Fatalf("buat draft: %v", err)
@@ -221,8 +214,8 @@ func TestBarisPackagingSatuUntukBeberapaProdukSertifikat(t *testing.T) {
 	if jml != 1 {
 		t.Fatalf("harus tepat satu baris packaging, dapat %d: %+v", jml, o.Lines)
 	}
-	if o.Total != 3000 || o.JumlahItem != 6 {
-		t.Errorf("total harus 3000 dan item 6, dapat %d/%d", o.Total, o.JumlahItem)
+	if o.Total != 3000 || o.JumlahItem != 7 || o.Lines[2].NamaInstansi != "TK C" {
+		t.Errorf("total harus 3000, item 7, dan instansi tiap baris tetap: %+v", o)
 	}
 }
 

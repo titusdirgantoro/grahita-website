@@ -48,6 +48,7 @@ export interface BarisPesanan {
   jenis: string;
   product_id?: string;
   nama: string;
+  nama_instansi: string;
   qty: number;
   harga_satuan: number;
   subtotal: number;
@@ -416,6 +417,7 @@ export function PesananDetailPage({ id }: { id: string }) {
               <thead>
                 <tr>
                   <th scope="col">Produk</th>
+                  <th scope="col">Nama instansi</th>
                   {tampilSerial ? <th scope="col">Serial number</th> : null}
                   <th scope="col" className="num">
                     Qty
@@ -439,6 +441,7 @@ export function PesananDetailPage({ id }: { id: string }) {
                       ) : null}
                       {l.nama}
                     </td>
+                    <td>{l.nama_instansi || "—"}</td>
                     {tampilSerial ? <td className={styles.muted}>{l.serial_number || "—"}</td> : null}
                     <td className="num">{l.qty}</td>
                     <td className="num">{rupiah.format(l.harga_satuan)}</td>
@@ -448,7 +451,7 @@ export function PesananDetailPage({ id }: { id: string }) {
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={tampilSerial ? 4 : 3}>Total</td>
+                  <td colSpan={tampilSerial ? 5 : 4}>Total</td>
                   <td className="num">
                     <b>{rupiah.format(data.total)}</b>
                   </td>
@@ -941,12 +944,13 @@ interface BarisEditor {
   kunci: number;
   productId: string;
   qty: number;
+  namaInstansi: string;
 }
 
 /**
  * PesananEditorPage — /pesanan/baru dan /pesanan/{id}/ubah.
  *
- * Editor mengirim HANYA product_id dan qty: harga satuan diambil server dari
+ * Editor mengirim product_id, qty, dan nama_instansi: harga satuan diambil server dari
  * daftar harga cabang, dan total dihitung ulang server saat menyimpan. Angka
  * total yang tampil di sini hanya pratinjau (PRD CP-ORD-02, BR-10).
  */
@@ -956,7 +960,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
   // Draft hanya dimuat saat mengubah pesanan yang sudah ada.
   const pesanan = useApi<Pesanan>(id ? `/orders/${id}` : "/orders", Boolean(id));
 
-  const [baris, setBaris] = useState<BarisEditor[]>([{ kunci: 1, productId: "", qty: 1 }]);
+  const [baris, setBaris] = useState<BarisEditor[]>([{ kunci: 1, productId: "", qty: 1, namaInstansi: "" }]);
   const [catatan, setCatatan] = useState("");
   const [galat, setGalat] = useState<string | null>(null);
   const [menyimpan, setMenyimpan] = useState(false);
@@ -967,8 +971,8 @@ export function PesananEditorPage({ id }: { id?: string }) {
     if (!id || !pesanan.data || siap) return;
     const barisAwal = (pesanan.data.lines ?? [])
       .filter((l) => l.jenis === "product" && l.product_id)
-      .map((l, i) => ({ kunci: i + 1, productId: l.product_id as string, qty: l.qty }));
-    setBaris(barisAwal.length > 0 ? barisAwal : [{ kunci: 1, productId: "", qty: 1 }]);
+      .map((l, i) => ({ kunci: i + 1, productId: l.product_id as string, qty: l.qty, namaInstansi: l.nama_instansi ?? "" }));
+    setBaris(barisAwal.length > 0 ? barisAwal : [{ kunci: 1, productId: "", qty: 1, namaInstansi: "" }]);
     setCatatan(pesanan.data.catatan ?? "");
     setSiap(true);
   }, [id, pesanan.data, siap]);
@@ -993,14 +997,14 @@ export function PesananEditorPage({ id }: { id?: string }) {
       return s + (p ? p.harga * (Number(b.qty) || 0) : 0);
     }, 0) + biayaPackaging;
 
-  const bolehTambah = !adaSertifikat && baris.length < 100;
+  const bolehTambah = baris.length < 100;
 
   const ubahBaris = useCallback((kunci: number, patch: Partial<BarisEditor>) => {
     setBaris((lama) => lama.map((b) => (b.kunci === kunci ? { ...b, ...patch } : b)));
   }, []);
 
   const tambahBaris = useCallback(() => {
-    setBaris((lama) => [...lama, { kunci: Date.now(), productId: "", qty: 1 }]);
+    setBaris((lama) => [...lama, { kunci: Math.max(...lama.map((b) => b.kunci)) + 1, productId: "", qty: 1, namaInstansi: "" }]);
   }, []);
 
   const hapusBaris = useCallback((kunci: number) => {
@@ -1009,6 +1013,11 @@ export function PesananEditorPage({ id }: { id?: string }) {
 
   async function simpan() {
     setGalat(null);
+    const tanpaProduk = baris.findIndex((b) => !b.productId && b.namaInstansi.trim());
+    if (tanpaProduk >= 0) {
+      setGalat(`Pilih produk untuk baris ${tanpaProduk + 1}.`);
+      return;
+    }
     const dipakai = baris.filter((b) => b.productId !== "");
     if (dipakai.length === 0) {
       setGalat("Pilih minimal satu produk sebelum menyimpan draft.");
@@ -1018,11 +1027,15 @@ export function PesananEditorPage({ id }: { id?: string }) {
       setGalat("Qty setiap baris minimal 1.");
       return;
     }
+    if (dipakai.some((b) => !b.namaInstansi.trim())) {
+      setGalat("Nama instansi wajib diisi pada setiap baris produk.");
+      return;
+    }
     setMenyimpan(true);
     try {
       const body = {
         catatan,
-        lines: dipakai.map((b) => ({ product_id: b.productId, qty: Number(b.qty) })),
+        lines: dipakai.map((b) => ({ product_id: b.productId, qty: Number(b.qty), nama_instansi: b.namaInstansi.trim() })),
       };
       const hasil = id
         ? await api.put<Pesanan>(`/orders/${id}`, body)
@@ -1074,11 +1087,12 @@ export function PesananEditorPage({ id }: { id?: string }) {
       <div className={styles.stack}>
         <Card>
           <CardHead title="Item pesanan" />
+          <p className="muted small">Satu baris untuk satu instansi dan produk. Nomor serial dibuat otomatis saat pesanan dikirim.</p>
           {katalog.galat ? <Notice tone="danger">{katalog.galat}</Notice> : null}
           {adaSertifikat ? (
             <Notice tone="info">
-              Sertifikat dipesan terpisah dan tidak boleh dicampur produk reguler. Untuk produk lain,
-              buat pesanan baru.
+              Sertifikat dipesan terpisah dari produk reguler. Tambahkan baris untuk tiap instansi;
+              biaya packaging tetap satu kali per pesanan.
               {biayaPackaging > 0
                 ? ` Biaya packaging ${rupiah.format(biayaPackaging)} ditambahkan otomatis per pesanan.`
                 : " Biaya packaging ditambahkan otomatis per pesanan."}
@@ -1092,6 +1106,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
               <div className={styles.lines}>
                 <div className={styles.linesHead} aria-hidden="true">
                   <span>Produk</span>
+                  <span>Nama instansi</span>
                   <span>Qty</span>
                   <span className="num">Harga satuan</span>
                   <span className="num">Subtotal</span>
@@ -1100,7 +1115,6 @@ export function PesananEditorPage({ id }: { id?: string }) {
                 {baris.map((b, i) => {
                   const p = perId.get(b.productId);
                   const qty = Number(b.qty) || 0;
-                  const terpakaiLain = new Set(baris.filter((x) => x.kunci !== b.kunci && x.productId).map((x) => x.productId));
                   return (
                     <div className={styles.line} key={b.kunci}>
                       <div className={styles.lProd}>
@@ -1115,10 +1129,8 @@ export function PesananEditorPage({ id }: { id?: string }) {
                           <option value="">Pilih produk</option>
                           {produk.map((opt) => {
                             const sertifikat = opt.jenis === "sertifikat";
-                            // Produk yang sama tidak boleh dipesan dua kali, dan
                             // Sertifikat tidak boleh dicampur produk reguler.
-                            const nonaktif =
-                              terpakaiLain.has(opt.id) || (sertifikat ? adaReguler : adaSertifikat);
+                            const nonaktif = sertifikat ? adaReguler : adaSertifikat;
                             return (
                               <option key={opt.id} value={opt.id} disabled={nonaktif}>
                                 {opt.nama}
@@ -1127,6 +1139,18 @@ export function PesananEditorPage({ id }: { id?: string }) {
                             );
                           })}
                         </Select>
+                      </div>
+                      <div className={styles.lInstansi}>
+                        <label className={styles.mLbl} htmlFor={`instansi-${b.kunci}`}>Nama instansi</label>
+                        <Input
+                          id={`instansi-${b.kunci}`}
+                          aria-label={`Nama instansi baris ${i + 1}`}
+                          maxLength={160}
+                          required
+                          value={b.namaInstansi}
+                          placeholder="Contoh: TK Al-Fatih"
+                          onChange={(e) => ubahBaris(b.kunci, { namaInstansi: e.target.value })}
+                        />
                       </div>
                       <div className={styles.lQty}>
                         <span className={styles.mLbl}>Qty</span>
@@ -1184,6 +1208,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
                       <i className="ph ph-lock-simple" aria-hidden="true" />
                       Biaya packaging
                     </div>
+                    <div className={styles.lInstansi}>—</div>
                     <div className={styles.lQty}>
                       <span className={styles.mLbl}>Qty</span>1
                     </div>
@@ -1201,10 +1226,10 @@ export function PesananEditorPage({ id }: { id?: string }) {
               </div>
               <div className={styles.tools}>
                 <Button variant="secondary" icon="plus" disabled={!bolehTambah} onClick={tambahBaris}>
-                  Tambah produk
+                  Tambah baris
                 </Button>
                 {adaSertifikat ? (
-                  <span className="muted small">Untuk produk lain, buat pesanan baru.</span>
+                  <span className="muted small">Produk reguler dipesan melalui pesanan terpisah.</span>
                 ) : adaReguler ? (
                   <span className="muted small">
                     Sertifikat dipesan terpisah. Buat pesanan baru untuk Sertifikat.

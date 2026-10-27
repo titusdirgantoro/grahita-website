@@ -96,8 +96,8 @@ func TestBuatDraftMemakaiHargaCabangDanTotalServer(t *testing.T) {
 	o, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{
 		Catatan: " dikirim pagi ",
 		Lines: []LineInput{
-			{ProductID: "p1", Qty: 3},
-			{ProductID: "p4", Qty: 2},
+			{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 3},
+			{NamaInstansi: "Instansi Uji", ProductID: "p4", Qty: 2},
 		},
 	})
 	if err != nil {
@@ -143,7 +143,7 @@ func TestHargaDariCabangSesiBukanCabangLain(t *testing.T) {
 	svc, _ := newUjiService()
 	ctx := context.Background()
 
-	o, err := svc.CreateDraft(ctx, aktorCabang("br-b"), DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 2}}})
+	o, err := svc.CreateDraft(ctx, aktorCabang("br-b"), DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 2}}})
 	if err != nil {
 		t.Fatalf("buat draft cabang B: %v", err)
 	}
@@ -160,19 +160,19 @@ func TestProdukTanpaHargaCabangDitolak(t *testing.T) {
 	ctx := context.Background()
 
 	// p2 hanya ada di master produk (harga_default) — tidak dijual ke cabang.
-	_, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{Lines: []LineInput{{ProductID: "p2", Qty: 1}}})
+	_, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p2", Qty: 1}}})
 	if !errors.Is(err, ErrProductNotSold) {
 		t.Fatalf("produk tanpa baris harga cabang harus ditolak, dapat %v", err)
 	}
 
 	// Produk yang tidak dikenal sama saja tidak dijual.
-	_, err = svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{Lines: []LineInput{{ProductID: "p-hantu", Qty: 1}}})
+	_, err = svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p-hantu", Qty: 1}}})
 	if !errors.Is(err, ErrProductNotSold) {
 		t.Fatalf("produk tak dikenal harus ditolak, dapat %v", err)
 	}
 
 	// p1 dijual ke cabang A tetapi TIDAK ke cabang tanpa harga (cabang C).
-	_, err = svc.CreateDraft(ctx, aktorCabang("br-c"), DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 1}}})
+	_, err = svc.CreateDraft(ctx, aktorCabang("br-c"), DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}}})
 	if !errors.Is(err, ErrProductNotSold) {
 		t.Fatalf("cabang tanpa baris harga harus ditolak, dapat %v", err)
 	}
@@ -184,12 +184,12 @@ func TestDraftHanyaMilikPemiliknya(t *testing.T) {
 	svc, _ := newUjiService()
 	ctx := context.Background()
 
-	draft, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 1}}})
+	draft, err := svc.CreateDraft(ctx, aktorCabang("br-a"), DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}}})
 	if err != nil {
 		t.Fatalf("buat draft: %v", err)
 	}
 
-	ubah := DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 9}}}
+	ubah := DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 9}}}
 	if _, err := svc.Get(ctx, aktorCabang("br-b"), draft.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("baca draft cabang lain harus 404, dapat %v", err)
 	}
@@ -218,11 +218,11 @@ func TestPesananSubmittedTidakBisaDiubahAtauDihapus(t *testing.T) {
 
 	kirim := repo.Put(Order{
 		BranchID: "br-a", Status: StatusSubmitted, Nomor: "2026-10-01", Tanggal: "2026-10-08",
-		Total: 100000, Lines: []Line{{LineNo: 1, Jenis: JenisProduct, ProductID: "p1", Nama: "Bio Magnetik", Qty: 1, HargaSatuan: 100000}},
+		Total: 100000, Lines: []Line{{LineNo: 1, Jenis: JenisProduct, NamaInstansi: "Instansi Uji", ProductID: "p1", Nama: "Bio Magnetik", Qty: 1, HargaSatuan: 100000}},
 	})
 	selesai := repo.Put(Order{BranchID: "br-a", Status: StatusDone, Nomor: "2026-10-02", Tanggal: "2026-10-08"})
 
-	ubah := DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 5}}}
+	ubah := DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 5}}}
 	for _, id := range []string{kirim.ID, selesai.ID} {
 		if _, err := svc.UpdateDraft(ctx, aktorCabang("br-a"), id, ubah); !errors.Is(err, ErrLocked) {
 			t.Errorf("ubah pesanan %s harus ORDER_LOCKED, dapat %v", id, err)
@@ -242,7 +242,7 @@ func TestDraftHanyaUntukAkunCabang(t *testing.T) {
 	ctx := context.Background()
 
 	admin := auth.Actor{UserID: "adm", Kind: auth.KindAdmin, Role: auth.RoleSuperadmin, Nama: "Rina"}
-	in := DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 1}}}
+	in := DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}}}
 	if _, err := svc.CreateDraft(ctx, admin, in); !errors.Is(err, ErrForbidden) {
 		t.Errorf("admin tidak boleh membuat pesanan cabang, dapat %v", err)
 	}
@@ -260,7 +260,7 @@ func TestDraftHanyaUntukAkunCabang(t *testing.T) {
 func TestSertifikatTidakBolehDicampurReguler(t *testing.T) {
 	svc, _ := newUjiService()
 	_, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{
-		Lines: []LineInput{{ProductID: "p1", Qty: 1}, {ProductID: "p3", Qty: 1}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}, {NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 1}},
 	})
 	if !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("campuran sertifikat + reguler harus ditolak, dapat %v", err)
@@ -271,14 +271,13 @@ func TestSertifikatTidakBolehDicampurReguler(t *testing.T) {
 
 	// Sertifikat sendirian tetap boleh dan mendapat baris biaya packaging.
 	if _, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{
-		Lines: []LineInput{{ProductID: "p3", Qty: 10}},
+		Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p3", Qty: 10}},
 	}); err != nil {
 		t.Fatalf("sertifikat sendirian harus diterima, dapat %v", err)
 	}
 }
 
-// TestValidasiIsiDraft memeriksa batas qty, catatan, jumlah baris, dan produk
-// ganda yang semuanya ditolak sebelum menyentuh database.
+// TestValidasiIsiDraft memeriksa batas qty, catatan, nama instansi, dan jumlah baris.
 func TestValidasiIsiDraft(t *testing.T) {
 	svc, repo := newUjiService()
 	ctx := context.Background()
@@ -290,11 +289,12 @@ func TestValidasiIsiDraft(t *testing.T) {
 		mau  error
 	}{
 		{"tanpa baris", DraftInput{}, ErrEmptyLines},
-		{"qty nol", DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 0}}}, ErrInvalidData},
-		{"qty negatif", DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: -2}}}, ErrInvalidData},
-		{"produk ganda", DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 1}, {ProductID: "p1", Qty: 2}}}, ErrInvalidData},
-		{"produk kosong", DraftInput{Lines: []LineInput{{ProductID: "  ", Qty: 1}}}, ErrInvalidData},
-		{"catatan terlalu panjang", DraftInput{Catatan: strings.Repeat("a", 501), Lines: []LineInput{{ProductID: "p1", Qty: 1}}}, ErrInvalidData},
+		{"qty nol", DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 0}}}, ErrInvalidData},
+		{"qty negatif", DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: -2}}}, ErrInvalidData},
+		{"instansi kosong", DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 1}}}, ErrInvalidData},
+		{"instansi terlalu panjang", DraftInput{Lines: []LineInput{{NamaInstansi: strings.Repeat("a", MaxNamaInstansi+1), ProductID: "p1", Qty: 1}}}, ErrInvalidData},
+		{"produk kosong", DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "  ", Qty: 1}}}, ErrInvalidData},
+		{"catatan terlalu panjang", DraftInput{Catatan: strings.Repeat("a", 501), Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}}}, ErrInvalidData},
 		{"terlalu banyak baris", DraftInput{Lines: banyakBaris(MaxLines + 1)}, ErrInvalidData},
 	}
 	for _, k := range kasus {
@@ -307,11 +307,27 @@ func TestValidasiIsiDraft(t *testing.T) {
 	}
 }
 
+func TestProdukSamaBolehUntukInstansiBerbeda(t *testing.T) {
+	svc, _ := newUjiService()
+	got, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{
+		Lines: []LineInput{
+			{ProductID: "p1", Qty: 40, NamaInstansi: "TK A"},
+			{ProductID: "p1", Qty: 5, NamaInstansi: "SD B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buat draft: %v", err)
+	}
+	if len(got.Lines) != 2 || got.Lines[0].NamaInstansi != "TK A" || got.Lines[1].NamaInstansi != "SD B" || got.JumlahItem != 45 {
+		t.Fatalf("baris instansi harus tetap terpisah: %+v", got)
+	}
+}
+
 // banyakBaris menyusun n baris produk unik (dipakai menguji batas MaxLines).
 func banyakBaris(n int) []LineInput {
 	out := make([]LineInput, 0, n)
 	for i := 0; i < n; i++ {
-		out = append(out, LineInput{ProductID: "p1", Qty: 1})
+		out = append(out, LineInput{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1})
 	}
 	return out
 }
@@ -325,7 +341,7 @@ func TestUbahDraftMenggantiBarisDanMenghitungUlangTotal(t *testing.T) {
 
 	draft, err := svc.CreateDraft(ctx, aktor, DraftInput{
 		Catatan: "awal",
-		Lines:   []LineInput{{ProductID: "p1", Qty: 1}},
+		Lines:   []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}},
 	})
 	if err != nil {
 		t.Fatalf("buat draft: %v", err)
@@ -333,7 +349,7 @@ func TestUbahDraftMenggantiBarisDanMenghitungUlangTotal(t *testing.T) {
 
 	ubah, err := svc.UpdateDraft(ctx, aktor, draft.ID, DraftInput{
 		Catatan: "akhir",
-		Lines:   []LineInput{{ProductID: "p1", Qty: 4}},
+		Lines:   []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 4}},
 	})
 	if err != nil {
 		t.Fatalf("ubah draft: %v", err)
@@ -355,7 +371,7 @@ func TestHapusDraftMilikSendiri(t *testing.T) {
 	ctx := context.Background()
 	aktor := aktorCabang("br-a")
 
-	draft, err := svc.CreateDraft(ctx, aktor, DraftInput{Lines: []LineInput{{ProductID: "p1", Qty: 1}}})
+	draft, err := svc.CreateDraft(ctx, aktor, DraftInput{Lines: []LineInput{{NamaInstansi: "Instansi Uji", ProductID: "p1", Qty: 1}}})
 	if err != nil {
 		t.Fatalf("buat draft: %v", err)
 	}

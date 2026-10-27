@@ -97,6 +97,7 @@ func (l *laporanPG) serialBaru() string {
 type barisLaporan struct {
 	Jenis     string // product | packaging
 	Nama      string
+	Instansi  string
 	Qty       int
 	Harga     int64
 	ProductID string // kosong untuk packaging
@@ -138,9 +139,9 @@ func (l *laporanPG) seedPesanan(t *testing.T, o pesananLaporan) string {
 			serial = b.Serial
 		}
 		if _, err := l.pool.Exec(ctx,
-			`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan, serial_number)
-			 VALUES ($1,$2,$3::line_kind,$4,$5,$6,$7,$8)`,
-			id, i+1, b.Jenis, produk, b.Nama, b.Qty, b.Harga, serial); err != nil {
+			`INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, qty, harga_satuan, serial_number)
+			 VALUES ($1,$2,$3::line_kind,$4,$5,$6,$7,$8,$9)`,
+			id, i+1, b.Jenis, produk, b.Nama, b.Instansi, b.Qty, b.Harga, serial); err != nil {
 			t.Fatalf("seed baris %d pesanan %s: %v", i+1, o.Nomor, err)
 		}
 	}
@@ -251,8 +252,8 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	l.seedPesanan(t, pesananLaporan{
 		BranchID: l.branchA, Nomor: "2026-10-01", Tanggal: "2026-10-01", Status: "submitted", IsCNC: true,
 		Baris: []barisLaporan{
-			{Jenis: "product", Nama: "Bio Magnetik", Qty: 2, Harga: 100000, ProductID: produkID, Serial: l.serialBaru()},
-			{Jenis: "product", Nama: "Bio Magnetik", Qty: 1, Harga: 100000, ProductID: produkID, Serial: l.serialBaru()},
+			{Jenis: "product", Nama: "Bio Magnetik", Instansi: "TK A", Qty: 2, Harga: 100000, ProductID: produkID, Serial: l.serialBaru()},
+			{Jenis: "product", Nama: "Bio Magnetik", Instansi: "SD B", Qty: 1, Harga: 100000, ProductID: produkID, Serial: l.serialBaru()},
 		},
 	})
 	// Pesanan done cabang B (1 baris produk) — verifikasi manual tercatat.
@@ -301,6 +302,9 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	}
 	if len(baris) != 5 {
 		t.Fatalf("kunci baris tidak unik: %v", baris)
+	}
+	if baris["2026-10-01#1"]["nama_instansi"] != "TK A" || baris["2026-10-01#2"]["nama_instansi"] != "SD B" {
+		t.Errorf("dua baris produk yang sama harus mempertahankan instansi masing-masing: %v", baris)
 	}
 	// Kolom PRD §4.7 lengkap, termasuk serial, versi, dan verifikasi.
 	satu := baris["2026-10-01#1"]
@@ -484,19 +488,19 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	// (satu baris per order line, AP-REP-01).
 	jenisTampil := map[string]int{}
 	for _, b := range barisEkspor[1:] {
-		if b[13] != "done" {
+		if b[14] != "done" {
 			t.Errorf("baris ekspor harus berstatus done (sesuai filter): %v", b)
 		}
 		if b[3] != "Grahita Cabang B" {
 			t.Errorf("baris ekspor harus milik cabang B (sesuai filter): %v", b)
 		}
-		jenisTampil[b[8]]++
+		jenisTampil[b[9]]++
 	}
 	if jenisTampil["product"] != 2 || jenisTampil["packaging"] != 1 {
 		t.Errorf("ekspor cabang B harus memuat 2 baris produk + 1 packaging, dapat %v", jenisTampil)
 	}
-	// Format Rupiah pada kolom harga satuan (L).
-	idGaya, err := f.GetCellStyle(report.SheetLaporan, "L2")
+	// Format Rupiah pada kolom harga satuan (M).
+	idGaya, err := f.GetCellStyle(report.SheetLaporan, "M2")
 	if err != nil {
 		t.Fatalf("gaya sel harga: %v", err)
 	}

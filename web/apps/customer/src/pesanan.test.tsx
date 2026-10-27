@@ -58,6 +58,7 @@ const draftLengkap = {
       jenis: "product",
       product_id: "p1",
       nama: "Bio Magnetik",
+      nama_instansi: "TK A",
       qty: 3,
       harga_satuan: 100000,
       subtotal: 300000,
@@ -83,6 +84,7 @@ const terkirim = {
       jenis: "product",
       product_id: "p1",
       nama: "Bio Magnetik",
+      nama_instansi: "TK A",
       qty: 5,
       harga_satuan: 100000,
       subtotal: 500000,
@@ -381,6 +383,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
 
     const pilih = await screen.findByLabelText("Produk baris 1");
     fireEvent.change(pilih, { target: { value: "p1" } });
+    fireEvent.change(screen.getByLabelText("Nama instansi baris 1"), { target: { value: "TK A" } });
 
     // Harga satuan datang dari katalog cabang, bukan diisi pengguna.
     const subtotalAwal = await screen.findByTestId("total-draft");
@@ -398,10 +401,10 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
     await waitFor(() => {
       const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders"));
       expect(kirim).toBeDefined();
-      // HANYA product_id dan qty yang dikirim: harga/total dihitung server.
+      // Harga/total dihitung server; nama instansi melekat pada baris.
       expect(JSON.parse(String(kirim?.init?.body))).toEqual({
         catatan: "dikirim pagi",
-        lines: [{ product_id: "p1", qty: 2 }],
+        lines: [{ product_id: "p1", qty: 2, nama_instansi: "TK A" }],
       });
     });
   });
@@ -418,7 +421,28 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
     expect(panggilan.some((p) => p.init?.method === "POST")).toBe(false);
   });
 
-  it("menandai Sertifikat dipesan terpisah dan mengunci tambah baris", async () => {
+  it("menjaga dua instansi pada dua baris produk yang sama", async () => {
+    const panggilan = fetchPesanan();
+    render(<RouterProvider router={buatRouter("/pesanan/baru")} />);
+    fireEvent.change(await screen.findByLabelText("Produk baris 1"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByLabelText("Nama instansi baris 1"), { target: { value: "TK A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Tambah baris" }));
+    const produkKedua = screen.getByLabelText("Produk baris 2") as HTMLSelectElement;
+    expect((within(produkKedua).getByRole("option", { name: "Bio Magnetik" }) as HTMLOptionElement).disabled).toBe(false);
+    fireEvent.change(produkKedua, { target: { value: "p1" } });
+    fireEvent.change(screen.getByLabelText("Nama instansi baris 2"), { target: { value: "SD B" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan draft" }));
+    await waitFor(() => {
+      const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders"));
+      expect(kirim).toBeDefined();
+      expect(JSON.parse(String(kirim?.init?.body)).lines).toEqual([
+        { product_id: "p1", qty: 1, nama_instansi: "TK A" },
+        { product_id: "p1", qty: 1, nama_instansi: "SD B" },
+      ]);
+    });
+  });
+
+  it("menandai Sertifikat terpisah dan tetap mengizinkan beberapa instansi", async () => {
     fetchPesanan();
 
     render(<RouterProvider router={buatRouter("/pesanan/baru")} />);
@@ -426,12 +450,12 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
     fireEvent.change(pilih, { target: { value: "p7" } });
 
     expect(await screen.findByText(/Sertifikat dipesan terpisah/)).toBeDefined();
-    expect((screen.getByRole("button", { name: "Tambah produk" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect((screen.getByRole("button", { name: "Tambah baris" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Tambah baris" }));
+    expect(screen.getByLabelText("Nama instansi baris 2")).toBeDefined();
   });
 
-  it("memuat draft yang diubah dan mengirim ulang hanya product_id + qty", async () => {
+  it("memuat draft yang diubah dan mempertahankan nama instansi", async () => {
     const panggilan = fetchPesanan();
 
     render(<RouterProvider router={buatRouter("/pesanan/o1/ubah")} />);
@@ -450,7 +474,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
       expect(kirim?.url.endsWith("/orders/o1")).toBe(true);
       expect(JSON.parse(String(kirim?.init?.body))).toEqual({
         catatan: "dikirim pagi",
-        lines: [{ product_id: "p1", qty: 4 }],
+        lines: [{ product_id: "p1", qty: 4, nama_instansi: "TK A" }],
       });
     });
   });

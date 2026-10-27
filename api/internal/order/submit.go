@@ -156,9 +156,10 @@ type SubmitRequest struct {
 // SubmitLine adalah satu baris draft beserta keadaan master dan harga cabang
 // pada saat submit dibaca. Repository menyusunnya di dalam transaksi.
 type SubmitLine struct {
-	LineNo int
-	Jenis  string
-	Qty    int
+	LineNo       int
+	Jenis        string
+	Qty          int
+	NamaInstansi string
 
 	// NamaLama adalah snapshot yang tersimpan di draft; dipakai sebagai
 	// cadangan bila teks master kosong.
@@ -229,6 +230,9 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 			})
 		case JenisProduct:
 			produk++
+			if strings.TrimSpace(l.NamaInstansi) == "" || len([]rune(l.NamaInstansi)) > MaxNamaInstansi {
+				return nil, fmt.Errorf("%w: nama instansi baris %d wajib diisi, maksimal %d karakter", ErrInvalidData, i+1, MaxNamaInstansi)
+			}
 			if l.Qty < 1 {
 				return nil, fmt.Errorf("%w: qty baris %d minimal 1", ErrInvalidData, i+1)
 			}

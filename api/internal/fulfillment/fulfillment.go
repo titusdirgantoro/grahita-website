@@ -47,6 +47,7 @@ type Documents interface {
 	//
 	// versi <= 0 berarti "versi berjalan" (perilaku lama).
 	EnsureInvoiceVersi(ctx context.Context, orderID string, versi int) (document.Document, error)
+	EnsureSemuaVersi(ctx context.Context, orderID string, versi int) ([]document.Document, error)
 }
 
 // Emailer adalah pengantre email dokumen (notification.Service).
@@ -72,8 +73,8 @@ var jenisEmailSaatDone = []string{
 
 // jenisEmailSaatRevisi adalah email yang diantre setelah invoice versi baru
 // tersedia (SystemDesign.md §4.5, PRD AP-REV-04): HANYA invoice ke cabang dan
-// invoice ke admin ber-flag. Surat Jalan TIDAK dikirim ulang — revisi hanya
-// menyentuh invoice (§6.2).
+// invoice ke admin ber-flag. Surat Jalan versi baru dibuat tetapi tidak
+// dikirim ulang lewat email.
 var jenisEmailSaatRevisi = []string{
 	notification.JenisInvoiceCabang,
 	notification.JenisInvoiceAdmin,
@@ -150,9 +151,8 @@ func (s *Service) PesananSelesai(ctx context.Context, orderID string) (Hasil, er
 //
 // Berbeda dari PesananSelesai, jalur ini:
 //
-//   - hanya memastikan dokumen INVOICE versi yang dipatok ada; Surat Jalan
-//     tidak disentuh dan tidak dikirim ulang — revisi hanya menyentuh invoice
-//     (§6.2);
+//   - memastikan invoice dan Surat Jalan versi revisi tersedia agar rincian
+//     instansi pada ketiganya tetap sama; email Surat Jalan tidak dikirim ulang;
 //   - mengantre HANYA email invoice (cabang + admin ber-flag) dan dijaga per
 //     (pesanan, jenis, VERSI), sehingga revisi berikutnya tetap mendapat email
 //     baru sementara pekerjaan yang dijalankan ulang tidak menggandakannya.
@@ -169,14 +169,21 @@ func (s *Service) PesananDirevisi(ctx context.Context, orderID string, versi int
 		return hasil, fmt.Errorf("layanan dokumen/email belum terpasang")
 	}
 
-	doc, err := s.docs.EnsureInvoiceVersi(ctx, id, versi)
+	docs, err := s.docs.EnsureSemuaVersi(ctx, id, versi)
 	if err != nil {
-		return hasil, fmt.Errorf("render invoice pesanan %s: %w", id, err)
+		return hasil, fmt.Errorf("render dokumen revisi pesanan %s: %w", id, err)
+	}
+	var doc document.Document
+	for _, d := range docs {
+		if d.Jenis == document.JenisInvoicePDF {
+			doc = d
+			break
+		}
 	}
 	if strings.TrimSpace(doc.ID) == "" {
 		return hasil, fmt.Errorf("invoice pesanan %s belum tersedia", id)
 	}
-	hasil.Dokumen = 1
+	hasil.Dokumen = len(docs)
 	v := versi
 	if v <= 0 {
 		// Job lama tanpa kolom versi: pakai versi invoice yang baru dipastikan.

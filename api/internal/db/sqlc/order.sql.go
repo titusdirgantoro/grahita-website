@@ -201,8 +201,8 @@ func (q *Queries) InsertOrderLinePackaging(ctx context.Context, arg InsertOrderL
 }
 
 const insertOrderLineProduct = `-- name: InsertOrderLineProduct :exec
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
-VALUES ($1, $2, 'product', $3, $4, $5, $6)
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, qty, harga_satuan)
+VALUES ($1, $2, 'product', $3, $4, $5, $6, $7)
 `
 
 type InsertOrderLineProductParams struct {
@@ -210,6 +210,7 @@ type InsertOrderLineProductParams struct {
 	LineNo       int32       `json:"line_no"`
 	ProductID    pgtype.UUID `json:"product_id"`
 	NamaSnapshot string      `json:"nama_snapshot"`
+	NamaInstansi string      `json:"nama_instansi"`
 	Qty          int32       `json:"qty"`
 	HargaSatuan  int64       `json:"harga_satuan"`
 }
@@ -222,6 +223,7 @@ func (q *Queries) InsertOrderLineProduct(ctx context.Context, arg InsertOrderLin
 		arg.LineNo,
 		arg.ProductID,
 		arg.NamaSnapshot,
+		arg.NamaInstansi,
 		arg.Qty,
 		arg.HargaSatuan,
 	)
@@ -229,7 +231,7 @@ func (q *Queries) InsertOrderLineProduct(ctx context.Context, arg InsertOrderLin
 }
 
 const listOrderLines = `-- name: ListOrderLines :many
-SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot,
+SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instansi,
        qty, harga_satuan, subtotal, serial_number
   FROM order_lines
  WHERE order_id = $1
@@ -242,6 +244,7 @@ type ListOrderLinesRow struct {
 	Jenis        string      `json:"jenis"`
 	ProductID    pgtype.UUID `json:"product_id"`
 	NamaSnapshot string      `json:"nama_snapshot"`
+	NamaInstansi string      `json:"nama_instansi"`
 	Qty          int32       `json:"qty"`
 	HargaSatuan  int64       `json:"harga_satuan"`
 	Subtotal     pgtype.Int8 `json:"subtotal"`
@@ -263,6 +266,7 @@ func (q *Queries) ListOrderLines(ctx context.Context, orderID string) ([]ListOrd
 			&i.Jenis,
 			&i.ProductID,
 			&i.NamaSnapshot,
+			&i.NamaInstansi,
 			&i.Qty,
 			&i.HargaSatuan,
 			&i.Subtotal,
@@ -282,6 +286,7 @@ const listOrderLinesForSubmit = `-- name: ListOrderLinesForSubmit :many
 SELECT l.line_no,
        l.jenis::text          AS jenis,
        l.nama_snapshot,
+       l.nama_instansi,
 
        l.qty,
        (p.id IS NOT NULL)::bool     AS produk_ada,
@@ -309,6 +314,7 @@ type ListOrderLinesForSubmitRow struct {
 	LineNo         int32  `json:"line_no"`
 	Jenis          string `json:"jenis"`
 	NamaSnapshot   string `json:"nama_snapshot"`
+	NamaInstansi   string `json:"nama_instansi"`
 	Qty            int32  `json:"qty"`
 	ProdukAda      bool   `json:"produk_ada"`
 	ProdukAktif    bool   `json:"produk_aktif"`
@@ -336,6 +342,7 @@ func (q *Queries) ListOrderLinesForSubmit(ctx context.Context, arg ListOrderLine
 			&i.LineNo,
 			&i.Jenis,
 			&i.NamaSnapshot,
+			&i.NamaInstansi,
 			&i.Qty,
 			&i.ProdukAda,
 			&i.ProdukAktif,

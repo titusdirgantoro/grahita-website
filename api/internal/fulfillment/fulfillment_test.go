@@ -35,6 +35,18 @@ func (d *docsPalsu) EnsureInvoiceVersi(_ context.Context, _ string, versi int) (
 	return d.invoice, d.invoiceErr
 }
 
+func (d *docsPalsu) EnsureSemuaVersi(_ context.Context, _ string, versi int) ([]document.Document, error) {
+	d.dipanggilInvoice++
+	d.versiInvoice = versi
+	if d.invoiceErr != nil {
+		return nil, d.invoiceErr
+	}
+	if len(d.docs) > 0 {
+		return d.docs, nil
+	}
+	return []document.Document{d.invoice}, nil
+}
+
 type mailPalsu struct {
 	jenis         []string
 	jenisVersi    []string
@@ -208,12 +220,13 @@ func TestPesananSelesaiMenolakMasukanTidakLengkap(t *testing.T) {
 
 // ---------- revisi invoice (F2-25) ----------
 
-// TestPesananDirevisiHanyaInvoiceTanpaSuratJalan membuktikan jalur revisi
-// merender/memastikan HANYA invoice VERSI YANG DIPATOK, lalu mengantre HANYA
-// email invoice (cabang + admin ber-flag) — Surat Jalan tidak disentuh/dikirim
-// ulang.
-func TestPesananDirevisiHanyaInvoiceTanpaSuratJalan(t *testing.T) {
-	docs := &docsPalsu{invoice: document.Document{ID: "doc-v1", Jenis: document.JenisInvoicePDF, Versi: 1}}
+// Revisi membuat tiga dokumen versi baru tetapi hanya mengirim email invoice.
+func TestPesananDirevisiMembuatSuratJalanVersiBaru(t *testing.T) {
+	docs := &docsPalsu{docs: []document.Document{
+		{ID: "doc-v1", Jenis: document.JenisInvoicePDF, Versi: 1},
+		{ID: "sj-xlsx-v1", Jenis: document.JenisSuratJalanXLSX, Versi: 1},
+		{ID: "sj-pdf-v1", Jenis: document.JenisSuratJalanPDF, Versi: 1},
+	}}
 	mail := newMailPalsu()
 	hasil, err := NewService(docs, mail).PesananDirevisi(context.Background(), "order-1", 1)
 	if err != nil {
@@ -228,11 +241,8 @@ func TestPesananDirevisiHanyaInvoiceTanpaSuratJalan(t *testing.T) {
 	if mail.versiTerakhir != 1 {
 		t.Errorf("email invoice harus memakai versi yang dipatok (1), dapat %d", mail.versiTerakhir)
 	}
-	if docs.dipanggil != 0 {
-		t.Errorf("jalur revisi tidak boleh merender ketiga dokumen Done, dapat %d", docs.dipanggil)
-	}
-	if hasil.Dokumen != 1 {
-		t.Errorf("satu dokumen (invoice) harus terlihat, dapat %d", hasil.Dokumen)
+	if hasil.Dokumen != 3 {
+		t.Errorf("ketiga dokumen revisi harus tersedia, dapat %d", hasil.Dokumen)
 	}
 	mau := []string{notification.JenisInvoiceCabang, notification.JenisInvoiceAdmin}
 	if len(hasil.EmailDibuat) != len(mau) {

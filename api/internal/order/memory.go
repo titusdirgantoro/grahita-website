@@ -299,10 +299,11 @@ func (m *Memory) Submit(_ context.Context, req SubmitRequest) (Order, error) {
 	lines := make([]SubmitLine, 0, len(o.Lines))
 	for _, l := range o.Lines {
 		sl := SubmitLine{
-			LineNo:   l.LineNo,
-			Jenis:    l.Jenis,
-			Qty:      l.Qty,
-			NamaLama: l.Nama,
+			LineNo:       l.LineNo,
+			Jenis:        l.Jenis,
+			Qty:          l.Qty,
+			NamaLama:     l.Nama,
+			NamaInstansi: l.NamaInstansi,
 		}
 		if l.Jenis == JenisProduct {
 			if p, ok := dijual[l.ProductID]; ok {

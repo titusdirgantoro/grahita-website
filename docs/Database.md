@@ -244,6 +244,7 @@ CREATE TABLE order_lines (
     jenis           line_kind NOT NULL DEFAULT 'product',
     product_id      uuid REFERENCES products(id) ON DELETE RESTRICT,
     nama_snapshot   text   NOT NULL,                  -- nama produk saat dipesan
+    nama_instansi   text   NOT NULL DEFAULT '',       -- per baris; kosong hanya data lama/packaging
     qty             int    NOT NULL CHECK (qty > 0),
     harga_satuan    bigint NOT NULL CHECK (harga_satuan >= 0),
     subtotal        bigint GENERATED ALWAYS AS (qty * harga_satuan) STORED,
@@ -504,7 +505,7 @@ WHERE ($1::uuid IS NULL OR branch_id = $1);
 ```sql
 SELECT o.tanggal, o.nomor, o.versi, b.nama AS cabang, b.nama_kepala,
        o.is_cnc, b.pajak_in,
-       l.nama_snapshot AS produk, l.jenis, l.serial_number,
+       l.nama_snapshot AS produk, l.nama_instansi, l.jenis, l.serial_number,
        l.qty, l.harga_satuan, l.subtotal,
        o.status, o.done_at,
        (SELECT metode FROM verification_logs v

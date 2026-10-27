@@ -182,8 +182,8 @@ func (q *Queries) InsertInvoiceRevision(ctx context.Context, arg InsertInvoiceRe
 
 const insertOrderLineProductWithSerial = `-- name: InsertOrderLineProductWithSerial :exec
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
-                         qty, harga_satuan, serial_number)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7)
+                         nama_instansi, qty, harga_satuan, serial_number)
+VALUES ($1, $2, 'product', $3, $4, $5, $6, $7, $8)
 `
 
 type InsertOrderLineProductWithSerialParams struct {
@@ -191,6 +191,7 @@ type InsertOrderLineProductWithSerialParams struct {
 	LineNo       int32       `json:"line_no"`
 	ProductID    pgtype.UUID `json:"product_id"`
 	NamaSnapshot string      `json:"nama_snapshot"`
+	NamaInstansi string      `json:"nama_instansi"`
 	Qty          int32       `json:"qty"`
 	HargaSatuan  int64       `json:"harga_satuan"`
 	SerialNumber pgtype.Text `json:"serial_number"`
@@ -205,6 +206,7 @@ func (q *Queries) InsertOrderLineProductWithSerial(ctx context.Context, arg Inse
 		arg.LineNo,
 		arg.ProductID,
 		arg.NamaSnapshot,
+		arg.NamaInstansi,
 		arg.Qty,
 		arg.HargaSatuan,
 		arg.SerialNumber,
@@ -271,6 +273,7 @@ SELECT l.line_no,
        l.jenis::text                    AS jenis,
        COALESCE(l.product_id::text, '')::text AS product_id,
        l.nama_snapshot,
+       l.nama_instansi,
        l.qty,
        l.harga_satuan,
        COALESCE(l.serial_number, '')::text AS serial_number,
@@ -288,6 +291,7 @@ type ListOrderLinesForReviseRow struct {
 	Jenis        string `json:"jenis"`
 	ProductID    string `json:"product_id"`
 	NamaSnapshot string `json:"nama_snapshot"`
+	NamaInstansi string `json:"nama_instansi"`
 	Qty          int32  `json:"qty"`
 	HargaSatuan  int64  `json:"harga_satuan"`
 	SerialNumber string `json:"serial_number"`
@@ -314,6 +318,7 @@ func (q *Queries) ListOrderLinesForRevise(ctx context.Context, orderID string) (
 			&i.Jenis,
 			&i.ProductID,
 			&i.NamaSnapshot,
+			&i.NamaInstansi,
 			&i.Qty,
 			&i.HargaSatuan,
 			&i.SerialNumber,

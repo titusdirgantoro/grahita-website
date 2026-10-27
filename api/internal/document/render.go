@@ -70,6 +70,7 @@ func penandaPembayaran(o Order) string {
 type lineView struct {
 	No       string
 	Nama     string
+	Instansi string
 	Qty      string
 	Harga    string
 	Subtotal string
@@ -127,6 +128,7 @@ func viewLines(o Order) []lineView {
 		out = append(out, lineView{
 			No:       fmt.Sprintf("%d", l.LineNo),
 			Nama:     l.Nama,
+			Instansi: l.NamaInstansi,
 			Qty:      fmt.Sprintf("%d", l.Qty),
 			Harga:    FormatAngka(l.HargaSatuan),
 			Subtotal: FormatAngka(l.Subtotal),
@@ -257,7 +259,7 @@ const templateInvoice = `<!DOCTYPE html>
   .info td { padding: 2px 0; vertical-align: top; }
   .info td.label { color: #52606d; padding-right: 8px; white-space: nowrap; }
   table.baris { width: 100%; border-collapse: collapse; margin-top: 4px; }
-  table.baris th, table.baris td { border: 1px solid #cbd2d9; padding: 5px 6px; text-align: left; }
+  table.baris th, table.baris td { border: 1px solid #cbd2d9; padding: 5px 6px; text-align: left; overflow-wrap: anywhere; }
   table.baris th { background: #f0f4f8; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
   table.baris td.num, table.baris th.num { text-align: right; }
   table.baris tr { page-break-inside: avoid; }
@@ -305,6 +307,7 @@ const templateInvoice = `<!DOCTYPE html>
       <tr>
         <th>No</th>
         <th>Nama</th>
+        <th>Nama Instansi</th>
         <th class="num">Qty</th>
         <th class="num">Harga</th>
         <th class="num">Subtotal</th>
@@ -316,6 +319,7 @@ const templateInvoice = `<!DOCTYPE html>
       <tr>
         <td>{{.No}}</td>
         <td>{{.Nama}}</td>
+        <td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td>
         <td class="num">{{.Qty}}</td>
         <td class="num">{{.Harga}}</td>
         <td class="num">{{.Subtotal}}</td>
@@ -325,7 +329,7 @@ const templateInvoice = `<!DOCTYPE html>
     </tbody>
     <tfoot>
       <tr class="total">
-        <td colspan="4">TOTAL</td>
+        <td colspan="5">TOTAL</td>
         <td class="num">{{.Total}}</td>
         <td></td>
       </tr>
@@ -375,7 +379,7 @@ const templateSuratJalan = `<!DOCTYPE html>
   .info td { padding: 2px 0; vertical-align: top; }
   .info td.label { color: #52606d; padding-right: 8px; white-space: nowrap; }
   table.baris { width: 100%; border-collapse: collapse; margin-top: 4px; }
-  table.baris th, table.baris td { border: 1px solid #cbd2d9; padding: 6px; text-align: left; }
+  table.baris th, table.baris td { border: 1px solid #cbd2d9; padding: 6px; text-align: left; overflow-wrap: anywhere; }
   table.baris th { background: #f0f4f8; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
   table.baris td.num, table.baris th.num { text-align: right; }
   table.baris tr { page-break-inside: avoid; }
@@ -418,6 +422,7 @@ const templateSuratJalan = `<!DOCTYPE html>
       <tr>
         <th>No</th>
         <th>Nama barang</th>
+        <th>Nama Instansi</th>
         <th class="num">Qty</th>
         <th>Serial number</th>
       </tr>
@@ -427,6 +432,7 @@ const templateSuratJalan = `<!DOCTYPE html>
       <tr>
         <td>{{.No}}</td>
         <td>{{.Nama}}</td>
+        <td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td>
         <td class="num">{{.Qty}}</td>
         <td>{{.Serial}}</td>
       </tr>
@@ -434,7 +440,7 @@ const templateSuratJalan = `<!DOCTYPE html>
     </tbody>
     <tfoot>
       <tr class="total">
-        <td colspan="2">TOTAL</td>
+        <td colspan="3">TOTAL</td>
         <td class="num">{{.TotalQty}}</td>
         <td></td>
       </tr>

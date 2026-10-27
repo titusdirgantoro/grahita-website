@@ -2459,9 +2459,10 @@ paths:
         `total` dihitung ulang server dari barisnya, snapshot versi lama
         tersimpan di `invoice_revisions` beserta `delta_total`, timeline +
         audit mencatat aktor/alasan/delta, dan pekerjaan render Invoice PDF
-        versi **baru** + email invoice ke cabang dan admin ber-flag Invoice
-        dititipkan pada transaksi yang sama. **Surat Jalan tidak dikirim
-        ulang** — revisi hanya menyentuh invoice. Berkas versi lama tidak
+        serta Surat Jalan PDF/XLSX versi **baru** + email invoice ke cabang dan
+        admin ber-flag Invoice dititipkan pada transaksi yang sama. Surat Jalan
+        versi baru tersedia untuk diunduh tetapi tidak dikirim ulang lewat
+        email. Berkas versi lama tidak
         pernah ditimpa (kunci storage per (pesanan, jenis, versi)).
 
         Dua revisi bersamaan berbaris rapi karena baris pesanan dikunci; total
@@ -4636,7 +4637,7 @@ components:
         mime_type: { type: string }
     OrderLine:
       type: object
-      required: [line_no, jenis, nama, qty, harga_satuan, subtotal]
+      required: [line_no, jenis, nama, nama_instansi, qty, harga_satuan, subtotal]
       properties:
         line_no: { type: integer }
         jenis:
@@ -4654,6 +4655,9 @@ components:
         nama:
           type: string
           description: Snapshot nama produk saat dipesan (BR-05).
+        nama_instansi:
+          type: string
+          description: Nama instansi per baris; kosong untuk packaging dan pesanan lama.
         qty: { type: integer, minimum: 1 }
         harga_satuan:
           type: integer
@@ -4705,10 +4709,10 @@ components:
     OrderDraftLineInput:
       type: object
       description: |
-        Satu baris editor pesanan. Hanya product_id dan qty yang diterima:
+        Satu baris editor pesanan. Product_id, qty, dan nama_instansi diterima:
         harga satuan, subtotal, dan total dihitung server, dan field lain
         (mis. "harga" atau "total") ditolak `400` oleh dekoder JSON.
-      required: [product_id, qty]
+      required: [product_id, qty, nama_instansi]
       additionalProperties: false
       properties:
         product_id:
@@ -4716,6 +4720,7 @@ components:
           format: uuid
           description: Harus produk yang punya baris harga untuk cabang sesi.
         qty: { type: integer, minimum: 1 }
+        nama_instansi: { type: string, minLength: 1, maxLength: 160, description: Nama instansi untuk baris produk. }
 
     OrderDraftInput:
       type: object
@@ -5182,6 +5187,11 @@ components:
           type: string
           format: uuid
           description: Wajib untuk baris baru; diabaikan untuk baris lama.
+        nama_instansi:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Wajib untuk baris baru; pada baris lama, bila tidak dikirim nama sebelumnya dipertahankan.
         qty: { type: integer, minimum: 1 }
         harga_satuan:
           type: integer
@@ -5901,7 +5911,7 @@ components:
             penanda/filter — tidak pernah mengubah harga, subtotal, atau pajak.
     ReportOrderLine:
       type: object
-      required: [tanggal, nomor, versi, branch_id, cabang, kepala_cabang, is_cnc, pajak_in, line_no, produk, jenis, qty, harga_satuan, subtotal, status]
+      required: [tanggal, nomor, versi, branch_id, cabang, kepala_cabang, is_cnc, pajak_in, line_no, produk, nama_instansi, jenis, qty, harga_satuan, subtotal, status]
       description: Satu baris laporan = SATU order line (PRD §4.7 AP-REP-01).
       properties:
         tanggal: { type: string, format: date }
@@ -5914,6 +5924,7 @@ components:
         pajak_in: { type: boolean, description: Atribut cabang "PI"; tidak mengubah harga atau pajak. }
         line_no: { type: integer }
         produk: { type: string, description: Nama produk saat transaksi (snapshot). }
+        nama_instansi: { type: string, description: Nama instansi pada baris pesanan; kosong untuk packaging dan pesanan lama. }
         jenis: { type: string, enum: [product, packaging] }
         serial_number: { type: string, description: Kosong untuk baris packaging. }
         qty: { type: integer }
