@@ -304,6 +304,21 @@ func TestSeedTutorialPRD(t *testing.T) {
 			t.Errorf("topik[%d] hanya %d langkah, ingin minimal %d", i, d.langkah, w.langkahMin)
 		}
 	}
+	var memesan, bukti string
+	if err := pool.QueryRow(ctx, `SELECT langkah::text FROM tutorial_topics WHERE ikon = 'memesan'`).Scan(&memesan); err != nil {
+		t.Fatalf("baca langkah memesan: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT langkah::text FROM tutorial_topics WHERE ikon = 'bukti'`).Scan(&bukti); err != nil {
+		t.Fatalf("baca langkah bukti: %v", err)
+	}
+	if !strings.Contains(memesan, "Tempo tidak perlu bukti di muka") ||
+		strings.Contains(memesan, "lalu transfer sesuai rekening") {
+		t.Error("panduan cara memesan belum sesuai tiga cara pembayaran")
+	}
+	if !strings.Contains(bukti, "Tempo tidak memerlukan bukti di muka") ||
+		strings.Contains(bukti, "Non-Cash & Carry wajib") {
+		t.Error("panduan bukti transfer masih mewajibkan bukti untuk Tempo")
+	}
 
 	// Idempoten: menjalankan migrasi ulang tidak menambah topik.
 	if err := database.Up(ctx, os.Getenv("TEST_DATABASE_URL")); err != nil {

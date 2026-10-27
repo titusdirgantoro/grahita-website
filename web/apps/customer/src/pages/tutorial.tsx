@@ -46,9 +46,9 @@ const TOPIK_MEMESAN: TopikApi = {
     "Buka menu Pesanan lalu pilih “Buat pesanan”.",
     "Pilih produk dan isi qty; harga satuan terisi otomatis dari harga khusus cabang Anda.",
     "Pilih “Simpan draft” bila belum siap dikirim — draft bisa diubah atau dihapus.",
-    "Pilih “Kirim pesanan”, lalu transfer sesuai rekening yang tampil.",
-    "Unggah bukti transfer (JPG/PNG/PDF) dan tekan “Kirim pesanan”.",
-    "Nomor pesanan muncul dan statusnya menjadi “Menunggu verifikasi”.",
+    "Pilih cara pembayaran yang tersedia untuk cabang Anda: Transfer di muka, Deposit (Cash & Carry), atau Tempo.",
+    "Untuk Transfer, unggah bukti pembayaran. Untuk Deposit, gunakan saldo dan unggah bukti bila saldo kurang. Tempo tidak perlu bukti di muka.",
+    "Tekan “Kirim pesanan”. Invoice tersedia setelah pesanan disetujui dan dokumen terbit.",
   ],
 };
 
@@ -60,8 +60,8 @@ const TOPIK_BUKTI: TopikApi = {
   langkah: [
     "Gunakan foto atau tangkapan layar yang jelas: JPG, PNG, atau PDF.",
     "Satu berkas maksimal 5 MB, dan bisa lebih dari satu berkas untuk pembayaran terpisah.",
-    "Non-Cash & Carry wajib menyertakan minimal satu bukti saat mengirim pesanan.",
-    "Bukti tambahan bisa diunggah dari detail pesanan selama statusnya masih Menunggu.",
+    "Bukti saat mengirim pesanan wajib untuk Transfer di muka. Deposit memerlukan bukti bila saldo kurang; Tempo tidak memerlukan bukti di muka.",
+    "Untuk Transfer atau Deposit yang masih menunggu verifikasi, bukti tambahan dapat diunggah dari detail pesanan.",
     "Nominal seluruh bukti dijumlahkan saat verifikasi Pusat.",
   ],
 };

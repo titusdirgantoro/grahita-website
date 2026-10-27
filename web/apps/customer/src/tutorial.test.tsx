@@ -78,10 +78,12 @@ describe("Customer Portal — Tutorial (F1-19)", () => {
     const wajib = [
       // Cara memesan (PRD §3.5, CP-ORD-01..05)
       "Buka menu Pesanan lalu pilih “Buat pesanan”.",
-      "Nomor pesanan muncul dan statusnya menjadi “Menunggu verifikasi”.",
+      "Pilih cara pembayaran yang tersedia untuk cabang Anda: Transfer di muka, Deposit (Cash & Carry), atau Tempo.",
+      "Tekan “Kirim pesanan”. Invoice tersedia setelah pesanan disetujui dan dokumen terbit.",
       // Bukti transfer (PRD §3.5 CP-ORD-04, §3.7 CP-CNC-02)
       "Satu berkas maksimal 5 MB, dan bisa lebih dari satu berkas untuk pembayaran terpisah.",
       "Nominal seluruh bukti dijumlahkan saat verifikasi Pusat.",
+      "Bukti saat mengirim pesanan wajib untuk Transfer di muka. Deposit memerlukan bukti bila saldo kurang; Tempo tidak memerlukan bukti di muka.",
       // Sertifikat (PRD §3.6)
       "Harga satuan Sertifikat selalu Rp0 berapa pun jumlah lembarnya.",
       "Biaya packaging ditambahkan otomatis satu baris per pesanan dan tidak bisa diubah.",

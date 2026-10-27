@@ -280,7 +280,7 @@ export function BerandaPage() {
                 <span className={styles.ttl}>Cara membuat pesanan</span>
                 <br />
                 <span className={styles.sub}>
-                  Dari memilih produk sampai mengunggah bukti transfer, dalam 6 langkah.
+                  Dari memilih produk sampai mengirim pesanan, dalam 6 langkah.
                 </span>
               </span>
             </button>

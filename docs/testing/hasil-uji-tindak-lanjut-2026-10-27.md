@@ -8,6 +8,7 @@ Dokumen ini memperbarui [laporan baseline](hasil-uji-e2e-2026-10-27.md) untuk sk
 - **DOC-08:** Surat Jalan dengan banyak baris dibagi ke beberapa tabel cetak. Halaman akhir selalu membawa rincian terakhir bersama total, catatan, dan tanda tangan. Pada hasil lama, 29 baris memenuhi halaman pertama dan tanda tangan terdorong sendirian ke halaman kedua.
 - Tooltip Invoice dan pesan API untuk dokumen/revisi diperbaiki agar sesuai dengan penerbitan invoice Tempo saat `approved_unpaid`.
 - Pemeriksaan browser produksi menemukan teks Riwayat Invoice dan Beranda yang masih menyebut invoice baru terbit setelah `Selesai`. Teks itu diperbaiki agar menyebut persetujuan dan terbitnya dokumen. Beranda kini menampilkan status `Disetujui — belum lunas` untuk pesanan Tempo yang telah disetujui, serta menggunakan pesan umum saat pesanan masih menunggu verifikasi.
+- Isi Tutorial produksi masih mewajibkan bukti transfer untuk semua cabang non C&C. Migrasi 0019 mengganti hanya langkah bawaan yang cocok persis dengan teks lama; opsi Transfer, Deposit, dan Tempo kini dijelaskan sesuai alur, termasuk Tempo tanpa bukti di muka. Fallback frontend dan ringkasan Tutorial di Beranda ikut diperbarui.
 
 ## Regresi dan bukti
 
@@ -41,6 +42,7 @@ Fixture backup/restore kini menyertakan `branch_id` yang diwajibkan database dan
 
 - Seluruh paket Go lulus `go test -p 1 ./...`; `go vet ./...` bersih.
 - Integrasi PostgreSQL QA lulus berurutan dengan `go test -p 1 -count=1 -timeout 60m ./internal/platform/database/... ./internal/worker/... ./internal/httpapi/...` (paket HTTP API 1.437,9 detik). Dua tes rekonsiliasi piutang dan batas status yang ditambahkan setelah suite dimulai lulus terarah pada PostgreSQL yang sama.
+- Migrasi Tutorial 0019 lulus uji database kosong → naik → turun → naik, serta asersi isi baru di PostgreSQL QA. Perubahan ini ditambahkan setelah suite integrasi penuh tersebut; tidak diklaim sebagai bagian dari run 1.437,9 detik.
 - Frontend lulus 249 tes (9 API client, 65 UI, 100 admin, 75 cabang), typecheck, dan build kedua portal.
 - Pemeriksaan migrasi kompatibel mundur, pemindaian rahasia, dan `git diff --check` lulus. Renderer Gotenberg QA menghasilkan 12 PDF untuk enam variasi jumlah baris.
 - Gerbang teknis ini memverifikasi perubahan rilis; status 162 skenario end to end tetap sesuai tabel di atas.
