@@ -51,7 +51,10 @@ func (g *Gotenberg) HTMLToPDF(ctx context.Context, html []byte) ([]byte, error) 
 	if _, err := part.Write(html); err != nil {
 		return nil, fmt.Errorf("tulis html: %w", err)
 	}
-	// Opsi A4 agar hasil konsisten dengan template invoice.
+	// Ukuran dan orientasi halaman ditetapkan oleh @page masing-masing dokumen:
+	// invoice mendatar, surat jalan dan surat tagihan tegak.
+	_ = mw.WriteField("preferCssPageSize", "true")
+	// Fallback A4 untuk dokumen lama yang tidak memiliki aturan @page.
 	_ = mw.WriteField("paperWidth", "8.27")
 	_ = mw.WriteField("paperHeight", "11.7")
 	_ = mw.WriteField("marginTop", "0.4")

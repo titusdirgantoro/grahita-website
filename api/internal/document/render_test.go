@@ -9,6 +9,24 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+func TestTerbilangRupiah(t *testing.T) {
+	kasus := []struct {
+		n   int64
+		mau string
+	}{
+		{0, "Nol rupiah"},
+		{11, "Sebelas rupiah"},
+		{1000, "Seribu rupiah"},
+		{4_549_375, "Empat juta lima ratus empat puluh sembilan ribu tiga ratus tujuh puluh lima rupiah"},
+		{5_003_000, "Lima juta tiga ribu rupiah"},
+	}
+	for _, tc := range kasus {
+		if got := TerbilangRupiah(tc.n); got != tc.mau {
+			t.Errorf("TerbilangRupiah(%d) = %q, mau %q", tc.n, got, tc.mau)
+		}
+	}
+}
+
 // TestInvoiceHTMLMemuatIdentitasDanAngka menjaga isi invoice sesuai PRD §6.1:
 // identitas PT, nomor + versi, tanggal, data cabang, baris + serial, total,
 // rekening, dan penanda LUNAS / Cash & Carry.
@@ -23,7 +41,7 @@ func TestInvoiceHTMLMemuatIdentitasDanAngka(t *testing.T) {
 	wajib := []string{
 		"PT GRAHITA INDONESIA",
 		"INVOICE",
-		"Nomor: 2026-10-0001",
+		"2026-10-0001",
 		"08 Oktober 2026",
 		"Grahita Bandung",
 		"Sandi",
@@ -39,6 +57,12 @@ func TestInvoiceHTMLMemuatIdentitasDanAngka(t *testing.T) {
 		"BRI — 0987654321 a.n. PT Grahita Indonesia",
 		"LUNAS",
 		"Tolong dikirim pagi",
+		"A4 landscape",
+		"data:image/png;base64,",
+		"Terbilang",
+		"Lima juta tiga ribu rupiah",
+		"Nama Instansi",
+		"PI (5%)",
 	}
 	for _, s := range wajib {
 		if !strings.Contains(html, s) {
@@ -239,8 +263,9 @@ func TestSuratJalanHTMLKonsistenDenganXLSX(t *testing.T) {
 		t.Fatalf("suratJalanHTML: %v", err)
 	}
 	html := string(b)
-	for _, s := range []string{"SURAT JALAN", "Nomor: 2026-10-0001", "08 Oktober 2026",
-		"Grahita Bandung", "20261008001", "20261008002", "Bio Magnetik", "Bio Listrik"} {
+	for _, s := range []string{"SURAT JALAN", "2026-10-0001", "08 Oktober 2026",
+		"Grahita Bandung", "20261008001", "20261008002", "Bio Magnetik", "Bio Listrik",
+		"A4 portrait", "data:image/png;base64,", "Asal Cabang", "Penerima,", "Pengemudi,"} {
 		if !strings.Contains(html, s) {
 			t.Errorf("surat jalan HTML tidak memuat %q", s)
 		}

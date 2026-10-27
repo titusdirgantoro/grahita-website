@@ -1,11 +1,18 @@
 package document
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"html/template"
 	"strings"
 	"time"
 )
+
+//go:embed assets/logo-grahita-lockup-320.png
+var logoGrahita []byte
+
+var logoGrahitaURL = template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(logoGrahita))
 
 // This file berisi penyusun isi dokumen: formatter angka/tanggal Indonesia,
 // model tampilan, dan template HTML kedua PDF (invoice & surat jalan).
@@ -53,6 +60,47 @@ func FormatAngka(n int64) string {
 // FormatRupiah menampilkan nilai uang lengkap dengan awalan "Rp".
 func FormatRupiah(n int64) string { return "Rp " + FormatAngka(n) }
 
+// TerbilangRupiah menulis nilai invoice dengan kata-kata untuk bagian
+// "Terbilang" seperti pada format cetak Grahita.
+func TerbilangRupiah(n int64) string {
+	if n < 0 {
+		return "Nilai tidak valid"
+	}
+	if n == 0 {
+		return "Nol rupiah"
+	}
+	kata := terbilang(n)
+	return strings.ToUpper(kata[:1]) + kata[1:] + " rupiah"
+}
+
+func terbilang(n int64) string {
+	satuan := [...]string{"", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "delapan", "sembilan", "sepuluh", "sebelas"}
+	switch {
+	case n < 12:
+		return satuan[n]
+	case n < 20:
+		return terbilang(n-10) + " belas"
+	case n < 100:
+		return strings.TrimSpace(terbilang(n/10) + " puluh " + terbilang(n%10))
+	case n < 200:
+		return strings.TrimSpace("seratus " + terbilang(n-100))
+	case n < 1000:
+		return strings.TrimSpace(terbilang(n/100) + " ratus " + terbilang(n%100))
+	case n < 2000:
+		return strings.TrimSpace("seribu " + terbilang(n-1000))
+	case n < 1_000_000:
+		return strings.TrimSpace(terbilang(n/1000) + " ribu " + terbilang(n%1000))
+	case n < 1_000_000_000:
+		return strings.TrimSpace(terbilang(n/1_000_000) + " juta " + terbilang(n%1_000_000))
+	case n < 1_000_000_000_000:
+		return strings.TrimSpace(terbilang(n/1_000_000_000) + " miliar " + terbilang(n%1_000_000_000))
+	case n < 1_000_000_000_000_000:
+		return strings.TrimSpace(terbilang(n/1_000_000_000_000) + " triliun " + terbilang(n%1_000_000_000_000))
+	default:
+		return strings.TrimSpace(terbilang(n/1_000_000_000_000_000) + " kuadriliun " + terbilang(n%1_000_000_000_000_000))
+	}
+}
+
 // penandaPembayaran menentukan penanda pembayaran invoice (PRD §6.1). Invoice
 // baru lahir saat pesanan selesai diverifikasi, jadi semuanya LUNAS; pesanan
 // Cash & Carry (dibayar dari deposit cabang) diberi keterangan tambahan.
@@ -86,34 +134,47 @@ type rekeningView struct {
 
 // invoiceView adalah model tampilan invoice.
 type invoiceView struct {
-	Nomor      string
-	Versi      string
-	Tanggal    string
-	Penanda    string
-	Cabang     string
-	Kepala     string
-	Email      string
-	Telepon    string
-	Catatan    string
-	JumlahItem string
-	Total      string
-	Lines      []lineView
-	Rekening   []rekeningView
+	Logo        template.URL
+	Nomor       string
+	Versi       string
+	Tanggal     string
+	Penanda     string
+	Cabang      string
+	Kepala      string
+	Email       string
+	Telepon     string
+	Catatan     string
+	JumlahItem  string
+	Total       string
+	Produksi    string
+	Terbilang   string
+	BarisKosong []int
+	Lines       []lineView
+	Rekening    []rekeningView
 }
 
 // suratJalanView adalah model tampilan surat jalan (HTML/PDF). XLSX memakai
 // data yang sama lewat penyusun tersendiri.
 type suratJalanView struct {
-	Nomor    string
-	Tanggal  string
-	Cabang   string
-	Kepala   string
-	Email    string
-	Telepon  string
-	Catatan  string
-	Lines    []lineView
-	Jumlah   string
-	TotalQty string
+	Logo        template.URL
+	Nomor       string
+	Tanggal     string
+	Cabang      string
+	Kepala      string
+	Email       string
+	Telepon     string
+	Catatan     string
+	Lines       []lineView
+	Jumlah      string
+	TotalQty    string
+	BarisKosong []int
+}
+
+func barisKosong(jumlah, minimum int) []int {
+	if jumlah >= minimum {
+		return nil
+	}
+	return make([]int, minimum-jumlah)
 }
 
 // viewLines menyusun baris tabel dokumen: satu baris per order line
@@ -157,20 +218,28 @@ func versiRevisi(versi int) string {
 }
 
 func newInvoiceView(o Order) invoiceView {
+	var produksi int64
+	for _, l := range o.Lines {
+		produksi += l.Subtotal
+	}
 	return invoiceView{
-		Nomor:      o.Nomor,
-		Versi:      versiRevisi(o.Versi),
-		Tanggal:    FormatTanggal(o.Tanggal),
-		Penanda:    penandaPembayaran(o),
-		Cabang:     o.Cabang.Nama,
-		Kepala:     o.Cabang.Kepala,
-		Email:      o.Cabang.Email,
-		Telepon:    o.Cabang.Telepon,
-		Catatan:    strings.TrimSpace(o.Catatan),
-		JumlahItem: fmt.Sprintf("%d", jumlahItem(o.Lines)),
-		Total:      FormatRupiah(o.Total),
-		Lines:      viewLines(o),
-		Rekening:   viewRekening(o),
+		Logo:        logoGrahitaURL,
+		Nomor:       o.Nomor,
+		Versi:       versiRevisi(o.Versi),
+		Tanggal:     FormatTanggal(o.Tanggal),
+		Penanda:     penandaPembayaran(o),
+		Cabang:      o.Cabang.Nama,
+		Kepala:      o.Cabang.Kepala,
+		Email:       o.Cabang.Email,
+		Telepon:     o.Cabang.Telepon,
+		Catatan:     strings.TrimSpace(o.Catatan),
+		JumlahItem:  fmt.Sprintf("%d", jumlahItem(o.Lines)),
+		Total:       FormatRupiah(o.Total),
+		Produksi:    FormatAngka(produksi),
+		Terbilang:   TerbilangRupiah(o.Total),
+		BarisKosong: barisKosong(len(o.Lines), 11),
+		Lines:       viewLines(o),
+		Rekening:    viewRekening(o),
 	}
 }
 
@@ -182,16 +251,18 @@ func newSuratJalanView(o Order) suratJalanView {
 	}
 	jumlah = len(o.Lines)
 	return suratJalanView{
-		Nomor:    o.Nomor,
-		Tanggal:  FormatTanggal(o.Tanggal),
-		Cabang:   o.Cabang.Nama,
-		Kepala:   o.Cabang.Kepala,
-		Email:    o.Cabang.Email,
-		Telepon:  o.Cabang.Telepon,
-		Catatan:  strings.TrimSpace(o.Catatan),
-		Lines:    viewLines(o),
-		Jumlah:   fmt.Sprintf("%d", jumlah),
-		TotalQty: fmt.Sprintf("%d", totalQty),
+		Logo:        logoGrahitaURL,
+		Nomor:       o.Nomor,
+		Tanggal:     FormatTanggal(o.Tanggal),
+		Cabang:      o.Cabang.Nama,
+		Kepala:      o.Cabang.Kepala,
+		Email:       o.Cabang.Email,
+		Telepon:     o.Cabang.Telepon,
+		Catatan:     strings.TrimSpace(o.Catatan),
+		Lines:       viewLines(o),
+		Jumlah:      fmt.Sprintf("%d", jumlah),
+		TotalQty:    fmt.Sprintf("%d", totalQty),
+		BarisKosong: barisKosong(len(o.Lines), 18),
 	}
 }
 
@@ -232,225 +303,151 @@ func renderHTML(nama, isi string, data any) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// templateInvoice adalah kerangka invoice A4. Sengaja tanpa tanda tangan atau
-// stempel digital: PRD §8 no.9 masih terbuka, jadi menambahkan citra tanda
-// tangan sekarang berarti menebak keputusan bisnis.
+// templateInvoice mengikuti tata letak contoh Grahita: A4 mendatar, kop
+// ungu-kuning, rincian per instansi, terbilang, ringkasan, dan ruang tanda
+// tangan. Kolom biaya tambahan ditandai kosong karena belum ada di model
+// pesanan; angka tagihan selalu berasal dari snapshot pesanan.
 const templateInvoice = `<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="utf-8">
-<title>Invoice {{.Nomor}}</title>
+<html lang="id"><head><meta charset="utf-8"><title>Invoice {{.Nomor}}</title>
 <style>
-  @page { size: A4; margin: 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 11px; color: #1f2933; margin: 0; }
-  .kop { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1f2933; padding-bottom: 10px; }
-  .merek { display: flex; gap: 10px; align-items: center; }
-  .logo { width: 44px; height: 44px; border-radius: 8px; background: #1f2933; color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-  .pt { font-size: 15px; font-weight: 700; letter-spacing: 0.4px; }
-  .sub { font-size: 10px; color: #52606d; }
-  .judul { text-align: right; }
-  .judul h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: 1px; }
-  .nomor { font-size: 12px; font-weight: 700; }
-  .versi { font-size: 10px; color: #52606d; }
-  .penanda { display: inline-block; margin-top: 6px; padding: 3px 8px; border: 1px solid #1f2933; border-radius: 999px; font-size: 10px; font-weight: 700; }
-  .info { display: flex; gap: 24px; margin: 14px 0 12px; }
-  .info table { border-collapse: collapse; }
-  .info td { padding: 2px 0; vertical-align: top; }
-  .info td.label { color: #52606d; padding-right: 8px; white-space: nowrap; }
-  table.baris { width: 100%; border-collapse: collapse; margin-top: 4px; }
-  table.baris th, table.baris td { border: 1px solid #cbd2d9; padding: 5px 6px; text-align: left; overflow-wrap: anywhere; }
-  table.baris th { background: #f0f4f8; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
-  table.baris td.num, table.baris th.num { text-align: right; }
-  table.baris tr { page-break-inside: avoid; }
-  tr.total td { font-weight: 700; background: #f8fafc; }
-  .rekening { margin-top: 14px; page-break-inside: avoid; }
-  .rekening h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 6px; }
-  .rekening ul { margin: 0; padding-left: 16px; }
-  .rekening li { margin-bottom: 2px; }
-  .catatan { margin-top: 14px; padding-top: 8px; border-top: 1px solid #cbd2d9; color: #52606d; font-size: 10px; }
-</style>
-</head>
-<body>
-  <div class="kop">
-    <div class="merek">
-      <div class="logo">GI</div>
-      <div>
-        <div class="pt">PT GRAHITA INDONESIA</div>
-        <div class="sub">Sistem Pemesanan Cabang</div>
-      </div>
-    </div>
-    <div class="judul">
-      <h1>INVOICE</h1>
-      <div class="nomor">Nomor: {{.Nomor}}</div>
-      {{if .Versi}}<div class="versi">{{.Versi}}</div>{{end}}
-      <div class="penanda">{{.Penanda}}</div>
-    </div>
+@page { size: A4 landscape; margin: 10mm; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #22202b; font: 9px Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.brand-purple { color: #4a2879; }
+.kop { display: flex; justify-content: space-between; align-items: flex-start; height: 95px; }
+.logo { display: block; width: 86px; height: 78px; object-fit: contain; object-position: left top; }
+.judul { text-align: right; padding-top: 6px; }
+.judul h1 { margin: 0 0 5px; color: #4a2879; font-size: 30px; letter-spacing: 1px; line-height: 1; }
+.metadata { margin-left: auto; border-collapse: collapse; font-size: 10px; }
+.metadata td { padding: 2px 0 2px 10px; }
+.metadata td:first-child { color: #5c5365; text-align: left; }
+.metadata td:last-child { font-weight: bold; }
+.rule { height: 4px; background: linear-gradient(to right, #f9d732 0 15%, #4a2879 15% 100%); }
+.recipient { width: 36%; min-height: 67px; margin: 12px 0 12px; padding: 9px 12px; border-left: 4px solid #4a2879; border-radius: 4px; background: #f3eef9; line-height: 1.45; }
+.recipient .label { color: #4a2879; font-size: 9px; font-weight: bold; letter-spacing: .5px; }
+.recipient strong { display: block; font-size: 11px; }
+.recipient .minor { color: #5c5365; }
+.baris { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8px; }
+.baris th, .baris td { border: 1px solid #d9d1e4; padding: 5px 3px; vertical-align: middle; overflow-wrap: anywhere; }
+.baris thead th { background: #4a2879; color: white; border-color: #4a2879; text-align: center; font-size: 7.4px; line-height: 1.3; text-transform: uppercase; }
+.baris thead tr:nth-child(2) th { background: #5b3987; }
+.baris tbody tr:nth-child(even) { background: #f7f4fb; }
+.baris tbody tr { break-inside: avoid; }
+.baris .empty td { height: 18px; color: transparent; }
+.baris .num { text-align: right; white-space: nowrap; }
+.baris .center { text-align: center; }
+.baris tfoot td { background: #fff5c8; color: #33224c; font-weight: bold; border-color: #d9d1e4; }
+.baris thead { display: table-header-group; }
+.baris tfoot { display: table-row-group; }
+.closing { display: grid; grid-template-columns: 43% 20% 35%; gap: 1%; margin-top: 14px; break-inside: avoid; min-height: 112px; }
+.small-label { color: #4a2879; font-size: 9px; font-weight: bold; text-transform: uppercase; letter-spacing: .4px; }
+.terbilang { margin: 4px 0 12px; font-style: italic; line-height: 1.45; }
+.note { margin-top: 4px; white-space: pre-wrap; line-height: 1.35; }
+.sign { text-align: center; padding: 2px 8px; }
+.sign .line { border-bottom: 1px solid #68587a; margin: 48px 14px 4px; }
+.sign .hint { color: #655b70; font-size: 8px; }
+.summary { width: 100%; border-collapse: collapse; font-size: 9px; }
+.summary td { padding: 5px 6px; border-bottom: 1px solid #e2dce9; }
+.summary td:last-child { text-align: right; white-space: nowrap; }
+.summary tr.grand td { padding: 9px 6px; background: #4a2879; color: white; border: 0; font-weight: bold; font-size: 10px; }
+.payment { margin-top: 5px; font-size: 8px; color: #544a60; }
+.bank { margin-top: 5px; font-size: 8px; line-height: 1.4; }
+.footer { display: flex; justify-content: space-between; border-top: 1px solid #d9d1e4; margin-top: 12px; padding-top: 6px; color: #71697b; font-size: 7.5px; }
+</style></head><body>
+<header class="kop">
+  <img class="logo" src="{{.Logo}}" alt="Grahita Indonesia">
+  <div class="judul"><h1>INVOICE</h1><table class="metadata">
+    <tr><td>Nomor</td><td>: {{.Nomor}}</td></tr>
+    <tr><td>Tanggal</td><td>: {{.Tanggal}}</td></tr>
+    {{if .Versi}}<tr><td>Dokumen</td><td>: {{.Versi}}</td></tr>{{end}}
+  </table></div>
+</header>
+<div class="rule"></div>
+<section class="recipient"><div class="label">KEPADA YTH.</div>
+  {{if .Kepala}}<strong>{{.Kepala}}</strong>{{end}}
+  <strong>{{.Cabang}}</strong>
+  {{if .Telepon}}<div>Telp. {{.Telepon}}</div>{{end}}
+  {{if .Email}}<div class="minor">{{.Email}}</div>{{end}}
+</section>
+<table class="baris" aria-label="Rincian invoice">
+  <colgroup><col style="width:3%"><col style="width:9%"><col style="width:17%"><col style="width:8%"><col style="width:4%"><col style="width:10%"><col style="width:8%"><col style="width:8%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:10%"><col style="width:5%"></colgroup>
+  <thead><tr><th rowspan="2">No</th><th rowspan="2">Serial Number</th><th rowspan="2">Nama Instansi</th><th rowspan="2">Cabang</th><th rowspan="2">Jml Pcs</th><th rowspan="2">Produk</th><th rowspan="2">Harga per Pcs</th><th colspan="4">Tagihan</th><th rowspan="2">Total Tagihan</th><th rowspan="2">Ket</th></tr>
+    <tr><th>Produksi</th><th>PI (5%)</th><th>Expres</th><th>Bea SPV</th></tr></thead>
+  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td class="center">{{.Qty}}</td><td>{{.Nama}}</td><td class="num">{{.Harga}}</td><td class="num">{{.Subtotal}}</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="num">{{.Subtotal}}</td><td></td></tr>{{end}}
+    {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}
+  </tbody>
+  <tfoot><tr><td colspan="4">JUMLAH</td><td class="center">{{.JumlahItem}}</td><td colspan="2"></td><td class="num">{{.Produksi}}</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="num">{{.Total}}</td><td></td></tr></tfoot>
+</table>
+<section class="closing">
+  <div><div class="small-label">Terbilang</div><div class="terbilang"># {{.Terbilang}} #</div>
+    <div class="small-label">Catatan</div>{{if .Catatan}}<div class="note">{{.Catatan}}</div>{{else}}<div class="note">—</div>{{end}}
+    <div class="bank"><strong>Rekening pembayaran:</strong><br>{{if .Rekening}}{{range .Rekening}}{{.Bank}} — {{.Nomor}} a.n. {{.AtasNama}}<br>{{end}}{{else}}Hubungi admin Pusat.{{end}}</div>
   </div>
+  <div class="sign">Tangerang, {{.Tanggal}}<br>Hormat kami,<div class="line"></div><div class="hint">Nama jelas</div></div>
+  <div><table class="summary"><tr><td>Total tagihan periode ini</td><td>{{.Total}}</td></tr><tr><td>Tagihan lama / lebih setor</td><td>—</td></tr><tr><td>Tagihan baru</td><td>—</td></tr><tr class="grand"><td>TOTAL TAGIHAN</td><td>{{.Total}}</td></tr></table><div class="payment">{{.Penanda}}</div></div>
+</section>
+<footer class="footer"><span>S.E. &amp; O. — Kesalahan dan kelalaian dikecualikan. Mohon cocokkan rincian sebelum melakukan pembayaran.</span><span>PT GRAHITA INDONESIA</span></footer>
+</body></html>`
 
-  <div class="info">
-    <table>
-      <tr><td class="label">Tanggal</td><td>{{.Tanggal}}</td></tr>
-      <tr><td class="label">Cabang</td><td>{{.Cabang}}</td></tr>
-      <tr><td class="label">Kepala cabang</td><td>{{.Kepala}}</td></tr>
-      <tr><td class="label">Email</td><td>{{.Email}}</td></tr>
-      {{if .Telepon}}<tr><td class="label">Telepon</td><td>{{.Telepon}}</td></tr>{{end}}
-    </table>
-    <table>
-      <tr><td class="label">Jumlah item</td><td>{{.JumlahItem}}</td></tr>
-      {{if .Catatan}}<tr><td class="label">Catatan</td><td>{{.Catatan}}</td></tr>{{end}}
-    </table>
-  </div>
-
-  <table class="baris">
-    <thead>
-      <tr>
-        <th>No</th>
-        <th>Nama</th>
-        <th>Nama Instansi</th>
-        <th class="num">Qty</th>
-        <th class="num">Harga</th>
-        <th class="num">Subtotal</th>
-        <th>Serial number</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{range .Lines}}
-      <tr>
-        <td>{{.No}}</td>
-        <td>{{.Nama}}</td>
-        <td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td>
-        <td class="num">{{.Qty}}</td>
-        <td class="num">{{.Harga}}</td>
-        <td class="num">{{.Subtotal}}</td>
-        <td>{{.Serial}}</td>
-      </tr>
-      {{end}}
-    </tbody>
-    <tfoot>
-      <tr class="total">
-        <td colspan="5">TOTAL</td>
-        <td class="num">{{.Total}}</td>
-        <td></td>
-      </tr>
-    </tfoot>
-  </table>
-
-  <div class="rekening">
-    <h2>Rekening pembayaran</h2>
-    {{if .Rekening}}
-    <ul>
-      {{range .Rekening}}<li>{{.Bank}} — {{.Nomor}} a.n. {{.AtasNama}}</li>{{end}}
-    </ul>
-    {{else}}
-    <p>Tidak ada rekening aktif. Hubungi admin Pusat.</p>
-    {{end}}
-  </div>
-
-  <div class="catatan">
-    Dokumen ini dibuat otomatis oleh sistem dan belum memuat tanda tangan atau stempel digital.
-    Total dalam Rupiah bulat (tanpa sen). Serial number dicetak apa adanya dari pesanan.
-  </div>
-</body>
-</html>
-`
-
-// templateSuratJalan adalah kerangka surat jalan PDF — kolomnya sengaja sama
-// dengan berkas XLSX-nya agar kedua berkas konsisten.
+// templateSuratJalan memakai identitas dan rincian yang sama, dalam A4 tegak
+// seperti contoh. Ruang tanda tangan dibiarkan kosong agar penerima dan
+// pengemudi dapat menandatangani hasil cetaknya.
 const templateSuratJalan = `<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="utf-8">
-<title>Surat Jalan {{.Nomor}}</title>
+<html lang="id"><head><meta charset="utf-8"><title>Surat Jalan {{.Nomor}}</title>
 <style>
-  @page { size: A4; margin: 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 11px; color: #1f2933; margin: 0; }
-  .kop { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1f2933; padding-bottom: 10px; }
-  .merek { display: flex; gap: 10px; align-items: center; }
-  .logo { width: 44px; height: 44px; border-radius: 8px; background: #1f2933; color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-  .pt { font-size: 15px; font-weight: 700; letter-spacing: 0.4px; }
-  .sub { font-size: 10px; color: #52606d; }
-  .judul { text-align: right; }
-  .judul h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: 1px; }
-  .nomor { font-size: 12px; font-weight: 700; }
-  .info { display: flex; gap: 24px; margin: 14px 0 12px; }
-  .info table { border-collapse: collapse; }
-  .info td { padding: 2px 0; vertical-align: top; }
-  .info td.label { color: #52606d; padding-right: 8px; white-space: nowrap; }
-  table.baris { width: 100%; border-collapse: collapse; margin-top: 4px; }
-  table.baris th, table.baris td { border: 1px solid #cbd2d9; padding: 6px; text-align: left; overflow-wrap: anywhere; }
-  table.baris th { background: #f0f4f8; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
-  table.baris td.num, table.baris th.num { text-align: right; }
-  table.baris tr { page-break-inside: avoid; }
-  tr.total td { font-weight: 700; background: #f8fafc; }
-  .catatan { margin-top: 16px; padding-top: 8px; border-top: 1px solid #cbd2d9; color: #52606d; font-size: 10px; }
-</style>
-</head>
-<body>
-  <div class="kop">
-    <div class="merek">
-      <div class="logo">GI</div>
-      <div>
-        <div class="pt">PT GRAHITA INDONESIA</div>
-        <div class="sub">Sistem Pemesanan Cabang</div>
-      </div>
-    </div>
-    <div class="judul">
-      <h1>SURAT JALAN</h1>
-      <div class="nomor">Nomor: {{.Nomor}}</div>
-    </div>
-  </div>
-
-  <div class="info">
-    <table>
-      <tr><td class="label">Tanggal</td><td>{{.Tanggal}}</td></tr>
-      <tr><td class="label">Cabang</td><td>{{.Cabang}}</td></tr>
-      <tr><td class="label">Kepala cabang</td><td>{{.Kepala}}</td></tr>
-      <tr><td class="label">Email</td><td>{{.Email}}</td></tr>
-      {{if .Telepon}}<tr><td class="label">Telepon</td><td>{{.Telepon}}</td></tr>{{end}}
-    </table>
-    <table>
-      <tr><td class="label">Jumlah baris</td><td>{{.Jumlah}}</td></tr>
-      <tr><td class="label">Total qty</td><td>{{.TotalQty}}</td></tr>
-      {{if .Catatan}}<tr><td class="label">Catatan</td><td>{{.Catatan}}</td></tr>{{end}}
-    </table>
-  </div>
-
-  <table class="baris">
-    <thead>
-      <tr>
-        <th>No</th>
-        <th>Nama barang</th>
-        <th>Nama Instansi</th>
-        <th class="num">Qty</th>
-        <th>Serial number</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{range .Lines}}
-      <tr>
-        <td>{{.No}}</td>
-        <td>{{.Nama}}</td>
-        <td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td>
-        <td class="num">{{.Qty}}</td>
-        <td>{{.Serial}}</td>
-      </tr>
-      {{end}}
-    </tbody>
-    <tfoot>
-      <tr class="total">
-        <td colspan="3">TOTAL</td>
-        <td class="num">{{.TotalQty}}</td>
-        <td></td>
-      </tr>
-    </tfoot>
-  </table>
-
-  <div class="catatan">
-    Surat jalan dibuat otomatis oleh sistem dan belum memuat tanda tangan atau stempel digital.
-    Barang diperiksa saat diterima; kekurangan/kerusakan mohon dilaporkan ke admin Pusat.
-  </div>
-</body>
-</html>
-`
+@page { size: A4 portrait; margin: 10mm; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.kop { display: flex; justify-content: space-between; align-items: flex-start; height: 104px; }
+.logo { display: block; width: 86px; height: 78px; object-fit: contain; object-position: left top; }
+.judul { text-align: right; padding-top: 8px; }
+.judul h1 { margin: 0 0 6px; color: #4a2879; font-size: 30px; letter-spacing: 1px; line-height: 1; }
+.metadata { margin-left: auto; border-collapse: collapse; font-size: 10px; }
+.metadata td { padding: 2px 0 2px 8px; }
+.metadata td:first-child { color: #5c5365; text-align: left; }
+.metadata td:last-child { font-weight: bold; }
+.rule { height: 4px; background: linear-gradient(to right, #f9d732 0 17%, #4a2879 17% 100%); }
+.info { display: grid; grid-template-columns: 48% 48%; gap: 4%; margin: 15px 0 16px; min-height: 77px; }
+.recipient { padding: 10px 12px; border-left: 4px solid #4a2879; border-radius: 4px; background: #f3eef9; line-height: 1.45; }
+.recipient .label { color: #4a2879; font-size: 9px; font-weight: bold; letter-spacing: .5px; }
+.recipient strong { display: block; font-size: 11px; }
+.recipient .minor { color: #5c5365; font-size: 9px; }
+.transport { padding-top: 3px; line-height: 1.8; }
+.transport .row { display: flex; gap: 6px; }
+.transport .row span { min-width: 62px; }
+.transport .blank { border-bottom: 1px solid #b8a7cb; flex: 1; }
+.baris { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8.5px; }
+.baris th, .baris td { border: 1px solid #d9d1e4; padding: 6px 5px; vertical-align: middle; overflow-wrap: anywhere; }
+.baris thead th { background: #4a2879; color: white; border-color: #4a2879; text-align: center; font-size: 8px; text-transform: uppercase; line-height: 1.3; }
+.baris tbody tr:nth-child(even) { background: #f7f4fb; }
+.baris tbody tr { break-inside: avoid; }
+.baris .empty td { height: 22px; color: transparent; }
+.baris .center { text-align: center; }
+.baris tfoot td { background: #fff5c8; color: #33224c; font-weight: bold; }
+.baris thead { display: table-header-group; }
+.baris tfoot { display: table-row-group; }
+.notes { margin-top: 15px; break-inside: avoid; }
+.label { color: #4a2879; font-weight: bold; text-transform: uppercase; font-size: 9px; letter-spacing: .4px; }
+.notes .box { border: 1px solid #d9d1e4; border-radius: 4px; min-height: 42px; margin-top: 5px; padding: 8px; white-space: pre-wrap; }
+.ack { margin-top: 12px; font-size: 9px; font-style: italic; }
+.place { text-align: right; margin-top: 15px; font-size: 9px; }
+.signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; text-align: center; margin-top: 9px; break-inside: avoid; }
+.signature .line { border-bottom: 1px solid #68587a; margin: 43px 15px 5px; }
+.signature .hint { color: #655b70; font-size: 8px; }
+.footer { display: flex; justify-content: space-between; border-top: 1px solid #d9d1e4; margin-top: 18px; padding-top: 6px; color: #71697b; font-size: 7.5px; }
+</style></head><body>
+<header class="kop"><img class="logo" src="{{.Logo}}" alt="Grahita Indonesia"><div class="judul"><h1>SURAT JALAN</h1><table class="metadata"><tr><td>Nomor</td><td>: {{.Nomor}}</td></tr><tr><td>Tanggal</td><td>: {{.Tanggal}}</td></tr></table></div></header>
+<div class="rule"></div>
+<section class="info"><div class="recipient"><div class="label">KEPADA YTH.</div><strong>{{.Cabang}}</strong>{{if .Telepon}}<div>Telp. {{.Telepon}}</div>{{end}}{{if .Email}}<div class="minor">{{.Email}}</div>{{end}}</div>
+  <div class="transport">Kami kirimkan barang-barang di bawah ini dengan:<div class="row"><span>Kendaraan</span><div class="blank"></div></div><div class="row"><span>No. Polisi</span><div class="blank"></div></div></div></section>
+<table class="baris" aria-label="Rincian surat jalan"><colgroup><col style="width:5%"><col style="width:17%"><col style="width:29%"><col style="width:15%"><col style="width:16%"><col style="width:8%"><col style="width:10%"></colgroup>
+  <thead><tr><th>No</th><th>Serial Number</th><th>Nama Instansi</th><th>Asal Cabang</th><th>Produk</th><th>Jumlah</th><th>Ket</th></tr></thead>
+  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td>{{.Nama}}</td><td class="center">{{.Qty}}</td><td></td></tr>{{end}}
+    {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}</tbody>
+  <tfoot><tr><td colspan="5" style="text-align:right">JUMLAH</td><td class="center">{{.TotalQty}}</td><td></td></tr></tfoot></table>
+<section class="notes"><div class="label">Catatan</div><div class="box">{{.Catatan}}</div></section>
+<div class="ack">Barang telah diterima dalam keadaan baik dan jumlah sesuai. Mohon kembalikan lembar tanda terima yang telah ditandatangani.</div>
+<div class="place">Tangerang, {{.Tanggal}}</div>
+<section class="signatures"><div class="signature">Penerima,<div class="line"></div><div class="hint">Tanda terima &amp; stempel</div></div><div class="signature">Pengemudi,<div class="line"></div><div class="hint">Nama jelas</div></div><div class="signature">Hormat kami,<div class="line"></div><div class="hint">Nama jelas</div></div></section>
+<footer class="footer"><span>Lembar 1: Penerima &nbsp;·&nbsp; Lembar 2: Pengirim (arsip) &nbsp;·&nbsp; Lembar 3: Pengemudi</span><span>PT GRAHITA INDONESIA</span></footer>
+</body></html>`

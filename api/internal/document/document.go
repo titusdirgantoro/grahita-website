@@ -44,9 +44,8 @@
 //     (versi lama tetap terlihat setelah revisi) ditambah pesanan ber-nomor
 //     yang dokumennya belum ada, selalu dibatasi branch_id SESI.
 //
-// Catatan kartu: PRD §8 no.7 (template resmi Surat Jalan) dan no.9 (tanda
-// tangan/stempel digital) masih terbuka. Paket ini memakai template awal yang
-// rapi tanpa tanda tangan/stempel; keputusan bisnis menyusul.
+// Template cetak memuat ruang tanda tangan fisik sesuai contoh Grahita.
+// Citra tanda tangan/stempel digital belum disimpan oleh sistem.
 package document
 
 import (
