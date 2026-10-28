@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"reflect"
 	"slices"
@@ -299,6 +300,204 @@ VALUES($1,1,'product',$2,'Bio Magnetik',1,$3,$4)`, id, productID, total, strings
 		t.Fatalf("baris Tempo: %v", err)
 	}
 	return id
+}
+
+// TMP-03: seluruh guard persetujuan Tempo diuji dalam satu fixture. Setiap
+// penolakan harus terjadi sebelum charge maupun pekerjaan dokumen terbentuk;
+// dua persetujuan serentak hanya boleh menghasilkan satu transisi ekonomi.
+func TestPGApproveTempoGuardStatusRekeningDanKlikGanda(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `DELETE FROM branch_bank_accounts WHERE branch_id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	managerCookies, managerCSRF := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	approveURL := func(id string) string { return f.srv.URL + "/api/v1/admin/orders/" + id + "/approve-tempo" }
+	assertKosong := func(id string) {
+		t.Helper()
+		var charges, jobsCount int
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_charges WHERE order_id=$1`, id).Scan(&charges); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind='render_dokumen_pesanan' AND args->>'order_id'=$1`, id).Scan(&jobsCount); err != nil {
+			t.Fatal(err)
+		}
+		if charges != 0 || jobsCount != 0 {
+			t.Fatalf("penolakan tidak boleh membuat charge/job: charge=%d job=%d", charges, jobsCount)
+		}
+	}
+
+	// Pesanan Tempo yang sah tetapi belum mempunyai rekening efektif.
+	tanpaRekening := tempoSubmitted(t, f, "2026-10-22", 110000)
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, approveURL(tanpaRekening), `{}`, managerCookies, managerCSRF)
+	if status != http.StatusConflict || kodeErrorVerifikasi(body) != "BRANCH_BANK_ACCOUNT_UNAVAILABLE" {
+		t.Fatalf("Tempo tanpa rekening harus 409 BRANCH_BANK_ACCOUNT_UNAVAILABLE: %d %+v", status, body)
+	}
+	assertKosong(tanpaRekening)
+
+	// Order non-Tempo yang sudah submitted dan draft yang belum memilih mode
+	// pembayaran tidak boleh dikenali sebagai order Tempo.
+	nonTempo := insertOrder(t, f, f.branchA, "submitted", "2026-10-NONTEMPO")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, approveURL(nonTempo), `{}`, managerCookies, managerCSRF)
+	if status != http.StatusNotFound {
+		t.Fatalf("order non-Tempo harus 404, dapat %d (%v)", status, body)
+	}
+	assertKosong(nonTempo)
+	branchCookies, branchCSRF := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	draft := buatDraftHTTP(t, f, branchCookies, branchCSRF, produkKode(t, f, "P-01"), 1)["id"].(string)
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, approveURL(draft), `{}`, managerCookies, managerCSRF)
+	if status != http.StatusNotFound {
+		t.Fatalf("draft belum memilih Tempo harus 404, dapat %d (%v)", status, body)
+	}
+	assertKosong(draft)
+
+	// Setelah rekening efektif dipasang, persetujuan pertama berhasil dan
+	// pengulangan atas order yang sudah approved konflik tanpa duplikasi.
+	if _, err := f.pool.Exec(ctx, `INSERT INTO branch_bank_accounts(branch_id,bank_account_id,is_allowed,assigned_by)
+		VALUES($1,$2,true,$3)`, f.branchA, f.bankDefault, f.adminSA); err != nil {
+		t.Fatal(err)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, approveURL(tanpaRekening), `{}`, managerCookies, managerCSRF)
+	if status != http.StatusOK {
+		t.Fatalf("approve Tempo sah harus 200, dapat %d (%v)", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, approveURL(tanpaRekening), `{}`, managerCookies, managerCSRF)
+	if status != http.StatusConflict || kodeErrorVerifikasi(body) != "TEMPO_CONFLICT" {
+		t.Fatalf("approve ulang harus 409 TEMPO_CONFLICT, dapat %d (%v)", status, body)
+	}
+
+	// Klik ganda serentak pada order lain: transaksi dan lock cabang menjamin
+	// tepat satu sukses dan satu konflik.
+	dobel := tempoSubmitted(t, f, "2026-10-23", 120000)
+	svc := receivable.New(f.pool, f.jobs)
+	actor := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	mulai := make(chan struct{})
+	hasil := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-mulai
+			_, err := svc.Approve(ctx, actor, dobel)
+			hasil <- err
+		}()
+	}
+	close(mulai)
+	wg.Wait()
+	close(hasil)
+	var sukses, konflik int
+	for err := range hasil {
+		switch {
+		case err == nil:
+			sukses++
+		case errors.Is(err, receivable.ErrConflict):
+			konflik++
+		default:
+			t.Fatalf("hasil klik ganda tidak terduga: %v", err)
+		}
+	}
+	if sukses != 1 || konflik != 1 {
+		t.Fatalf("klik ganda harus satu sukses/satu konflik: sukses=%d konflik=%d", sukses, konflik)
+	}
+	for _, id := range []string{tanpaRekening, dobel} {
+		var charges, jobsCount int
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_charges WHERE order_id=$1`, id).Scan(&charges); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind='render_dokumen_pesanan' AND args->>'order_id'=$1`, id).Scan(&jobsCount); err != nil {
+			t.Fatal(err)
+		}
+		if charges != 1 || jobsCount != 1 {
+			t.Fatalf("order %s harus tepat satu charge/job: charge=%d job=%d", id, charges, jobsCount)
+		}
+	}
+}
+
+// TMP-11: endpoint pelunasan Tempo menolak seluruh batas nominal dan berkas
+// sebelum membentuk receipt aktif. Bukti sah tersimpan sekali; byte identik
+// tidak dapat dipakai ulang dan objek kedua dibersihkan.
+func TestPGPelunasanTempoValidasiNominalBerkasDanDuplikat(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	kirim := func(amount, bankID, filename string, isi []byte) (int, map[string]any) {
+		t.Helper()
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		_ = mw.WriteField("amount", amount)
+		_ = mw.WriteField("bank_account_id", bankID)
+		if isi != nil {
+			fw, err := mw.CreateFormFile("file", filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = fw.Write(isi)
+		}
+		_ = mw.Close()
+		req, err := http.NewRequest(http.MethodPost, f.srv.URL+"/api/v1/tempo/repayments", &buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		return kirimDeposit(t, req, cookies, csrf, "")
+	}
+	validJPEG := berkasJPEGUji("pelunasan-tempo-valid")
+	objekAwal := f.objek.jumlah()
+	invalid := []struct {
+		nama, amount, bankID, filename string
+		isi                            []byte
+	}{
+		{"nominal nol", "0", f.bankDefault, "nol.jpg", validJPEG},
+		{"nominal negatif", "-1", f.bankDefault, "negatif.jpg", validJPEG},
+		{"nominal desimal", "12.5", f.bankDefault, "desimal.jpg", validJPEG},
+		{"nominal di atas satu triliun", "1000000000001", f.bankDefault, "besar.jpg", validJPEG},
+		{"tanpa rekening", "100000", "", "rekening.jpg", validJPEG},
+		{"tanpa berkas", "100000", f.bankDefault, "", nil},
+		{"MIME tidak didukung", "100000", f.bankDefault, "palsu.jpg", []byte("bukan gambar atau PDF")},
+		{"lebih dari 10 MB", "100000", f.bankDefault, "terlalu-besar.jpg", append(berkasJPEGUji("besar"), bytes.Repeat([]byte{'x'}, 10*1024*1024)...)},
+	}
+	for _, tc := range invalid {
+		status, body := kirim(tc.amount, tc.bankID, tc.filename, tc.isi)
+		if status < 400 || status >= 500 {
+			t.Fatalf("%s harus ditolak 4xx, dapat %d (%v)", tc.nama, status, body)
+		}
+	}
+	var receipts, proofs int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_receipts`).Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM payment_proofs WHERE purpose='tempo_repayment'`).Scan(&proofs); err != nil {
+		t.Fatal(err)
+	}
+	if receipts != 0 || proofs != 0 || f.objek.jumlah() != objekAwal {
+		t.Fatalf("input tidak sah meninggalkan data: receipt=%d proof=%d objek=%d awal=%d",
+			receipts, proofs, f.objek.jumlah(), objekAwal)
+	}
+
+	status, body := kirim("100000", f.bankDefault, "valid.jpg", validJPEG)
+	if status != http.StatusCreated || dataMap(t, body)["status"] != "pending" {
+		t.Fatalf("bukti sah harus 201 pending, dapat %d (%v)", status, body)
+	}
+	status, body = kirim("100000", f.bankDefault, "duplikat.jpg", validJPEG)
+	if status != http.StatusConflict || kodeErrorVerifikasi(body) != "TEMPO_PROOF_DUPLICATE" {
+		t.Fatalf("bukti identik harus 409 TEMPO_PROOF_DUPLICATE, dapat %d (%v)", status, body)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_receipts`).Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM payment_proofs WHERE purpose='tempo_repayment'`).Scan(&proofs); err != nil {
+		t.Fatal(err)
+	}
+	if receipts != 1 || proofs != 1 || f.objek.jumlah() != objekAwal+1 {
+		t.Fatalf("duplikat harus menyisakan tepat satu bukti aktif: receipt=%d proof=%d objek=%d", receipts, proofs, f.objek.jumlah())
+	}
 }
 
 func TestPGApproveTempoSebelumPadaDanSesudahJatuhTempo(t *testing.T) {

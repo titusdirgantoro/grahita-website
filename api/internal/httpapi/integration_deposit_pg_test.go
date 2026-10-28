@@ -156,6 +156,37 @@ func TestPGDepositTopupPendingTidakMenambahSaldo(t *testing.T) {
 	}
 	jadikanCNC(t, f, f.branchA)
 
+	// DEP-03: berkas wajib, isi harus cocok dengan ekstensi, dan batas ukuran
+	// per berkas mengikuti setting (default 10 MB). Semua kegagalan terjadi
+	// tanpa baris top-up/payment_proof maupun objek yatim.
+	objekSebelum := f.objek.jumlah()
+	invalid := []struct {
+		nama string
+		key  string
+		isi  []byte
+	}{
+		{nama: "tanpa bukti", key: "invalid-empty", isi: nil},
+		{nama: "PDF berkedok JPG", key: "invalid-mime", isi: berkasPDFUji("palsu")},
+		{nama: "lebih dari 10 MB", key: "invalid-large", isi: append(berkasJPEGUji("besar"), bytes.Repeat([]byte{'x'}, 10*1024*1024)...)},
+	}
+	for _, tc := range invalid {
+		status, body = topupHTTP(t, f, cookiesA, csrfA, tc.key, f.bankDefault, 150000, tc.isi)
+		if status < 400 || status >= 500 {
+			t.Fatalf("%s harus ditolak 4xx, dapat %d (%v)", tc.nama, status, body)
+		}
+	}
+	var invalidTopups, invalidProofs int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM deposit_topups`).Scan(&invalidTopups); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM payment_proofs WHERE purpose='deposit_topup'`).Scan(&invalidProofs); err != nil {
+		t.Fatal(err)
+	}
+	if invalidTopups != 0 || invalidProofs != 0 || f.objek.jumlah() != objekSebelum {
+		t.Fatalf("unggahan gagal meninggalkan data: topup=%d proof=%d objek=%d (sebelum=%d)",
+			invalidTopups, invalidProofs, f.objek.jumlah(), objekSebelum)
+	}
+
 	status, body = topupHTTP(t, f, cookiesA, csrfA, "", f.bankDefault, 150000, isi)
 	if status != http.StatusBadRequest {
 		t.Fatalf("tanpa Idempotency-Key harus 400, dapat %d (%v)", status, body)

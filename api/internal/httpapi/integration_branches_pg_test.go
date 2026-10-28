@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1977,12 +1978,18 @@ SELECT 1 FROM pg_stat_activity
 func TestPGTokenRegistrasiSHA256SekaliPakai(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
+	cookiesSA, csrfSA := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/settings",
+		`{"key":"token_hari","value":3}`, cookiesSA, csrfSA)
+	if status != http.StatusOK {
+		t.Fatalf("ubah token_hari harus 200, dapat %d (%v)", status, body)
+	}
 	cookiesMgr, csrfMgr := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
 
 	// Cabang tanpa akun, siap menerima token.
 	id := insertBranch(t, ctx, f.pool, "Grahita Cabang G", "Kepala G", "cabang-g@example.test", true)
 
-	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/branches/"+id+"/token",
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/admin/branches/"+id+"/token",
 		"", cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("generate token harus 200, dapat %d (%v)", status, body)
@@ -1997,8 +2004,8 @@ func TestPGTokenRegistrasiSHA256SekaliPakai(t *testing.T) {
 		t.Errorf("prefix harus 8 karakter pertama token, dapat %q", prefix)
 	}
 
-	// Database hanya memuat SHA-256 token + prefix + masa berlaku 14 hari
-	// (nilai `token_hari` bawaan PRD §4.9).
+	// Database hanya memuat SHA-256 token + prefix. Masa berlaku mengikuti
+	// `token_hari=3` yang baru saja diubah melalui API Superadmin.
 	var hashDB []byte
 	var prefixDB string
 	var expiresAt time.Time
@@ -2017,8 +2024,8 @@ func TestPGTokenRegistrasiSHA256SekaliPakai(t *testing.T) {
 	if prefixDB != prefix || usedAt != nil {
 		t.Errorf("prefix/used_at tidak sesuai: %q %v", prefixDB, usedAt)
 	}
-	if d := time.Until(expiresAt); d < 13*24*time.Hour || d > 15*24*time.Hour {
-		t.Errorf("masa berlaku harus ~14 hari, dapat %v", d)
+	if d := time.Until(expiresAt); d < 2*24*time.Hour || d > 4*24*time.Hour {
+		t.Errorf("masa berlaku harus ~3 hari sesuai setting, dapat %v", d)
 	}
 	// Token tersimpan juga hanya SATU baris aktif untuk cabang itu.
 	var jumlah int
@@ -2090,6 +2097,34 @@ func TestPGTokenRegistrasiSHA256SekaliPakai(t *testing.T) {
 	}
 	if beforePrefix != prefix {
 		t.Errorf("before harus memuat prefix token lama %q, dapat %q", prefix, beforePrefix)
+	}
+
+	// Registrasi menggunakan token lama tetap ditolak. Token pengganti dapat
+	// dipakai tepat sekali untuk membuat akun, lalu replay ditolak tanpa akun
+	// ganda.
+	registerBody := func(raw string) string {
+		return fmt.Sprintf(`{"token":%q,"telepon":"0821-3333-4444","password":"rahasia123","password_konfirmasi":"rahasia123"}`, raw)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/auth/register",
+		registerBody(token), nil, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("registrasi token lama harus 400, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "TOKEN_INVALID")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/auth/register",
+		registerBody(tokenBaru), nil, "")
+	if status != http.StatusCreated {
+		t.Fatalf("registrasi token pengganti harus 201, dapat %d (%v)", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/auth/register",
+		registerBody(tokenBaru), nil, "")
+	if status != http.StatusConflict {
+		t.Fatalf("pemakaian ulang token pengganti harus 409, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "TOKEN_USED")
+	var jumlahAkun int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM branch_users WHERE branch_id=$1`, id).Scan(&jumlahAkun); err != nil || jumlahAkun != 1 {
+		t.Fatalf("token pengganti harus menghasilkan tepat satu akun: jumlah=%d err=%v", jumlahAkun, err)
 	}
 
 	// Cabang yang sudah punya akun tidak butuh token; cabang nonaktif juga.

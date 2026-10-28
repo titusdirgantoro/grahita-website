@@ -92,10 +92,10 @@ func (s *Service) Approve(ctx context.Context, actor auth.Actor, orderID string)
 	if _, err := tx.Exec(ctx, `SELECT id FROM branches WHERE id=$1 FOR UPDATE`, branchID); err != nil {
 		return "", err
 	}
-	var submitted time.Time
+	var submitted *time.Time
 	var status string
 	var isTempo bool
-	var payDay int16
+	var payDay *int16
 	var total int64
 	if err := tx.QueryRow(ctx, `SELECT tanggal,status::text,is_tempo,tanggal_bayar_snapshot,total
 FROM orders WHERE id=$1 AND branch_id=$2 FOR UPDATE`, orderID, branchID).
@@ -108,6 +108,9 @@ FROM orders WHERE id=$1 AND branch_id=$2 FOR UPDATE`, orderID, branchID).
 	if status != "submitted" {
 		return "", ErrConflict
 	}
+	if submitted == nil || payDay == nil {
+		return "", ErrConflict
+	}
 	var hasAccount bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM branch_bank_accounts bba
  JOIN bank_accounts ba ON ba.id=bba.bank_account_id
@@ -118,7 +121,7 @@ FROM orders WHERE id=$1 AND branch_id=$2 FOR UPDATE`, orderID, branchID).
 		return "", ErrNoBankAccount
 	}
 	now := s.clk.Now().UTC()
-	due := DueDate(submitted, now, int(payDay))
+	due := DueDate(*submitted, now, int(*payDay))
 	approvedStatus := "approved_unpaid"
 	if total == 0 {
 		approvedStatus = "done"
