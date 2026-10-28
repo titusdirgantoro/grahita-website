@@ -84,6 +84,7 @@ func TestFilterTidakValidDitolak(t *testing.T) {
 		{"jenis tidak dikenal", Filter{Jenis: "jasa"}},
 		{"cabang bukan uuid", Filter{Cabang: []string{"bandung"}}},
 		{"rentang terbalik", Filter{Dari: "2026-10-31", Sampai: "2026-10-01"}},
+		{"halaman meluap", Filter{Halaman: 100000000, PerHalaman: 500}},
 	}
 	for _, k := range kasus {
 		if _, err := svc.List(context.Background(), aktorSA(), k.in); !errors.Is(err, ErrFilterInvalid) {

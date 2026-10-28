@@ -1587,7 +1587,7 @@ paths:
                       model: { type: string }
                       key_configured: { type: boolean, description: Khusus Gemini }
                       key_verified: { type: boolean, description: Khusus Gemini }
-                      key_updated_at: { type: string, format: date-time, nullable: true }
+                      key_updated_at: { type: [string, "null"], format: date-time }
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":

@@ -1,3 +1,4 @@
+import { useDeferredValue, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { api } from "@grahita/api-client";
@@ -63,15 +64,44 @@ interface Cabang {
 /** pKatalog — /katalog: grid produk aktif dengan harga khusus cabang. */
 export function KatalogPage() {
   const { data, memuat, galat } = useApi<Produk[]>("/catalog");
+  const [pencarian, setPencarian] = useState("");
+  const pencarianTertunda = useDeferredValue(pencarian);
+  const kataKunci = pencarianTertunda.trim().toLocaleLowerCase("id-ID");
+  const hasil = data?.filter((p) =>
+    `${p.nama} ${p.deskripsi ?? ""}`.toLocaleLowerCase("id-ID").includes(kataKunci),
+  );
 
   return (
     <>
       <PageHead title="Katalog" sub="Produk aktif dengan harga khusus cabang Anda" />
-      {data && data.length > 0 && !memuat && !galat ? (
+      <Card>
+        <div className={styles.catSearch}>
+          <Field label="Cari produk" htmlFor="cari-produk">
+            <Input
+              id="cari-produk"
+              type="search"
+              value={pencarian}
+              placeholder="Nama atau deskripsi produk"
+              onChange={(e) => setPencarian(e.target.value)}
+            />
+          </Field>
+          {pencarian.trim() ? (
+            <Button variant="secondary" onClick={() => setPencarian("")}>
+              Hapus pencarian
+            </Button>
+          ) : null}
+        </div>
+        {!memuat && !galat && data ? (
+          <p className="muted small" role="status">
+            {hasil?.length ?? 0} dari {data.length} produk ditampilkan
+          </p>
+        ) : null}
+      </Card>
+      {hasil && hasil.length > 0 && !memuat && !galat ? (
         // Satu kartu per produk seperti `article.card.prod` prototype, agar
         // produk di layar sempit tidak menyatu tanpa pemisah.
         <div className={styles.catGrid}>
-          {data.map((p) => (
+          {hasil.map((p) => (
             <Card as="article" className={styles.prod} key={p.id}>
               <div className={styles.row}>
                 <span className={styles.nm}>{p.nama}</span>
@@ -93,6 +123,10 @@ export function KatalogPage() {
             <SkeletonList rows={3} />
           ) : galat ? (
             <Notice tone="danger">{galat}</Notice>
+          ) : kataKunci && data && data.length > 0 ? (
+            <EmptyState icon="magnifying-glass">
+              Tidak ada produk yang cocok dengan pencarian Anda.
+            </EmptyState>
           ) : (
             <EmptyState icon="tag">
               Belum ada produk yang tersedia untuk cabang ini. Hubungi admin Pusat.

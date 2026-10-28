@@ -27,9 +27,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/grahita/portal/api/internal/auth"
 	"github.com/grahita/portal/api/internal/platform/clock"
@@ -53,6 +55,7 @@ const (
 const (
 	DefaultPerHalaman = 25
 	MaxPerHalaman     = 100
+	MaxCari           = 200
 	// MaxCatatanInternal membatasi panjang catatan internal admin.
 	MaxCatatanInternal = 2000
 )
@@ -371,6 +374,9 @@ func (s *AdminService) query(f AdminFilter) (AdminQuery, error) {
 		EmailGagal: f.EmailGagal,
 		Grup:       strings.ToLower(strings.TrimSpace(f.Grup)),
 	}
+	if utf8.RuneCountInString(q.Cari) > MaxCari {
+		return AdminQuery{}, fmt.Errorf("%w: pencarian terlalu panjang (maksimal %d karakter)", ErrAdminFilter, MaxCari)
+	}
 	if q.BranchID != "" && !uuidRe.MatchString(q.BranchID) {
 		return AdminQuery{}, fmt.Errorf("%w: cabang tidak valid", ErrAdminFilter)
 	}
@@ -420,6 +426,9 @@ func (s *AdminService) query(f AdminFilter) (AdminQuery, error) {
 	halaman := f.Halaman
 	if halaman <= 0 {
 		halaman = 1
+	}
+	if halaman > 1+math.MaxInt32/per {
+		return AdminQuery{}, fmt.Errorf("%w: halaman terlalu besar", ErrAdminFilter)
 	}
 	q.Limit = per
 	q.Offset = (halaman - 1) * per

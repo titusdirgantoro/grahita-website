@@ -42,7 +42,13 @@ function fetchAndalan(cnc = true, tempo = false, tempoHistory = false) {
       if (input.endsWith("/catalog")) {
         return json({
           data: [
-            { id: "p1", nama: "Bio Magnetik", jenis: "reguler", harga: 340000 },
+            {
+              id: "p1",
+              nama: "Bio Magnetik",
+              deskripsi: "Terapi kesehatan",
+              jenis: "reguler",
+              harga: 340000,
+            },
             {
               id: "p7",
               nama: "Sertifikat Psikotes",
@@ -100,6 +106,17 @@ describe("Customer Portal — shell & navigasi", () => {
     expect(screen.getByText("Sertifikat")).toBeDefined();
     // CP-KAT-04: produk Sertifikat mencantumkan biaya packaging yang berlaku.
     expect(screen.getByText(/Biaya packaging Rp\s?3\.000 ditambahkan otomatis per pesanan\./)).toBeDefined();
+
+    const pencarian = screen.getByRole("searchbox", { name: "Cari produk" });
+    fireEvent.change(pencarian, { target: { value: "kesehatan" } });
+    expect(await screen.findByText("1 dari 2 produk ditampilkan")).toBeDefined();
+    expect(screen.getByText("Bio Magnetik")).toBeDefined();
+    expect(screen.queryByText("Sertifikat Psikotes")).toBeNull();
+
+    fireEvent.change(pencarian, { target: { value: "tidak ada" } });
+    expect(await screen.findByText("Tidak ada produk yang cocok dengan pencarian Anda.")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Hapus pencarian" }));
+    expect(await screen.findByText("2 dari 2 produk ditampilkan")).toBeDefined();
   });
 
   it("menu Deposit hanya untuk cabang Cash & Carry", async () => {

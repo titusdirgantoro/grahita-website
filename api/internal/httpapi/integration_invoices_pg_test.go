@@ -6,9 +6,70 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 )
+
+// Riwayat invoice harus menampilkan angka dari versi PDF yang dipilih.
+// Revisi berikutnya menyimpan snapshot versi sebelumnya; memakai orders.total
+// untuk semua baris akan membuat total/jumlah item versi lama keliru.
+func TestPGInvoicesHistoricalVersionAmounts(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	id := tempoSubmitted(t, f, "2026-10-20", 100000)
+	manager, managerCSRF := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/orders/"+id+"/approve-tempo", `{}`, manager, managerCSRF)
+	if status != http.StatusOK {
+		t.Fatalf("approve Tempo: %d %v", status, body)
+	}
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("render invoice v0: %v", err)
+	}
+
+	superadmin, superadminCSRF := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	for version, qty := range []int{2, 3} {
+		request := reviseBody(fmt.Sprintf("koreksi ke versi %d", version+1),
+			fmt.Sprintf(`{"line_no":1,"nama_instansi":"UJI-Versi %d","qty":%d,"harga_satuan":100000}`, version+1, qty))
+		status, body := reviseHTTP(t, f, superadmin, superadminCSRF, id, request)
+		if status != http.StatusOK {
+			t.Fatalf("revisi v%d: %d %v", version+1, status, body)
+		}
+		if err := jalankanPekerjaanDone(t, f, id); err != nil {
+			t.Fatalf("render invoice v%d: %v", version+1, err)
+		}
+	}
+
+	branch, branchCSRF := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/invoices", "", branch, branchCSRF)
+	if status != http.StatusOK {
+		t.Fatalf("riwayat invoice: %d %v", status, body)
+	}
+	want := map[float64]float64{0: 100000, 1: 200000, 2: 300000}
+	seen := map[float64]bool{}
+	for _, item := range dataList(t, body) {
+		row := item.(map[string]any)
+		if row["order_id"] != id {
+			continue
+		}
+		version, ok := row["versi_dokumen"].(float64)
+		if !ok {
+			t.Fatalf("baris tanpa versi dokumen: %v", row)
+		}
+		seen[version] = true
+		if row["total"] != want[version] || row["jumlah_item"] != version+1 || row["dapat_diunduh"] != true {
+			t.Errorf("invoice v%.0f tidak cocok dengan snapshot/PDF: %v", version, row)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("versi invoice yang tampak %v, mau %v", seen, want)
+	}
+}
 
 // seedPesananSubmitted menyemai pesanan berstatus submitted: sudah punya nomor
 // dan tanggal (BR-04) tetapi belum punya dokumen — bentuk "invoice belum Done"

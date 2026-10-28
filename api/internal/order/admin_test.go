@@ -142,6 +142,8 @@ func TestAdminListNormalisasiFilter(t *testing.T) {
 		{Sampai: "2026-13-01"},
 		{Dari: "2026-10-08", Sampai: "2026-10-01"},
 		{BranchID: "bukan-uuid"},
+		{Cari: strings.Repeat("x", MaxCari+1)},
+		{Halaman: 100000000, PerHalaman: 100},
 	}
 	for i, f := range kasus {
 		if _, err := svc.List(context.Background(), aktorAdmin(auth.RoleManager), f); !errors.Is(err, ErrAdminFilter) {

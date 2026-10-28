@@ -1,5 +1,7 @@
 # Hasil uji keuangan Grahita — 28 Oktober 2026
 
+**Koreksi rekap kumulatif:** angka 41 PASS / 102 PARTIAL di bawah melewatkan hasil remediasi dan uji paralel 27 Oktober yang sudah selesai. Lihat [rekap dan pengujian PARTIAL lanjutan](hasil-uji-partial-2026-10-28.md) untuk hitungan kumulatif yang benar. Bukti tiap skenario dalam dokumen ini tetap berlaku.
+
 Pengujian dilakukan pada PostgreSQL, object storage, API, worker River, Gotenberg, Mailpit SMTP, serta portal Cabang dan Admin **khusus QA lokal**. Semua cabang, pesanan, bukti, dan email dalam laporan ini sintetis. Produksi tidak dipakai untuk transaksi keuangan. Kode aplikasi tidak diedit oleh penguji ini.
 
 | ID | Status QA | Bukti utama dan batasnya |

@@ -37,6 +37,18 @@
   gap: 16px;
 }
 
+.catSearch {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.catSearch > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
 .prod {
   display: flex;
   flex-direction: column;
@@ -79,6 +91,11 @@
 }
 
 @media (max-width: 767px) {
+  .catSearch {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .kpis {
     display: flex;
     overflow-x: auto;

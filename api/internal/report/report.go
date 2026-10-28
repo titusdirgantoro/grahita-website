@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -545,6 +546,9 @@ func (s *Service) query(f Filter) (Filter, Query, error) {
 	halaman := f.Halaman
 	if halaman <= 0 {
 		halaman = 1
+	}
+	if halaman > 1+math.MaxInt32/per {
+		return Filter{}, Query{}, fmt.Errorf("%w: halaman terlalu besar", ErrFilterInvalid)
 	}
 
 	q := Query{

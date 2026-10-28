@@ -105,9 +105,18 @@ SELECT o.id::text                     AS order_id,
        o.versi,
        o.is_cnc,
        o.is_tempo,
-       o.total,
-       COALESCE((SELECT sum(l.qty) FROM order_lines l
-                  WHERE l.order_id = o.id AND l.jenis = 'product'), 0)::bigint AS jumlah_item,
+       -- Pada versi lama, angka di daftar harus sama dengan PDF versi itu.
+       -- Snapshot sebelum revisi disimpan pada versi_lama; pesanan terbaru
+       -- tetap memakai nilai order sekarang. Revisi lawas tanpa snapshot
+       -- yang cocok tetap terbaca melalui fallback ke order.
+       COALESCE((rev.snapshot->>'total')::bigint, o.total)::bigint AS total,
+       COALESCE(
+         (SELECT sum((line->>'qty')::bigint)
+            FROM jsonb_array_elements(COALESCE(rev.snapshot->'lines', '[]'::jsonb)) AS line
+           WHERE line->>'jenis' = 'product'),
+         (SELECT sum(l.qty) FROM order_lines l
+           WHERE l.order_id = o.id AND l.jenis = 'product'),
+         0)::bigint AS jumlah_item,
        COALESCE(d.id::text, '')::text AS dokumen_id,
        COALESCE(d.versi, -1)          AS versi_dokumen,
        COALESCE(d.ukuran_byte, 0)::bigint AS ukuran_byte,
@@ -116,6 +125,13 @@ SELECT o.id::text                     AS order_id,
   LEFT JOIN documents d
          ON d.order_id = o.id
         AND d.jenis = 'invoice_pdf'
+  LEFT JOIN LATERAL (
+    SELECT ir.snapshot
+      FROM invoice_revisions ir
+     WHERE ir.order_id = o.id AND ir.versi_lama = d.versi
+     ORDER BY ir.versi_baru DESC
+     LIMIT 1
+  ) rev ON TRUE
  WHERE o.branch_id = sqlc.arg(branch_id)::uuid
    AND o.nomor IS NOT NULL
    AND (sqlc.narg(dari)::date IS NULL OR o.tanggal >= sqlc.narg(dari)::date)

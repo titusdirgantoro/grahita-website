@@ -301,6 +301,112 @@ VALUES($1,1,'product',$2,'Bio Magnetik',1,$3,$4)`, id, productID, total, strings
 	return id
 }
 
+func TestPGApproveTempoSebelumPadaDanSesudahJatuhTempo(t *testing.T) {
+	wib := time.FixedZone("WIB", 7*60*60)
+	for _, tc := range []struct {
+		name, approval, wantDue string
+	}{
+		{name: "sebelum", approval: "2026-11-04T10:00:00+07:00", wantDue: "2026-11-05"},
+		{name: "pada_hari_h", approval: "2026-11-05T23:59:59+07:00", wantDue: "2026-11-05"},
+		{name: "sesudah", approval: "2026-11-06T00:00:00+07:00", wantDue: "2026-12-05"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			approval, err := time.Parse(time.RFC3339, tc.approval)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clk := clock.Fixed(approval.In(wib))
+			f := newPGFixture(t, pgFixtureClock{receivables: clk})
+			if _, err := f.pool.Exec(t.Context(),
+				`UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+				t.Fatal(err)
+			}
+			id := tempoSubmitted(t, f, "2026-10-15", 100000)
+			cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+			status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+				f.srv.URL+"/api/v1/admin/orders/"+id+"/approve-tempo", `{}`, cookies, csrf)
+			if status != http.StatusOK || dataMap(t, body)["tempo_due_date"] != tc.wantDue {
+				t.Fatalf("approve %s: HTTP %d, body=%v, mau due %s", tc.name, status, body, tc.wantDue)
+			}
+			var orderDue, chargeDue, orderStatus string
+			var chargeCount int
+			if err := f.pool.QueryRow(t.Context(), `SELECT tempo_due_date::text,status::text FROM orders WHERE id=$1`, id).
+				Scan(&orderDue, &orderStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.pool.QueryRow(t.Context(), `SELECT due_date::text,count(*) OVER () FROM tempo_charges WHERE order_id=$1`, id).
+				Scan(&chargeDue, &chargeCount); err != nil {
+				t.Fatal(err)
+			}
+			if orderDue != tc.wantDue || chargeDue != tc.wantDue || orderStatus != "approved_unpaid" || chargeCount != 1 {
+				t.Fatalf("approve %s: order due=%s, charge due=%s, status=%s, charges=%d", tc.name, orderDue, chargeDue, orderStatus, chargeCount)
+			}
+		})
+	}
+}
+
+func TestPGTempoTanggalBayarSnapshotSaatMasterBerubah(t *testing.T) {
+	clk := clock.Fixed(time.Date(2026, time.October, 20, 10, 0, 0, 0, time.FixedZone("WIB", 7*60*60)))
+	f := newPGFixture(t, pgFixtureClock{orders: clk, receivables: clk})
+	ctx := t.Context()
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	branchCookies, branchCSRF := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	adminCookies, adminCSRF := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	product := produkKode(t, f, "P-01")
+	submit := func() string {
+		t.Helper()
+		id := buatDraftHTTP(t, f, branchCookies, branchCSRF, product, 1)["id"].(string)
+		resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit",
+			branchCookies, branchCSRF, nil, "", "tempo")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("submit Tempo: %d %+v", resp.StatusCode, body)
+		}
+		return id
+	}
+	first := submit()
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut,
+		f.srv.URL+"/api/v1/admin/branches/"+f.branchA,
+		`{"tanggal_bayar":10}`, adminCookies, adminCSRF)
+	if status != http.StatusOK {
+		t.Fatalf("ubah tanggal bayar melalui API Admin: %d %+v", status, body)
+	}
+	second := submit()
+	for _, tc := range []struct {
+		id      string
+		payDay  int16
+		wantDue string
+	}{
+		{id: first, payDay: 5, wantDue: "2026-11-05"},
+		{id: second, payDay: 10, wantDue: "2026-11-10"},
+	} {
+		var snapshot int16
+		if err := f.pool.QueryRow(ctx, `SELECT tanggal_bayar_snapshot FROM orders WHERE id=$1`, tc.id).Scan(&snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if snapshot != tc.payDay {
+			t.Fatalf("snapshot pesanan %s: %d, mau %d", tc.id, snapshot, tc.payDay)
+		}
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodPost,
+			f.srv.URL+"/api/v1/admin/orders/"+tc.id+"/approve-tempo", `{}`, adminCookies, adminCSRF)
+		if status != http.StatusOK || dataMap(t, body)["tempo_due_date"] != tc.wantDue {
+			t.Fatalf("approve pesanan %s: HTTP %d body=%+v, mau due %s", tc.id, status, body, tc.wantDue)
+		}
+		var orderDue, chargeDue string
+		if err := f.pool.QueryRow(ctx, `SELECT tempo_due_date::text FROM orders WHERE id=$1`, tc.id).Scan(&orderDue); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.pool.QueryRow(ctx, `SELECT due_date::text FROM tempo_charges WHERE order_id=$1`, tc.id).Scan(&chargeDue); err != nil {
+			t.Fatal(err)
+		}
+		if orderDue != tc.wantDue || chargeDue != tc.wantDue {
+			t.Fatalf("due pesanan %s berubah setelah master diubah: order=%s charge=%s", tc.id, orderDue, chargeDue)
+		}
+	}
+}
+
 func TestPGTagihanHistorisSesudahIzinTempoDicabut(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
@@ -399,6 +505,20 @@ func TestPGPiutangCabangAdminDanEksporSelaras(t *testing.T) {
 	}
 	branchCookies, _ := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	adminCookies, _ := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	managerCookies, _ := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	for _, tc := range []struct {
+		role    string
+		cookies []*http.Cookie
+	}{
+		{role: "manager", cookies: managerCookies},
+		{role: "branch", cookies: branchCookies},
+	} {
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+			f.srv.URL+"/api/v1/admin/tempo/export", "", tc.cookies, "")
+		if status != http.StatusForbidden {
+			t.Fatalf("ekspor piutang oleh %s harus 403, dapat %d (%v)", tc.role, status, body)
+		}
+	}
 	getOverview := func(path string, cookies []*http.Cookie) map[string]any {
 		t.Helper()
 		status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+path, "", cookies, "")
