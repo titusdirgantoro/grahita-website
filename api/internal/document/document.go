@@ -228,23 +228,32 @@ type Cabang struct {
 // dan serial datang apa adanya dari database (sudah di-snapshot saat submit,
 // BR-05), jadi dokumen selalu cocok dengan pesanan yang tersimpan.
 type Order struct {
-	ID           string
-	Nomor        string
-	Status       string
-	Versi        int
-	BranchID     string
-	IsCNC        bool
-	IsTempo      bool
-	TempoDueDate time.Time
-	IsSertifikat bool
-	Total        int64
-	Catatan      string
+	ID            string
+	Nomor         string
+	Status        string
+	Versi         int
+	BranchID      string
+	IsCNC         bool
+	IsTempo       bool
+	TempoDueDate  time.Time
+	TempoDueParts []TempoDuePart
+	IsSertifikat  bool
+	Total         int64
+	Catatan       string
 	// Tanggal adalah tanggal bisnis (WIB) dari kolom `date`; hanya ada setelah
 	// submit (BR-04).
 	Tanggal  time.Time
 	Cabang   Cabang
 	Lines    []Line
 	Rekening []Rekening
+}
+
+// TempoDuePart adalah bagian nilai invoice dengan tanggal jatuh temponya.
+// Revisi Tempo dapat menambah nilai dengan jatuh tempo bulan berikutnya,
+// sementara nilai awal tetap pada tanggal semula.
+type TempoDuePart struct {
+	DueDate time.Time
+	Amount  int64
 }
 
 // SaveRequest adalah satu unit kerja penyimpanan metadata dokumen: seluruh

@@ -155,6 +155,34 @@ func TestPesananSelesaiIdempotenSaatDiulang(t *testing.T) {
 	}
 }
 
+func TestPesananSelesaiSetelahRevisiTransferMengirimInvoiceVersiBaru(t *testing.T) {
+	docs := &docsPalsu{docs: []document.Document{
+		{ID: "invoice-v1", Jenis: document.JenisInvoicePDF, Versi: 1},
+		{ID: "sj-xlsx-v1", Jenis: document.JenisSuratJalanXLSX, Versi: 1},
+		{ID: "sj-pdf-v1", Jenis: document.JenisSuratJalanPDF, Versi: 1},
+	}}
+	mail := newMailPalsu()
+	// Simulasikan dokumen pertama sudah dikirim sebelum revisi total.
+	for _, jenis := range jenisEmailSaatDone {
+		mail.adaSudah[jenis] = true
+	}
+	svc := NewService(docs, mail)
+	hasil, err := svc.PesananSelesai(context.Background(), "order-1")
+	if err != nil {
+		t.Fatalf("penyelesaian revisi harus berhasil: %v", err)
+	}
+	if len(hasil.EmailDibuat) != 2 || mail.versiTerakhir != 1 {
+		t.Fatalf("invoice revisi v1 harus dikirim ke cabang dan admin: %+v, versi %d", hasil, mail.versiTerakhir)
+	}
+	if len(mail.jenis) != 0 || len(mail.jenisVersi) != 2 {
+		t.Fatalf("email awal dan surat jalan tidak boleh dikirim ulang: awal=%v revisi=%v", mail.jenis, mail.jenisVersi)
+	}
+	hasil, err = svc.PesananSelesai(context.Background(), "order-1")
+	if err != nil || len(hasil.EmailDibuat) != 0 || len(hasil.EmailSudahAda) != 2 {
+		t.Fatalf("pekerjaan ulang harus idempoten: %+v, err=%v", hasil, err)
+	}
+}
+
 func TestPesananSelesaiMenahanEmailSaatDokumenGagal(t *testing.T) {
 	docs := &docsPalsu{err: document.ErrRenderUnavailable}
 	mail := newMailPalsu()

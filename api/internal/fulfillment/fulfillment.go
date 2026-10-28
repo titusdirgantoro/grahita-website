@@ -133,7 +133,22 @@ func (s *Service) PesananSelesai(ctx context.Context, orderID string) (Hasil, er
 	if len(dokumen) == 0 {
 		return hasil, fmt.Errorf("dokumen pesanan %s belum tersedia", id)
 	}
-	if err := s.antreEmail(ctx, id, jenisEmailSaatDone, 0, &hasil); err != nil {
+	// Pesanan Transfer yang direvisi dengan kenaikan total kembali ke jalur
+	// settlement. Saat pelunasannya selesai, Ensure membuat invoice revisi.
+	// Email versi awal sudah pernah dikirim, jadi versi baru harus memakai
+	// penjaga per versi seperti jalur revisi biasa.
+	versi := 0
+	for _, d := range dokumen {
+		if d.Jenis == document.JenisInvoicePDF {
+			versi = d.Versi
+			break
+		}
+	}
+	jenis := jenisEmailSaatDone
+	if versi > 0 {
+		jenis = jenisEmailSaatRevisi
+	}
+	if err := s.antreEmail(ctx, id, jenis, versi, &hasil); err != nil {
 		return hasil, err
 	}
 	return hasil, nil

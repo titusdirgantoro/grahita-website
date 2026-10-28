@@ -175,6 +175,32 @@ WHERE bba.branch_id=$1 AND bba.is_allowed AND ba.is_active ORDER BY ba.bank,ba.i
 	if row.TempoDueDate != nil {
 		out.TempoDueDate = *row.TempoDueDate
 	}
+	if row.IsTempo {
+		dueRows, err := r.pool.Query(ctx, `SELECT due_date,SUM(amount)::bigint
+FROM tempo_charges WHERE order_id=$1 AND amount>0
+GROUP BY due_date ORDER BY due_date`, orderID)
+		if err != nil {
+			return document.Order{}, fmt.Errorf("baca rincian jatuh tempo invoice: %w", err)
+		}
+		var totalCharges int64
+		for dueRows.Next() {
+			var part document.TempoDuePart
+			if err := dueRows.Scan(&part.DueDate, &part.Amount); err != nil {
+				dueRows.Close()
+				return document.Order{}, fmt.Errorf("baca rincian jatuh tempo invoice: %w", err)
+			}
+			out.TempoDueParts = append(out.TempoDueParts, part)
+			totalCharges += part.Amount
+		}
+		if err := dueRows.Err(); err != nil {
+			dueRows.Close()
+			return document.Order{}, fmt.Errorf("baca rincian jatuh tempo invoice: %w", err)
+		}
+		dueRows.Close()
+		if totalCharges != out.Total {
+			return document.Order{}, fmt.Errorf("invariant invoice Tempo: rincian jatuh tempo %d tidak sama dengan total %d", totalCharges, out.Total)
+		}
+	}
 
 	out.Lines = make([]document.Line, 0, len(lines))
 	for _, l := range lines {

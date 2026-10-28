@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -95,6 +96,36 @@ func TestInvoiceHTMLVersiDanPenanda(t *testing.T) {
 	}
 	if strings.Contains(html, "jatuh tempo") {
 		t.Error("invoice C&C tidak lagi memuat jatuh tempo")
+	}
+}
+
+func TestInvoiceTempoRevisiMenunjukkanNilaiPerJatuhTempo(t *testing.T) {
+	o := fixtureOrder("o1")
+	o.IsTempo = true
+	o.Versi = 2
+	o.Total = 300_000
+	o.TempoDueDate = time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
+	o.TempoDueParts = []TempoDuePart{
+		{DueDate: o.TempoDueDate, Amount: 250_000},
+		{DueDate: time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC), Amount: 50_000},
+	}
+	b, err := invoiceHTML(o)
+	if err != nil {
+		t.Fatalf("invoiceHTML: %v", err)
+	}
+	html := string(b)
+	for _, want := range []string{
+		"PEMBAYARAN TEMPO — jatuh tempo sesuai rincian",
+		"Rincian jatuh tempo:",
+		"27 Oktober 2026", "Rp 250.000",
+		"05 November 2026", "Rp 50.000",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("invoice Tempo revisi harus memuat %q", want)
+		}
+	}
+	if strings.Contains(html, "PEMBAYARAN TEMPO — jatuh tempo 27 Oktober 2026") {
+		t.Fatal("seluruh total invoice tidak boleh digambarkan jatuh tempo pada tanggal awal")
 	}
 }
 

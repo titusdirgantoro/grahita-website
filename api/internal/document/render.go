@@ -106,6 +106,12 @@ func terbilang(n int64) string {
 // terbit setelah settlement lengkap.
 func penandaPembayaran(o Order) string {
 	if o.IsTempo {
+		if len(o.TempoDueParts) > 1 {
+			return "PEMBAYARAN TEMPO — jatuh tempo sesuai rincian"
+		}
+		if len(o.TempoDueParts) == 1 {
+			return "PEMBAYARAN TEMPO — jatuh tempo " + FormatTanggal(o.TempoDueParts[0].DueDate)
+		}
 		return "PEMBAYARAN TEMPO — jatuh tempo " + FormatTanggal(o.TempoDueDate)
 	}
 	if o.IsCNC {
@@ -132,6 +138,11 @@ type rekeningView struct {
 	AtasNama string
 }
 
+type tempoDueView struct {
+	Tanggal string
+	Jumlah  string
+}
+
 // invoiceView adalah model tampilan invoice.
 type invoiceView struct {
 	Logo        template.URL
@@ -139,6 +150,7 @@ type invoiceView struct {
 	Versi       string
 	Tanggal     string
 	Penanda     string
+	JadwalTempo []tempoDueView
 	Cabang      string
 	Kepala      string
 	Email       string
@@ -228,12 +240,22 @@ func newInvoiceView(o Order) invoiceView {
 	for _, l := range o.Lines {
 		produksi += l.Subtotal
 	}
+	var jadwalTempo []tempoDueView
+	if o.IsTempo && len(o.TempoDueParts) > 1 {
+		for _, part := range o.TempoDueParts {
+			jadwalTempo = append(jadwalTempo, tempoDueView{
+				Tanggal: FormatTanggal(part.DueDate),
+				Jumlah:  FormatRupiah(part.Amount),
+			})
+		}
+	}
 	return invoiceView{
 		Logo:        logoGrahitaURL,
 		Nomor:       o.Nomor,
 		Versi:       versiRevisi(o.Versi),
 		Tanggal:     FormatTanggal(o.Tanggal),
 		Penanda:     penandaPembayaran(o),
+		JadwalTempo: jadwalTempo,
 		Cabang:      o.Cabang.Nama,
 		Kepala:      o.Cabang.Kepala,
 		Email:       o.Cabang.Email,
@@ -371,6 +393,8 @@ body { margin: 0; color: #22202b; font: 9px Arial, Helvetica, sans-serif; -webki
 .summary td:last-child { text-align: right; white-space: nowrap; }
 .summary tr.grand td { padding: 9px 6px; background: #4a2879; color: white; border: 0; font-weight: bold; font-size: 10px; }
 .payment { margin-top: 5px; font-size: 8px; color: #544a60; }
+.tempo-schedule { margin-top: 5px; font-size: 8px; color: #33224c; }
+.tempo-schedule div { display: flex; justify-content: space-between; gap: 8px; padding-top: 2px; }
 .bank { margin-top: 5px; font-size: 8px; line-height: 1.4; }
 .footer { display: flex; justify-content: space-between; border-top: 1px solid #d9d1e4; margin-top: 12px; padding-top: 6px; color: #71697b; font-size: 7.5px; }
 </style></head><body>
@@ -404,7 +428,7 @@ body { margin: 0; color: #22202b; font: 9px Arial, Helvetica, sans-serif; -webki
     <div class="bank"><strong>Rekening pembayaran:</strong><br>{{if .Rekening}}{{range .Rekening}}{{.Bank}} — {{.Nomor}} a.n. {{.AtasNama}}<br>{{end}}{{else}}Hubungi admin Pusat.{{end}}</div>
   </div>
   <div class="sign">Tangerang, {{.Tanggal}}<br>Hormat kami,<div class="line"></div><div class="hint">Nama jelas</div></div>
-  <div><table class="summary"><tr><td>Total tagihan periode ini</td><td>{{.Total}}</td></tr><tr><td>Tagihan lama / lebih setor</td><td>—</td></tr><tr><td>Tagihan baru</td><td>—</td></tr><tr class="grand"><td>TOTAL TAGIHAN</td><td>{{.Total}}</td></tr></table><div class="payment">{{.Penanda}}</div></div>
+  <div><table class="summary"><tr><td>Total tagihan periode ini</td><td>{{.Total}}</td></tr><tr><td>Tagihan lama / lebih setor</td><td>—</td></tr><tr><td>Tagihan baru</td><td>—</td></tr><tr class="grand"><td>TOTAL TAGIHAN</td><td>{{.Total}}</td></tr></table><div class="payment">{{.Penanda}}</div>{{if .JadwalTempo}}<div class="tempo-schedule"><strong>Rincian jatuh tempo:</strong>{{range .JadwalTempo}}<div><span>{{.Tanggal}}</span><span>{{.Jumlah}}</span></div>{{end}}</div>{{end}}</div>
 </section>
 <footer class="footer"><span>S.E. &amp; O. — Kesalahan dan kelalaian dikecualikan. Mohon cocokkan rincian sebelum melakukan pembayaran.</span><span>PT GRAHITA INDONESIA</span></footer>
 </body></html>`
