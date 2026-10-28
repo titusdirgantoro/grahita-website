@@ -50,3 +50,9 @@ Skenario OCR provider nyata VER-08/09/10 tetap **BLOCKED** sampai key Gemini dii
 - `go vet`, build server, pemeriksaan rahasia, dan pemeriksaan migrasi kompatibel: **PASS**.
 - Typecheck kedua portal, 9+14 berkas tes portal (77+106 tes), paket UI/API client, dan build produksi kedua portal: **PASS** dengan `NODE_ENV` tes yang benar (`/opt/temp/grahita-web-gates-2026-10-28.log`).
 - OpenAPI 3.1: **valid** setelah `nullable` lama pada status kunci OCR disesuaikan ke union `string|null`; 10 warning dokumentasi lama tetap tidak memblokir (`/opt/temp/grahita-openapi-lint-2026-10-28.log`).
+
+## Rilis produksi
+
+Perubahan dirilis pada 28 Oktober 2026 pukul 16:10 WIB. Commit sumber `b59f374f` diterapkan sebagai commit operator `e7003d9c`. Skrip deploy membuat backup database `/srv/grahita-backups/grahita-20261028-090822.dump` sebelum build dan pergantian container. Deploy selesai tanpa rollback.
+
+Pemeriksaan sesudah deploy: API `healthy`; web dan worker berjalan; portal Admin, portal Cabang, dan `/api/v1/meta` merespons HTTP 200. Bundle portal Cabang yang aktif memuat teks pencarian Katalog baru. Log lima menit pertama API dan worker tidak memuat `panic`, `fatal`, atau level error. Pemeriksaan produksi ini bersifat baca saja; tidak ada pesanan, bukti pembayaran, atau transaksi sintetis yang dibuat di produksi.
