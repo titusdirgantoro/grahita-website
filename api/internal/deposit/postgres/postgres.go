@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	auditpg "github.com/grahita/portal/api/internal/audit/postgres"
 	"github.com/grahita/portal/api/internal/deposit"
 	"github.com/grahita/portal/api/internal/platform/database"
 )
@@ -351,6 +352,11 @@ WHERE id=$1 AND status IN ('pending_review','needs_review')`, in.TopupID, in.Amo
 	if err != nil {
 		return deposit.TopupApprovalResult{}, err
 	}
+	if in.Audit.Entity != "" {
+		if err := auditpg.Insert(ctx, tx, in.Audit); err != nil {
+			return deposit.TopupApprovalResult{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return deposit.TopupApprovalResult{}, err
 	}
@@ -494,6 +500,11 @@ WHERE reverses_transaction_id=$1 AND (created_at,id) <= ($2,$3)`,
 	out, a, account, err := applyReversal(ctx, tx, a, in)
 	if err != nil {
 		return deposit.ReversalResult{}, err
+	}
+	if in.Audit.Entity != "" {
+		if err := auditpg.Insert(ctx, tx, in.Audit); err != nil {
+			return deposit.ReversalResult{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return deposit.ReversalResult{}, err

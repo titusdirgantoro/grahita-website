@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/grahita/portal/api/internal/audit"
 )
 
 var (
@@ -78,6 +80,7 @@ type TopupApprovalInput struct {
 	RequestFingerprint     []byte
 	ActorID                string
 	Reason                 string
+	Audit                  audit.Entry
 }
 
 type TopupApprovalResult struct {
@@ -127,6 +130,7 @@ type ReversalInput struct {
 	ActorKind              string
 	ActorID                string
 	Reason                 string
+	Audit                  audit.Entry
 }
 
 type ReversalResult struct {

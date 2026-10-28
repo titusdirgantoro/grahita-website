@@ -604,6 +604,10 @@ func (s *Service) verifyTopup(ctx context.Context, actor auth.Actor, t Topup, in
 		IdempotencyKey:     in.IdempotencyKey,
 		RequestFingerprint: fingerprint("topup_verify", t.ID, bankID, in.ApprovedAmount),
 		ActorID:            actor.UserID, Reason: reason,
+		Audit: audit.NewEntry(ctx, actor, audit.EntityDepositTopup, t.ID, audit.ActionVerify,
+			map[string]any{"status": t.Status, "declared_amount": t.DeclaredAmount},
+			map[string]any{"status": TopupVerified, "approved_amount": in.ApprovedAmount,
+				"bank_account_id": bankID, "reason": reason}),
 	})
 	if err != nil {
 		return DecisionResult{}, err
@@ -819,6 +823,9 @@ func (s *Service) Reverse(ctx context.Context, actor auth.Actor, orderID, alloca
 		RequestFingerprint: fingerprint("reverse", allocationID, in.Amount, in.ExpectedJournalVersion,
 			strings.TrimSpace(in.Reason)),
 		ActorKind: string(actor.Kind), ActorID: actor.UserID, Reason: strings.TrimSpace(in.Reason),
+		Audit: audit.NewEntry(ctx, actor, audit.EntityDepositAllocation, allocationID, audit.ActionReverse,
+			nil, map[string]any{"order_id": orderID, "amount": in.Amount,
+				"reason": strings.TrimSpace(in.Reason)}),
 	})
 	if errors.Is(err, ErrNotFound) {
 		return ReversalResponse{}, ErrAllocationNotFound

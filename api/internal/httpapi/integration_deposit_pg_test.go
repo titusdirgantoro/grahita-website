@@ -295,6 +295,80 @@ func TestPGDepositKreditHanyaSuperadmin(t *testing.T) {
 		WHERE entity='deposit_topup' AND entity_id=$1 AND action='review'`, topupID).Scan(&audit); err != nil || audit != 1 {
 		t.Fatalf("review harus tercatat sekali di audit, dapat %d (err %v)", audit, err)
 	}
+
+	// Manager boleh menolak dengan alasan, tetapi penolakan tidak menambah
+	// saldo. Tanpa alasan tetap ditolak sebelum keputusan tersimpan.
+	status, body = topupHTTP(t, f, cookiesA, csrfA, "k-reject", f.bankDefault, 125000, berkasJPEGUji("kredit-reject"))
+	if status != http.StatusCreated {
+		t.Fatalf("top-up untuk reject harus 201, dapat %d (%v)", status, body)
+	}
+	rejectID := dataObj(body)["id"].(string)
+	rejectURL := f.srv.URL + "/api/v1/admin/deposit-topups/" + rejectID + "/decision"
+	status, body = depositReq(t, http.MethodPost, rejectURL, `{"action":"reject"}`, cookiesMgr, csrfMgr, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("reject tanpa alasan harus 400, dapat %d (%v)", status, body)
+	}
+	status, body = depositReq(t, http.MethodPost, rejectURL,
+		`{"action":"reject","reason":"Bukti tidak menunjukkan transfer"}`, cookiesMgr, csrfMgr, "")
+	if status != http.StatusOK || dataObj(body)["topup"].(map[string]any)["status"] != "rejected" {
+		t.Fatalf("reject Manager harus rejected, dapat %d (%v)", status, body)
+	}
+	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != 200000 {
+		t.Fatalf("reject tidak boleh menambah saldo, dapat %d", saldo)
+	}
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_logs
+		WHERE entity='deposit_topup' AND entity_id=$1 AND action='reject'`, rejectID).Scan(&audit); err != nil || audit != 1 {
+		t.Fatalf("reject harus tercatat sekali di audit, dapat %d (err %v)", audit, err)
+	}
+
+	// Superadmin boleh menyetujui nominal berbeda hanya dengan alasan. Nilai
+	// journal, saldo, audit, dan sumber bukti harus memakai nominal final.
+	status, body = topupHTTP(t, f, cookiesA, csrfA, "k-different", f.bankDefault, 200000, berkasJPEGUji("kredit-different"))
+	if status != http.StatusCreated {
+		t.Fatalf("top-up nominal berbeda harus 201, dapat %d (%v)", status, body)
+	}
+	differentID := dataObj(body)["id"].(string)
+	differentURL := f.srv.URL + "/api/v1/admin/deposit-topups/" + differentID + "/decision"
+	status, body = depositReq(t, http.MethodPost, differentURL,
+		`{"action":"verify","approved_amount":180000,"reason":"Mutasi bank yang sah hanya Rp180.000"}`,
+		cookiesSA, csrfSA, "sa-different")
+	if status != http.StatusOK || dataObj(body)["topup"].(map[string]any)["status"] != "verified" {
+		t.Fatalf("verify nominal berbeda beralasan harus 200, dapat %d (%v)", status, body)
+	}
+	if saldo, versi, _, _ := saldoCabang(t, f, cookiesA); saldo != 380000 || versi != 2 {
+		t.Fatalf("saldo harus bertambah tepat nominal final: saldo=%d versi=%d", saldo, versi)
+	}
+	var approvedAmount int64
+	var proofLinked, auditLinked int
+	if err := f.pool.QueryRow(context.Background(), `SELECT t.amount,
+		(t.source_proof_id=dt.payment_proof_id)::int,
+		EXISTS(SELECT 1 FROM audit_logs a WHERE a.entity='deposit_topup' AND a.entity_id=dt.id AND a.action='verify')::int
+		FROM deposit_topups dt
+		JOIN deposit_verification_logs v ON v.topup_id=dt.id
+		JOIN branch_deposit_transactions t ON t.deposit_verification_log_id=v.id
+		WHERE dt.id=$1 AND t.kind='topup_credit'`, differentID).Scan(&approvedAmount, &proofLinked, &auditLinked); err != nil {
+		t.Fatalf("baca jurnal top-up nominal berbeda: %v", err)
+	}
+	if approvedAmount != 180000 || proofLinked != 1 || auditLinked != 1 {
+		t.Fatalf("jurnal/audit/sumber bukti salah: amount=%d proof=%d audit=%d", approvedAmount, proofLinked, auditLinked)
+	}
+	status, body = depositReq(t, http.MethodPost, differentURL,
+		`{"action":"verify","approved_amount":180000,"reason":"Mutasi bank yang sah hanya Rp180.000"}`,
+		cookiesSA, csrfSA, "sa-different")
+	if status != http.StatusOK || dataObj(body)["replayed"] != true {
+		t.Fatalf("retry verify top-up harus replay, dapat %d (%v)", status, body)
+	}
+	var logs, journals, audits int
+	if err := f.pool.QueryRow(context.Background(), `SELECT
+		(SELECT count(*) FROM deposit_verification_logs WHERE topup_id=$1 AND result='verified'),
+		(SELECT count(*) FROM branch_deposit_transactions t JOIN deposit_verification_logs v ON v.id=t.deposit_verification_log_id WHERE v.topup_id=$1),
+		(SELECT count(*) FROM audit_logs WHERE entity='deposit_topup' AND entity_id=$1 AND action='verify')`,
+		differentID).Scan(&logs, &journals, &audits); err != nil {
+		t.Fatalf("hitung replay top-up: %v", err)
+	}
+	if logs != 1 || journals != 1 || audits != 1 {
+		t.Fatalf("retry tidak boleh menggandakan log/jurnal/audit: log=%d journal=%d audit=%d", logs, journals, audits)
+	}
 }
 
 // TestPGDepositAlokasiParalelDanIsolasi: alokasi paralel ke beberapa order dari
@@ -309,7 +383,29 @@ func TestPGDepositAlokasiParalelDanIsolasi(t *testing.T) {
 	cookiesB, csrfB := pgLogin(t, f.srv, "b@example.test", "rahasia123")
 	orderA := insertOrderSubmitted(t, f, f.branchA, "2026-10-1001", 80000)
 	body := fmt.Sprintf(`{"amount":10000,"expected_journal_version":%d,"expected_order_version":0}`, versi)
-	status, res := depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations", body, cookiesB, csrfB, "b-1")
+	status, res := depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations", body, cookiesA, csrfA, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("alokasi tanpa Idempotency-Key harus 400, dapat %d (%v)", status, res)
+	}
+	melebihi := fmt.Sprintf(`{"amount":90000,"expected_journal_version":%d,"expected_order_version":0}`, versi)
+	status, res = depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations", melebihi, cookiesA, csrfA, "a-over-order")
+	if status != http.StatusConflict || errCode(res) != "DEPOSIT_ALLOCATION_EXCEEDS_ORDER" {
+		t.Fatalf("alokasi melebihi sisa order harus 409 DEPOSIT_ALLOCATION_EXCEEDS_ORDER, dapat %d (%v)", status, res)
+	}
+	orderDone := insertOrder(t, f, f.branchA, "done", "2026-10-1002")
+	status, res = depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderDone+"/deposit-allocations", body, cookiesA, csrfA, "a-done")
+	if status != http.StatusConflict || errCode(res) != "ORDER_ALREADY_DONE" {
+		t.Fatalf("alokasi ke order Done harus 409 ORDER_ALREADY_DONE, dapat %d (%v)", status, res)
+	}
+	orderVersionStale := fmt.Sprintf(`{"amount":10000,"expected_journal_version":%d,"expected_order_version":99}`, versi)
+	status, res = depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations", orderVersionStale, cookiesA, csrfA, "a-order-stale")
+	if status != http.StatusConflict || errCode(res) != "DEPOSIT_VERSION_CONFLICT" {
+		t.Fatalf("versi order basi harus 409 DEPOSIT_VERSION_CONFLICT, dapat %d (%v)", status, res)
+	}
+	if saldo, currentVersion, _, _ := saldoCabang(t, f, cookiesA); saldo != 100000 || currentVersion != versi {
+		t.Fatalf("seluruh alokasi ditolak tidak boleh mendebit: saldo=%d versi=%d", saldo, currentVersion)
+	}
+	status, res = depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations", body, cookiesB, csrfB, "b-1")
 	if status != http.StatusNotFound {
 		t.Fatalf("cabang lain harus 404, dapat %d (%v)", status, res)
 	}
@@ -355,6 +451,27 @@ func TestPGDepositAlokasiParalelDanIsolasi(t *testing.T) {
 	saldo, versi2, _, _ := saldoCabang(t, f, cookiesA)
 	if saldo != 40000 || versi2 != versi+1 {
 		t.Fatalf("saldo setelah alokasi paralel salah: saldo=%d versi=%d", saldo, versi2)
+	}
+
+	// Satu alokasi sah dan replay dengan key/payload yang sama hanya menulis
+	// satu debit serta satu allocation.
+	replayBody := fmt.Sprintf(`{"amount":10000,"expected_journal_version":%d,"expected_order_version":0}`, versi2)
+	status, firstReplay := depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations",
+		replayBody, cookiesA, csrfA, "a-replay")
+	if status != http.StatusCreated {
+		t.Fatalf("alokasi untuk replay harus 201, dapat %d (%v)", status, firstReplay)
+	}
+	status, res = depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations",
+		replayBody, cookiesA, csrfA, "a-replay")
+	if status != http.StatusOK || dataObj(res)["replayed"] != true {
+		t.Fatalf("replay alokasi harus 200 replayed, dapat %d (%v)", status, res)
+	}
+	versi2 = num(dataObj(firstReplay)["balance"].(map[string]any)["journal_version"])
+	if n := hitungSQL(t, f, `SELECT count(*) FROM deposit_allocations WHERE order_id=$1`, orderA); n != 1 {
+		t.Fatalf("replay harus menyisakan satu allocation, dapat %d", n)
+	}
+	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != 30000 {
+		t.Fatalf("replay tidak boleh mendebit dua kali, saldo=%d", saldo)
 	}
 	var journal, cache int64
 	if err := f.pool.QueryRow(context.Background(), `SELECT
@@ -413,6 +530,33 @@ func TestPGDepositReversalAdmin(t *testing.T) {
 		fmt.Sprintf(`{"amount":50000,"expected_journal_version":%d,"reason":"Terlalu besar"}`, versi), cookiesMgr, csrfMgr, "rev-2")
 	if status != http.StatusConflict || errCode(res) != "REVERSAL_EXCEEDS_AVAILABLE" {
 		t.Fatalf("reversal melebihi bagian aktif harus 409 REVERSAL_EXCEEDS_AVAILABLE, dapat %d (%v)", status, res)
+	}
+
+	// Reverse seluruh sisa aktif. Retry dengan key/payload sama harus replay,
+	// tanpa kredit kedua. Sumber transaksi dan audit tetap terhubung.
+	fullBody := fmt.Sprintf(`{"amount":40000,"expected_journal_version":%d,"reason":"Batalkan seluruh sisa alokasi"}`, versi)
+	status, full := depositReq(t, http.MethodPost, url, fullBody, cookiesMgr, csrfMgr, "rev-full")
+	if status != http.StatusOK || num(dataObj(full)["reversed_amount"]) != 60000 || num(dataObj(full)["active_amount"]) != 0 {
+		t.Fatalf("reversal seluruh sisa salah: %d (%v)", status, full)
+	}
+	status, res = depositReq(t, http.MethodPost, url, fullBody, cookiesMgr, csrfMgr, "rev-full")
+	if status != http.StatusOK || dataObj(res)["replayed"] != true {
+		t.Fatalf("retry reversal seluruh harus replay, dapat %d (%v)", status, res)
+	}
+	versi = num(dataObj(full)["balance"].(map[string]any)["journal_version"])
+	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != 100000 {
+		t.Fatalf("reversal seluruh harus mengembalikan saldo ke 100000, dapat %d", saldo)
+	}
+	var reversalJournal, reversalAudit int
+	if err := f.pool.QueryRow(context.Background(), `SELECT
+		count(*) FILTER (WHERE t.kind='allocation_reversal_credit' AND t.reverses_transaction_id=a.debit_transaction_id),
+		(SELECT count(*) FROM audit_logs l WHERE l.entity='deposit_allocation' AND l.entity_id=a.id AND l.action='reverse')
+		FROM deposit_allocations a LEFT JOIN branch_deposit_transactions t ON t.reverses_transaction_id=a.debit_transaction_id
+		WHERE a.id=$1 GROUP BY a.id`, allocID).Scan(&reversalJournal, &reversalAudit); err != nil {
+		t.Fatalf("baca sumber reversal/audit: %v", err)
+	}
+	if reversalJournal != 2 || reversalAudit != 2 {
+		t.Fatalf("dua reversal harus punya sumber dan audit: journal=%d audit=%d", reversalJournal, reversalAudit)
 	}
 
 	if _, err := f.pool.Exec(context.Background(), `UPDATE orders SET total=0 WHERE id=$1`, orderID); err != nil {

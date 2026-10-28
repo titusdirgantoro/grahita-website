@@ -36,6 +36,8 @@ const (
 	EntityCNCReminder = "cnc_reminder"
 	// EntityDepositTopup: pengajuan dan keputusan top-up deposit (D3 §4.9).
 	EntityDepositTopup = "deposit_topup"
+	// EntityDepositAllocation mencatat reversal parsial/penuh alokasi deposit.
+	EntityDepositAllocation = "deposit_allocation"
 )
 
 // Aksi yang dicatat (kolom audit_logs.action).
@@ -68,6 +70,8 @@ const (
 	// ActionReview / ActionReject: keputusan admin atas top-up deposit.
 	ActionReview = "review"
 	ActionReject = "reject"
+	// ActionReverse mencatat pengembalian alokasi deposit ke saldo cabang.
+	ActionReverse = "reverse"
 	// ActionBacaBukti mencatat pembacaan AI/OCR atas bukti transfer
 	// (F2-26, PRD §5): EntityID-nya adalah id pesanan; snapshot After memuat
 	// hasil per bukti (nominal, tanggal, bank, rekening, keyakinan) beserta
