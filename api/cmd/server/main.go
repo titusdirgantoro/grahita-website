@@ -52,6 +52,8 @@ import (
 	masterimportpg "github.com/grahita/portal/api/internal/masterimport/postgres"
 	"github.com/grahita/portal/api/internal/notification"
 	notificationpg "github.com/grahita/portal/api/internal/notification/postgres"
+	"github.com/grahita/portal/api/internal/ocrsecret"
+	ocrsecretpg "github.com/grahita/portal/api/internal/ocrsecret/postgres"
 	"github.com/grahita/portal/api/internal/order"
 	orderpg "github.com/grahita/portal/api/internal/order/postgres"
 	"github.com/grahita/portal/api/internal/payment"
@@ -228,6 +230,10 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 	}
 
 	if mode == "worker" {
+		ocrKeys, err := buildOCRSecrets(cfg, pool)
+		if err != nil {
+			return err
+		}
 		// Object storage juga dipasang di worker: pengiriman lampiran dokumen
 		// (F1-16), render Invoice/Surat Jalan setelah pesanan selesai (F1-18),
 		// dan sinkronisasi cadangan (F1-21) membacanya di sini.
@@ -262,7 +268,7 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 			return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
 		}
 		paymentRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
-		ocrSvc := payment.NewOCRService(paymentRepo, buildReader(cfg, logger), store,
+		ocrSvc := payment.NewOCRService(paymentRepo, buildReader(cfg, logger, ocrKeys), store,
 			bank.NewService(bankpg.New(pool)), settings.NewService(settingspg.New(pool)),
 			payment.NewVerificationService(paymentRepo))
 
@@ -310,10 +316,22 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 //   - OCR_PROVIDER=claude (bawaan) → Claude vision. Tanpa ANTHROPIC_API_KEY,
 //     pekerjaan pembacaan bukti GAGAL dan diulang (bukan menyetujui asal-asalan
 //     atau menyimpan bacaan kosong); admin tetap bisa memverifikasi manual.
-func buildReader(cfg config.Config, logger *slog.Logger) payment.PaymentReader {
+//   - OCR_PROVIDER=gemini → Gemini 2.5 Flash-Lite dengan kunci terenkripsi
+//     yang diisi Superadmin dan dibaca dari database setiap pekerjaan.
+func buildOCRSecrets(cfg config.Config, pool *database.Pool) (*ocrsecret.Service, error) {
+	if cfg.OCRProvider != config.OCRProviderGemini {
+		return nil, nil
+	}
+	return ocrsecret.New(ocrsecretpg.New(pool), cfg.GeminiKeyEncryptionKey)
+}
+
+func buildReader(cfg config.Config, logger *slog.Logger, keys *ocrsecret.Service) payment.PaymentReader {
 	if cfg.OCRProvider == config.OCRProviderMock {
 		logger.Warn("pembaca bukti memakai mock deterministik (OCR_PROVIDER=mock) — hanya untuk pengembangan/pengujian")
 		return payment.NewMockReader(nil)
+	}
+	if cfg.OCRProvider == config.OCRProviderGemini {
+		return payment.NewGeminiReader(payment.GeminiConfig{Keys: keys, Timeout: cfg.OCRTimeout})
 	}
 	if cfg.AnthropicAPIKey == "" {
 		logger.Warn("ANTHROPIC_API_KEY kosong: pekerjaan pembacaan bukti akan gagal dan diulang sampai kuncinya diisi")
@@ -400,6 +418,10 @@ func (h health) MigrationVersion(ctx context.Context) (int64, error) {
 
 // runAPI menyusun seluruh dependensi dan menjalankan HTTP API.
 func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger *slog.Logger, metrik *observability.Metrics) error {
+	ocrKeys, err := buildOCRSecrets(cfg, pool)
+	if err != nil {
+		return err
+	}
 	if cfg.BrowserFixture.Enabled {
 		if err := database.VerifyBrowserFixture(ctx, pool); err != nil {
 			return fmt.Errorf("fixture browser ditolak: %w", err)
@@ -555,6 +577,8 @@ func runAPI(ctx context.Context, pool *database.Pool, cfg config.Config, logger 
 		Health:              health{pool: pool, dsn: cfg.DatabaseURL},
 		Auth:                authSvc,
 		Settings:            settingsSvc,
+		OCRSecrets:          ocrKeys,
+		OCRTester:           payment.NewGeminiReader(payment.GeminiConfig{Timeout: cfg.OCRTimeout}),
 		Catalog:             catalogSvc,
 		Orders:              orderSvc,
 		AdminOrders:         adminOrderSvc,

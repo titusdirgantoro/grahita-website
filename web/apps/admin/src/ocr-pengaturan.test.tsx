@@ -19,8 +19,10 @@ function renderPengaturan() {
   render(<RouterProvider router={router} />);
 }
 
-function stubFetch(providerReady: boolean | null, aiActive = false) {
+function stubFetch(providerReady: boolean | null, aiActive = false, gemini = false) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
+  let keyConfigured = false;
+  let keyVerified = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -34,7 +36,23 @@ function stubFetch(providerReady: boolean | null, aiActive = false) {
       }
       if (input.endsWith("/admin/settings/ocr-status")) {
         if (providerReady === null) return json({ error: { code: "UNAVAILABLE", message: "gagal" } }, 503);
-        return json({ data: { ai_active: aiActive, provider_ready: providerReady } });
+        return json({ data: {
+          ai_active: aiActive,
+          provider_ready: gemini ? keyVerified : providerReady,
+          provider: gemini ? "gemini" : "claude",
+          model: gemini ? "gemini-2.5-flash-lite" : "",
+          key_configured: keyConfigured,
+          key_verified: keyVerified,
+        } });
+      }
+      if (input.endsWith("/admin/settings/ocr-key") && init?.method === "PUT") {
+        keyConfigured = true;
+        keyVerified = false;
+        return json({ data: { key_configured: true, key_verified: false } });
+      }
+      if (input.endsWith("/admin/settings/ocr-key/test") && init?.method === "POST") {
+        keyVerified = true;
+        return json({ data: { key_configured: true, key_verified: true } });
       }
       if (input.endsWith("/admin/settings") && (init?.method ?? "GET") === "GET") {
         return json({
@@ -127,5 +145,26 @@ describe("Admin Portal — pilihan verifikasi OCR", () => {
       const put = calls.find((c) => c.url.endsWith("/admin/settings") && c.init?.method === "PUT");
       expect(JSON.parse(String(put?.init?.body)).values.ai.aktif).toBe(false);
     });
+  });
+
+  it("Gemini: Superadmin menyimpan kunci, menguji koneksi, lalu AI dapat diaktifkan", async () => {
+    const calls = stubFetch(false, false, true);
+    renderPengaturan();
+    const input = await screen.findByLabelText("API key Gemini") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    const toggle = screen.getByRole("switch", { name: "Verifikasi otomatis dengan AI" }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+
+    fireEvent.change(input, { target: { value: "AIza-kunci-rahasia-pengujian" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan API key" }));
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.endsWith("/admin/settings/ocr-key") && c.init?.method === "PUT")).toBe(true);
+      expect((screen.getByLabelText("Ganti API key Gemini") as HTMLInputElement).value).toBe("");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Uji koneksi" }));
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+    const test = calls.find((c) => c.url.endsWith("/admin/settings/ocr-key/test") && c.init?.method === "POST");
+    expect(test?.init?.body).toBeUndefined();
+    expect(screen.queryByDisplayValue("AIza-kunci-rahasia-pengujian")).toBeNull();
   });
 });

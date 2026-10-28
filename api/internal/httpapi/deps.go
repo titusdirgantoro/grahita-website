@@ -25,6 +25,7 @@ import (
 	"github.com/grahita/portal/api/internal/document"
 	"github.com/grahita/portal/api/internal/masterimport"
 	"github.com/grahita/portal/api/internal/notification"
+	"github.com/grahita/portal/api/internal/ocrsecret"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/config"
@@ -53,9 +54,13 @@ type Deps struct {
 	Config  config.Config
 	Version string
 
-	Health   HealthChecker
-	Auth     *auth.Service
-	Settings *settings.Service
+	Health     HealthChecker
+	Auth       *auth.Service
+	Settings   *settings.Service
+	OCRSecrets *ocrsecret.Service
+	OCRTester  interface {
+		TestKey(context.Context, string) error
+	}
 	Catalog  *catalog.Service
 	Users    *users.Service
 	Branches *branch.Service

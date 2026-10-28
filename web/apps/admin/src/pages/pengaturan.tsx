@@ -26,6 +26,11 @@ export type NilaiPengaturan = Record<string, unknown>;
 interface OCRStatus {
   ai_active: boolean;
   provider_ready: boolean;
+  provider?: string;
+  model?: string;
+  key_configured?: boolean;
+  key_verified?: boolean;
+  key_updated_at?: string;
 }
 
 const label = (kunci: string) =>
@@ -242,6 +247,87 @@ function TetapanBackup() {
   );
 }
 
+/** Kunci tidak pernah dibaca balik dari API; status hanya memberi penanda. */
+function TetapanGemini({ status, refresh }: { status: OCRStatus; refresh: () => Promise<void> }) {
+  const [key, setKey] = useState("");
+  const [terlihat, setTerlihat] = useState(false);
+  const [sibuk, setSibuk] = useState(false);
+  const [galat, setGalat] = useState<string | null>(null);
+  const [sukses, setSukses] = useState<string | null>(null);
+
+  async function jalankan(aksi: "simpan" | "uji" | "hapus") {
+    setSibuk(true);
+    setGalat(null);
+    setSukses(null);
+    try {
+      if (aksi === "simpan") {
+        await api.put("/admin/settings/ocr-key", { api_key: key.trim() });
+        setKey("");
+        setTerlihat(false);
+        setSukses("API key tersimpan terenkripsi. Uji koneksi sebelum mengaktifkan AI.");
+      } else if (aksi === "uji") {
+        await api.post("/admin/settings/ocr-key/test");
+        setSukses("Koneksi Gemini 2.5 Flash-Lite berhasil. AI dapat diaktifkan.");
+      } else {
+        await api.delete("/admin/settings/ocr-key");
+        setKey("");
+        setSukses("API key dihapus.");
+      }
+      await refresh();
+    } catch (err) {
+      setGalat(pesanGalat(err));
+    } finally {
+      setSibuk(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHead title="Koneksi AI untuk bukti pembayaran" />
+      <p className="muted small">
+        Provider: Gemini · Model: {status.model || "gemini-2.5-flash-lite"}. API key hanya dapat
+        diisi Superadmin dan tidak ditampilkan kembali setelah disimpan.
+      </p>
+      <p className="small">
+        Status: {status.key_verified ? "Kunci teruji" : status.key_configured ? "Kunci tersimpan, belum teruji" : "Belum ada kunci"}
+        {status.key_updated_at ? ` · Diperbarui ${waktuWIB(status.key_updated_at)}` : ""}
+      </p>
+      {galat ? <Notice tone="danger">{galat}</Notice> : null}
+      {sukses ? <Notice tone="success">{sukses}</Notice> : null}
+      <Field
+        label={status.key_configured ? "Ganti API key Gemini" : "API key Gemini"}
+        htmlFor="gemini-api-key"
+        hint="Kunci baru menggantikan kunci lama. Matikan AI sebelum mengganti kunci."
+      >
+        <Input
+          id="gemini-api-key"
+          type={terlihat ? "text" : "password"}
+          autoComplete="new-password"
+          spellCheck={false}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+        />
+      </Field>
+      <div className={styles.row}>
+        <Button variant="secondary" onClick={() => setTerlihat(!terlihat)} disabled={!key || sibuk}>
+          {terlihat ? "Sembunyikan kunci" : "Lihat kunci"}
+        </Button>
+        <Button variant="primary" onClick={() => void jalankan("simpan")} disabled={!key.trim() || sibuk || status.ai_active}>
+          Simpan API key
+        </Button>
+        <Button variant="secondary" onClick={() => void jalankan("uji")} disabled={!status.key_configured || sibuk}>
+          Uji koneksi
+        </Button>
+        {status.key_configured ? (
+          <Button variant="secondary" onClick={() => void jalankan("hapus")} disabled={sibuk || status.ai_active}>
+            Hapus API key
+          </Button>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
 function PengaturanContent() {
   const [nilai, setNilai] = useState<NilaiPengaturan | null>(null);
   const [ocrStatus, setOcrStatus] = useState<OCRStatus | null>(null);
@@ -272,6 +358,10 @@ function PengaturanContent() {
     } finally {
       setMemuat(false);
     }
+  }, []);
+
+  const muatStatusOCR = useCallback(async () => {
+    setOcrStatus(await api.get<OCRStatus>("/admin/settings/ocr-status"));
   }, []);
 
   useEffect(() => {
@@ -329,6 +419,7 @@ function PengaturanContent() {
       <PageHead title="Pengaturan" sub="Konstanta sistem (Superadmin)" />
       <div className={styles.stack}>
         <TetapanBackup />
+        {ocrStatus?.provider === "gemini" ? <TetapanGemini status={ocrStatus} refresh={muatStatusOCR} /> : null}
         <Card>
           <CardHead title="Nilai tersimpan" />
           {memuat ? (
@@ -398,7 +489,9 @@ function PengaturanContent() {
               {!ocrStatus?.provider_ready ? (
                 <Notice tone="warning">
                   {ocrStatus
-                    ? "AI belum tersedia karena provider belum dikonfigurasi pada API. Verifikasi manual tetap berjalan. Minta operator menyiapkan provider pada API dan worker, lalu uji pembacaan bukti sebelum mengaktifkan AI."
+                    ? ocrStatus.provider === "gemini"
+                      ? "AI belum tersedia. Simpan API key Gemini di atas, lalu uji koneksi sebelum mengaktifkan AI. Verifikasi manual tetap berjalan."
+                      : "AI belum tersedia karena provider belum dikonfigurasi pada API. Verifikasi manual tetap berjalan. Minta operator menyiapkan provider pada API dan worker, lalu uji pembacaan bukti sebelum mengaktifkan AI."
                     : "Status provider AI belum dapat diperiksa. Verifikasi manual tetap berjalan; pengaktifan AI ditahan sementara."}
                 </Notice>
               ) : form.aiAktif ? (

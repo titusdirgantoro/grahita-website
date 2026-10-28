@@ -16,7 +16,7 @@ Dokumen ini menjelaskan **pilihan teknologi, topologi deployment, dan operasiona
 | Auth | Session cookie `HttpOnly; Secure; SameSite=Lax` di PostgreSQL, password **Argon2id** | Lebih aman & sederhana dari JWT untuk aplikasi web internal; logout instan |
 | PDF | **Gotenberg** (HTML/CSS → PDF via Chromium headless) | Template invoice memakai HTML/CSS yang sama dengan desain portal — hasilnya konsisten dengan prototype |
 | Excel | **excelize** | Standar de-facto di Go untuk .xlsx |
-| OCR / AI | **Claude API (vision)** di balik interface `PaymentReader` | Akurat untuk struk m-banking Indonesia; bisa ditukar ke Google Document AI tanpa ubah domain |
+| OCR / AI | **Gemini 2.5 Flash-Lite** di balik interface `PaymentReader` | Model tetap untuk pembacaan bukti; verifikasi manual tetap tersedia. API key diisi Superadmin, disimpan terenkripsi, dan diuji sebelum AI dapat diaktifkan. |
 | Object storage | **S3-compatible** (MinIO self-host atau Cloudflare R2 / IDCloudHost Object Storage) | File bukti transfer & dokumen tidak di dalam DB; presigned URL |
 | Frontend | **React 19 + TypeScript + Vite**, TanStack Router + TanStack Query + TanStack Table, React Hook Form + Zod | Lihat §3 |
 | Styling | **CSS asli dengan design token** hasil port langsung dari prototype (+ CSS Modules) | Prototype sudah punya token & komponen matang; menulis ulang ke Tailwind justru menambah risiko dan hilangnya nuansa desain |
@@ -165,7 +165,7 @@ Semua fitur yang dipakai tetap kompatibel dengan PG 17 ke atas sehingga upgrade/
                             │
       ┌─────────────────────┼──────────────────────┐
       ▼                     ▼                      ▼
-  Gmail SMTP        Google Drive (backup)     Claude API (OCR)
+  Gmail SMTP        Google Drive (backup)     Gemini API (OCR)
 ```
 
 `api` dan `worker` adalah **binary Go yang sama** dengan flag berbeda (`--mode=api` / `--mode=worker`), sehingga tidak ada duplikasi kode dan konfigurasi.
@@ -256,7 +256,7 @@ Migrasi dijalankan sebagai langkah terpisah sebelum rilis dan harus **kompatibel
 | VPS 4 vCPU / 8 GB | Rp 400.000 – 900.000 |
 | Backup storage (Google Drive / Workspace) | sudah ada / Rp 50.000 |
 | Domain + TLS | Rp 25.000 (TLS gratis via Caddy) |
-| Claude API untuk OCR bukti transfer | < Rp 100.000 pada volume ratusan pesanan/bulan |
+| Gemini API untuk OCR bukti transfer | Biaya mengikuti tarif dan volume pemakaian aktual; pantau kuota dan tagihan provider. |
 | Email (Gmail akun Grahita) | sudah ada |
 | **Total** | **± Rp 500.000 – 1.100.000 / bulan** |
 

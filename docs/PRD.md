@@ -274,6 +274,8 @@ Tiga mode, dapat berjalan berdampingan:
 |---|---|---|
 | **Manual** | Admin membandingkan total pesanan dan nominal pada bukti, lalu klik Verifikasi. | Fase 1 — wajib ada |
 | **AI / OCR** | Sistem membaca nominal, tanggal, bank, dan 4 digit akhir rekening tujuan dari gambar. Cocok + keyakinan ≥ ambang → otomatis Done. Selain itu → masuk antrean "perlu review" dengan alasan. | Fase 2 |
+
+Provider OCR yang dipilih adalah **Gemini 2.5 Flash-Lite**. Superadmin mengisi API key di halaman Pengaturan; nilainya tidak dapat dibaca kembali dari portal dan disimpan terenkripsi di database. Tombol uji koneksi harus berhasil sebelum sakelar verifikasi otomatis dapat diaktifkan. Jika AI nonaktif atau pembacaan gagal, admin tetap dapat memverifikasi pembayaran secara manual.
 | **Virtual Account** | Callback bank menandai pembayaran lunas tanpa unggah bukti. | Fase 3 (R&D BCA, BRI TBD) |
 
 Aturan AI:

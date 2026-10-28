@@ -268,6 +268,9 @@ func NewRouter(d Deps) http.Handler {
 					r.Use(a.requireCap(auth.CapAdminSettings))
 					r.Get("/settings", a.adapt(a.adminSettings))
 					r.Get("/settings/ocr-status", a.adapt(a.adminOCRStatus))
+					r.Put("/settings/ocr-key", a.adapt(a.adminOCRKeySave))
+					r.Post("/settings/ocr-key/test", a.adapt(a.adminOCRKeyTest))
+					r.Delete("/settings/ocr-key", a.adapt(a.adminOCRKeyDelete))
 					r.Put("/settings", a.adapt(a.adminSettingsUpdate))
 					// Status cadangan terenkripsi (F1-21): hasil setiap pekerjaan
 					// (jenis/status/ukuran/tujuan) + ringkasan "perlu tindakan".

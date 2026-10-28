@@ -1564,10 +1564,10 @@ paths:
       operationId: getAdminOCRStatus
       summary: Status pilihan verifikasi AI atau manual (Superadmin)
       description: |
-        Menunjukkan apakah AI aktif dan apakah konfigurasi provider tersedia
-        pada proses API, tanpa mengekspos kunci. Kesiapan ini bukan bukti
-        provider eksternal sehat; uji provider tetap diperlukan sebelum AI
-        diaktifkan. Bila AI nonaktif, bukti diproses lewat verifikasi manual.
+        Menunjukkan apakah AI aktif, provider dan model, serta status API key
+        Gemini tanpa mengekspos nilainya. Untuk Gemini, provider_ready hanya
+        true setelah kunci tersimpan dan uji koneksi model berhasil. Bila AI
+        nonaktif, bukti diproses lewat verifikasi manual.
       responses:
         "200":
           description: Status konfigurasi AI
@@ -1583,10 +1583,70 @@ paths:
                     properties:
                       ai_active: { type: boolean }
                       provider_ready: { type: boolean }
+                      provider: { type: string, enum: [gemini, claude, mock] }
+                      model: { type: string }
+                      key_configured: { type: boolean, description: Khusus Gemini }
+                      key_verified: { type: boolean, description: Khusus Gemini }
+                      key_updated_at: { type: string, format: date-time, nullable: true }
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/settings/ocr-key:
+    put:
+      tags: [admin]
+      operationId: saveGeminiOCRKey
+      summary: Simpan API key Gemini terenkripsi (Superadmin)
+      description: |
+        Hanya tersedia saat OCR_PROVIDER=gemini. API key tidak pernah dikirim
+        balik, dimasukkan ke settings umum, atau dicatat dalam audit log.
+        Menyimpan kunci baru membatalkan status uji sebelumnya. AI harus
+        dimatikan sebelum kunci diganti.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [api_key]
+              additionalProperties: false
+              properties:
+                api_key: { type: string, format: password, writeOnly: true }
+      responses:
+        "200": { description: Kunci tersimpan; nilainya tidak dikembalikan }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [admin]
+      operationId: deleteGeminiOCRKey
+      summary: Hapus API key Gemini (Superadmin)
+      description: AI harus dimatikan terlebih dahulu.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "200": { description: Kunci dihapus }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/admin/settings/ocr-key/test:
+    post:
+      tags: [admin]
+      operationId: testGeminiOCRKey
+      summary: Uji koneksi API key dengan Gemini 2.5 Flash-Lite (Superadmin)
+      description: |
+        Server memanggil model dengan prompt teks kecil. Hanya kunci versi
+        yang lulus uji yang ditandai siap; permintaan tidak membawa API key.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "200": { description: Koneksi model berhasil; kunci teruji }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/v1/admin/backup-runs:
     get:

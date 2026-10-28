@@ -48,7 +48,7 @@ func newBankServer(t *testing.T) *bankServer {
 	return newBankServerWithConfig(t, testConfig())
 }
 
-func newBankServerWithConfig(t *testing.T, cfg config.Config) *bankServer {
+func newBankServerWithConfig(t *testing.T, cfg config.Config, options ...func(*Deps)) *bankServer {
 	t.Helper()
 
 	hash, err := auth.HashPassword("rahasia123")
@@ -88,6 +88,9 @@ func newBankServerWithConfig(t *testing.T, cfg config.Config) *bankServer {
 		AdminOrders:   order.NewAdminService(bankOrderRepo{}),
 		LoginLimiter:  httpx.NewRateLimiter(5, 15*time.Minute),
 		ForgotLimiter: httpx.NewRateLimiter(5, 15*time.Minute),
+	}
+	for _, option := range options {
+		option(&deps)
 	}
 
 	srv := httptest.NewServer(NewRouter(deps))

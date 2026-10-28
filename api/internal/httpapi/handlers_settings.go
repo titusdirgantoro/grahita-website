@@ -1,11 +1,15 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/ocrsecret"
+	"github.com/grahita/portal/api/internal/payment"
 	"github.com/grahita/portal/api/internal/platform/apierr"
 	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
@@ -35,10 +39,110 @@ func (a *API) adminOCRStatus(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return mapDomainErr(err)
 	}
-	httpx.OK(w, data(map[string]any{
+	ready, keyStatus, err := a.ocrProviderStatus(r.Context())
+	if err != nil {
+		return apierr.Wrap(err, http.StatusServiceUnavailable, apierr.CodeUnavailable, "Status kunci AI belum dapat diperiksa.")
+	}
+	result := map[string]any{
 		"ai_active":      ai.Aktif,
-		"provider_ready": ocrProviderReady(a.d.Config),
-	}))
+		"provider_ready": ready,
+		"provider":       a.d.Config.OCRProvider,
+		"model":          "",
+	}
+	if a.d.Config.OCRProvider == config.OCRProviderGemini {
+		result["model"] = payment.GeminiModel
+		result["key_configured"] = keyStatus.Configured
+		result["key_verified"] = keyStatus.Verified
+		result["key_updated_at"] = keyStatus.UpdatedAt
+	}
+	httpx.OK(w, data(result))
+	return nil
+}
+
+func (a *API) ocrProviderStatus(ctx context.Context) (bool, ocrsecret.Status, error) {
+	if a.d.Config.OCRProvider == config.OCRProviderGemini {
+		if a.d.OCRSecrets == nil {
+			return false, ocrsecret.Status{}, nil
+		}
+		status, err := a.d.OCRSecrets.Status(ctx)
+		return err == nil && status.Verified, status, err
+	}
+	return ocrProviderReady(a.d.Config), ocrsecret.Status{}, nil
+}
+
+func (a *API) geminiSecrets() (*ocrsecret.Service, error) {
+	if a.d.Config.OCRProvider != config.OCRProviderGemini || a.d.OCRSecrets == nil {
+		return nil, apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Provider Gemini belum dikonfigurasi pada server.")
+	}
+	return a.d.OCRSecrets, nil
+}
+
+func ocrKeyError(err error) error {
+	switch {
+	case errors.Is(err, ocrsecret.ErrForbidden):
+		return apierr.Forbidden("Hanya Superadmin yang boleh mengelola kunci AI.")
+	case errors.Is(err, ocrsecret.ErrInvalidKey):
+		return apierr.Validation("Format API key Gemini tidak valid.", map[string]string{"api_key": "periksa API key"})
+	case errors.Is(err, ocrsecret.ErrAIActive):
+		return apierr.Conflict("AI_ACTIVE", "Matikan verifikasi otomatis sebelum mengganti atau menghapus API key.")
+	case errors.Is(err, ocrsecret.ErrNotConfigured):
+		return apierr.Validation("Simpan API key Gemini sebelum menguji koneksi.", nil)
+	case errors.Is(err, ocrsecret.ErrStale):
+		return apierr.Conflict("OCR_KEY_CHANGED", "API key berubah saat diuji. Uji ulang kunci terbaru.")
+	default:
+		return apierr.Wrap(err, http.StatusServiceUnavailable, apierr.CodeUnavailable, "Pengaturan API key Gemini belum dapat diproses.")
+	}
+}
+
+func (a *API) adminOCRKeySave(w http.ResponseWriter, r *http.Request) error {
+	secrets, err := a.geminiSecrets()
+	if err != nil {
+		return err
+	}
+	var req struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := httpx.DecodeJSON(r, &req); err != nil {
+		return err
+	}
+	if err := secrets.Save(r.Context(), auth.ActorFrom(r.Context()), req.APIKey); err != nil {
+		return ocrKeyError(err)
+	}
+	httpx.OK(w, data(map[string]any{"key_configured": true, "key_verified": false}))
+	return nil
+}
+
+func (a *API) adminOCRKeyTest(w http.ResponseWriter, r *http.Request) error {
+	secrets, err := a.geminiSecrets()
+	if err != nil {
+		return err
+	}
+	if a.d.OCRTester == nil {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeUnavailable, "Penguji Gemini belum tersedia.")
+	}
+	key, version, err := secrets.KeyForTest(r.Context())
+	if err != nil {
+		return ocrKeyError(err)
+	}
+	if err := a.d.OCRTester.TestKey(r.Context(), key); err != nil {
+		return apierr.Validation("Uji koneksi Gemini 2.5 Flash-Lite gagal. Periksa API key, akses model, kuota, dan jaringan server.", nil)
+	}
+	if err := secrets.MarkVerified(r.Context(), auth.ActorFrom(r.Context()), version); err != nil {
+		return ocrKeyError(err)
+	}
+	httpx.OK(w, data(map[string]any{"key_configured": true, "key_verified": true}))
+	return nil
+}
+
+func (a *API) adminOCRKeyDelete(w http.ResponseWriter, r *http.Request) error {
+	secrets, err := a.geminiSecrets()
+	if err != nil {
+		return err
+	}
+	if err := secrets.Delete(r.Context(), auth.ActorFrom(r.Context())); err != nil {
+		return ocrKeyError(err)
+	}
+	httpx.OK(w, data(map[string]any{"key_configured": false, "key_verified": false}))
 	return nil
 }
 
@@ -106,7 +210,11 @@ func (a *API) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) error 
 			var pilihan struct {
 				Aktif bool `json:"aktif"`
 			}
-			if err := json.Unmarshal(canonical, &pilihan); err == nil && pilihan.Aktif && !ocrProviderReady(a.d.Config) {
+			ready, _, statusErr := a.ocrProviderStatus(r.Context())
+			if statusErr != nil {
+				return apierr.Wrap(statusErr, http.StatusServiceUnavailable, apierr.CodeUnavailable, "Status provider AI belum dapat diperiksa.")
+			}
+			if err := json.Unmarshal(canonical, &pilihan); err == nil && pilihan.Aktif && !ready {
 				return apierr.Validation("Verifikasi AI belum tersedia. Minta operator menyiapkan provider terlebih dahulu.",
 					map[string]string{"ai": "provider AI belum dikonfigurasi"})
 			}

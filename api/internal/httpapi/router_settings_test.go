@@ -1,11 +1,54 @@
 package httpapi
 
 import (
+	"context"
+	"encoding/base64"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/grahita/portal/api/internal/auth"
+	"github.com/grahita/portal/api/internal/ocrsecret"
 	"github.com/grahita/portal/api/internal/platform/config"
 )
+
+type testOCRRepo struct {
+	rec        ocrsecret.Record
+	configured bool
+}
+
+func (r *testOCRRepo) Load(context.Context) (ocrsecret.Record, error) {
+	if !r.configured {
+		return ocrsecret.Record{}, ocrsecret.ErrNotConfigured
+	}
+	return r.rec, nil
+}
+func (r *testOCRRepo) Save(_ context.Context, _ auth.Actor, rec ocrsecret.Record) error {
+	if r.configured {
+		rec.Version = r.rec.Version + 1
+	} else {
+		rec.Version = 1
+	}
+	rec.UpdatedAt = time.Now()
+	r.rec = rec
+	r.configured = true
+	return nil
+}
+func (r *testOCRRepo) MarkVerified(_ context.Context, _ auth.Actor, version int64) error {
+	if version != r.rec.Version {
+		return ocrsecret.ErrStale
+	}
+	now := time.Now()
+	r.rec.VerifiedAt = &now
+	return nil
+}
+func (r *testOCRRepo) Delete(context.Context, auth.Actor) error { r.configured = false; return nil }
+
+type testOCRTester struct{}
+
+func (testOCRTester) TestKey(context.Context, string) error { return nil }
 
 // TestApiPengaturanOtorisasiSuperadmin memastikan pengelolaan pengaturan
 // (baca lengkap & ubah) hanya untuk Superadmin, baik lewat UI maupun API.
@@ -203,3 +246,58 @@ func TestApiOCRProviderSiapMengizinkanAI(t *testing.T) {
 		t.Fatalf("status AI setelah diaktifkan salah: %v", data)
 	}
 }
+
+func TestApiGeminiKunciHanyaSuperadminDanHarusTeruji(t *testing.T) {
+	cfg := testConfig()
+	cfg.AppEnv = "production"
+	cfg.OCRProvider = config.OCRProviderGemini
+	cfg.GeminiKeyEncryptionKey = base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012"))
+	repo := &testOCRRepo{}
+	secret, err := ocrsecret.New(repo, cfg.GeminiKeyEncryptionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs := newBankServerWithConfig(t, cfg, func(d *Deps) { d.OCRSecrets = secret; d.OCRTester = testOCRTester{} })
+	base := bs.srv.URL + "/api/v1/admin/settings"
+	manager, managerCSRF := login(t, bs.srv, "budi@example.test")
+	status, _, _ := apiReq(t, http.DefaultClient, http.MethodPut, base+"/ocr-key",
+		`{"api_key":"AIza-kunci-uji-rahasia-123456"}`, manager, managerCSRF)
+	if status != http.StatusForbidden {
+		t.Fatalf("manager simpan kunci: %d", status)
+	}
+	sa, csrf := login(t, bs.srv, "rina@example.test")
+	key := "AIza-kunci-uji-rahasia-123456"
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, base+"/ocr-key",
+		`{"api_key":"`+key+`"}`, sa, csrf)
+	if status != http.StatusOK || strings.Contains(strings.Join([]string{bodyString(body), string(repo.rec.Ciphertext)}, " "), key) {
+		t.Fatalf("simpan kunci gagal atau bocor: %d", status)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base+"/ocr-status", "", sa, "")
+	if status != http.StatusOK || body["data"].(map[string]any)["provider_ready"] != false {
+		t.Fatalf("kunci belum diuji tidak boleh siap: %d %v", status, body)
+	}
+	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base,
+		`{"values":{"ai":{"aktif":true}}}`, sa, csrf)
+	if status != http.StatusBadRequest {
+		t.Fatalf("AI aktif sebelum uji: %d", status)
+	}
+	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPost, base+"/ocr-key/test", "", manager, managerCSRF)
+	if status != http.StatusForbidden {
+		t.Fatalf("manager uji kunci: %d", status)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, base+"/ocr-key/test", "", sa, csrf)
+	if status != http.StatusOK || body["data"].(map[string]any)["key_verified"] != true {
+		t.Fatalf("uji kunci: %d %v", status, body)
+	}
+	status, _, _ = apiReq(t, http.DefaultClient, http.MethodPut, base,
+		`{"values":{"ai":{"aktif":true}}}`, sa, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("AI setelah kunci teruji: %d", status)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base, "", sa, "")
+	if status != http.StatusOK || strings.Contains(bodyString(body), key) {
+		t.Fatal("settings umum membocorkan API key")
+	}
+}
+
+func bodyString(value any) string { return fmt.Sprint(value) }

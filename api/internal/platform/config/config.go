@@ -157,10 +157,13 @@ type Config struct {
 
 	// Pembacaan bukti transfer AI/OCR (F2-26; Architecture.md §1/§11).
 	//
-	// OCRProvider memilih implementasi `payment.PaymentReader`: "claude"
-	// (bawaan) memakai Claude vision, "mock" memakai pembaca deterministik
-	// untuk pengembangan lokal/pengujian (Architecture.md §1: "OCR mode mock").
+	// OCRProvider memilih implementasi `payment.PaymentReader`: "gemini"
+	// memakai Gemini 2.5 Flash-Lite dengan API key portal, "claude" adalah
+	// bawaan kompatibel, dan "mock" hanya untuk pengujian lokal.
 	OCRProvider string
+	// GeminiKeyEncryptionKey adalah kunci AES-256 base64 milik operator untuk
+	// mengenkripsi API key Gemini yang diisi Superadmin lewat portal.
+	GeminiKeyEncryptionKey string
 	// AnthropicAPIKey adalah kunci Claude API. Kosong berarti provider claude
 	// BELUM bisa dipakai: pekerjaan pembacaan bukti gagal dan diulang (River),
 	// bukan menyetujui pembayaran atas dasar tebakan. Kunci TIDAK pernah
@@ -189,6 +192,7 @@ type BrowserFixtureConfig struct {
 const (
 	// OCRProviderClaude memakai Claude vision (bawaan).
 	OCRProviderClaude = "claude"
+	OCRProviderGemini = "gemini"
 	// OCRProviderMock memakai pembaca deterministik (lokal/pengujian).
 	OCRProviderMock = "mock"
 )
@@ -247,56 +251,57 @@ func Load() (Config, error) {
 			ManagerEmail:    strings.TrimSpace(env("BROWSER_FIXTURE_MANAGER_EMAIL", "budi@grahitaindonesia.com")),
 			BranchEmail:     strings.TrimSpace(env("BROWSER_FIXTURE_BRANCH_EMAIL", "bandung@grahitaindonesia.com")),
 		},
-		S3Endpoint:           env("S3_ENDPOINT", ""),
-		S3Region:             env("S3_REGION", "us-east-1"),
-		S3Bucket:             env("S3_BUCKET", ""),
-		S3AccessKey:          env("S3_ACCESS_KEY", ""),
-		S3SecretKey:          env("S3_SECRET_KEY", ""),
-		S3UsePathStyle:       envBool("S3_USE_PATH_STYLE", true),
-		SMTPHost:             env("SMTP_HOST", ""),
-		SMTPPort:             envInt("SMTP_PORT", 1025),
-		SMTPUser:             env("SMTP_USER", ""),
-		SMTPPass:             env("SMTP_PASS", ""),
-		MailFrom:             env("MAIL_FROM", "no-reply@grahita.id"),
-		GotenbergURL:         env("GOTENBERG_URL", ""),
-		OutboxMaxAttempts:    envInt("OUTBOX_MAX_ATTEMPTS", 6),
-		OutboxBatch:          envInt("OUTBOX_BATCH", 50),
-		BackupDir:            env("BACKUP_TARGET_DIR", ""),
-		BackupRcloneBin:      env("BACKUP_RCLONE_BIN", "rclone"),
-		BackupRcloneRemote:   env("BACKUP_RCLONE_REMOTE", ""),
-		BackupRcloneConfig:   env("BACKUP_RCLONE_CONFIG", ""),
-		BackupAgeRecipient:   env("BACKUP_AGE_RECIPIENT", ""),
-		BackupAgeIdentity:    env("BACKUP_AGE_IDENTITY_FILE", ""),
-		BackupPgDump:         env("BACKUP_PG_DUMP", "pg_dump"),
-		BackupPgRestore:      env("BACKUP_PG_RESTORE", "pg_restore"),
-		BackupWorkDir:        env("BACKUP_WORK_DIR", os.TempDir()),
-		BackupRetensiHarian:  envInt("BACKUP_RETENSI_HARIAN", 30),
-		BackupRetensiBulanan: envInt("BACKUP_RETENSI_BULANAN", 12),
-		BackupWALHari:        envInt("BACKUP_WAL_HARI", 7),
-		BackupWALDir:         env("BACKUP_WAL_DIR", ""),
-		BackupJamWIB:         envInt("BACKUP_JAM_WIB", 2),
-		BackupRestoreDSN:     env("BACKUP_RESTORE_DSN", ""),
-		WorkerShutdown:       20 * time.Second,
-		JobPollInterval:      15 * time.Second,
-		MetricsEnabled:       envBool("METRICS_ENABLED", true),
-		DiskMounts:           observability.MountsDariEnv(env("DISK_MOUNTS", "/")),
-		SentryDSN:            env("SENTRY_DSN", ""),
-		SentryEnvironment:    env("SENTRY_ENVIRONMENT", ""),
-		SentrySampleRate:     envFloat("SENTRY_TRACES_SAMPLE_RATE", 0),
-		WorkerMetricsAddr:    env("WORKER_METRICS_ADDR", ":9091"),
-		OCRProvider:          strings.ToLower(strings.TrimSpace(env("OCR_PROVIDER", OCRProviderClaude))),
-		AnthropicAPIKey:      strings.TrimSpace(env("ANTHROPIC_API_KEY", "")),
-		AnthropicBaseURL:     strings.TrimSpace(env("ANTHROPIC_BASE_URL", "")),
-		AnthropicModel:       strings.TrimSpace(env("ANTHROPIC_MODEL", "")),
+		S3Endpoint:             env("S3_ENDPOINT", ""),
+		S3Region:               env("S3_REGION", "us-east-1"),
+		S3Bucket:               env("S3_BUCKET", ""),
+		S3AccessKey:            env("S3_ACCESS_KEY", ""),
+		S3SecretKey:            env("S3_SECRET_KEY", ""),
+		S3UsePathStyle:         envBool("S3_USE_PATH_STYLE", true),
+		SMTPHost:               env("SMTP_HOST", ""),
+		SMTPPort:               envInt("SMTP_PORT", 1025),
+		SMTPUser:               env("SMTP_USER", ""),
+		SMTPPass:               env("SMTP_PASS", ""),
+		MailFrom:               env("MAIL_FROM", "no-reply@grahita.id"),
+		GotenbergURL:           env("GOTENBERG_URL", ""),
+		OutboxMaxAttempts:      envInt("OUTBOX_MAX_ATTEMPTS", 6),
+		OutboxBatch:            envInt("OUTBOX_BATCH", 50),
+		BackupDir:              env("BACKUP_TARGET_DIR", ""),
+		BackupRcloneBin:        env("BACKUP_RCLONE_BIN", "rclone"),
+		BackupRcloneRemote:     env("BACKUP_RCLONE_REMOTE", ""),
+		BackupRcloneConfig:     env("BACKUP_RCLONE_CONFIG", ""),
+		BackupAgeRecipient:     env("BACKUP_AGE_RECIPIENT", ""),
+		BackupAgeIdentity:      env("BACKUP_AGE_IDENTITY_FILE", ""),
+		BackupPgDump:           env("BACKUP_PG_DUMP", "pg_dump"),
+		BackupPgRestore:        env("BACKUP_PG_RESTORE", "pg_restore"),
+		BackupWorkDir:          env("BACKUP_WORK_DIR", os.TempDir()),
+		BackupRetensiHarian:    envInt("BACKUP_RETENSI_HARIAN", 30),
+		BackupRetensiBulanan:   envInt("BACKUP_RETENSI_BULANAN", 12),
+		BackupWALHari:          envInt("BACKUP_WAL_HARI", 7),
+		BackupWALDir:           env("BACKUP_WAL_DIR", ""),
+		BackupJamWIB:           envInt("BACKUP_JAM_WIB", 2),
+		BackupRestoreDSN:       env("BACKUP_RESTORE_DSN", ""),
+		WorkerShutdown:         20 * time.Second,
+		JobPollInterval:        15 * time.Second,
+		MetricsEnabled:         envBool("METRICS_ENABLED", true),
+		DiskMounts:             observability.MountsDariEnv(env("DISK_MOUNTS", "/")),
+		SentryDSN:              env("SENTRY_DSN", ""),
+		SentryEnvironment:      env("SENTRY_ENVIRONMENT", ""),
+		SentrySampleRate:       envFloat("SENTRY_TRACES_SAMPLE_RATE", 0),
+		WorkerMetricsAddr:      env("WORKER_METRICS_ADDR", ":9091"),
+		OCRProvider:            strings.ToLower(strings.TrimSpace(env("OCR_PROVIDER", OCRProviderClaude))),
+		GeminiKeyEncryptionKey: strings.TrimSpace(env("GEMINI_KEY_ENCRYPTION_KEY", "")),
+		AnthropicAPIKey:        strings.TrimSpace(env("ANTHROPIC_API_KEY", "")),
+		AnthropicBaseURL:       strings.TrimSpace(env("ANTHROPIC_BASE_URL", "")),
+		AnthropicModel:         strings.TrimSpace(env("ANTHROPIC_MODEL", "")),
 	}
 
 	// Pilihan pembaca bukti divalidasi di sini: nilai yang tidak dikenal
 	// menghentikan start alih-alih diam-diam memakai provider lain (F2-26).
 	switch c.OCRProvider {
-	case OCRProviderClaude, OCRProviderMock:
+	case OCRProviderClaude, OCRProviderGemini, OCRProviderMock:
 	default:
-		return c, fmt.Errorf("OCR_PROVIDER tidak dikenal: %q (pilih %s atau %s)",
-			c.OCRProvider, OCRProviderClaude, OCRProviderMock)
+		return c, fmt.Errorf("OCR_PROVIDER tidak dikenal: %q (pilih %s, %s, atau %s)",
+			c.OCRProvider, OCRProviderClaude, OCRProviderGemini, OCRProviderMock)
 	}
 
 	// Cara menjangkau tujuan cadangan ditentukan otomatis bila tidak disebut
@@ -370,6 +375,12 @@ func Load() (Config, error) {
 
 // Validate memastikan konfigurasi wajib terisi dan tidak saling bertabrakan.
 func (c Config) Validate() error {
+	if c.OCRProvider == OCRProviderGemini {
+		key, err := base64.StdEncoding.DecodeString(c.GeminiKeyEncryptionKey)
+		if err != nil || len(key) != 32 {
+			return errors.New("GEMINI_KEY_ENCRYPTION_KEY wajib base64 32 byte saat OCR_PROVIDER=gemini")
+		}
+	}
 	if c.DatabaseURL == "" {
 		return errors.New("DATABASE_URL wajib diisi")
 	}
