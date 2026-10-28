@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"testing"
+
+	"github.com/grahita/portal/api/internal/platform/config"
 )
 
 // TestApiPengaturanOtorisasiSuperadmin memastikan pengelolaan pengaturan
@@ -129,5 +131,75 @@ func TestApiSettingsLintasRoleTidakAda(t *testing.T) {
 		if status != http.StatusNotFound {
 			t.Errorf("%s GET /api/v1/settings harus 404, dapat %d (%v)", email, status, body)
 		}
+	}
+}
+
+// Sakelar AI tidak boleh terlihat siap atau dapat diaktifkan di produksi
+// ketika konfigurasi provider API belum ada. Opsi manual tetap dapat disimpan.
+func TestApiOCRStatusDanGuardProviderProduksi(t *testing.T) {
+	cfg := testConfig()
+	cfg.AppEnv = "production"
+	bs := newBankServerWithConfig(t, cfg)
+	base := bs.srv.URL + "/api/v1/admin/settings/ocr-status"
+
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, base, "", nil, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("tanpa sesi harus 401, dapat %d (%v)", status, body)
+	}
+	mgr, _ := login(t, bs.srv, "budi@example.test")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base, "", mgr, "")
+	if status != http.StatusForbidden {
+		t.Fatalf("Manager harus 403, dapat %d (%v)", status, body)
+	}
+	sa, csrf := login(t, bs.srv, "rina@example.test")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, base, "", sa, "")
+	if status != http.StatusOK {
+		t.Fatalf("Superadmin harus 200, dapat %d (%v)", status, body)
+	}
+	data := body["data"].(map[string]any)
+	if data["provider_ready"] != false || data["ai_active"] != false {
+		t.Fatalf("tanpa kunci AI harus nonaktif/tidak siap: %v", data)
+	}
+	if _, leaked := data["api_key"]; leaked {
+		t.Fatal("status OCR tidak boleh mengembalikan kunci")
+	}
+
+	settingsURL := bs.srv.URL + "/api/v1/admin/settings"
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, settingsURL,
+		`{"values":{"ai":{"aktif":true}}}`, sa, csrf)
+	if status != http.StatusBadRequest {
+		t.Fatalf("AI tanpa provider harus 400, dapat %d (%v)", status, body)
+	}
+	assertErrorShape(t, body, "VALIDATION_FAILED")
+	if _, saved := bs.settings.values["ai"]; saved {
+		t.Fatal("AI tanpa provider tidak boleh tersimpan")
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, settingsURL,
+		`{"values":{"ai":{"aktif":false}}}`, sa, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("manual harus tetap diizinkan, dapat %d (%v)", status, body)
+	}
+}
+
+func TestApiOCRProviderSiapMengizinkanAI(t *testing.T) {
+	cfg := testConfig()
+	cfg.AppEnv = "production"
+	cfg.OCRProvider = config.OCRProviderClaude
+	cfg.AnthropicAPIKey = "kunci-qa-tidak-asli"
+	bs := newBankServerWithConfig(t, cfg)
+	sa, csrf := login(t, bs.srv, "rina@example.test")
+	settingsURL := bs.srv.URL + "/api/v1/admin/settings"
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, settingsURL,
+		`{"values":{"ai":{"aktif":true}}}`, sa, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("AI dengan provider siap harus 200, dapat %d (%v)", status, body)
+	}
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodGet, settingsURL+"/ocr-status", "", sa, "")
+	if status != http.StatusOK {
+		t.Fatalf("status OCR harus 200, dapat %d (%v)", status, body)
+	}
+	data := body["data"].(map[string]any)
+	if data["provider_ready"] != true || data["ai_active"] != true {
+		t.Fatalf("status AI setelah diaktifkan salah: %v", data)
 	}
 }

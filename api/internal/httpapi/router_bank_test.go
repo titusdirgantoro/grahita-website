@@ -11,6 +11,7 @@ import (
 	"github.com/grahita/portal/api/internal/bank"
 	"github.com/grahita/portal/api/internal/order"
 	"github.com/grahita/portal/api/internal/platform/clock"
+	"github.com/grahita/portal/api/internal/platform/config"
 	"github.com/grahita/portal/api/internal/platform/httpx"
 	"github.com/grahita/portal/api/internal/settings"
 )
@@ -44,6 +45,10 @@ type bankServer struct {
 }
 
 func newBankServer(t *testing.T) *bankServer {
+	return newBankServerWithConfig(t, testConfig())
+}
+
+func newBankServerWithConfig(t *testing.T, cfg config.Config) *bankServer {
 	t.Helper()
 
 	hash, err := auth.HashPassword("rahasia123")
@@ -74,7 +79,7 @@ func newBankServer(t *testing.T) *bankServer {
 
 	svc := auth.NewService(store, store, store, clock.System(), 8*time.Hour, 30*24*time.Hour)
 	deps := Deps{
-		Config:        testConfig(),
+		Config:        cfg,
 		Version:       "test-bank",
 		Health:        fakeHealth{migrasi: 9},
 		Auth:          svc,

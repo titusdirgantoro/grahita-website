@@ -136,6 +136,23 @@ services:
       MAIL_FROM: ${MAIL_FROM:-no-reply@grahita.id}
       GOTENBERG_URL: ${GOTENBERG_URL:-http://gotenberg:3000}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      OCR_PROVIDER: ${OCR_PROVIDER:-claude}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      OCR_TIMEOUT: ${OCR_TIMEOUT:-60s}
+      # Status backup pada API harus memakai target dan penerima enkripsi yang
+      # sama dengan worker; konfigurasi saja belum membuktikan job berhasil.
+      BACKUP_TARGET: ${BACKUP_TARGET:-}
+      BACKUP_TARGET_DIR: ${BACKUP_TARGET_DIR:-}
+      BACKUP_RCLONE_BIN: ${BACKUP_RCLONE_BIN:-rclone}
+      BACKUP_RCLONE_REMOTE: ${BACKUP_RCLONE_REMOTE:-}
+      BACKUP_RCLONE_CONFIG: ${BACKUP_RCLONE_CONFIG:-}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:-}
+      BACKUP_RETENSI_HARIAN: ${BACKUP_RETENSI_HARIAN:-30}
+      BACKUP_RETENSI_BULANAN: ${BACKUP_RETENSI_BULANAN:-12}
+      BACKUP_WAL_DIR: ${BACKUP_WAL_DIR:-}
+      BACKUP_JAM_WIB: ${BACKUP_JAM_WIB:-2}
     ports:
       - "8088:8080"   # akses langsung ke API untuk debugging
     command: ["--mode=api"]
@@ -173,6 +190,11 @@ services:
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}
       # Di lokal outbox dipindai lebih sering supaya email Mailpit cepat muncul.
       OUTBOX_INTERVAL: ${OUTBOX_INTERVAL:-10s}
+      OCR_PROVIDER: ${OCR_PROVIDER:-claude}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      OCR_TIMEOUT: ${OCR_TIMEOUT:-60s}
       # Cadangan terenkripsi (F1-21). Dibiarkan kosong secara bawaan supaya
       # lingkungan pengembangan tidak menjalankan pekerjaan cadangan sama
       # sekali; operasi nyatanya ada di infra/backup/README.md.

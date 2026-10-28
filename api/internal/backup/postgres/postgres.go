@@ -76,6 +76,42 @@ func (r *Repo) Terakhir(ctx context.Context, limit int) ([]backup.Run, error) {
 	return out, nil
 }
 
+// StatusJenis mengambil sukses/gagal terbaru tiap jenis dari seluruh riwayat.
+// Query ini sengaja tidak memakai batas halaman riwayat yang tampil di UI:
+// sukses lama atau kegagalan baru tidak boleh hilang saat ada banyak run lain.
+func (r *Repo) StatusJenis(ctx context.Context) (map[string]backup.StatusJenis, error) {
+	const query = `
+		SELECT DISTINCT ON (jenis, sukses) jenis, sukses, mulai
+		FROM backup_runs
+		WHERE sukses IS NOT NULL
+		ORDER BY jenis, sukses, mulai DESC, id DESC`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query status backup per jenis: %w", err)
+	}
+	defer rows.Close()
+	status := make(map[string]backup.StatusJenis)
+	for rows.Next() {
+		var jenis string
+		var sukses bool
+		var mulai time.Time
+		if err := rows.Scan(&jenis, &sukses, &mulai); err != nil {
+			return nil, fmt.Errorf("baca status backup per jenis: %w", err)
+		}
+		jejak := status[jenis]
+		if sukses {
+			jejak.SuksesTerakhir = mulai
+		} else {
+			jejak.GagalTerakhir = mulai
+		}
+		status[jenis] = jejak
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterasi status backup per jenis: %w", err)
+	}
+	return status, nil
+}
+
 // Sejak melaporkan run satu jenis yang mulai sejak waktu tertentu.
 func (r *Repo) Sejak(ctx context.Context, jenis string, sejak time.Time) (backup.Run, bool, error) {
 	row, err := r.q.BackupRunSejak(ctx, sqlc.BackupRunSejakParams{Jenis: jenis, Mulai: sejak})

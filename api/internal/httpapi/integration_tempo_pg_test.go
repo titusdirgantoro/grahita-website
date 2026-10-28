@@ -694,6 +694,10 @@ func TestPGTempoApprovalFIFOdanKreditTerpisah(t *testing.T) {
 	if err != nil || len(rows) < 2 {
 		t.Fatalf("isi XLSX: %d %v", len(rows), err)
 	}
+	dimensi, err := book.GetSheetDimension("Piutang Tempo")
+	if err != nil || dimensi != fmt.Sprintf("A1:H%d", len(rows)) {
+		t.Fatalf("rentang XLSX wajib memuat semua baris untuk pembaca streaming: %q, %v", dimensi, err)
+	}
 	id, err := svc.IssueMonth(ctx, f.branchA, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 	if err != nil || id == "" {
 		t.Fatalf("terbit tagihan: %q %v", id, err)

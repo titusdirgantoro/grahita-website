@@ -29,6 +29,23 @@ Superadmin aktif** dan muncul sebagai peringatan di halaman Pengaturan admin
 - Direktori kerja tulis untuk `BACKUP_WORK_DIR` (cadangan polos hanya hidup di
   sini, sementara, dan dihapus setelah diunggah).
 
+Image aplikasi dari `api/Dockerfile` membawa klien PostgreSQL 18 dan rclone.
+Sebelum menyalakan job pada worker, periksa `pg_dump --version` dan
+`pg_restore --version` di **image yang benar-benar dideploy**, karena image
+lama hanya membawa binary aplikasi. `BACKUP_TARGET`, tujuan, dan
+`BACKUP_AGE_RECIPIENT` harus sama pada proses API dan worker; status API
+`konfigurasi_api_siap=true` hanya menyatakan konfigurasi API terisi, bukan
+bahwa worker telah berhasil membuat cadangan. Keberhasilan dibuktikan dari
+riwayat `backup_runs` untuk `postgres` dan `storage`.
+Mulai pukul 03:00 WIB, status meminta tindakan bila salah satu jenis belum
+berhasil sejak target 02:00 WIB hari itu.
+
+Untuk target direktori, pasang direktori tujuan yang sama ke worker dan API,
+pastikan UID proses aplikasi 10001 bisa menulis, dan batasi izin direktori
+host ke 0700. Direktori pada host aplikasi tetap rentan hilang bersama host;
+simpan salinan terenkripsi di lokasi terpisah. Kunci privat age juga perlu
+salinan di luar server agar pemulihan tetap mungkin saat server hilang.
+
 ## 3. Menyiapkan kunci age
 
 ```sh

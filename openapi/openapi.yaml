@@ -1500,7 +1500,9 @@ paths:
         token_hari 1..3650; reset_menit 1..43200; max_mb 1..1024;
         max_file 1..100; digit_invoice 1..10; manager_boleh_revisi boolean;
         `ai` objek {aktif, min_keyakinan 0..1, tol_kurang, tol_lebih,
-        digit_rek 1..20, mundur 0..3650}.
+        digit_rek 1..20, mundur 0..3650}. Pada staging/produksi,
+        mengaktifkan AI ditolak bila provider belum dikonfigurasi. Opsi
+        verifikasi manual selalu tersedia.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -1556,6 +1558,36 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/admin/settings/ocr-status:
+    get:
+      tags: [admin]
+      operationId: getAdminOCRStatus
+      summary: Status pilihan verifikasi AI atau manual (Superadmin)
+      description: |
+        Menunjukkan apakah AI aktif dan apakah konfigurasi provider tersedia
+        pada proses API, tanpa mengekspos kunci. Kesiapan ini bukan bukti
+        provider eksternal sehat; uji provider tetap diperlukan sebelum AI
+        diaktifkan. Bila AI nonaktif, bukti diproses lewat verifikasi manual.
+      responses:
+        "200":
+          description: Status konfigurasi AI
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [ai_active, provider_ready]
+                    properties:
+                      ai_active: { type: boolean }
+                      provider_ready: { type: boolean }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/admin/backup-runs:
     get:
       tags: [admin]
@@ -1566,10 +1598,14 @@ paths:
         (Architecture.md §7, Database.md §4.7) berikut ringkasan status:
 
         - `terakhir` — run terbaru (jenis postgres/storage/wal), terbaru dulu;
-        - `perlu_tindakan` — true bila run terakhir yang GAGAL belum disusul
-          run sukses apa pun untuk jenis yang sama (dipakai dashboard admin
-          F1-20 sebagai penanda "perlu tindakan");
-        - `tujuan`, `jadwal`, `retensi` — konfigurasi efektif yang berlaku
+        - `konfigurasi_api_siap` — target, kunci enkripsi, dan penyimpanan
+          objek terisi pada proses API; status worker tetap harus dibuktikan
+          lewat riwayat pekerjaan;
+        - `perlu_tindakan` — true bila konfigurasi belum lengkap, belum ada
+          keberhasilan postgres/storage, kegagalan terbaru belum disusul
+          keberhasilan jenis yang sama, atau jadwal harian sudah lewat satu
+          jam tanpa keberhasilan baru;
+        - `tujuan`, `jadwal`, `retensi` — konfigurasi target yang berlaku
           (30 harian, 12 bulanan, bukti transfer tanpa batas).
 
         Manager dan akun cabang ditolak (PRD §2.1).
@@ -1589,11 +1625,12 @@ paths:
                 properties:
                   data:
                     type: object
-                    required: [terakhir, perlu_tindakan, tujuan, jadwal, retensi]
+                    required: [terakhir, konfigurasi_api_siap, perlu_tindakan, tujuan, jadwal, retensi]
                     properties:
                       terakhir:
                         type: array
                         items: { $ref: "#/components/schemas/BackupRun" }
+                      konfigurasi_api_siap: { type: boolean }
                       perlu_tindakan: { type: boolean }
                       pesan: { type: string }
                       tujuan: { type: string }

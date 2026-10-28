@@ -46,6 +46,7 @@ const BACKUP = {
       pesan: "rclone rcat gagal: kredensial Drive kedaluwarsa",
     },
   ],
+  konfigurasi_api_siap: true,
   perlu_tindakan: true,
   pesan: "Cadangan postgres gagal pada 08 Okt 2026 02:00 WIB dan belum ada cadangan sukses sesudahnya.",
   tujuan: "rclone:gdrive:grahita-backup",
@@ -120,14 +121,32 @@ describe("Admin Portal — /pengaturan (F1-21)", () => {
     stubFetch("superadmin", {
       ...BACKUP,
       terakhir: [],
-      perlu_tindakan: false,
-      pesan: undefined,
+      konfigurasi_api_siap: false,
+      perlu_tindakan: true,
+      pesan: "Tujuan cadangan aplikasi belum dikonfigurasi pada API. Periksa konfigurasi API dan worker.",
       tujuan: "",
     });
 
     render(<RouterProvider router={buatRouter("/pengaturan")} />);
 
-    expect(await screen.findByText(/belum dikonfigurasi/)).toBeDefined();
-    expect(await screen.findByText(/Belum ada pekerjaan cadangan tercatat/)).toBeDefined();
+    expect(await screen.findByText(/Tujuan cadangan aplikasi belum dikonfigurasi pada API/)).toBeDefined();
+    expect(await screen.findByText(/Belum ada pekerjaan cadangan aplikasi tercatat/)).toBeDefined();
+    expect(screen.getByText(/Konfigurasi API: belum lengkap/)).toBeDefined();
+    expect(screen.queryByText(/Cadangan berjalan otomatis/)).toBeNull();
+  });
+
+  it("tujuan yang siap tanpa sukses pertama tetap meminta tindakan", async () => {
+    stubFetch("superadmin", {
+      ...BACKUP,
+      terakhir: [],
+      perlu_tindakan: true,
+      pesan: "Cadangan postgres belum pernah berhasil dan tercatat di aplikasi. Periksa jadwal worker dan jalankan cadangan awal.",
+    });
+
+    render(<RouterProvider router={buatRouter("/pengaturan")} />);
+
+    expect(await screen.findByText(/Cadangan postgres belum pernah berhasil/)).toBeDefined();
+    expect(screen.getByText(/Konfigurasi API: siap/)).toBeDefined();
+    expect(screen.queryByText(/Cadangan berjalan otomatis/)).toBeNull();
   });
 });

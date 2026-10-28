@@ -93,6 +93,26 @@ func (r *repoPalsu) Terakhir(_ context.Context, limit int) ([]backup.Run, error)
 	return out, nil
 }
 
+func (r *repoPalsu) StatusJenis(context.Context) (map[string]backup.StatusJenis, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	status := make(map[string]backup.StatusJenis)
+	for _, run := range r.runs {
+		if run.Sukses == nil {
+			continue
+		}
+		jejak := status[run.Jenis]
+		if *run.Sukses && run.Mulai.After(jejak.SuksesTerakhir) {
+			jejak.SuksesTerakhir = run.Mulai
+		}
+		if !*run.Sukses && run.Mulai.After(jejak.GagalTerakhir) {
+			jejak.GagalTerakhir = run.Mulai
+		}
+		status[run.Jenis] = jejak
+	}
+	return status, nil
+}
+
 func (r *repoPalsu) Sejak(_ context.Context, jenis string, sejak time.Time) (backup.Run, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -570,10 +590,12 @@ func TestRingkasanMenandaiPerluTindakan(t *testing.T) {
 	gagal := false
 	sukses := true
 	repo.runs = []backup.Run{
+		{ID: "storage-a", Jenis: backup.JenisStorage, Mulai: time.Now(), Sukses: &sukses},
 		{ID: "a", Jenis: backup.JenisPostgres, Mulai: time.Now().Add(-48 * time.Hour), Sukses: &sukses},
 		{ID: "b", Jenis: backup.JenisPostgres, Mulai: time.Now().Add(-24 * time.Hour), Sukses: &gagal},
 	}
-	svc := serviceUji(t, repo, backup.Nol{}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir()})
+	recipient, _ := kunciUji(t)
+	svc := serviceUji(t, repo, &backup.Dir{Root: t.TempDir()}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir(), Recipient: recipient})
 
 	ringkasan, err := svc.Ringkasan(context.Background(), 10)
 	if err != nil {
@@ -928,12 +950,13 @@ func TestRingkasanMemakaiKegagalanTerbaruPerJenis(t *testing.T) {
 	// Terakhir() mengembalikannya seperti ORDER BY mulai DESC.
 	repo := &repoPalsu{runs: []backup.Run{
 		{ID: "postgres-gagal-lama", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-72 * time.Hour), Sukses: &gagal},
-		{ID: "postgres-sukses", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-60 * time.Hour), Sukses: &sukses},
+		{ID: "postgres-sukses", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-2 * time.Hour), Sukses: &sukses},
 		{ID: "storage-gagal-tertua", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-49 * time.Hour), Sukses: &gagal},
 		{ID: "storage-sukses-selang", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-25 * time.Hour), Sukses: &sukses},
 		{ID: "storage-gagal-terbaru", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-1 * time.Hour), Sukses: &gagal},
 	}}
-	svc := serviceUji(t, repo, backup.Nol{}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir()})
+	recipient, _ := kunciUji(t)
+	svc := serviceUji(t, repo, &backup.Dir{Root: t.TempDir()}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir(), Recipient: recipient})
 
 	ringkasan, err := svc.Ringkasan(ctx, 20)
 	if err != nil {
@@ -973,16 +996,127 @@ func TestRingkasanMemakaiKegagalanTerbaruPerJenis(t *testing.T) {
 // (sukses NULL) tidak pernah dianggap kegagalan.
 func TestRingkasanMengabaikanRunBelumSelesai(t *testing.T) {
 	sekarang := time.Now().UTC()
+	sukses := true
 	repo := &repoPalsu{runs: []backup.Run{
-		{ID: "selesai", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-30 * time.Hour)},
+		{ID: "postgres-sukses", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-2 * time.Hour), Sukses: &sukses},
+		{ID: "storage-sukses", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-2 * time.Hour), Sukses: &sukses},
+		{ID: "sedang-berjalan", Jenis: backup.JenisPostgres, Mulai: sekarang},
 	}}
-	svc := serviceUji(t, repo, backup.Nol{}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir()})
+	recipient, _ := kunciUji(t)
+	svc := serviceUji(t, repo, &backup.Dir{Root: t.TempDir()}, storage.NewMemory(""), backup.Config{Kerja: t.TempDir(), Recipient: recipient})
 	ringkasan, err := svc.Ringkasan(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("Ringkasan: %v", err)
 	}
 	if ringkasan.PerluTindakan {
 		t.Error("run yang belum selesai bukan kegagalan")
+	}
+}
+
+func TestRingkasanMenunjukkanKonfigurasiDanCadanganAwalYangBelumAda(t *testing.T) {
+	ctx := context.Background()
+	recipient, _ := kunciUji(t)
+	target := &backup.Dir{Root: t.TempDir()}
+	store := storage.NewMemory("")
+	berhasil := true
+	sekarang := time.Now().UTC()
+	tests := []struct {
+		nama       string
+		target     backup.Target
+		store      storage.Store
+		recipient  string
+		runs       []backup.Run
+		siap       bool
+		tindakan   bool
+		pesanHarus string
+	}{
+		{"tujuan kosong", backup.Nol{}, store, recipient, nil, false, true, "Tujuan cadangan"},
+		{"kunci kosong", target, store, "", nil, false, true, "Kunci publik"},
+		{"penyimpanan objek kosong", target, storage.Disabled{}, recipient, nil, false, true, "Penyimpanan objek"},
+		{"belum ada run", target, store, recipient, nil, true, true, "postgres belum pernah berhasil"},
+		{"baru database", target, store, recipient, []backup.Run{{Jenis: backup.JenisPostgres, Mulai: sekarang, Sukses: &berhasil}}, true, true, "storage belum pernah berhasil"},
+		{"database dan objek", target, store, recipient, []backup.Run{
+			{Jenis: backup.JenisPostgres, Mulai: sekarang, Sukses: &berhasil},
+			{Jenis: backup.JenisStorage, Mulai: sekarang, Sukses: &berhasil},
+		}, true, false, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.nama, func(t *testing.T) {
+			svc := serviceUji(t, &repoPalsu{runs: tc.runs}, tc.target, tc.store,
+				backup.Config{Kerja: t.TempDir(), Recipient: tc.recipient})
+			r, err := svc.Ringkasan(ctx, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.KonfigurasiAPISiap != tc.siap || r.PerluTindakan != tc.tindakan || !strings.Contains(r.Pesan, tc.pesanHarus) {
+				t.Errorf("ringkasan = %+v, ingin siap=%v tindakan=%v pesan memuat %q", r, tc.siap, tc.tindakan, tc.pesanHarus)
+			}
+		})
+	}
+}
+
+func TestRingkasanStatusDariSeluruhRiwayatMeskiDaftarDibatasi(t *testing.T) {
+	ctx := context.Background()
+	recipient, _ := kunciUji(t)
+	sekarang := time.Now().UTC()
+	sukses, gagal := true, false
+	repo := &repoPalsu{runs: []backup.Run{
+		{ID: "pg-sukses-lama", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-5 * time.Hour), Sukses: &sukses},
+		{ID: "storage-sukses-lama", Jenis: backup.JenisStorage, Mulai: sekarang.Add(-4 * time.Hour), Sukses: &sukses},
+		{ID: "pg-gagal", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-3 * time.Hour), Sukses: &gagal},
+		{ID: "wal-berjalan", Jenis: backup.JenisWAL, Mulai: sekarang.Add(-2 * time.Hour)},
+		{ID: "pg-berjalan", Jenis: backup.JenisPostgres, Mulai: sekarang.Add(-1 * time.Hour)},
+	}}
+	svc := serviceUji(t, repo, &backup.Dir{Root: t.TempDir()}, storage.NewMemory(""),
+		backup.Config{Kerja: t.TempDir(), Recipient: recipient})
+	r, err := svc.Ringkasan(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Terakhir) != 2 || len(r.SuksesTerakhir) != 2 || !r.PerluTindakan || !strings.Contains(r.Pesan, "postgres gagal") {
+		t.Errorf("status harus membaca seluruh riwayat walau daftar dua baris: %+v", r)
+	}
+	// Kegagalan tidak lagi aktif bila diikuti sukses, meski sukses itu juga
+	// terdorong keluar dari dua baris riwayat yang ditampilkan.
+	repo.runs = append(repo.runs, backup.Run{ID: "pg-sukses-baru", Jenis: backup.JenisPostgres, Mulai: sekarang, Sukses: &sukses})
+	repo.runs = append(repo.runs, backup.Run{ID: "wal-berjalan-baru", Jenis: backup.JenisWAL, Mulai: sekarang.Add(time.Minute)})
+	r, err = svc.Ringkasan(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.PerluTindakan || len(r.SuksesTerakhir) != 2 {
+		t.Errorf("sukses setelah gagal harus menghapus alarm walau tidak terlihat dalam halaman: %+v", r)
+	}
+}
+
+func TestRingkasanCadanganHarianYangTerlambat(t *testing.T) {
+	zona := clock.Jakarta()
+	sekarang := time.Date(2026, time.October, 28, 2, 30, 0, 0, zona)
+	jam := clock.Fixed(sekarang)
+	sukses := true
+	repo := &repoPalsu{runs: []backup.Run{
+		{Jenis: backup.JenisPostgres, Mulai: time.Date(2026, time.October, 27, 2, 5, 0, 0, zona), Sukses: &sukses},
+		{Jenis: backup.JenisStorage, Mulai: time.Date(2026, time.October, 27, 2, 10, 0, 0, zona), Sukses: &sukses},
+	}}
+	recipient, _ := kunciUji(t)
+	svc := serviceUji(t, repo, &backup.Dir{Root: t.TempDir()}, storage.NewMemory(""),
+		backup.Config{Kerja: t.TempDir(), Recipient: recipient}, backup.WithClock(jam))
+
+	r, err := svc.Ringkasan(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.PerluTindakan {
+		t.Fatalf("setengah jam setelah target masih masa pengejaran worker: %q", r.Pesan)
+	}
+
+	jam.Set(time.Date(2026, time.October, 28, 3, 5, 0, 0, zona))
+	r, err = svc.Ringkasan(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.PerluTindakan || !strings.Contains(r.Pesan, "postgres belum berhasil sejak jadwal 28 Oct 2026 02:00 WIB") {
+		t.Errorf("sukses kemarin tidak boleh menutupi target hari ini: %+v", r)
 	}
 }
 

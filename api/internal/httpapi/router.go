@@ -267,6 +267,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(a.requireCap(auth.CapAdminSettings))
 					r.Get("/settings", a.adapt(a.adminSettings))
+					r.Get("/settings/ocr-status", a.adapt(a.adminOCRStatus))
 					r.Put("/settings", a.adapt(a.adminSettingsUpdate))
 					// Status cadangan terenkripsi (F1-21): hasil setiap pekerjaan
 					// (jenis/status/ukuran/tujuan) + ringkasan "perlu tindakan".

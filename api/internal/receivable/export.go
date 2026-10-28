@@ -38,6 +38,13 @@ func (s *Service) ExportXLSX(ctx context.Context, actor auth.Actor) ([]byte, err
 			}
 		}
 	}
+	// Excelize tidak selalu memperbarui <dimension> saat sel ditulis satu per
+	// satu. Pembaca streaming seperti openpyxl read_only mengandalkan rentang
+	// ini; A1 bawaan membuat baris data diabaikan meski XML berisi semua sel.
+	akhir, _ := excelize.CoordinatesToCellName(len(heads), len(overview.Items)+1)
+	if err := f.SetSheetDimension(sheet, "A1:"+akhir); err != nil {
+		return nil, fmt.Errorf("rentang sheet piutang: %w", err)
+	}
 	_ = f.SetColWidth(sheet, "A", "A", 30)
 	_ = f.SetColWidth(sheet, "B", "C", 16)
 	_ = f.SetColWidth(sheet, "D", "F", 18)

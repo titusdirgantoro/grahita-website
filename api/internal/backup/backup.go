@@ -122,6 +122,11 @@ func (TanpaRepo) Selesai(context.Context, string, time.Time, bool, int64, string
 // Terakhir selalu menolak.
 func (TanpaRepo) Terakhir(context.Context, int) ([]Run, error) { return nil, ErrTanpaDatabase }
 
+// StatusJenis selalu menolak.
+func (TanpaRepo) StatusJenis(context.Context) (map[string]StatusJenis, error) {
+	return nil, ErrTanpaDatabase
+}
+
 // Sejak selalu menolak.
 func (TanpaRepo) Sejak(context.Context, string, time.Time) (Run, bool, error) {
 	return Run{}, false, ErrTanpaDatabase
@@ -151,6 +156,13 @@ type Run struct {
 	Pesan      string     `json:"pesan,omitempty"`
 }
 
+// StatusJenis menyimpan waktu sukses dan gagal terbaru dari SELURUH riwayat
+// satu jenis. Daftar ringkas yang ditampilkan di UI tetap dibatasi terpisah.
+type StatusJenis struct {
+	SuksesTerakhir time.Time
+	GagalTerakhir  time.Time
+}
+
 // Repo menyimpan jejak pekerjaan cadangan dan menyediakan data pendukungnya.
 type Repo interface {
 	// Mulai menyisipkan baris backup_runs (selesai/sukses masih NULL).
@@ -159,6 +171,8 @@ type Repo interface {
 	Selesai(ctx context.Context, id string, selesai time.Time, sukses bool, ukuranByte int64, tujuan, pesan string) error
 	// Terakhir mengembalikan run terbaru (semua jenis), terbaru dulu.
 	Terakhir(ctx context.Context, limit int) ([]Run, error)
+	// StatusJenis membaca sukses/gagal terbaru per jenis dari seluruh riwayat.
+	StatusJenis(ctx context.Context) (map[string]StatusJenis, error)
 	// Sejak melaporkan apakah sudah ada run satu jenis yang MULAI sejak
 	// `sejak` (dipakai penjaga jadwal harian supaya tidak dobel).
 	Sejak(ctx context.Context, jenis string, sejak time.Time) (Run, bool, error)
@@ -410,13 +424,14 @@ func (s *Service) beritahuGagal(ctx context.Context, run Run, sebab string) {
 // Ringkasan adalah data yang ditampilkan di halaman Pengaturan admin
 // (Architecture.md §7) sekaligus sumber "perlu tindakan" untuk dashboard.
 type Ringkasan struct {
-	Terakhir       []Run                `json:"terakhir"`
-	PerluTindakan  bool                 `json:"perlu_tindakan"`
-	Pesan          string               `json:"pesan,omitempty"`
-	Tujuan         string               `json:"tujuan"`
-	Jadwal         string               `json:"jadwal"`
-	Retensi        Retensi              `json:"retensi"`
-	SuksesTerakhir map[string]time.Time `json:"sukses_terakhir,omitempty"`
+	Terakhir           []Run                `json:"terakhir"`
+	KonfigurasiAPISiap bool                 `json:"konfigurasi_api_siap"`
+	PerluTindakan      bool                 `json:"perlu_tindakan"`
+	Pesan              string               `json:"pesan,omitempty"`
+	Tujuan             string               `json:"tujuan"`
+	Jadwal             string               `json:"jadwal"`
+	Retensi            Retensi              `json:"retensi"`
+	SuksesTerakhir     map[string]time.Time `json:"sukses_terakhir,omitempty"`
 }
 
 // Retensi merangkum kebijakan retensi yang berlaku.
@@ -436,6 +451,10 @@ func (s *Service) Ringkasan(ctx context.Context, limit int) (Ringkasan, error) {
 	if err != nil {
 		return Ringkasan{}, err
 	}
+	status, err := s.repo.StatusJenis(ctx)
+	if err != nil {
+		return Ringkasan{}, err
+	}
 	r := Ringkasan{
 		Terakhir: runs,
 		Tujuan:   s.target.Nama(),
@@ -448,29 +467,36 @@ func (s *Service) Ringkasan(ctx context.Context, limit int) (Ringkasan, error) {
 		},
 		SuksesTerakhir: map[string]time.Time{},
 	}
-	for _, run := range runs {
-		if run.Sukses != nil && *run.Sukses {
-			if _, ada := r.SuksesTerakhir[run.Jenis]; !ada {
-				r.SuksesTerakhir[run.Jenis] = run.Mulai
-			}
+	for jenis, jejak := range status {
+		if !jejak.SuksesTerakhir.IsZero() {
+			r.SuksesTerakhir[jenis] = jejak.SuksesTerakhir
 		}
 	}
-	// Baris paling baru yang GAGAL per jenis (belum ditutup sukses setelahnya)
-	// berarti masih perlu tindakan.
-	//
-	// `runs` datang TERBARU-DULU dari repository (ORDER BY mulai DESC), jadi
-	// kegagalan PERTAMA yang ditemui untuk satu jenis adalah kegagalan yang
-	// terbaru. Nilai itu tidak boleh ditimpa kegagalan yang lebih tua: putaran
-	// QA-1 menemukan loop yang menimpa terus sehingga nilai akhirnya adalah
-	// kegagalan TERTUA di jendela, dan status bisa berbunyi "aman" tepat
-	// setelah cadangan terakhir gagal (pola gagal → sukses → gagal).
+	// Konfigurasi API sengaja ditandai terpisah dari riwayat pekerjaan worker.
+	// Kedua proses mempunyai environment sendiri; run sukses lama tidak boleh
+	// menutupi konfigurasi API yang saat ini tidak lengkap.
+	switch {
+	case s.target.Nama() == "":
+		r.PerluTindakan = true
+		r.Pesan = "Tujuan cadangan aplikasi belum dikonfigurasi pada API. Periksa konfigurasi API dan worker."
+		return r, nil
+	case s.kripto.SiapEnkripsi() != nil:
+		r.PerluTindakan = true
+		r.Pesan = "Kunci publik enkripsi age belum siap pada API. Periksa konfigurasi API dan worker."
+		return r, nil
+	}
+	if _, tidakAktif := s.objek.(storage.Disabled); tidakAktif {
+		r.PerluTindakan = true
+		r.Pesan = "Penyimpanan objek belum dikonfigurasi pada API. Cadangan bukti dan dokumen belum siap."
+		return r, nil
+	}
+	r.KonfigurasiAPISiap = true
+	// Kegagalan terbaru per jenis dibaca dari seluruh riwayat, bukan hanya
+	// deret yang tampil. Dengan begitu batas halaman tidak menyembunyikan alarm.
 	gagalTerakhir := map[string]time.Time{}
-	for _, run := range runs {
-		if run.Sukses == nil || *run.Sukses {
-			continue
-		}
-		if _, sudah := gagalTerakhir[run.Jenis]; !sudah {
-			gagalTerakhir[run.Jenis] = run.Mulai
+	for jenis, jejak := range status {
+		if !jejak.GagalTerakhir.IsZero() {
+			gagalTerakhir[jenis] = jejak.GagalTerakhir
 		}
 	}
 	// Urutan tetap (jenis pekerjaan harian lebih dahulu, sisanya alfabetis)
@@ -483,6 +509,33 @@ func (s *Service) Ringkasan(ctx context.Context, limit int) (Ringkasan, error) {
 			r.Pesan = fmt.Sprintf("Cadangan %s gagal pada %s dan belum ada cadangan sukses sesudahnya.",
 				jenis, waktuGagal.In(s.cfg.Zona).Format("02 Jan 2006 15:04 WIB"))
 			break
+		}
+	}
+	if r.PerluTindakan {
+		return r, nil
+	}
+	// Dump dan objek sama-sama wajib. WAL hanya wajib saat PITR aktif dan
+	// kegagalannya di atas tetap ditampilkan bila pernah dijalankan.
+	for _, jenis := range []string{JenisPostgres, JenisStorage} {
+		if _, ada := r.SuksesTerakhir[jenis]; !ada {
+			r.PerluTindakan = true
+			r.Pesan = fmt.Sprintf("Cadangan %s belum pernah berhasil dan tercatat di aplikasi. Periksa jadwal worker dan jalankan cadangan awal.", jenis)
+			return r, nil
+		}
+	}
+	// Sukses lama tidak cukup untuk menyatakan cadangan harian sehat. Berikan
+	// worker waktu satu jam setelah target 02:00 WIB sebelum menandai telat.
+	sekarang := s.clk.Now().In(s.cfg.Zona)
+	batas := time.Date(sekarang.Year(), sekarang.Month(), sekarang.Day(), s.cfg.JamHarian, 0, 0, 0, s.cfg.Zona)
+	if sekarang.Before(batas.Add(time.Hour)) {
+		batas = batas.AddDate(0, 0, -1)
+	}
+	for _, jenis := range []string{JenisPostgres, JenisStorage} {
+		if r.SuksesTerakhir[jenis].Before(batas) {
+			r.PerluTindakan = true
+			r.Pesan = fmt.Sprintf("Cadangan %s belum berhasil sejak jadwal %s. Periksa worker dan jalankan cadangan ulang.",
+				jenis, batas.Format("02 Jan 2006 15:04 WIB"))
+			return r, nil
 		}
 	}
 	return r, nil

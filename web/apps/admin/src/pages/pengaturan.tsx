@@ -23,6 +23,11 @@ import styles from "./admin-pages.module.css";
 /** Nilai adalah peta kunci pengaturan dari API (PRD §4.9). */
 export type NilaiPengaturan = Record<string, unknown>;
 
+interface OCRStatus {
+  ai_active: boolean;
+  provider_ready: boolean;
+}
+
 const label = (kunci: string) =>
   ({
     biaya_packaging: "Biaya packaging (Rp)",
@@ -118,6 +123,7 @@ export interface BackupRun {
 /** RingkasanBackup adalah bentuk data GET /admin/backup-runs (F1-21). */
 export interface RingkasanBackup {
   terakhir: BackupRun[];
+  konfigurasi_api_siap: boolean;
   perlu_tindakan: boolean;
   pesan?: string;
   tujuan: string;
@@ -180,19 +186,20 @@ function TetapanBackup() {
           {ringkasan.perlu_tindakan ? (
             <Notice tone="danger">
               {ringkasan.pesan ??
-                "Cadangan terakhir gagal dan belum ada cadangan sukses sesudahnya. Hubungi operator."}
+                "Cadangan aplikasi memerlukan tindakan operator."}
             </Notice>
           ) : null}
           <p className="muted small">
-            Tujuan: {ringkasan.tujuan || "belum dikonfigurasi"} · Jadwal: {ringkasan.jadwal} · Retensi:{" "}
+            Konfigurasi API: {ringkasan.konfigurasi_api_siap ? "siap" : "belum lengkap"} · Tujuan:{" "}
+            {ringkasan.tujuan || "belum dikonfigurasi pada API"} · Target jadwal: {ringkasan.jadwal} · Retensi:{" "}
             {ringkasan.retensi.harian} harian, {ringkasan.retensi.bulanan} bulanan, WAL{" "}
             {ringkasan.retensi.wal_hari} hari
             {ringkasan.retensi.bukti_tanpa_batas ? ", bukti transfer tanpa batas" : ""}.
           </p>
           {ringkasan.terakhir.length === 0 ? (
             <EmptyState icon="cloud-arrow-up">
-              Belum ada pekerjaan cadangan tercatat. Cadangan berjalan otomatis setiap hari pukul
-              02:00 WIB.
+              Belum ada pekerjaan cadangan aplikasi tercatat. Periksa konfigurasi pada API dan
+              worker, lalu jalankan cadangan awal.
             </EmptyState>
           ) : (
             <Table stack="narrow" caption="Riwayat cadangan">
@@ -237,6 +244,7 @@ function TetapanBackup() {
 
 function PengaturanContent() {
   const [nilai, setNilai] = useState<NilaiPengaturan | null>(null);
+  const [ocrStatus, setOcrStatus] = useState<OCRStatus | null>(null);
   const [awal, setAwal] = useState<FormPengaturan | null>(null);
   const [form, setForm] = useState<FormPengaturan | null>(null);
   const [memuat, setMemuat] = useState(true);
@@ -249,8 +257,12 @@ function PengaturanContent() {
   const muat = useCallback(async () => {
     setMemuat(true);
     try {
-      const data = await api.get<NilaiPengaturan>("/admin/settings");
+      const [data, status] = await Promise.all([
+        api.get<NilaiPengaturan>("/admin/settings"),
+        api.get<OCRStatus>("/admin/settings/ocr-status").catch(() => null),
+      ]);
       setNilai(data);
+      setOcrStatus(status);
       const f = dariApi(data);
       setAwal(f);
       setForm(f);
@@ -378,18 +390,30 @@ function PengaturanContent() {
               <SwitchRow
                 checked={form.aiAktif}
                 onChange={(v) => setForm({ ...form, aiAktif: v })}
-                label="Verifikasi bukti transfer otomatis (AI)"
-                hint="Kunci ai.aktif"
+                label="Verifikasi otomatis dengan AI"
+                hint="Nonaktif: bukti pembayaran pesanan diperiksa admin. Aktif: AI hanya menyetujui pesanan bila semua syarat cocok; sisanya masuk antrean admin. Top-up Deposit dan pelunasan Tempo tetap diverifikasi admin."
+                disabled={!form.aiAktif && !ocrStatus?.provider_ready}
               />
 
-              {KUNCI_AI.map(([k, judul, step]) => (
+              {!ocrStatus?.provider_ready ? (
+                <Notice tone="warning">
+                  {ocrStatus
+                    ? "AI belum tersedia karena provider belum dikonfigurasi pada API. Verifikasi manual tetap berjalan. Minta operator menyiapkan provider pada API dan worker, lalu uji pembacaan bukti sebelum mengaktifkan AI."
+                    : "Status provider AI belum dapat diperiksa. Verifikasi manual tetap berjalan; pengaktifan AI ditahan sementara."}
+                </Notice>
+              ) : form.aiAktif ? (
+                <Notice tone="warning">
+                  Konfigurasi provider tersedia pada API. Pastikan worker memiliki konfigurasi yang sama dan pembacaan bukti nyata sudah diuji.
+                </Notice>
+              ) : null}
+
+              {form.aiAktif && KUNCI_AI.map(([k, judul, step]) => (
                 <Field key={k} label={judul} htmlFor={`set-ai-${k}`} error={errorFields[k]}>
                   <Input
                     id={`set-ai-${k}`}
                     type="number"
                     step={step}
                     min={0}
-                    disabled={!form.aiAktif}
                     value={form.ai[k] ?? ""}
                     onChange={(e) =>
                       setForm({ ...form, ai: { ...form.ai, [k]: e.target.value } })
