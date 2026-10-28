@@ -1,5 +1,7 @@
 # Tindak lanjut QA Grahita — 27 Oktober 2026
 
+Lanjutan uji keuangan, perbaikan, dan rilis 28 Oktober tercatat dalam [hasil uji keuangan 28 Oktober](hasil-uji-keuangan-2026-10-28.md).
+
 Dokumen ini memperbarui [laporan baseline](hasil-uji-e2e-2026-10-27.md) untuk skenario yang diuji ulang. Status baseline lainnya tetap berlaku. Semua transaksi bisnis di bawah menggunakan PostgreSQL, storage, dan renderer QA terisolasi. Pemeriksaan pada dua portal produksi dilakukan dengan akun `UJI-` yang disediakan operator dan hanya membaca data.
 
 ## Perbaikan produk
