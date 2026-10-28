@@ -56,3 +56,26 @@ Skenario OCR provider nyata VER-08/09/10 tetap **BLOCKED** sampai key Gemini dii
 Perubahan dirilis pada 28 Oktober 2026 pukul 16:10 WIB. Commit sumber `b59f374f` diterapkan sebagai commit operator `e7003d9c`. Skrip deploy membuat backup database `/srv/grahita-backups/grahita-20261028-090822.dump` sebelum build dan pergantian container. Deploy selesai tanpa rollback.
 
 Pemeriksaan sesudah deploy: API `healthy`; web dan worker berjalan; portal Admin, portal Cabang, dan `/api/v1/meta` merespons HTTP 200. Bundle portal Cabang yang aktif memuat teks pencarian Katalog baru. Log lima menit pertama API dan worker tidak memuat `panic`, `fatal`, atau level error. Pemeriksaan produksi ini bersifat baca saja; tidak ada pesanan, bukti pembayaran, atau transaksi sintetis yang dibuat di produksi.
+
+## Putaran lanjutan setelah kunci Gemini diisi
+
+Status provider diperiksa melalui API Admin produksi dengan akun UJI Superadmin. Konfigurasi menunjuk `gemini-2.5-flash-lite` dan kunci tersimpan, tetapi uji koneksi resmi aplikasi gagal. Pemeriksaan provider menunjukkan endpoint metadata model dapat diakses, sedangkan permintaan generasi teks maupun gambar dikembalikan Gemini sebagai HTTP 402 `RESOURCE_EXHAUSTED` karena kredit prabayar proyek habis. Karena itu `key_verified`, `provider_ready`, dan AI aktif tetap `false`; VER-08/09/10 tetap **BLOCKED** dan tidak dinaikkan berdasarkan mock.
+
+Enam skenario P0 lain ditutup pada PostgreSQL 18 QA terisolasi:
+
+| ID | Hasil | Bukti utama |
+|---|---|---|
+| CAB-05 | **PASS QA** | Superadmin mengubah `token_hari` dari default menjadi 3 melalui API. Token yang diterbitkan mengikuti TTL sekitar 3 hari; generate ulang mencabut token lama; registrasi dengan token lama ditolak, token baru membuat tepat satu akun, dan pemakaian ulang ditolak. |
+| ORD-15 | **PASS QA komposit** | Cabang B menerima 404 saat membaca, mengubah, menghapus, mengirim, maupun mengunggah bukti ke draft/order cabang A. Qty, status, nomor, ledger, baris bukti, dan kepemilikan tidak berubah; pemilik tetap dapat mengirim sesudah percobaan asing. |
+| ORD-17 | **PASS QA** | JPG/PNG/PDF sah diterima; ekstensi atau isi palsu, skrip berkedok gambar, kosong, melebihi ukuran, melebihi jumlah, dan duplikat ditolak. Kegagalan di validasi, object storage, maupun commit metadata tidak meninggalkan baris, timeline, atau objek yatim. |
+| DEP-03 | **PASS QA** | Top-up tanpa bukti, PDF berkedok JPG, serta berkas di atas 10 MB ditolak 4xx tanpa top-up, `payment_proof`, atau objek. Bukti sah menjadi `pending_review`; byte identik direplay untuk permintaan sama dan ditolak bila dipakai untuk nominal lain. |
+| TMP-03 | **PASS QA setelah perbaikan** | Tanpa rekening efektif ditolak 409; order non-Tempo dan draft ditolak 404; order sudah disetujui ditolak 409. Dua persetujuan serentak menghasilkan satu sukses dan satu konflik, dengan tepat satu charge dan satu job. Tes menemukan respons 500 pada order non-Tempo/draft karena kolom nullable dipindai ke tipe non-null; service diperbaiki agar membaca snapshot nullable dan memeriksa jenis/status sebelum memakainya. |
+| TMP-11 | **PASS QA** | Nominal 0, negatif, desimal, di atas Rp1 triliun, rekening kosong, berkas kosong, MIME tidak didukung, dan berkas di atas 10 MB ditolak 4xx. Tidak ada receipt, proof, atau objek dari permintaan gagal. Bukti sah menjadi `pending`; byte identik berikutnya ditolak 409 dan tetap hanya ada satu bukti aktif. |
+
+Log utama: `/opt/temp/grahita-qa-followup-core-20261028.log`, `/opt/temp/grahita-qa-followup-tmp03-20261028.log`, `/opt/temp/grahita-qa-followup-ord17-20261028.log`, `/opt/temp/grahita-qa-followup-dep03-20261028.log`, dan `/opt/temp/grahita-qa-followup-tmp11-20261028.log`.
+
+### Rekap kumulatif terbaru
+
+Enam skenario berpindah dari PARTIAL menjadi PASS. Rekap seluruh 162 ID sekarang **91 PASS, 68 PARTIAL, 0 NOT RUN, 3 BLOCKED**. Untuk 124 skenario P0: **73 PASS, 48 PARTIAL, 0 NOT RUN, 3 BLOCKED**. Tidak ada status yang diturunkan.
+
+Gerbang perubahan lulus: seluruh paket Go, `go vet`, tes integrasi PostgreSQL terarah, pemeriksaan rahasia, kompatibilitas migrasi, dan `git diff --check`. Suite Go penuh tercatat di `/opt/temp/grahita-qa-followup-go-all-20261028.log`; `go vet` di `/opt/temp/grahita-qa-followup-go-vet-20261028.log`.
