@@ -1638,7 +1638,8 @@ paths:
       operationId: testGeminiOCRKey
       summary: Uji koneksi API key dengan Gemini 2.5 Flash-Lite (Superadmin)
       description: |
-        Server memanggil model dengan prompt teks kecil. Hanya kunci versi
+        Server memanggil model dengan gambar sintetis dan meminta JSON. Uji
+        ini belum membuktikan ketepatan baca bukti transfer. Hanya kunci versi
         yang lulus uji yang ditandai siap; permintaan tidak membawa API key.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"

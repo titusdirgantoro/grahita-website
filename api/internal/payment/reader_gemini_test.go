@@ -24,6 +24,17 @@ func TestGeminiReaderMemakaiModelDanTidakMembocorkanKunci(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
+		if len(paths) == 1 {
+			contents, ok := body["contents"].([]any)
+			if !ok || len(contents) == 0 {
+				t.Error("uji koneksi harus mengirim gambar")
+			} else {
+				parts, _ := contents[0].(map[string]any)["parts"].([]any)
+				if len(parts) == 0 || parts[0].(map[string]any)["inline_data"] == nil {
+					t.Error("gambar uji tidak ada")
+				}
+			}
+		}
 		if strings.Contains(r.URL.String(), "kunci-uji-rahasia") {
 			t.Error("API key bocor di URL")
 		}

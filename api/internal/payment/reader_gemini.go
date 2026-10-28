@@ -9,6 +9,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"strings"
@@ -123,17 +126,43 @@ func (r *GeminiReader) Read(ctx context.Context, in ReadInput) (ReadResult, erro
 	return bacaan.keBacaan(mentah), nil
 }
 
-// TestKey memanggil model sungguhan dengan permintaan teks kecil. Keberhasilan
-// ini menjadi syarat sakelar AI; hasil provider tidak pernah diteruskan.
+// TestKey menguji jalur gambar + JSON pada model sungguhan dengan gambar
+// sintetis kecil. Ini menguji akses multimodal, bukan akurasi OCR bank nyata.
 func (r *GeminiReader) TestKey(ctx context.Context, key string) error {
+	img := image.NewRGBA(image.Rect(0, 0, 256, 256))
+	for y := 0; y < 256; y++ {
+		for x := 0; x < 256; x++ {
+			shade := uint8(245)
+			if y >= 110 && y < 146 && x >= 32 && x < 224 {
+				shade = 25
+			}
+			img.SetRGBA(x, y, color.RGBA{R: shade, G: shade, B: shade, A: 255})
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, img); err != nil {
+		return fmt.Errorf("%w: gambar uji gagal dibuat", ErrReaderGagal)
+	}
 	request := geminiRequest{}
 	request.Contents = append(request.Contents, struct {
 		Parts []geminiPart `json:"parts"`
 	}{
-		Parts: []geminiPart{{Text: "Balas hanya kata OK."}},
+		Parts: []geminiPart{
+			{InlineData: &geminiInlineData{MimeType: MimePNG, Data: base64.StdEncoding.EncodeToString(encoded.Bytes())}},
+			{Text: `Balas hanya objek JSON {"ok":true}.`},
+		},
 	})
-	_, err := r.generate(ctx, key, request)
-	return err
+	request.GenerationConfig = &struct {
+		ResponseMimeType string `json:"responseMimeType"`
+	}{ResponseMimeType: "application/json"}
+	answer, err := r.generate(ctx, key, request)
+	if err != nil {
+		return err
+	}
+	if !json.Valid(ambilJSON(answer)) {
+		return fmt.Errorf("%w: model tidak mengembalikan JSON untuk gambar uji", ErrReaderGagal)
+	}
+	return nil
 }
 
 func (r *GeminiReader) generate(ctx context.Context, key string, payload geminiRequest) (string, error) {

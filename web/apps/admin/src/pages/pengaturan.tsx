@@ -267,7 +267,7 @@ function TetapanGemini({ status, refresh }: { status: OCRStatus; refresh: () => 
         setSukses("API key tersimpan terenkripsi. Uji koneksi sebelum mengaktifkan AI.");
       } else if (aksi === "uji") {
         await api.post("/admin/settings/ocr-key/test");
-        setSukses("Koneksi Gemini 2.5 Flash-Lite berhasil. AI dapat diaktifkan.");
+        setSukses("Uji gambar dan JSON Gemini berhasil. Uji bukti transfer nyata di QA sebelum mengaktifkan AI.");
       } else {
         await api.delete("/admin/settings/ocr-key");
         setKey("");
