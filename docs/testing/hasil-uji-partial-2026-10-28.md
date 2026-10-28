@@ -81,3 +81,22 @@ Enam skenario berpindah dari PARTIAL menjadi PASS. Rekap seluruh 162 ID sekarang
 Gerbang perubahan lulus: seluruh paket Go, `go vet`, tes integrasi PostgreSQL terarah, pemeriksaan rahasia, kompatibilitas migrasi, dan `git diff --check`. Suite Go penuh tercatat di `/opt/temp/grahita-qa-followup-go-all-20261028.log`; `go vet` di `/opt/temp/grahita-qa-followup-go-vet-20261028.log`.
 
 Perbaikan dirilis ke produksi pada 28 Oktober 2026 pukul 16:53 WIB. Commit sumber produk `c1d4178b` diterapkan sebagai commit operator `52858e87`; checkout produksi berada pada `50a478af` karena commit dokumentasi ikut terpasang. Backup sebelum deploy: `/srv/grahita-backups/grahita-20261028-095048.dump`. API healthy, kedua portal dan metadata merespons HTTP 200, serta log API/worker sesudah deploy tidak memuat panic/fatal/error. Uji negatif produksi memakai akun UJI membuktikan approve Tempo terhadap order non-Tempo mengembalikan `404 NOT_FOUND`; hash detail order sebelum dan sesudah identik. Tidak ada transaksi ekonomi produksi yang dibuat.
+
+## Putaran lanjutan skenario Deposit
+
+Empat skenario P0 berikut diuji pada source terbaru dengan komponen portal Admin, HTTP aplikasi, dan PostgreSQL 18 QA terisolasi. Pengujian menemukan bahwa verifikasi top-up dan reversal alokasi sebelumnya belum menulis `audit_logs` di dalam transaksi ledger. Implementasi diperbaiki agar audit verifikasi/reversal ditulis sesudah mutasi journal dan sebelum `COMMIT`; jalur replay keluar sebelum penulisan sehingga audit tidak digandakan.
+
+| ID | Hasil | Bukti utama |
+|---|---|---|
+| DEP-04 | **PASS komposit QA** | UI Manager hanya menampilkan Review/Tolak, mewajibkan alasan, dan tidak menampilkan Verifikasi. HTTP nyata membuktikan review/reject masing-masing tercatat sekali di audit, status berubah sesuai keputusan, dan saldo tidak bertambah. Manager tetap tidak dapat mengkredit deposit. |
+| DEP-05 | **PASS komposit QA** | UI Superadmin mewajibkan alasan saat nominal final berbeda dan mengirim `approved_amount` serta `Idempotency-Key`. HTTP/PostgreSQL membuktikan nominal sama maupun berbeda; saldo bertambah tepat nominal approved, journal `topup_credit` terhubung ke bukti dan verification log, audit `deposit_topup/verify` tercatat, dan replay tidak menggandakan log, journal, saldo, atau audit. |
+| DEP-10 | **PASS QA** | API/PostgreSQL menolak alokasi tanpa key, melebihi saldo/sisa order, order `done`, cabang asing, versi order/journal basi, serta request paralel yang kalah tanpa debit. Replay key/payload sama mengembalikan hasil lama dan hanya menyisakan satu allocation serta satu debit. |
+| DEP-11 | **PASS QA setelah perbaikan** | Reversal parsial Rp20.000 lalu seluruh sisa Rp40.000 mengembalikan saldo tepat ke nilai awal. Dua journal `allocation_reversal_credit` menunjuk debit sumber, dua audit `deposit_allocation/reverse` tercatat atomik, cache aktif menjadi nol, dan replay tidak menambah kredit/audit kedua. Reversal melebihi sisa dan setelah order `done` tetap ditolak. |
+
+Log utama: `/opt/temp/grahita-qa-deposit-partial-pg-20261028.log`, `/opt/temp/grahita-qa-deposit-partial-admin-target-20261028.log`, `/opt/temp/grahita-qa-deposit-partial-admin-full-retry-20261028.log`, `/opt/temp/grahita-qa-deposit-partial-go-all-20261028.log`, dan `/opt/temp/grahita-qa-deposit-partial-go-vet-20261028.log`.
+
+### Rekap kumulatif setelah putaran Deposit
+
+Empat skenario berpindah dari PARTIAL menjadi PASS. Rekap seluruh 162 ID menjadi **95 PASS, 64 PARTIAL, 0 NOT RUN, 3 BLOCKED**. Untuk 124 skenario P0 menjadi **77 PASS, 44 PARTIAL, 0 NOT RUN, 3 BLOCKED**. Tidak ada status lain yang dinaikkan atau diturunkan.
+
+Gerbang akhir: tiga tes integrasi PostgreSQL Deposit lulus; seluruh paket Go dan `go vet` lulus; tes Deposit portal Admin lulus 2/2; typecheck Admin lulus; pemeriksaan rahasia, migrasi kompatibel, dan `git diff --check` lulus. Suite Admin penuh sempat gagal pada dua query UI karena transform/jsdom lambat melewati waktu tunggu default; kedua tes lulus saat diisolasi, waktu tunggu awal tes Deposit diperkuat, dan pengulangan suite penuh secara serial kemudian lulus **108/108**. Kegagalan sementara tersebut tidak dipakai sebagai bukti PASS.
