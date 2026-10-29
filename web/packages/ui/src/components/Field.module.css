@@ -20,7 +20,7 @@
 .hint {
   font-size: 12px;
   line-height: 16px;
-  color: var(--text-subtle);
+  color: var(--text-muted);
 }
 
 .formGrid {
