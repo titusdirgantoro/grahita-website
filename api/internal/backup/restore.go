@@ -56,18 +56,20 @@ type OpsiUjiRestore struct {
 
 // HasilAnonim merangkum pemeriksaan penyamaran data.
 type HasilAnonim struct {
-	EmailCabangBocor       int64 `json:"email_cabang_bocor"`
-	EmailAdminBocor        int64 `json:"email_admin_bocor"`
-	EmailOutboxBocor       int64 `json:"email_outbox_bocor"`
-	SesiTersisa            int64 `json:"sesi_tersisa"`
-	TokenResetTersisa      int64 `json:"token_reset_tersisa"`
-	TokenRegistrasiTersisa int64 `json:"token_registrasi_tersisa"`
-	IPAuditTersisa         int64 `json:"ip_audit_tersisa"`
+	EmailCabangBocor         int64 `json:"email_cabang_bocor"`
+	EmailPenggunaCabangBocor int64 `json:"email_pengguna_cabang_bocor"`
+	EmailAdminBocor          int64 `json:"email_admin_bocor"`
+	EmailOutboxBocor         int64 `json:"email_outbox_bocor"`
+	SesiTersisa              int64 `json:"sesi_tersisa"`
+	TokenResetTersisa        int64 `json:"token_reset_tersisa"`
+	TokenRegistrasiTersisa   int64 `json:"token_registrasi_tersisa"`
+	IPAuditTersisa           int64 `json:"ip_audit_tersisa"`
 }
 
 // Bersih melaporkan apakah tidak ada lagi data pribadi di salinan staging.
 func (h HasilAnonim) Bersih() bool {
-	return h.EmailCabangBocor == 0 && h.EmailAdminBocor == 0 && h.EmailOutboxBocor == 0 &&
+	return h.EmailCabangBocor == 0 && h.EmailPenggunaCabangBocor == 0 &&
+		h.EmailAdminBocor == 0 && h.EmailOutboxBocor == 0 &&
 		h.SesiTersisa == 0 && h.TokenResetTersisa == 0 && h.TokenRegistrasiTersisa == 0 &&
 		h.IPAuditTersisa == 0
 }
@@ -457,6 +459,8 @@ var sqlAnonim = []string{
 	// `left(id::text,8)` melanggar unique branches.email).
 	`UPDATE branches SET email = 'cabang-' || id::text || '@staging.invalid',
 	       nama = 'Cabang ' || left(id::text, 8), nama_kepala = 'Kepala Cabang', telepon = NULL`,
+	`UPDATE branch_users SET email = 'pengguna-cabang-' || id::text || '@staging.invalid',
+	       telepon = NULL, last_login_at = NULL`,
 	`UPDATE admin_users SET email = 'admin-' || id::text || '@staging.invalid',
 	       nama = 'Admin ' || left(id::text, 8)`,
 	`UPDATE audit_logs SET ip = NULL, actor_nama = NULL`,
@@ -496,6 +500,7 @@ func verifikasiAnonim(ctx context.Context, dsn string) (HasilAnonim, error) {
 		sql    string
 	}{
 		{&h.EmailCabangBocor, `SELECT count(*) FROM branches WHERE email NOT LIKE '%@staging.invalid'`},
+		{&h.EmailPenggunaCabangBocor, `SELECT count(*) FROM branch_users WHERE email NOT LIKE '%@staging.invalid'`},
 		{&h.EmailAdminBocor, `SELECT count(*) FROM admin_users WHERE email NOT LIKE '%@staging.invalid'`},
 		{&h.EmailOutboxBocor, `SELECT count(*) FROM email_outbox WHERE NOT (to_addr @> ARRAY['staging.invalid'::text])`},
 		{&h.SesiTersisa, `SELECT count(*) FROM sessions`},

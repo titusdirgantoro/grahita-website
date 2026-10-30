@@ -168,6 +168,11 @@ func TestPGBackupRestoreLingkaranPenuh(t *testing.T) {
 		 VALUES ('Rina Superadmin', 'rina.superadmin@example.test', 'superadmin', 'x', true, now())`); err != nil {
 		t.Fatalf("insert superadmin: %v", err)
 	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO branch_users (branch_id, email, password_hash, telepon, last_login_at)
+		 VALUES ($1, 'pengguna.cabang@example.test', 'hash-uji', '0812999999', now())`, branchID); err != nil {
+		t.Fatalf("insert pengguna cabang: %v", err)
+	}
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO orders (branch_id, status)
 		 VALUES ($1, 'draft') RETURNING id`, branchID).Scan(&orderID); err != nil {
@@ -337,6 +342,18 @@ func TestPGBackupRestoreLingkaranPenuh(t *testing.T) {
 	}
 	if emailUnik != 3 {
 		t.Errorf("email hasil penyamaran tidak unik: %d dari 3", emailUnik)
+	}
+	var emailPenggunaCabang string
+	var teleponPenggunaCabang *string
+	var loginPenggunaCabang *time.Time
+	if err := conn.QueryRow(ctx,
+		`SELECT email::text, telepon, last_login_at FROM branch_users LIMIT 1`).
+		Scan(&emailPenggunaCabang, &teleponPenggunaCabang, &loginPenggunaCabang); err != nil {
+		t.Fatalf("baca pengguna cabang hasil restore: %v", err)
+	}
+	if !strings.HasSuffix(emailPenggunaCabang, "@staging.invalid") || teleponPenggunaCabang != nil || loginPenggunaCabang != nil {
+		t.Errorf("pengguna cabang belum disamarkan: email=%q telepon_nil=%v login_nil=%v",
+			emailPenggunaCabang, teleponPenggunaCabang == nil, loginPenggunaCabang == nil)
 	}
 	var jumlahBukti int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM payment_proofs`).Scan(&jumlahBukti); err != nil {
