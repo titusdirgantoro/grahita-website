@@ -429,7 +429,7 @@ export function PesananDetailPage({ id }: { id: string }) {
                 <tr>
                   <th scope="col">No</th>
                   <th scope="col">Serial Number</th>
-                  <th scope="col">Nama instansi</th>
+                  <th scope="col">Nama Instansi</th>
                   <th scope="col">Cabang</th>
                   <th scope="col" className="num">Jml Pcs</th>
                   <th scope="col">Produk</th>
@@ -1071,7 +1071,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
       return;
     }
     if (dipakai.some((b) => !b.namaInstansi.trim())) {
-      setGalat("Nama instansi wajib diisi pada setiap baris produk.");
+      setGalat("Nama Instansi wajib diisi pada setiap baris produk.");
       return;
     }
     setMenyimpan(true);
@@ -1130,7 +1130,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
       <div className={styles.stack}>
         <Card>
           <CardHead title="Item pesanan" />
-          <p className="muted small">Satu baris untuk satu instansi dan produk. Nama instansi maksimal 160 karakter. Nomor serial dibuat otomatis saat pesanan dikirim.</p>
+          <p className="muted small">Satu baris untuk satu instansi dan produk. Nama Instansi maksimal 160 karakter. Nomor serial dibuat otomatis saat pesanan dikirim.</p>
           {katalog.galat ? <Notice tone="danger">{katalog.galat}</Notice> : null}
           {adaSertifikat ? (
             <Notice tone="info">
@@ -1150,7 +1150,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
                 <div className={styles.linesHead} aria-hidden="true">
                   <span>No</span>
                   <span>Serial Number</span>
-                  <span>Nama instansi</span>
+                  <span>Nama Instansi</span>
                   <span>Cabang</span>
                   <span>Jml Pcs</span>
                   <span>Produk</span>
@@ -1170,8 +1170,8 @@ export function PesananEditorPage({ id }: { id?: string }) {
                       <div className={styles.lNo}><span className={styles.mLbl}>No</span>{i + 1}</div>
                       <div className={styles.lSerial}><span className={styles.mLbl}>Serial Number</span><span className="muted small">Dibuat saat dikirim</span></div>
                       <div className={styles.lInstansi}>
-                        <label className={styles.mLbl} htmlFor={`instansi-${b.kunci}`}>Nama instansi</label>
-                        <Input id={`instansi-${b.kunci}`} aria-label={`Nama instansi baris ${i + 1}`} required
+                        <label className={styles.mLbl} htmlFor={`instansi-${b.kunci}`}>Nama Instansi</label>
+                        <Input id={`instansi-${b.kunci}`} aria-label={`Nama Instansi baris ${i + 1}`} required
                           value={b.namaInstansi} placeholder="Contoh: TK Al-Fatih"
                           onChange={(e) => ubahBaris(b.kunci, { namaInstansi: Array.from(e.target.value).slice(0, 160).join("") })} />
                       </div>

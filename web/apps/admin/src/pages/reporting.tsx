@@ -194,7 +194,7 @@ export function ReportingPage() {
               <table className={styles.table}>
                 <thead><tr>
                   <th scope="col">Tanggal</th><th scope="col">Invoice</th><th scope="col">Cabang</th>
-                  <th scope="col">Nama instansi</th><th scope="col">Produk</th><th scope="col">Serial number</th>
+                  <th scope="col">Nama Instansi</th><th scope="col">Produk</th><th scope="col">Serial Number</th>
                   <th scope="col" className={styles.num}>Qty</th><th scope="col" className={styles.num}>Harga/Pcs</th>
                   <th scope="col" className={styles.num}>Produksi</th><th scope="col" className={styles.num}>PI</th>
                   <th scope="col" className={styles.num}>Expres</th><th scope="col" className={styles.num}>Bea SPV</th>

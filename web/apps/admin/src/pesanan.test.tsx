@@ -957,7 +957,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     fireEvent.change(pilih, { target: { value: "pr-2" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Tambah baris" }));
     expect(within(dialog).getByLabelText("Qty Kalung Kesehatan")).toBeDefined();
-    fireEvent.change(within(dialog).getByLabelText(/Nama instansi Kalung Kesehatan/), { target: { value: "SD B" } });
+    fireEvent.change(within(dialog).getByLabelText(/Nama Instansi Kalung Kesehatan/), { target: { value: "SD B" } });
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Hapus Bio Magnetik" }));
     expect(within(dialog).queryByLabelText("Qty Bio Magnetik")).toBeNull();
@@ -1007,7 +1007,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     const tersisa = within(dialog).getAllByLabelText("Qty Kalung Kesehatan");
     expect(tersisa.length).toBe(1);
     expect((tersisa[0] as HTMLInputElement).value).toBe("1");
-    fireEvent.change(within(dialog).getByLabelText(/Nama instansi Kalung Kesehatan/), { target: { value: "TK C" } });
+    fireEvent.change(within(dialog).getByLabelText(/Nama Instansi Kalung Kesehatan/), { target: { value: "TK C" } });
 
     // Payload tetap satu baris produk_id serta tidak pernah dikirim dua kali.
     fireEvent.change(within(dialog).getByLabelText("Alasan revisi"), { target: { value: "ganti produk" } });

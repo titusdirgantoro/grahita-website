@@ -1224,7 +1224,7 @@ export function PesananDetailAdminPage() {
         return;
       }
       if (b.line_no === 0 && !b.nama_instansi.trim()) {
-        setGalatRevisi(`Nama instansi baris "${b.nama}" wajib diisi.`);
+        setGalatRevisi(`Nama Instansi baris "${b.nama}" wajib diisi.`);
         return;
       }
       lines.push(
@@ -1392,7 +1392,7 @@ export function PesananDetailAdminPage() {
                 <tr>
                   <th scope="col">No</th>
                   <th scope="col">Serial Number</th>
-                  <th scope="col">Nama instansi</th>
+                  <th scope="col">Nama Instansi</th>
                   <th scope="col">Cabang</th>
                   <th scope="col" className="num">Jml Pcs</th>
                   <th scope="col">Produk</th>
@@ -1965,7 +1965,7 @@ export function PesananDetailAdminPage() {
             <thead>
               <tr>
                 <th scope="col">Produk</th>
-                <th scope="col">Nama instansi</th>
+                <th scope="col">Nama Instansi</th>
                 <th scope="col">Ket</th>
                 <th scope="col" className="num">
                   Qty
@@ -1988,10 +1988,10 @@ export function PesananDetailAdminPage() {
                     placeholder="Opsional" onChange={(e) => ubahBaris(b.kunci, { keterangan: e.target.value })} /></td>
                   <td>
                     <Input
-                      aria-label={`Nama instansi ${b.nama} baris ${b.kunci}`}
+                      aria-label={`Nama Instansi ${b.nama} baris ${b.kunci}`}
                       maxLength={160}
                       value={b.nama_instansi}
-                      placeholder={b.line_no > 0 ? "Data lama tanpa instansi" : "Nama instansi"}
+                      placeholder={b.line_no > 0 ? "Data lama tanpa instansi" : "Nama Instansi"}
                       onChange={(e) => ubahBaris(b.kunci, { nama_instansi: e.target.value })}
                     />
                   </td>

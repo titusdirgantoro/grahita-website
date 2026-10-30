@@ -408,7 +408,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
 
     const pilih = await screen.findByLabelText("Produk baris 1");
     fireEvent.change(pilih, { target: { value: "p1" } });
-    fireEvent.change(screen.getByLabelText("Nama instansi baris 1"), { target: { value: "TK A" } });
+    fireEvent.change(screen.getByLabelText("Nama Instansi baris 1"), { target: { value: "TK A" } });
 
     // Harga satuan datang dari katalog cabang, bukan diisi pengguna.
     const subtotalAwal = await screen.findByTestId("total-draft");
@@ -450,12 +450,12 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
     const panggilan = fetchPesanan();
     render(<RouterProvider router={buatRouter("/pesanan/baru")} />);
     fireEvent.change(await screen.findByLabelText("Produk baris 1"), { target: { value: "p1" } });
-    fireEvent.change(screen.getByLabelText("Nama instansi baris 1"), { target: { value: "TK A" } });
+    fireEvent.change(screen.getByLabelText("Nama Instansi baris 1"), { target: { value: "TK A" } });
     fireEvent.click(screen.getByRole("button", { name: "Tambah baris" }));
     const produkKedua = screen.getByLabelText("Produk baris 2") as HTMLSelectElement;
     expect((within(produkKedua).getByRole("option", { name: "Bio Magnetik" }) as HTMLOptionElement).disabled).toBe(false);
     fireEvent.change(produkKedua, { target: { value: "p1" } });
-    fireEvent.change(screen.getByLabelText("Nama instansi baris 2"), { target: { value: "SD B" } });
+    fireEvent.change(screen.getByLabelText("Nama Instansi baris 2"), { target: { value: "SD B" } });
     fireEvent.click(screen.getByRole("button", { name: "Simpan draft" }));
     await waitFor(() => {
       const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders"));
@@ -477,7 +477,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
     expect(await screen.findByText(/Sertifikat dipesan terpisah/)).toBeDefined();
     expect((screen.getByRole("button", { name: "Tambah baris" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Tambah baris" }));
-    expect(screen.getByLabelText("Nama instansi baris 2")).toBeDefined();
+    expect(screen.getByLabelText("Nama Instansi baris 2")).toBeDefined();
   });
 
   it("memuat draft yang diubah dan mempertahankan nama instansi", async () => {
