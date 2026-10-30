@@ -63,7 +63,7 @@ func TestInvoiceHTMLMemuatIdentitasDanAngka(t *testing.T) {
 		"Terbilang",
 		"Lima juta tiga ribu rupiah",
 		"Nama Instansi",
-		"PI (5%)",
+		"PI",
 	}
 	for _, s := range wajib {
 		if !strings.Contains(html, s) {
@@ -73,6 +73,33 @@ func TestInvoiceHTMLMemuatIdentitasDanAngka(t *testing.T) {
 	// Versi 0 tidak menampilkan penanda revisi.
 	if strings.Contains(html, "Revisi v") {
 		t.Error("invoice versi 0 tidak boleh menyebut revisi")
+	}
+}
+
+func TestInvoiceHTMLMenampilkanKomponenDanKeteranganBaris(t *testing.T) {
+	o := fixtureOrder("o-komponen")
+	o.Total = 1255000
+	o.Lines = []Line{{LineNo: 1, Jenis: "product", Nama: "Produk A", NamaInstansi: "TK A", Keterangan: "Prioritas",
+		Qty: 40, HargaSatuan: 31375, HargaDasar: 27500, Produksi: 1100000, PI: 55000, Express: 0, BeaSPV: 100000,
+		Subtotal: 1255000, SerialNumber: "20261008001"}}
+	b, err := invoiceHTML(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(b)
+	for _, want := range []string{"27.500", "1.100.000", "55.000", "100.000", "1.255.000", "Prioritas", "Expres"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("invoice tidak memuat %q", want)
+		}
+	}
+	// Urutan visual memakai empat subkolom Tagihan di antara Harga/Pcs dan Total.
+	barisUtama := `<th rowspan="2">No</th><th rowspan="2">Serial Number</th><th rowspan="2">Nama Instansi</th><th rowspan="2">Cabang</th><th rowspan="2">Jml Pcs</th><th rowspan="2">Produk</th><th rowspan="2">Harga/Pcs</th><th colspan="4">Tagihan</th><th rowspan="2">Total Tagihan</th><th rowspan="2">Ket</th>`
+	barisKomponen := `<tr><th>Produksi</th><th>PI</th><th>Expres</th><th>Bea SPV</th></tr>`
+	if !strings.Contains(html, barisUtama) || !strings.Contains(html, barisKomponen) {
+		t.Fatal("urutan header invoice tidak sesuai urutan bisnis 13 kolom")
+	}
+	if !strings.Contains(html, `<td class="num">—</td>`) {
+		t.Fatal("komponen Expres nol harus ditampilkan sebagai em dash")
 	}
 }
 

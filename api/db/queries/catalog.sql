@@ -23,9 +23,31 @@ SELECT id, kode, nama, jenis::text AS jenis,
 -- Harga default TIDAK dipakai sebagai cadangan: sel kosong = tidak dijual
 -- (PRD CP-KAT-01/02).
 SELECT p.id, p.nama, p.jenis::text AS jenis,
-       COALESCE(p.deskripsi, '') AS deskripsi, bp.harga, p.urutan
+       COALESCE(p.deskripsi, '') AS deskripsi,
+       CASE WHEN t.hjm_rupiah IS NULL THEN bp.harga
+            ELSE t.hjm_rupiah
+              + CASE WHEN b.pajak_in THEN ROUND(t.hjm_rupiah * t.p1_ratio)::bigint ELSE 0 END
+              + COALESCE(t.express_rupiah, 0) + t.spv_rupiah END::bigint AS harga,
+       COALESCE(t.hjm_rupiah, bp.harga)::bigint AS harga_dasar,
+       CASE WHEN b.pajak_in THEN COALESCE(t.p1_ratio, 0) ELSE 0 END::text AS p1_ratio,
+       CASE WHEN b.pajak_in THEN COALESCE(ROUND(t.hjm_rupiah * t.p1_ratio), 0) ELSE 0 END::bigint AS pi_per_pcs,
+       COALESCE(t.express_rupiah, 0)::bigint AS express_per_pcs,
+       COALESCE(t.spv_rupiah, 0)::bigint AS spv_per_pcs,
+       p.urutan
   FROM products p
   JOIN branch_prices bp ON bp.product_id = p.id
+  JOIN branches b ON b.id = bp.branch_id
+  LEFT JOIN LATERAL (
+        SELECT tv.hjm_rupiah, tv.p1_ratio, tv.express_rupiah, tv.spv_rupiah
+          FROM product_variants v
+          JOIN branch_tariff_versions tv ON tv.variant_id = v.id
+         WHERE v.product_id = p.id
+           AND v.tariff_parent_variant_id IS NULL
+           AND tv.branch_id = bp.branch_id
+           AND tv.superseded_at IS NULL AND tv.is_available
+           AND tv.final_item_rupiah = bp.harga
+         ORDER BY v.created_at, v.id LIMIT 1
+       ) t ON true
  WHERE bp.branch_id = $1 AND p.is_active
  ORDER BY p.urutan, p.nama;
 
@@ -108,16 +130,16 @@ SELECT (EXISTS (SELECT 1 FROM order_lines ol WHERE ol.product_id = sqlc.arg(prod
 -- Sel matriks yang BERISI harga. Sel kosong tidak punya baris dan berarti
 -- produk tidak dijual ke cabang tersebut (PRD AP-KAT-03).
 --
--- Komponen HJM/P1/SPV diambil dari versi tarif aktif varian utama produk,
+-- Komponen HJM/P1/Expres/SPV diambil dari versi tarif aktif varian utama produk,
 -- hanya bila tarif finalnya sama dengan harga sel (komponen benar-benar
 -- menjelaskan harga). Sel harga lama tanpa versi yang cocok mengembalikan
 -- komponen NULL dan source_kind kosong.
 SELECT bp.branch_id, bp.product_id, bp.harga,
-       t.hjm_rupiah, COALESCE(t.p1_ratio, '')::text AS p1_ratio, t.spv_rupiah,
+       t.hjm_rupiah, COALESCE(t.p1_ratio, '')::text AS p1_ratio, t.express_rupiah, t.spv_rupiah,
        COALESCE(t.source_kind, '')::text AS source_kind
   FROM branch_prices bp
   LEFT JOIN LATERAL (
-        SELECT tv.hjm_rupiah, tv.p1_ratio::text AS p1_ratio, tv.spv_rupiah, tv.source_kind
+        SELECT tv.hjm_rupiah, tv.p1_ratio::text AS p1_ratio, tv.express_rupiah, tv.spv_rupiah, tv.source_kind
           FROM product_variants v
           JOIN branch_tariff_versions tv ON tv.variant_id = v.id
          WHERE v.product_id = bp.product_id
@@ -152,7 +174,7 @@ DELETE FROM branch_prices WHERE branch_id = $1;
 
 -- ---------- Versi tarif manual dari matriks harga ----------
 --
--- Edit matriks menulis komponen HJM/P1/SPV sebagai versi tarif append-only
+-- Edit matriks menulis komponen HJM/P1/Expres/SPV sebagai versi tarif append-only
 -- (source_kind 'manual'), lalu memproyeksikan tarif finalnya ke branch_prices
 -- yang dibaca katalog dan order (docs/design/master-impact-import.md §5.3).
 
@@ -185,10 +207,10 @@ UPDATE branch_tariff_versions SET superseded_at = now() WHERE id = $1;
 
 -- name: InsertManualTariffVersion :exec
 INSERT INTO branch_tariff_versions
-       (branch_id, variant_id, hjm_rupiah, p1_ratio, spv_rupiah, final_item_rupiah,
+       (branch_id, variant_id, hjm_rupiah, p1_ratio, express_rupiah, spv_rupiah, final_item_rupiah,
         is_available, source_kind, created_by, source_component_hash)
 VALUES (sqlc.arg(branch_id), sqlc.arg(variant_id), sqlc.arg(hjm_rupiah),
-        (sqlc.arg(p1_ratio)::text)::numeric, sqlc.arg(spv_rupiah), sqlc.arg(final_item_rupiah),
+        (sqlc.arg(p1_ratio)::text)::numeric, sqlc.arg(express_rupiah), sqlc.arg(spv_rupiah), sqlc.arg(final_item_rupiah),
         true, 'manual', sqlc.arg(created_by), sqlc.arg(source_component_hash));
 
 -- name: InsertManualTariffTombstone :exec

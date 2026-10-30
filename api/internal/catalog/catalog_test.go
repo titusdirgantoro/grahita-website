@@ -24,6 +24,14 @@ func svc() (*Service, *Memory) {
 
 func ptr[T any](v T) *T { return &v }
 
+func TestHitungTarifDenganExpress(t *testing.T) {
+	got, err := HitungTarif(Komponen{HJM: 27500, P1: "0.05", Express: 1500, SPV: 2500}, JenisReguler)
+	if err != nil { t.Fatal(err) }
+	if got.Final != 32875 || got.Express != 1500 {
+		t.Fatalf("tarif dengan Expres salah: %+v", got)
+	}
+}
+
 // TestKatalogCabangHanyaProdukBerharga memastikan produk tanpa baris harga
 // TIDAK muncul di portal cabang, dan harga default bukan cadangan (PRD
 // CP-KAT-01/02).

@@ -446,6 +446,86 @@ func TestPGVerifikasiSetujuMenghasilkanDokumenDanEmailSekali(t *testing.T) {
 	}
 }
 
+// VER-01: Manager memeriksa dua bukti transfer dalam satu keputusan. Nominal
+// tiap bukti harus terikat ke bukti dan rekening yang dipilih, jumlahnya harus
+// tepat sama dengan total order, dan seluruh efek Done tetap lahir satu kali.
+func TestPGVerifikasiDuaBuktiTransferMenyimpanSplitTepat(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	id, total := seedPesananSubmitted(t, f, f.branchA, "2026-10-701")
+	proofA := buktiOrder(t, f, id, "ver01-a")
+	proofB := buktiOrder(t, f, id, "ver01-b")
+	bagianA := int64(100000)
+	bagianB := total - bagianA
+
+	cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	body := settlementBody(f, 0, nil, []splitUji{
+		{proof: proofA, approved: bagianA, apply: bagianA},
+		{proof: proofB, approved: bagianB, apply: bagianB},
+	})
+	status, res := verifyKey(t, f, cookies, csrf, id, body, "")
+	if status != http.StatusOK {
+		t.Fatalf("Manager harus dapat menyetujui dua bukti tepat total: %d %v", status, res)
+	}
+
+	st, verif, _, doneAt := statusPesanan(t, f, id)
+	if st != "done" || verif != "cocok" || doneAt == nil || *doneAt == "" {
+		t.Fatalf("order harus done/cocok dengan done_at: %s/%s/%v", st, verif, doneAt)
+	}
+	var jumlahSplit int
+	var approved, applied int64
+	if err := f.pool.QueryRow(ctx, `SELECT count(*), COALESCE(sum(approved_nominal),0), COALESCE(sum(applied_to_order),0)
+		FROM verification_proof_splits WHERE order_id=$1`, id).Scan(&jumlahSplit, &approved, &applied); err != nil {
+		t.Fatal(err)
+	}
+	if jumlahSplit != 2 || approved != total || applied != total {
+		t.Fatalf("split dua bukti harus tepat total=%d, dapat count=%d approved=%d applied=%d", total, jumlahSplit, approved, applied)
+	}
+	for proof, mau := range map[string]int64{proofA: bagianA, proofB: bagianB} {
+		var n int
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM verification_proof_splits
+			WHERE order_id=$1 AND payment_proof_id=$2
+			AND approved_nominal=$3 AND applied_to_order=$3 AND credited_to_deposit_total=0`,
+			id, proof, mau).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("split bukti %s tidak tersimpan tepat %d", proof, mau)
+		}
+	}
+	if n := hitungBaris(t, f, "verification_logs", "order_id", id); n != 1 {
+		t.Fatalf("harus satu log verifikasi, dapat %d", n)
+	}
+	var tujuanRaw []byte
+	if err := f.pool.QueryRow(ctx, `SELECT destination_results FROM verification_logs WHERE order_id=$1`, id).Scan(&tujuanRaw); err != nil {
+		t.Fatal(err)
+	}
+	var tujuan []payment.DestinationResult
+	if err := json.Unmarshal(tujuanRaw, &tujuan); err != nil {
+		t.Fatal(err)
+	}
+	if len(tujuan) != 2 {
+		t.Fatalf("harus ada dua snapshot rekening tujuan, dapat %+v", tujuan)
+	}
+	for _, hasil := range tujuan {
+		if hasil.BankAccountID != f.bankDefault || hasil.Status != "allowed" || hasil.BankSnapshot == "" || hasil.AccountOwnerSnapshot == "" {
+			t.Fatalf("snapshot rekening efektif tidak lengkap: %+v", hasil)
+		}
+	}
+	if n := hitungBaris(t, f, "audit_logs", "entity_id", id); n != 1 {
+		t.Fatalf("harus satu audit verifikasi, dapat %d", n)
+	}
+	if n := pekerjaanDokumen(t, f, id); n != 1 {
+		t.Fatalf("harus satu job dokumen, dapat %d", n)
+	}
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("worker dokumen gagal: %v", err)
+	}
+	if n := hitungBaris(t, f, "documents", "order_id", id); n != 3 {
+		t.Fatalf("harus tiga dokumen, dapat %d", n)
+	}
+}
+
 // TestPGVerifikasiCocokWajibTujuanEfektifCabang menegakkan pemetaan tepat satu
 // bukti ke rekening efektif dari cabang order.
 func TestPGVerifikasiCocokWajibTujuanEfektifCabang(t *testing.T) {
@@ -627,6 +707,63 @@ func TestPGVerifikasiPerluReviewTidakMenyelesaikan(t *testing.T) {
 	}
 }
 
+// VER-02: seluruh alasan operasional yang tersedia di modal admin harus
+// menghasilkan substatus review tanpa menyelesaikan order atau menerbitkan
+// dokumen/email. Setiap kasus memakai order terpisah agar histori tidak saling
+// menutupi.
+func TestPGVerifikasiEmpatAlasanReviewTetapSubmitted(t *testing.T) {
+	f := newPGFixture(t)
+	cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	kasus := []struct {
+		nama, alasan string
+		suffix       int
+		nominal      func(int64) *int64
+	}{
+		{"nominal kurang", "kurang_bayar", 711, func(total int64) *int64 { v := total - 1; return &v }},
+		{"nominal lebih", "lebih_bayar", 712, func(total int64) *int64 { v := total + 1; return &v }},
+		{"bukti tidak terbaca", "tidak_terbaca", 713, func(int64) *int64 { return nil }},
+		{"rekening salah", "rekening_beda", 714, func(total int64) *int64 { v := total; return &v }},
+	}
+	for _, k := range kasus {
+		t.Run(k.nama, func(t *testing.T) {
+			id, total := seedPesananSubmitted(t, f, f.branchA, fmt.Sprintf("2026-10-%03d", k.suffix))
+			seedBuktiOCR(t, f, id, "review-"+k.alasan+".jpg", berkasJPEGUji(k.alasan))
+			payload := map[string]any{
+				"hasil":   "perlu_review",
+				"alasan":  k.alasan,
+				"catatan": "UJI " + k.nama,
+			}
+			if nominal := k.nominal(total); nominal != nil {
+				payload["total_terbaca"] = *nominal
+			}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, res := verifyHTTP(t, f, cookies, csrf, id, string(raw))
+			if status != http.StatusOK {
+				t.Fatalf("review %s harus 200: %d %v", k.alasan, status, res)
+			}
+			st, verif, alasan, doneAt := statusPesanan(t, f, id)
+			if st != "submitted" || verif != "perlu_review" || alasan != k.alasan || doneAt != nil {
+				t.Fatalf("keadaan review salah: %s/%s/%s/%v", st, verif, alasan, doneAt)
+			}
+			if n := hitungBaris(t, f, "verification_logs", "order_id", id); n != 1 {
+				t.Fatalf("harus satu log review, dapat %d", n)
+			}
+			if n := pekerjaanDokumen(t, f, id); n != 0 {
+				t.Fatalf("review tidak boleh membuat job dokumen, dapat %d", n)
+			}
+			if n := hitungBaris(t, f, "documents", "order_id", id); n != 0 {
+				t.Fatalf("review tidak boleh membuat dokumen, dapat %d", n)
+			}
+			if n := hitungBaris(t, f, "email_outbox", "order_id", id); n != 0 {
+				t.Fatalf("review tidak boleh membuat email, dapat %d", n)
+			}
+		})
+	}
+}
+
 // TestPGVerifikasiBentukDataDitolak menegakkan validasi bentuk pada endpoint.
 func TestPGVerifikasiBentukDataDitolak(t *testing.T) {
 	f := newPGFixture(t)
@@ -642,6 +779,7 @@ func TestPGVerifikasiBentukDataDitolak(t *testing.T) {
 		{"setuju membawa alasan", `{"hasil":"cocok","alasan":"kurang_bayar"}`},
 		{"hasil kosong", `{}`},
 		{"nominal negatif", `{"hasil":"cocok","total_terbaca":-1}`},
+		{"nominal desimal", `{"hasil":"cocok","total_terbaca":1.5}`},
 	}
 	for _, k := range kasus {
 		status, body := verifyHTTP(t, f, cookies, csrf, id, k.body)
@@ -656,6 +794,9 @@ func TestPGVerifikasiBentukDataDitolak(t *testing.T) {
 	st, verif, _, _ := statusPesanan(t, f, id)
 	if st != "submitted" || verif != "belum" {
 		t.Errorf("permintaan tak sah tidak boleh mengubah keadaan: %s/%s", st, verif)
+	}
+	if n := hitungBaris(t, f, "branch_deposit_transactions", "order_id", id); n != 0 {
+		t.Errorf("permintaan tak sah tidak boleh menulis jurnal deposit, dapat %d", n)
 	}
 
 	// Nominal terbaca boleh kosong (nominal belum terbaca) — tetap boleh setuju.
@@ -687,6 +828,7 @@ func TestPGVerifikasiBersamaanTepatSekali(t *testing.T) {
 	body := bodyVerifikasiCocok(t, f, id, &total, "")
 	siap := make(chan struct{})
 	for i := 0; i < percobaan; i++ {
+		i := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -700,6 +842,14 @@ func TestPGVerifikasiBersamaanTepatSekali(t *testing.T) {
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set(httpx.CSRFHeader, csrf)
+			// Separuh request memakai key yang sama, separuh memakai key unik.
+			// Untuk settlement tanpa kredit, kontraknya adalah tepat satu sukses
+			// dan seluruh retry/key lain konflik sesudah order Done.
+			if i < percobaan/2 {
+				req.Header.Set("Idempotency-Key", "ver04-sama")
+			} else {
+				req.Header.Set("Idempotency-Key", fmt.Sprintf("ver04-beda-%d", i))
+			}
 			for _, c := range cookies {
 				req.AddCookie(c)
 			}
@@ -748,6 +898,18 @@ func TestPGVerifikasiBersamaanTepatSekali(t *testing.T) {
 	}
 	if n := hitungBaris(t, f, "email_outbox", "order_id", id); n != 3 {
 		t.Errorf("harus tetap satu set email (3), dapat %d", n)
+	}
+	for _, key := range []string{"ver04-sama", "ver04-key-baru"} {
+		status, res := verifyKey(t, f, cookies, csrf, id, body, key)
+		if status != http.StatusConflict || kodeErrorVerifikasi(res) != "ORDER_ALREADY_DONE" {
+			t.Fatalf("retry sesudah Done dengan key %q harus 409 ORDER_ALREADY_DONE, dapat %d (%v)", key, status, res)
+		}
+	}
+	if n := hitungBaris(t, f, "verification_logs", "order_id", id); n != 1 {
+		t.Errorf("retry key sama/berbeda tidak boleh menggandakan log, dapat %d", n)
+	}
+	if n := hitungBaris(t, f, "audit_logs", "entity_id", id); n != 1 {
+		t.Errorf("retry key sama/berbeda tidak boleh menggandakan audit, dapat %d", n)
 	}
 }
 

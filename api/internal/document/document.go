@@ -202,8 +202,14 @@ type Line struct {
 	Jenis        string
 	Nama         string
 	NamaInstansi string
+	Keterangan   string
 	Qty          int
 	HargaSatuan  int64
+	HargaDasar   int64
+	Produksi     int64
+	PI           int64
+	Express      int64
+	BeaSPV       int64
 	Subtotal     int64
 	SerialNumber string
 }

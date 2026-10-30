@@ -619,6 +619,12 @@ func TestPGEmailGagalTampilDiRiwayatDanBisaDikirimUlang(t *testing.T) {
 	if len(pesan.Attachments) != 1 || pesan.Attachments[0].Name != "Invoice-2026-10-0003.pdf" {
 		t.Fatalf("lampiran email kirim ulang harus tepat, dapat %+v", pesan.Attachments)
 	}
+	if len(pesan.To) != 1 || pesan.To[0] != "rina@example.test" {
+		t.Fatalf("penerima kirim ulang berubah keliru: %v", pesan.To)
+	}
+	if string(pesan.Attachments[0].Data) != "isi-invoice_pdf" {
+		t.Fatalf("isi dokumen kirim ulang berubah: %q", string(pesan.Attachments[0].Data))
+	}
 	if terkirim := f.emailTerakhir(t, orderID, notification.JenisInvoiceAdmin); terkirim.Status != notification.StatusSent {
 		t.Fatalf("baris terbaru harus sent, dapat %s", terkirim.Status)
 	}

@@ -75,7 +75,9 @@ func (r *Repo) ListProductsForBranch(ctx context.Context, branchID string) ([]ca
 	for _, row := range rows {
 		out = append(out, catalog.BranchProduct{
 			ID: row.ID, Nama: row.Nama, Jenis: row.Jenis,
-			Deskripsi: row.Deskripsi, Harga: row.Harga, Urutan: int(row.Urutan),
+			Deskripsi: row.Deskripsi, Harga: row.Harga, HargaDasar: row.HargaDasar,
+			P1: row.P1Ratio, PI: row.PiPerPcs, Express: row.ExpressPerPcs, SPV: row.SpvPerPcs,
+			Urutan: int(row.Urutan),
 		})
 	}
 	return out, nil
@@ -275,8 +277,11 @@ func listPrices(ctx context.Context, q *sqlc.Queries, f catalog.PriceFilter) ([]
 	for _, row := range rows {
 		cell := catalog.PriceCell{BranchID: row.BranchID, ProductID: row.ProductID, Harga: row.Harga, Sumber: catalog.SumberLama}
 		if row.SourceKind != "" && row.HjmRupiah.Valid && row.SpvRupiah.Valid && row.P1Ratio != "" {
-			hjm, p1, spv := row.HjmRupiah.Int64, row.P1Ratio, row.SpvRupiah.Int64
-			cell.HJM, cell.P1, cell.SPV, cell.Sumber = &hjm, &p1, &spv, row.SourceKind
+			hjm, p1, express, spv := row.HjmRupiah.Int64, row.P1Ratio, int64(0), row.SpvRupiah.Int64
+			if row.ExpressRupiah.Valid {
+				express = row.ExpressRupiah.Int64
+			}
+			cell.HJM, cell.P1, cell.Express, cell.SPV, cell.Sumber = &hjm, &p1, &express, &spv, row.SourceKind
 		}
 		out = append(out, cell)
 	}
@@ -339,7 +344,7 @@ func terapkanSel(ctx context.Context, q *sqlc.Queries, branchID, productID strin
 	}
 	if err := q.InsertManualTariffVersion(ctx, sqlc.InsertManualTariffVersionParams{
 		BranchID: branchID, VariantID: variantID,
-		HjmRupiah: pgtypes.Int8Ptr(&t.HJM), P1Ratio: t.P1, SpvRupiah: pgtypes.Int8Ptr(&t.SPV),
+		HjmRupiah: pgtypes.Int8Ptr(&t.HJM), P1Ratio: t.P1, ExpressRupiah: pgtypes.Int8Ptr(&t.Express), SpvRupiah: pgtypes.Int8Ptr(&t.SPV),
 		FinalItemRupiah: pgtypes.Int8Ptr(&t.Final), CreatedBy: pgtypes.UUID(actorID),
 		SourceComponentHash: t.Sidik,
 	}); err != nil {

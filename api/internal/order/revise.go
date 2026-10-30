@@ -106,6 +106,7 @@ type ReviseLineInput struct {
 	LineNo       int     `json:"line_no"`
 	ProductID    string  `json:"product_id"`
 	NamaInstansi *string `json:"nama_instansi,omitempty"`
+	Keterangan   *string `json:"keterangan,omitempty"`
 	Qty          int     `json:"qty"`
 	HargaSatuan  int64   `json:"harga_satuan"`
 }
@@ -131,6 +132,7 @@ type ReviseLine struct {
 	LineNo       int
 	ProductID    string
 	NamaInstansi *string
+	Keterangan   *string
 	Qty          int
 	HargaSatuan  int64
 }
@@ -357,6 +359,13 @@ func validasiBarisRevisi(in []ReviseLineInput) ([]ReviseLine, error) {
 			}
 			l.NamaInstansi = &instansi
 		}
+		if l.Keterangan != nil {
+			ket := strings.TrimSpace(*l.Keterangan)
+			if len([]rune(ket)) > MaxKeterangan {
+				return nil, fmt.Errorf("%w: keterangan baris ke-%d maksimal %d karakter", ErrInvalidData, i+1, MaxKeterangan)
+			}
+			l.Keterangan = &ket
+		}
 		if l.LineNo < 0 {
 			return nil, fmt.Errorf("%w: line_no baris ke-%d tidak boleh negatif", ErrInvalidData, i+1)
 		}
@@ -372,7 +381,7 @@ func validasiBarisRevisi(in []ReviseLineInput) ([]ReviseLine, error) {
 		} else if l.NamaInstansi == nil {
 			return nil, fmt.Errorf("%w: nama instansi baris baru ke-%d wajib diisi", ErrInvalidData, i+1)
 		}
-		out = append(out, ReviseLine{LineNo: l.LineNo, ProductID: pid, NamaInstansi: l.NamaInstansi, Qty: l.Qty, HargaSatuan: l.HargaSatuan})
+		out = append(out, ReviseLine{LineNo: l.LineNo, ProductID: pid, NamaInstansi: l.NamaInstansi, Keterangan: l.Keterangan, Qty: l.Qty, HargaSatuan: l.HargaSatuan})
 	}
 	return out, nil
 }

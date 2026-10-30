@@ -54,13 +54,18 @@ interface Panggilan {
   init?: RequestInit;
 }
 
-function pasangFetch(alokasi: () => Response, bayar: () => PembayaranPesanan = () => pembayaran()) {
+function pasangFetch(
+  alokasi: () => Response,
+  bayar: () => PembayaranPesanan = () => pembayaran(),
+  isCNC = true,
+) {
   const panggilan: Panggilan[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
       panggilan.push({ url: input, init });
       if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
+      if (input.endsWith("/me/branch")) return json({ data: { is_cnc: isCNC } });
       if (input.endsWith("/deposit")) return json({ data: saldo });
       if (input.includes("/deposit/topups")) return json({ data: [], meta: { total: 0 } });
       if (input.includes("/deposit/transactions")) return json({ data: [], meta: { total: 0 } });
@@ -96,6 +101,18 @@ describe("Customer Portal — deposit (C4)", () => {
     expect(nilai.textContent).toContain("300.000");
     expect(nilai.textContent).not.toContain("450.000");
     expect(screen.getByText(/belum menambah saldo/i)).toBeTruthy();
+  });
+
+  it("rute Deposit cabang non-C&C tetap menampilkan data sendiri tanpa formulir top-up", async () => {
+    const panggilan = pasangFetch(() => json({}), () => pembayaran(), false);
+    buka("/deposit");
+
+    expect(await screen.findByText("Saldo deposit milik cabang Anda")).toBeTruthy();
+    expect(await screen.findByText(/Deposit hanya untuk cabang Cash & Carry/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Kirim top-up" })).toBeNull();
+    expect(panggilan.some((p) => p.url.endsWith("/deposit"))).toBe(true);
+    expect(panggilan.some((p) => p.url.includes("/deposit/topups"))).toBe(true);
+    expect(panggilan.some((p) => p.url.includes("/deposit/transactions"))).toBe(true);
   });
 
   it("Gunakan deposit mengirim versi layar dan key sama saat dicoba ulang setelah gagal jaringan", async () => {
@@ -142,5 +159,28 @@ describe("Customer Portal — deposit (C4)", () => {
     expect(statusBayar(pembayaran({ revision_payment_state: "revision_overpayment_pending", remaining_due: 0 })).label).not.toBe("Lunas");
     expect(statusBayar(pembayaran({ remaining_due: 0 })).label).not.toBe("Lunas");
     expect(statusBayar(pembayaran({ status: "done", is_lunas: true, remaining_due: 0 })).label).toBe("Lunas");
+  });
+
+  it("menampilkan split deposit Rp70.000 dan transfer Rp30.000 hanya setelah lunas", async () => {
+    pasangFetch(
+      () => json({}),
+      () => pembayaran({
+        status: "done",
+        current_total: 100000,
+        committed_deposit: 70000,
+        remaining_due: 0,
+        is_lunas: true,
+        settlement: { order_version: 0, deposit_amount: 70000, transfer_amount: 30000 },
+        balance: { ...saldo, available_balance: 0, journal_version: 2 },
+      }),
+    );
+    buka("/pesanan/o1");
+
+    expect(await screen.findByText("Dibayar dari deposit")).toBeTruthy();
+    expect(screen.getByText("Dibayar dengan transfer")).toBeTruthy();
+    expect(screen.getByText(/Rp\s*70\.000/)).toBeTruthy();
+    expect(screen.getByText(/Rp\s*30\.000/)).toBeTruthy();
+    expect(screen.getByText("Lunas")).toBeTruthy();
+    expect(screen.queryByText(/belum diverifikasi admin/i)).toBeNull();
   });
 });

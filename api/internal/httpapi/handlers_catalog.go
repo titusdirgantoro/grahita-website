@@ -293,8 +293,9 @@ type priceItemRequest struct {
 	ProductID string `json:"product_id" validate:"required"`
 	HJM       *int64 `json:"hjm" validate:"omitempty,gte=0"`
 	// P1 adalah rasio desimal 0–1 sebagai teks ("0.1" = 10%); kosong = 0.
-	P1  string `json:"p1" validate:"max=20"`
-	SPV *int64 `json:"spv" validate:"omitempty,gte=0"`
+	P1      string `json:"p1" validate:"max=20"`
+	Express *int64 `json:"express" validate:"omitempty,gte=0"`
+	SPV     *int64 `json:"spv" validate:"omitempty,gte=0"`
 }
 
 // adminPricesUpdate menerapkan batch edit matriks harga (PRD AP-KAT-02/03/04).
@@ -317,6 +318,9 @@ func (a *API) adminPricesUpdate(w http.ResponseWriter, r *http.Request) error {
 		}
 		if it.HJM != nil {
 			k := catalog.Komponen{HJM: *it.HJM, P1: strings.TrimSpace(it.P1)}
+			if it.Express != nil {
+				k.Express = *it.Express
+			}
 			if it.SPV != nil {
 				k.SPV = *it.SPV
 			}

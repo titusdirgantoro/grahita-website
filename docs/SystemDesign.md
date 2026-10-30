@@ -100,8 +100,14 @@ type OrderLine struct {
     ProductID    *uuid.UUID
     NamaSnapshot string
     NamaInstansi string         // per order line; bebas, wajib untuk produk baru
+    Keterangan   string         // per order line; maksimal 250 karakter
     Qty          int
-    HargaSatuan  int64          // snapshot harga cabang saat submit
+    HargaDasar   int64          // Produksi/HJM per pcs
+    PIRatio      decimal        // rasio master; efektif hanya bila flag PI aktif
+    PIPerPcs     int64
+    ExpressPerPcs int64
+    SPVPerPcs    int64
+    HargaSatuan  int64          // jumlah komponen per pcs saat submit
     Subtotal     int64
     SerialNumber *string        // YYYYMMDDXXX, hanya untuk jenis product
 }
@@ -112,9 +118,9 @@ Invarian yang dijaga di service `order`:
 1. Order `draft` tidak punya nomor dan serial number.
 2. Order `submitted`/`done` tidak dapat diubah lewat jalur cabang.
 3. Baris `packaging` hanya ada pada pesanan yang memuat produk sertifikat, tepat satu baris, qty 1.
-4. Satu pesanan boleh memuat beberapa baris produk yang sama untuk instansi berbeda; setiap baris mendapat serial sendiri. Nama instansi ikut ke detail, dokumen, dan laporan.
+4. Satu pesanan boleh memuat beberapa baris produk yang sama untuk instansi berbeda; setiap baris mendapat serial sendiri. Nama instansi dan Ket ikut ke detail, dokumen, dan laporan.
 5. Pesanan sertifikat tidak boleh memuat produk reguler.
-6. `Total = Σ Subtotal`, dihitung ulang di server — nilai dari klien selalu diabaikan.
+6. `HargaSatuan = HargaDasar + PIPerPcs + ExpressPerPcs + SPVPerPcs` dan `Total = Σ Subtotal`, dihitung ulang di server. P1 hanya diterapkan bila flag PI cabang aktif; nilai harga dari klien selalu diabaikan.
 7. `IsCNC` hanya boleh `true` jika cabang punya flag Cash & Carry.
 
 ---

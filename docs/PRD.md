@@ -116,7 +116,7 @@ Ringkasan untuk cabang: jumlah pesanan periode berjalan, pesanan menunggu verifi
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
 | CP-ORD-01 | List pesanan menampilkan nomor, tanggal, jumlah item, total, status, penanda C&C; dapat difilter per status. | Must |
-| CP-ORD-02 | Editor pesanan: header (catatan) + order line (nama instansi bebas, produk dari master, qty, harga otomatis, subtotal) dengan total live. Nama instansi wajib pada setiap baris produk baru; produk yang sama boleh muncul beberapa kali untuk instansi berbeda dan setiap baris mendapat serial sendiri. | Must |
+| CP-ORD-02 | Editor pesanan memakai urutan kolom **No → Serial Number → Nama Instansi → Cabang → Jml Pcs → Produk → Harga/Pcs → Produksi → PI → Expres → Bea SPV → Total Tagihan → Ket**. Nama instansi wajib dan Ket opsional maksimal 250 karakter pada setiap baris; produk yang sama boleh muncul beberapa kali untuk instansi berbeda. Harga dan komponen dihitung otomatis dengan total live. | Must |
 | CP-ORD-03 | **Save** → status Draft; draft bisa diubah dan dihapus. | Must |
 | CP-ORD-04 | **Submit** → modal unggah bukti transfer (≥1 file, maks `max_file` file × `max_mb` MB, JPG/PNG/PDF). | Must |
 | CP-ORD-05 | Saat submit: nomor invoice dan serial number per order line ter-generate, status → Submitted, pesanan terkunci. | Must |
@@ -206,17 +206,17 @@ Field: Nama Cabang, Nama Kepala Cabang, Email Cabang, Telepon, **Cara pembayaran
 | AP-CAB-02 | Generate token menggantikan token lama yang belum terpakai. | Must |
 | AP-CAB-03 | Cabang nonaktif: user tidak bisa login dan tidak muncul di pilihan aktif. | Must |
 | AP-CAB-04 | Cabang tidak dapat dihapus bila sudah punya pesanan — hanya dinonaktifkan. | Must |
-| AP-CAB-05 | Flag Special dihapus dari aplikasi. Kolom lama `is_special` tetap dorman untuk kompatibilitas migrasi. Efek PI terhadap invoice/harga masih perlu diputuskan (lihat §8). | Must |
+| AP-CAB-05 | Flag Special dihapus dari aplikasi. Kolom lama `is_special` tetap dorman untuk kompatibilitas migrasi. Flag PI menentukan apakah komponen persentase P1 diterapkan pada harga efektif pesanan cabang. | Must |
 
 ### 4.5 Katalog product & matriks harga
 
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
 | AP-KAT-01 | CRUD produk: nama, jenis (reguler / sertifikat), harga default, urutan tampil, aktif. Produk tidak memiliki field satuan. | Must |
-| AP-KAT-02 | Tab **Matriks harga**: grid Produk × Cabang, pencarian cabang. Setiap sel diisi komponen **HJM, P1 (%), dan SPV**; harga jual sel dihitung server = HJM + (HJM × P1) + SPV dan tidak diketik langsung (keputusan user 2026-10-17, rumus `design/master-impact-import.md` §7). | Must |
+| AP-KAT-02 | Tab **Matriks harga**: grid Produk × Cabang, pencarian cabang. Setiap sel diisi komponen **HJM, P1 (%), Expres, dan SPV**; tarif master dihitung server = HJM + (HJM × P1) + Expres + SPV dan tidak diketik langsung. Expres dan SPV adalah nominal Rupiah per pcs. P1 hanya masuk harga efektif bila flag PI cabang aktif. | Must |
 | AP-KAT-03 | Sel kosong = produk tidak dijual ke cabang itu (tidak tampil di portal cabang). | Must |
 | AP-KAT-04 | Aksi "salin harga" dari satu cabang ke cabang lain / ke semua cabang. | Should |
-| AP-KAT-05 | Perubahan harga tidak mengubah pesanan yang sudah ada (harga di-snapshot pada order line). | Must |
+| AP-KAT-05 | Perubahan harga, komponen, atau flag PI cabang tidak mengubah pesanan yang sudah dikirim; HJM, rasio PI, PI/Expres/SPV per pcs, harga final, dan Ket di-snapshot pada order line saat submit. | Must |
 | AP-KAT-06 | Riwayat perubahan harga tercatat di audit log. | Should |
 
 ### 4.6 Rekening bank (Superadmin)
@@ -229,7 +229,7 @@ Field: Bank (BCA / BRI), Nama di rekening, Nomor rekening, Aktif. Rekening aktif
 |---|---|---|
 | AP-REP-01 | Baris laporan = order line dari seluruh pesanan (bukan per pesanan), termasuk nama instansi per baris pada API dan ekspor Excel. | Must |
 | AP-REP-02 | Filter: rentang tanggal, cabang (multi), status, jenis produk, C&C, PI. | Must |
-| AP-REP-03 | Kolom: tanggal, nomor invoice, versi, cabang, kepala cabang, C&C, PI, produk, nama instansi, jenis, serial number, qty, harga satuan, subtotal, status, tanggal verifikasi, metode verifikasi. | Must |
+| AP-REP-03 | Laporan dan ekspor memuat tanggal, nomor invoice, versi, cabang, kepala cabang, C&C, flag PI, produk, nama instansi, jenis, serial number, qty, harga per pcs, Produksi, PI, Expres, Bea SPV, total baris, Ket, status, tanggal verifikasi, dan metode verifikasi. | Must |
 | AP-REP-04 | Ekspor Excel (.xlsx) dengan header ter-freeze dan format angka Rupiah; ekspor besar diproses asinkron lalu diunduh. | Must |
 | AP-REP-05 | Ringkasan bulanan per cabang (rekap) sebagai sheet kedua. | Should |
 
@@ -298,7 +298,7 @@ Aturan AI:
 | Surat Jalan | XLSX + PDF | Status → Done | Email admin ber-flag Surat Jalan |
 | Laporan | XLSX | Diminta Superadmin | Unduhan |
 
-Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi revisi), tanggal, data cabang, rincian order line dengan serial number, biaya packaging bila ada, total, rekening pembayaran, dan penanda LUNAS (pesanan C&C: "LUNAS — CASH & CARRY").
+Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi revisi), tanggal, data cabang, biaya packaging bila ada, total, rekening pembayaran, dan penanda LUNAS (pesanan C&C: "LUNAS — CASH & CARRY"). Rincian order line memakai urutan **No → Serial Number → Nama Instansi → Cabang → Jml Pcs → Produk → Harga/Pcs → Produksi → PI → Expres → Bea SPV → Total Tagihan → Ket**; komponen nol ditampilkan sebagai em dash (`—`).
 
 ### 6.2 Email
 
@@ -355,7 +355,7 @@ Invoice memuat: logo & identitas PT Grahita Indonesia, nomor invoice (+ versi re
 | No | Pertanyaan | Dampak |
 |---|---|---|
 | 1 | Selesai: flag Special dihapus; termin pembayaran menggunakan cara pembayaran **Tempo** yang memiliki aturan tersendiri pada §11. | Logika harga & invoice |
-| 2 | Apa efek **Pajak In (PI)** — apakah invoice perlu baris PPN/materai? | Perhitungan total & layout invoice |
+| 2 | Selesai: **Pajak In (PI)** mengaktifkan komponen P1 pada harga efektif cabang. Invoice menampilkan nilai PI per order line; tidak ada baris PPN/materai tambahan. | Perhitungan total & layout invoice |
 | 3 | ~~Apakah C&C otomatis Done saat jatuh tempo lewat tanpa bayar?~~ Diputus 2026-10-18: C&C adalah sistem deposit tanpa jatuh tempo; pesanan tetap diverifikasi admin (CP-CNC-05). | State machine |
 | 4 | Apakah cabang boleh membatalkan pesanan Submitted (status Batal)? | State machine & penomoran |
 | 5 | Email Pusat untuk Surat Jalan: cukup via flag per admin, atau ada alamat tetap tambahan? | Konfigurasi email |

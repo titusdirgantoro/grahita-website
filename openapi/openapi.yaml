@@ -4738,7 +4738,7 @@ components:
         mime_type: { type: string }
     OrderLine:
       type: object
-      required: [line_no, jenis, nama, nama_instansi, qty, harga_satuan, subtotal]
+      required: [line_no, jenis, nama, nama_instansi, keterangan, qty, harga_satuan, harga_dasar, produksi, pi, express, bea_spv, subtotal]
       properties:
         line_no: { type: integer }
         jenis:
@@ -4759,6 +4759,7 @@ components:
         nama_instansi:
           type: string
           description: Nama instansi per baris; kosong untuk packaging dan pesanan lama.
+        keterangan: { type: string, maxLength: 250, description: Keterangan bebas per baris. }
         qty: { type: integer, minimum: 1 }
         harga_satuan:
           type: integer
@@ -4767,6 +4768,15 @@ components:
           description: |
             Harga khusus cabang yang diambil server dari branch_prices. Untuk
             produk Sertifikat nilainya selalu 0 berapa pun qty-nya (CP-SER-01).
+        harga_dasar: { type: integer, format: int64, minimum: 0, description: HJM atau Harga/Pcs yang disnapshot. }
+        pi_ratio: { type: string, description: Rasio PI yang disnapshot; 0 bila flag PI cabang tidak aktif. }
+        pi_per_pcs: { type: integer, format: int64, minimum: 0 }
+        express_per_pcs: { type: integer, format: int64, minimum: 0 }
+        spv_per_pcs: { type: integer, format: int64, minimum: 0 }
+        produksi: { type: integer, format: int64, minimum: 0 }
+        pi: { type: integer, format: int64, minimum: 0 }
+        express: { type: integer, format: int64, minimum: 0 }
+        bea_spv: { type: integer, format: int64, minimum: 0 }
         subtotal: { type: integer, format: int64 }
         serial_number:
           type: string
@@ -4822,6 +4832,7 @@ components:
           description: Harus produk yang punya baris harga untuk cabang sesi.
         qty: { type: integer, minimum: 1 }
         nama_instansi: { type: string, minLength: 1, maxLength: 160, description: Nama instansi untuk baris produk. }
+        keterangan: { type: string, maxLength: 250, description: Keterangan opsional per baris. }
 
     OrderDraftInput:
       type: object
@@ -5293,6 +5304,10 @@ components:
           minLength: 1
           maxLength: 160
           description: Wajib untuk baris baru; pada baris lama, bila tidak dikirim nama sebelumnya dipertahankan.
+        keterangan:
+          type: string
+          maxLength: 250
+          description: Keterangan per baris; pada baris lama, bila tidak dikirim nilai sebelumnya dipertahankan.
         qty: { type: integer, minimum: 1 }
         harga_satuan:
           type: integer
@@ -5575,7 +5590,7 @@ components:
 
     PriceCell:
       type: object
-      required: [branch_id, product_id, harga, hjm, p1, spv, sumber]
+      required: [branch_id, product_id, harga, hjm, p1, express, spv, sumber]
       properties:
         branch_id: { type: string, format: uuid }
         product_id: { type: string, format: uuid }
@@ -5593,6 +5608,11 @@ components:
           type: [string, "null"]
           pattern: "^[0-9]+(\\.[0-9]+)?$"
           description: Rasio P1 desimal 0–1 ("0.1" = 10%); null untuk sel tanpa rincian.
+        express:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: Biaya Expres per pcs; null untuk sel tanpa rincian.
         spv:
           type: [integer, "null"]
           format: int64
@@ -5634,6 +5654,11 @@ components:
                 type: string
                 maxLength: 20
                 description: Rasio P1 desimal 0–1 ("0.1" = 10%, maksimal 6 digit desimal); kosong = 0.
+              express:
+                type: [integer, "null"]
+                format: int64
+                minimum: 0
+                description: Biaya Expres per pcs; kosong/null = 0.
               spv:
                 type: [integer, "null"]
                 format: int64
@@ -5680,13 +5705,18 @@ components:
     BranchProduct:
       type: object
       description: Produk beserta harga khusus cabang (Rupiah bulat)
-      required: [id, nama, jenis, harga, urutan]
+      required: [id, nama, jenis, harga, harga_dasar, p1, pi_per_pcs, express_per_pcs, spv_per_pcs, urutan]
       properties:
         id: { type: string, format: uuid }
         nama: { type: string }
         jenis: { type: string, enum: [reguler, sertifikat] }
         deskripsi: { type: string }
         harga: { type: integer, format: int64, minimum: 0 }
+        harga_dasar: { type: integer, format: int64, minimum: 0 }
+        p1: { type: string }
+        pi_per_pcs: { type: integer, format: int64, minimum: 0 }
+        express_per_pcs: { type: integer, format: int64, minimum: 0 }
+        spv_per_pcs: { type: integer, format: int64, minimum: 0 }
         urutan: { type: integer }
         biaya_packaging:
           type: integer
@@ -6009,11 +6039,11 @@ components:
         pi:
           type: boolean
           description: |
-            Filter atribut cabang "PI" (`branches.pajak_in`). Murni
-            penanda/filter — tidak pernah mengubah harga, subtotal, atau pajak.
+            Filter atribut cabang "PI" (`branches.pajak_in`). Jika aktif,
+            komponen P1 pada master tarif diterapkan sebagai PI.
     ReportOrderLine:
       type: object
-      required: [tanggal, nomor, versi, branch_id, cabang, kepala_cabang, is_cnc, pajak_in, line_no, produk, nama_instansi, jenis, qty, harga_satuan, subtotal, status]
+      required: [tanggal, nomor, versi, branch_id, cabang, kepala_cabang, is_cnc, pajak_in, line_no, produk, nama_instansi, jenis, qty, harga_satuan, harga_dasar, produksi, pi, express, bea_spv, subtotal, keterangan, status]
       description: Satu baris laporan = SATU order line (PRD §4.7 AP-REP-01).
       properties:
         tanggal: { type: string, format: date }
@@ -6023,7 +6053,7 @@ components:
         cabang: { type: string }
         kepala_cabang: { type: string }
         is_cnc: { type: boolean }
-        pajak_in: { type: boolean, description: Atribut cabang "PI"; tidak mengubah harga atau pajak. }
+        pajak_in: { type: boolean, description: Atribut cabang yang menentukan penerapan komponen PI. }
         line_no: { type: integer }
         produk: { type: string, description: Nama produk saat transaksi (snapshot). }
         nama_instansi: { type: string, description: Nama instansi pada baris pesanan; kosong untuk packaging dan pesanan lama. }
@@ -6031,7 +6061,13 @@ components:
         serial_number: { type: string, description: Kosong untuk baris packaging. }
         qty: { type: integer }
         harga_satuan: { type: integer, format: int64 }
+        harga_dasar: { type: integer, format: int64 }
+        produksi: { type: integer, format: int64 }
+        pi: { type: integer, format: int64 }
+        express: { type: integer, format: int64 }
+        bea_spv: { type: integer, format: int64 }
         subtotal: { type: integer, format: int64 }
+        keterangan: { type: string, maxLength: 250 }
         status: { type: string, enum: [submitted, approved_unpaid, done] }
         tanggal_verifikasi:
           type: string

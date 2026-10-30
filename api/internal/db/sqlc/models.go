@@ -977,6 +977,7 @@ type BranchTariffVersion struct {
 	SupersededAt          *time.Time     `json:"superseded_at"`
 	SourceKind            string         `json:"source_kind"`
 	CreatedBy             pgtype.UUID    `json:"created_by"`
+	ExpressRupiah         pgtype.Int8    `json:"express_rupiah"`
 }
 
 type BranchUser struct {
@@ -1171,6 +1172,16 @@ type NumberingCounter struct {
 	LastValue int32  `json:"last_value"`
 }
 
+type OcrCredential struct {
+	Singleton  bool       `json:"singleton"`
+	Ciphertext []byte     `json:"ciphertext"`
+	Nonce      []byte     `json:"nonce"`
+	Version    int64      `json:"version"`
+	VerifiedAt *time.Time `json:"verified_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	UpdatedBy  string     `json:"updated_by"`
+}
+
 type Order struct {
 	ID                       string                   `json:"id"`
 	BranchID                 string                   `json:"branch_id"`
@@ -1216,19 +1227,25 @@ type OrderEvent struct {
 }
 
 type OrderLine struct {
-	ID             string      `json:"id"`
-	OrderID        string      `json:"order_id"`
-	LineNo         int32       `json:"line_no"`
-	Jenis          LineKind    `json:"jenis"`
-	ProductID      pgtype.UUID `json:"product_id"`
-	NamaSnapshot   string      `json:"nama_snapshot"`
-	SatuanSnapshot string      `json:"satuan_snapshot"`
-	Qty            int32       `json:"qty"`
-	HargaSatuan    int64       `json:"harga_satuan"`
-	Subtotal       pgtype.Int8 `json:"subtotal"`
-	SerialNumber   pgtype.Text `json:"serial_number"`
-	CreatedAt      time.Time   `json:"created_at"`
-	NamaInstansi   string      `json:"nama_instansi"`
+	ID             string         `json:"id"`
+	OrderID        string         `json:"order_id"`
+	LineNo         int32          `json:"line_no"`
+	Jenis          LineKind       `json:"jenis"`
+	ProductID      pgtype.UUID    `json:"product_id"`
+	NamaSnapshot   string         `json:"nama_snapshot"`
+	SatuanSnapshot string         `json:"satuan_snapshot"`
+	Qty            int32          `json:"qty"`
+	HargaSatuan    int64          `json:"harga_satuan"`
+	Subtotal       pgtype.Int8    `json:"subtotal"`
+	SerialNumber   pgtype.Text    `json:"serial_number"`
+	CreatedAt      time.Time      `json:"created_at"`
+	NamaInstansi   string         `json:"nama_instansi"`
+	Keterangan     string         `json:"keterangan"`
+	HargaDasar     int64          `json:"harga_dasar"`
+	PiRatio        pgtype.Numeric `json:"pi_ratio"`
+	PiPerPcs       int64          `json:"pi_per_pcs"`
+	ExpressPerPcs  int64          `json:"express_per_pcs"`
+	SpvPerPcs      int64          `json:"spv_per_pcs"`
 }
 
 type PasswordResetToken struct {

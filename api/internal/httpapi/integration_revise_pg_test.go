@@ -534,6 +534,78 @@ func TestPGRevisiMenaikkanVersiSimpanSnapshotDanInvoiceBaru(t *testing.T) {
 	}
 }
 
+// DOC-01: penggantian komposisi benar-benar menghapus baris yang tidak lagi
+// dikirim, mempertahankan serial baris lama, dan memberi serial baru hanya
+// kepada produk yang ditambahkan. Ini melengkapi uji UI editor revisi dengan
+// bukti transaksi PostgreSQL nyata.
+func TestPGDOC01RevisiHapusTambahBarisMenjagaSerial(t *testing.T) {
+	f, id, _, cookies, csrf := jalurUtamaRevisi(t)
+	ctx := context.Background()
+	_, periode := tanggalDanPeriode(3)
+	if err := jalankanPekerjaanDone(t, f, id); err != nil {
+		t.Fatalf("render dokumen prasyarat: %v", err)
+	}
+	serialLama := serialBaris(t, f, id, 1)
+	serialDihapus := serialBaris(t, f, id, 2)
+	produkBaru := insertProduct(t, ctx, f.pool, "P-DOC01", "Produk Pengganti", 25000)
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO branch_prices (branch_id, product_id, harga) VALUES ($1,$2,$3)`,
+		f.branchA, produkBaru, 25000); err != nil {
+		t.Fatalf("seed harga produk pengganti: %v", err)
+	}
+
+	body := reviseBody("ganti komposisi dan instansi",
+		`{"line_no":1,"nama_instansi":"Instansi Revisi","qty":2,"harga_satuan":100000},`+
+			`{"product_id":"`+produkBaru+`","nama_instansi":"Instansi Baru","qty":2,"harga_satuan":25000}`)
+	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
+	if status != http.StatusOK {
+		t.Fatalf("revisi harus 200, dapat %d (%v)", status, hasil)
+	}
+	data := dataMap(t, hasil)
+	if data["nomor"] != "2026-10-900" || data["versi"] != float64(1) || data["total"] != float64(250000) {
+		t.Fatalf("nomor/versi/total revisi salah: %+v", data)
+	}
+
+	rows, err := f.pool.Query(ctx, `SELECT line_no,nama_instansi,serial_number
+		FROM order_lines WHERE order_id=$1 ORDER BY line_no`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type line struct {
+		no       int
+		instansi string
+		serial   string
+	}
+	var lines []line
+	for rows.Next() {
+		var item line
+		if err := rows.Scan(&item.no, &item.instansi, &item.serial); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, item)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("revisi harus menyisakan tepat dua baris, dapat %+v", lines)
+	}
+	if lines[0].no != 1 || lines[0].instansi != "Instansi Revisi" || lines[0].serial != serialLama {
+		t.Fatalf("baris lama berubah keliru: %+v, serial awal %s", lines[0], serialLama)
+	}
+	if lines[1].serial == "" || lines[1].serial == serialDihapus || !strings.HasPrefix(lines[1].serial, periode) || lines[1].instansi != "Instansi Baru" {
+		t.Fatalf("baris baru tidak mendapat snapshot/serial baru yang benar: %+v; serial dihapus=%s", lines[1], serialDihapus)
+	}
+	var masihAda int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM order_lines WHERE order_id=$1 AND serial_number=$2`, id, serialDihapus).Scan(&masihAda); err != nil {
+		t.Fatal(err)
+	}
+	if masihAda != 0 {
+		t.Fatalf("baris yang dihapus masih tersimpan: %d", masihAda)
+	}
+}
+
 func TestPGRevisiC1TotalTetapNaikTurunMenjagaSettlementTyped(t *testing.T) {
 	f := newPGFixture(t)
 	produk := produkKode(t, f, "P-01")
@@ -1008,6 +1080,10 @@ func TestPGRevisiMenolakPesananBelumDoneDanIdTakSah(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
 	produk := produkKode(t, f, "P-01")
+	tgl, periode := tanggalDanPeriode(1)
+	idDone, _ := seedPesananDone(t, f, f.branchA, "2026-10-904", tgl, []barisDone{
+		{lineNo: 1, product: produk, nama: "Bio Magnetik", qty: 1, harga: 100000, serial: periode + "904"},
+	})
 
 	// Pesanan Submitted (belum Done) tidak bisa direvisi.
 	var idSubmitted string
@@ -1023,15 +1099,42 @@ func TestPGRevisiMenolakPesananBelumDoneDanIdTakSah(t *testing.T) {
 		t.Fatalf("seed baris submitted: %v", err)
 	}
 
+	var idDraft string
+	if err := f.pool.QueryRow(ctx,
+		`INSERT INTO orders (branch_id, status, verif_status, total)
+		 VALUES ($1,'draft','belum',100000) RETURNING id`, f.branchA).Scan(&idDraft); err != nil {
+		t.Fatalf("seed pesanan draft: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO order_lines (order_id, line_no, product_id, nama_snapshot, qty, harga_satuan)
+		 VALUES ($1,1,$2,'Bio Magnetik',1,100000)`, idDraft, produk); err != nil {
+		t.Fatalf("seed baris draft: %v", err)
+	}
+
 	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
 	body := reviseBody("coba", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":2,"harga_satuan":100000}`)
 
-	status, hasil := reviseHTTP(t, f, cookies, csrf, idSubmitted, body)
+	// Alasan wajib bahkan untuk pesanan Done yang secara status dapat direvisi.
+	status, hasil := reviseHTTP(t, f, cookies, csrf, idDone,
+		reviseBody("", `{"line_no":1,"nama_instansi":"Instansi Uji","qty":2,"harga_satuan":100000}`))
+	if status != http.StatusBadRequest {
+		t.Fatalf("revisi tanpa alasan harus 400, dapat %d (%v)", status, hasil)
+	}
+	if versi, _ := versiPesanan(t, f, idDone); versi != 0 {
+		t.Fatalf("revisi tanpa alasan tidak boleh menaikkan versi, dapat %d", versi)
+	}
+
+	status, hasil = reviseHTTP(t, f, cookies, csrf, idSubmitted, body)
 	if status != http.StatusConflict {
 		t.Fatalf("pesanan belum Done harus 409, dapat %d (%v)", status, hasil)
 	}
 	if kode := errorKode(t, hasil); kode != "ORDER_NOT_DONE" {
 		t.Errorf("kode harus ORDER_NOT_DONE, dapat %q", kode)
+	}
+
+	status, hasil = reviseHTTP(t, f, cookies, csrf, idDraft, body)
+	if status != http.StatusConflict || errorKode(t, hasil) != "ORDER_NOT_DONE" {
+		t.Fatalf("pesanan draft harus 409 ORDER_NOT_DONE, dapat %d (%v)", status, hasil)
 	}
 
 	// Id bukan UUID -> 404 (bukan 500).
@@ -1052,6 +1155,15 @@ func TestPGRevisiMenolakPesananBelumDoneDanIdTakSah(t *testing.T) {
 	status, _ = reviseHTTP(t, f, cabang, csrfCabang, idSubmitted, body)
 	if status != http.StatusForbidden {
 		t.Errorf("akun cabang harus 403, dapat %d", status)
+	}
+
+	for _, id := range []string{idDone, idSubmitted, idDraft} {
+		if n := hitungBaris(t, f, "invoice_revisions", "order_id", id); n != 0 {
+			t.Errorf("request revisi ditolak tidak boleh menulis invoice_revisions untuk %s: %d", id, n)
+		}
+		if n := hitungBaris(t, f, "audit_logs", "entity_id", id); n != 0 {
+			t.Errorf("request revisi ditolak tidak boleh menulis audit untuk %s: %d", id, n)
+		}
 	}
 }
 

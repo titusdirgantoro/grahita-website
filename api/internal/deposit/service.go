@@ -678,13 +678,14 @@ func (s *Service) Allocate(ctx context.Context, actor auth.Actor, orderID string
 	if ref.Status == statusDone {
 		return AllocationResponse{}, ErrOrderDone
 	}
+	reason := strings.TrimSpace(in.Reason)
 	res, err := s.repo.Allocate(ctx, AllocationInput{
 		BranchID: ref.BranchID, OrderID: ref.ID, Amount: in.Amount,
 		ExpectedJournalVersion: in.ExpectedJournalVersion, ExpectedOrderVersion: in.ExpectedOrderVersion,
 		IdempotencyKey: in.IdempotencyKey,
 		RequestFingerprint: fingerprint("allocate", ref.ID, in.Amount,
-			in.ExpectedJournalVersion, in.ExpectedOrderVersion),
-		ActorKind: string(actor.Kind), ActorID: actor.UserID,
+			in.ExpectedJournalVersion, in.ExpectedOrderVersion, reason),
+		ActorKind: string(actor.Kind), ActorID: actor.UserID, Reason: reason,
 	})
 	if err != nil {
 		return AllocationResponse{}, err

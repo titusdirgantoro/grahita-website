@@ -127,9 +127,23 @@ func (m *Memory) ListProductsForBranch(_ context.Context, branchID string) ([]Br
 		if !ok {
 			continue
 		}
+		hargaDasar := valueInt64(sel.HJM)
+		if sel.HJM == nil {
+			hargaDasar = sel.Harga
+		}
+		pi := int64(0)
+		p1 := "0"
+		if branch, ada := m.branches[branchID]; ada && branch.PajakIn && sel.HJM != nil && sel.P1 != nil {
+			// Harga versi tarif sudah memakai pembulatan half-up. Selisih
+			// terhadap komponen tetap memberikan nilai PI efektif yang sama.
+			pi = sel.Harga - hargaDasar - valueInt64(sel.Express) - valueInt64(sel.SPV)
+			p1 = *sel.P1
+		}
+		harga := hargaDasar + pi + valueInt64(sel.Express) + valueInt64(sel.SPV)
 		out = append(out, BranchProduct{
 			ID: p.ID, Nama: p.Nama, Jenis: p.Jenis,
-			Deskripsi: p.Deskripsi, Harga: sel.Harga, Urutan: p.Urutan,
+			Deskripsi: p.Deskripsi, Harga: harga, HargaDasar: hargaDasar,
+			P1: p1, PI: pi, Express: valueInt64(sel.Express), SPV: valueInt64(sel.SPV), Urutan: p.Urutan,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -139,6 +153,13 @@ func (m *Memory) ListProductsForBranch(_ context.Context, branchID string) ([]Br
 		return out[i].Nama < out[j].Nama
 	})
 	return out, nil
+}
+
+func valueString(v *string) string {
+	if v == nil {
+		return "0"
+	}
+	return *v
 }
 
 // GetBranch mengembalikan satu cabang.

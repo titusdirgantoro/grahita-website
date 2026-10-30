@@ -119,7 +119,7 @@ func TestPGKatalogHargaBerbedaDanProdukTanpaHarga(t *testing.T) {
 }
 
 // TestPGEditKomponenTarifBerversi memverifikasi edit matriks berkomponen pada
-// PostgreSQL: harga sel selalu tarif HJM + HJM×P1 + SPV hitungan server yang
+// PostgreSQL: harga sel selalu tarif HJM + HJM×P1 + Expres + SPV hitungan server yang
 // tersimpan sebagai versi tarif manual append-only, komponen yang sama tidak
 // membuat versi baru, mengosongkan sel menutup versi dengan tombstone, dan
 // produk yang punya riwayat tarif tidak bisa dihapus.
@@ -136,15 +136,16 @@ func TestPGEditKomponenTarifBerversi(t *testing.T) {
 		}
 	}
 	type versi struct {
-		aktif, tersedia bool
-		hjm, spv, final *int64
-		p1              *string
-		sumber          string
+		aktif, tersedia          bool
+		hjm, express, spv, final *int64
+		p1                       *string
+		sumber                   string
 	}
 	bacaVersi := func() []versi {
 		t.Helper()
 		rows, err := f.pool.Query(ctx, `
-			SELECT tv.superseded_at IS NULL, tv.is_available, tv.hjm_rupiah, tv.p1_ratio::text, tv.spv_rupiah,
+			SELECT tv.superseded_at IS NULL, tv.is_available, tv.hjm_rupiah, tv.p1_ratio::text,
+			       tv.express_rupiah, tv.spv_rupiah,
 			       tv.final_item_rupiah, tv.source_kind
 			  FROM branch_tariff_versions tv JOIN product_variants v ON v.id = tv.variant_id
 			 WHERE v.product_id = $1 AND tv.branch_id = $2 AND tv.created_by IS NOT NULL
@@ -156,7 +157,7 @@ func TestPGEditKomponenTarifBerversi(t *testing.T) {
 		var out []versi
 		for rows.Next() {
 			var v versi
-			if err := rows.Scan(&v.aktif, &v.tersedia, &v.hjm, &v.p1, &v.spv, &v.final, &v.sumber); err != nil {
+			if err := rows.Scan(&v.aktif, &v.tersedia, &v.hjm, &v.p1, &v.express, &v.spv, &v.final, &v.sumber); err != nil {
 				t.Fatalf("scan versi: %v", err)
 			}
 			out = append(out, v)
@@ -170,14 +171,14 @@ func TestPGEditKomponenTarifBerversi(t *testing.T) {
 		return harga, err == nil
 	}
 
-	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":34100,"p1":"0.1","spv":2500}]}`, f.branchA, produk))
+	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":34100,"p1":"0.1","express":1500,"spv":2500}]}`, f.branchA, produk))
 	vs := bacaVersi()
 	if len(vs) != 1 || !vs[0].aktif || !vs[0].tersedia || vs[0].sumber != "manual" ||
-		*vs[0].hjm != 34100 || *vs[0].p1 != "0.1" || *vs[0].spv != 2500 || *vs[0].final != 40010 {
-		t.Fatalf("harus ada satu versi manual aktif 34.100 + 10%% + 2.500 = 40.010, dapat %+v", vs)
+		*vs[0].hjm != 34100 || *vs[0].p1 != "0.1" || *vs[0].express != 1500 || *vs[0].spv != 2500 || *vs[0].final != 41510 {
+		t.Fatalf("harus ada satu versi manual aktif 34.100 + 10%% + 1.500 + 2.500 = 41.510, dapat %+v", vs)
 	}
-	if harga, ok := hargaSel(); !ok || harga != 40010 {
-		t.Fatalf("branch_prices harus memproyeksikan tarif final 40.010, dapat %d %v", harga, ok)
+	if harga, ok := hargaSel(); !ok || harga != 41510 {
+		t.Fatalf("branch_prices harus memproyeksikan tarif master 41.510, dapat %d %v", harga, ok)
 	}
 	// Matriks admin mengembalikan komponennya.
 	_, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/admin/prices?branch_id="+f.branchA, "", cookiesMgr, "")
@@ -187,12 +188,37 @@ func TestPGEditKomponenTarifBerversi(t *testing.T) {
 			sel = c.(map[string]any)
 		}
 	}
-	if sel == nil || sel["harga"] != float64(40010) || sel["hjm"] != float64(34100) || sel["p1"] != "0.1" || sel["spv"] != float64(2500) || sel["sumber"] != "manual" {
+	if sel == nil || sel["harga"] != float64(41510) || sel["hjm"] != float64(34100) || sel["p1"] != "0.1" || sel["express"] != float64(1500) || sel["spv"] != float64(2500) || sel["sumber"] != "manual" {
 		t.Fatalf("sel matriks harus memuat komponen, dapat %v", sel)
 	}
 
+	// Flag PI cabang menentukan apakah komponen P1 masuk harga efektif katalog.
+	cookiesA, _ := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	_, bodyTanpaPI, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/catalog", "", cookiesA, "")
+	var efektif map[string]any
+	for _, item := range dataList(t, bodyTanpaPI) {
+		if item.(map[string]any)["id"] == produk {
+			efektif = item.(map[string]any)
+		}
+	}
+	if efektif == nil || efektif["harga"] != float64(38100) || efektif["pi_per_pcs"] != float64(0) || efektif["express_per_pcs"] != float64(1500) {
+		t.Fatalf("tanpa flag PI, katalog harus HJM+Expres+SPV = 38.100, dapat %v", efektif)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET pajak_in = true WHERE id = $1`, f.branchA); err != nil {
+		t.Fatalf("aktifkan PI cabang: %v", err)
+	}
+	_, bodyDenganPI, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+"/api/v1/catalog", "", cookiesA, "")
+	for _, item := range dataList(t, bodyDenganPI) {
+		if item.(map[string]any)["id"] == produk {
+			efektif = item.(map[string]any)
+		}
+	}
+	if efektif["harga"] != float64(41510) || efektif["pi_per_pcs"] != float64(3410) {
+		t.Fatalf("dengan flag PI, katalog harus memuat PI 3.410 dan total 41.510, dapat %v", efektif)
+	}
+
 	// Komponen yang sama (P1 ditulis "0.10") tidak membuat versi baru.
-	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":34100,"p1":"0.10","spv":2500}]}`, f.branchA, produk))
+	put(fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":34100,"p1":"0.10","express":1500,"spv":2500}]}`, f.branchA, produk))
 	if got := len(bacaVersi()); got != 1 {
 		t.Fatalf("komponen sama tidak boleh menambah versi, dapat %d versi", got)
 	}

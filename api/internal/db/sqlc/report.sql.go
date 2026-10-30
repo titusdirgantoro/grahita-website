@@ -180,7 +180,15 @@ SELECT o.tanggal,
        COALESCE(l.serial_number, '')                                AS serial_number,
        l.qty,
        l.harga_satuan,
+       CASE WHEN l.harga_dasar=0 AND l.harga_satuan>0 AND l.pi_per_pcs=0 AND l.express_per_pcs=0 AND l.spv_per_pcs=0
+            THEN l.harga_satuan ELSE l.harga_dasar END::bigint AS harga_dasar,
+       (l.qty * CASE WHEN l.harga_dasar=0 AND l.harga_satuan>0 AND l.pi_per_pcs=0 AND l.express_per_pcs=0 AND l.spv_per_pcs=0
+                     THEN l.harga_satuan ELSE l.harga_dasar END)::bigint AS produksi,
+       (l.qty*l.pi_per_pcs)::bigint AS pi,
+       (l.qty*l.express_per_pcs)::bigint AS express,
+       (l.qty*l.spv_per_pcs)::bigint AS bea_spv,
        COALESCE(l.subtotal, 0)::bigint                              AS subtotal,
+       l.keterangan,
        o.status::text                                               AS status,
        o.done_at,
        COALESCE((SELECT vl.metode::text
@@ -238,7 +246,13 @@ type ListReportOrderLinesRow struct {
 	SerialNumber     string     `json:"serial_number"`
 	Qty              int32      `json:"qty"`
 	HargaSatuan      int64      `json:"harga_satuan"`
+	HargaDasar       int64      `json:"harga_dasar"`
+	Produksi         int64      `json:"produksi"`
+	Pi               int64      `json:"pi"`
+	Express          int64      `json:"express"`
+	BeaSpv           int64      `json:"bea_spv"`
 	Subtotal         int64      `json:"subtotal"`
+	Keterangan       string     `json:"keterangan"`
 	Status           string     `json:"status"`
 	DoneAt           *time.Time `json:"done_at"`
 	MetodeVerifikasi string     `json:"metode_verifikasi"`
@@ -308,7 +322,13 @@ func (q *Queries) ListReportOrderLines(ctx context.Context, arg ListReportOrderL
 			&i.SerialNumber,
 			&i.Qty,
 			&i.HargaSatuan,
+			&i.HargaDasar,
+			&i.Produksi,
+			&i.Pi,
+			&i.Express,
+			&i.BeaSpv,
 			&i.Subtotal,
+			&i.Keterangan,
 			&i.Status,
 			&i.DoneAt,
 			&i.MetodeVerifikasi,

@@ -262,7 +262,7 @@ Jalankan tiap perjalanan dari portal cabang sampai keluaran akhir; bandingkan an
 | Asinkron | Job dokumen, statement, email retry, ekspor, backup/restore yang termasuk rilis PASS dengan bukti. |
 | Produksi | Smoke dua host dan rute autentikasi sehat; perjalanan `UJI-` terkontrol (bila dijalankan) dicatat terpisah dari fixture lokal. |
 
-**Batas cakupan saat ini:** Virtual Account hanya kode R&D domain, belum ada rute produk sehingga bukan skenario penerimaan portal. Master Impact memiliki API tetapi belum ada menu frontend; uji sebagai suite API terpisah. Efek PI terhadap harga/pajak dan angka Expres/Bea SPV belum dimodelkan: uji bahwa dokumen tidak mengarang nilainya. UI Reporting belum memaparkan semua filter yang didukung API, maka kedua lapisan diuji terpisah.
+**Batas cakupan saat ini:** Virtual Account hanya kode R&D domain, belum ada rute produk sehingga bukan skenario penerimaan portal. Master Impact memiliki API tetapi belum ada menu frontend; uji sebagai suite API terpisah. PI, Expres, dan Bea SPV sudah dimodelkan sebagai komponen tarif dan wajib diuji dari master tarif sampai snapshot order, invoice, surat jalan, laporan, dan ekspor. UI Reporting belum memaparkan semua filter yang didukung API, maka kedua lapisan diuji terpisah.
 
 **Titik perhatian dari pembacaan kode untuk pengujian pertama:** navigasi cabang menyembunyikan `Tagihan` ketika izin Tempo dimatikan, meski tagihan historis bisa tetap terbuka (CAB-09). Tooltip invoice yang belum siap masih menyebut dokumen hanya tersedia setelah `Done`, padahal invoice Tempo terbit saat `approved_unpaid` (DOC-11). Keduanya perlu dibuktikan di UI lalu dicatat sebagai temuan bila benar menghambat pengguna.
 

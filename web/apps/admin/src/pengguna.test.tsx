@@ -173,6 +173,51 @@ describe("Admin Portal — /pengguna (F1-05)", () => {
     );
   });
 
+  it("Superadmin mengirim ulang undangan dan mengubah role serta flag email admin", async () => {
+    const panggilan = stubFetch("superadmin", (url, init) => {
+      if (url.endsWith("/admin/users/admin/adm-undang/resend") && init?.method === "POST") {
+        return json({ data: { status: "queued" } });
+      }
+      if (url.endsWith("/admin/users/admin/adm-undang") && init?.method === "PUT") {
+        return json({ data: { ...ADMINS[1], role: "superadmin", notif_invoice: true } });
+      }
+      return undefined;
+    });
+
+    render(<RouterProvider router={buatRouter("/pengguna")} />);
+    expect(await screen.findByText("Grahita Bandung")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "User admin" }));
+    expect(await screen.findByText("Dewi Lestari")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Kirim ulang undangan" }));
+    await waitFor(() => {
+      const post = panggilan.find(
+        (p) => p.url.endsWith("/admin/users/admin/adm-undang/resend") && p.init?.method === "POST",
+      );
+      expect(post).toBeDefined();
+      expect((post?.init?.headers as Record<string, string>)["X-CSRF-Token"]).toBe("token-uji");
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Ubah" })[1]);
+    expect(await screen.findByText("Ubah admin")).toBeDefined();
+    fireEvent.change(screen.getByLabelText("Role"), { target: { value: "superadmin" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Terima email invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
+
+    await waitFor(() => {
+      const put = panggilan.find(
+        (p) => p.url.endsWith("/admin/users/admin/adm-undang") && p.init?.method === "PUT",
+      );
+      expect(put).toBeDefined();
+      expect(JSON.parse(String(put?.init?.body))).toMatchObject({
+        role: "superadmin",
+        notif_invoice: true,
+        notif_surat_jalan: false,
+        is_active: true,
+      });
+    });
+  });
+
   it("Menonaktifkan akun cabang mengirim PUT is_active=false", async () => {
     const panggilan = stubFetch("manager");
 
@@ -187,6 +232,27 @@ describe("Admin Portal — /pengguna (F1-05)", () => {
       );
       expect(put).toBeDefined();
       expect(JSON.parse(String(put?.init?.body))).toEqual({ is_active: false });
+    });
+  });
+
+  it("Manager mengirim tautan reset untuk akun cabang terdaftar", async () => {
+    const panggilan = stubFetch("manager", (url, init) => {
+      if (url.endsWith("/admin/users/branch/usr-a/reset") && init?.method === "POST") {
+        return json({ data: { queued: true } });
+      }
+      return undefined;
+    });
+
+    render(<RouterProvider router={buatRouter("/pengguna")} />);
+    expect(await screen.findByText("Grahita Bandung")).toBeDefined();
+    fireEvent.click(screen.getAllByRole("button", { name: "Kirim link reset" })[0]);
+
+    await waitFor(() => {
+      const post = panggilan.find(
+        (p) => p.url.endsWith("/admin/users/branch/usr-a/reset") && p.init?.method === "POST",
+      );
+      expect(post).toBeDefined();
+      expect((post?.init?.headers as Record<string, string>)["X-CSRF-Token"]).toBe("token-uji");
     });
   });
 

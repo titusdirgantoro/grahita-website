@@ -295,6 +295,10 @@ SELECT o.id::text                     AS order_id,
        o.versi,
        o.is_cnc,
        o.is_tempo,
+       -- Pada versi lama, angka di daftar harus sama dengan PDF versi itu.
+       -- Snapshot sebelum revisi disimpan pada versi_lama; pesanan terbaru
+       -- tetap memakai nilai order sekarang. Revisi lawas tanpa snapshot
+       -- yang cocok tetap terbaca melalui fallback ke order.
        COALESCE((rev.snapshot->>'total')::bigint, o.total)::bigint AS total,
        COALESCE(
          (SELECT sum((line->>'qty')::bigint)

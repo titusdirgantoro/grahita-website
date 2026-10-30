@@ -387,6 +387,36 @@ func TestPGAdminUnggahMenandaiNamaDanStatusDone(t *testing.T) {
 	if p["uploaded_by_kind"] != "admin" || p["uploaded_by_nama"] != "Rina" {
 		t.Errorf("bukti admin harus membawa nama pengunggah: %v", p)
 	}
+	proofID, _ := p["id"].(string)
+	if proofID == "" {
+		t.Fatalf("bukti admin harus memiliki id: %v", p)
+	}
+
+	// Jalur yang dipakai tombol Preview/Zoom Portal Admin harus dapat
+	// mendaftar bukti dan menghasilkan tautan unduh berumur pendek.
+	resp, body = doJSON(t, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/orders/"+pesananDone+"/proofs", "", cookiesSA, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin harus melihat daftar bukti: %d %v", resp.StatusCode, body)
+	}
+	ditemukan := false
+	for _, item := range dataList(t, body) {
+		if item.(map[string]any)["id"] == proofID {
+			ditemukan = true
+		}
+	}
+	if !ditemukan {
+		t.Fatalf("bukti unggahan admin tidak ditemukan pada daftar: %v", body)
+	}
+	resp, body = doJSON(t, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/orders/"+pesananDone+"/proofs/"+proofID+"/download", "", cookiesSA, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin harus mendapat tautan unduh bukti: %d %v", resp.StatusCode, body)
+	}
+	download := dataMap(t, body)
+	if download["url"] == "" || download["expires_in"].(float64) <= 0 {
+		t.Fatalf("tautan unduh admin harus terbatas waktu: %v", download)
+	}
 
 	var teks, kind string
 	if err := f.pool.QueryRow(context.Background(),

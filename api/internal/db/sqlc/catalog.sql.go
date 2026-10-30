@@ -210,11 +210,11 @@ func (q *Queries) InsertManualTariffTombstone(ctx context.Context, arg InsertMan
 
 const insertManualTariffVersion = `-- name: InsertManualTariffVersion :exec
 INSERT INTO branch_tariff_versions
-       (branch_id, variant_id, hjm_rupiah, p1_ratio, spv_rupiah, final_item_rupiah,
+       (branch_id, variant_id, hjm_rupiah, p1_ratio, express_rupiah, spv_rupiah, final_item_rupiah,
         is_available, source_kind, created_by, source_component_hash)
 VALUES ($1, $2, $3,
-        ($4::text)::numeric, $5, $6,
-        true, 'manual', $7, $8)
+        ($4::text)::numeric, $5, $6, $7,
+        true, 'manual', $8, $9)
 `
 
 type InsertManualTariffVersionParams struct {
@@ -222,6 +222,7 @@ type InsertManualTariffVersionParams struct {
 	VariantID           string      `json:"variant_id"`
 	HjmRupiah           pgtype.Int8 `json:"hjm_rupiah"`
 	P1Ratio             string      `json:"p1_ratio"`
+	ExpressRupiah       pgtype.Int8 `json:"express_rupiah"`
 	SpvRupiah           pgtype.Int8 `json:"spv_rupiah"`
 	FinalItemRupiah     pgtype.Int8 `json:"final_item_rupiah"`
 	CreatedBy           pgtype.UUID `json:"created_by"`
@@ -234,6 +235,7 @@ func (q *Queries) InsertManualTariffVersion(ctx context.Context, arg InsertManua
 		arg.VariantID,
 		arg.HjmRupiah,
 		arg.P1Ratio,
+		arg.ExpressRupiah,
 		arg.SpvRupiah,
 		arg.FinalItemRupiah,
 		arg.CreatedBy,
@@ -293,11 +295,11 @@ func (q *Queries) ListActiveProducts(ctx context.Context) ([]ListActiveProductsR
 const listBranchPrices = `-- name: ListBranchPrices :many
 
 SELECT bp.branch_id, bp.product_id, bp.harga,
-       t.hjm_rupiah, COALESCE(t.p1_ratio, '')::text AS p1_ratio, t.spv_rupiah,
+       t.hjm_rupiah, COALESCE(t.p1_ratio, '')::text AS p1_ratio, t.express_rupiah, t.spv_rupiah,
        COALESCE(t.source_kind, '')::text AS source_kind
   FROM branch_prices bp
   LEFT JOIN LATERAL (
-        SELECT tv.hjm_rupiah, tv.p1_ratio::text AS p1_ratio, tv.spv_rupiah, tv.source_kind
+        SELECT tv.hjm_rupiah, tv.p1_ratio::text AS p1_ratio, tv.express_rupiah, tv.spv_rupiah, tv.source_kind
           FROM product_variants v
           JOIN branch_tariff_versions tv ON tv.variant_id = v.id
          WHERE v.product_id = bp.product_id
@@ -320,13 +322,14 @@ type ListBranchPricesParams struct {
 }
 
 type ListBranchPricesRow struct {
-	BranchID   string      `json:"branch_id"`
-	ProductID  string      `json:"product_id"`
-	Harga      int64       `json:"harga"`
-	HjmRupiah  pgtype.Int8 `json:"hjm_rupiah"`
-	P1Ratio    string      `json:"p1_ratio"`
-	SpvRupiah  pgtype.Int8 `json:"spv_rupiah"`
-	SourceKind string      `json:"source_kind"`
+	BranchID      string      `json:"branch_id"`
+	ProductID     string      `json:"product_id"`
+	Harga         int64       `json:"harga"`
+	HjmRupiah     pgtype.Int8 `json:"hjm_rupiah"`
+	P1Ratio       string      `json:"p1_ratio"`
+	ExpressRupiah pgtype.Int8 `json:"express_rupiah"`
+	SpvRupiah     pgtype.Int8 `json:"spv_rupiah"`
+	SourceKind    string      `json:"source_kind"`
 }
 
 // ---------- Matriks harga per cabang ----------
@@ -352,6 +355,7 @@ func (q *Queries) ListBranchPrices(ctx context.Context, arg ListBranchPricesPara
 			&i.Harga,
 			&i.HjmRupiah,
 			&i.P1Ratio,
+			&i.ExpressRupiah,
 			&i.SpvRupiah,
 			&i.SourceKind,
 		); err != nil {
@@ -484,20 +488,47 @@ func (q *Queries) ListProductsForAdmin(ctx context.Context, arg ListProductsForA
 
 const listProductsForBranch = `-- name: ListProductsForBranch :many
 SELECT p.id, p.nama, p.jenis::text AS jenis,
-       COALESCE(p.deskripsi, '') AS deskripsi, bp.harga, p.urutan
+       COALESCE(p.deskripsi, '') AS deskripsi,
+       CASE WHEN t.hjm_rupiah IS NULL THEN bp.harga
+            ELSE t.hjm_rupiah
+              + CASE WHEN b.pajak_in THEN ROUND(t.hjm_rupiah * t.p1_ratio)::bigint ELSE 0 END
+              + COALESCE(t.express_rupiah, 0) + t.spv_rupiah END::bigint AS harga,
+       COALESCE(t.hjm_rupiah, bp.harga)::bigint AS harga_dasar,
+       CASE WHEN b.pajak_in THEN COALESCE(t.p1_ratio, 0) ELSE 0 END::text AS p1_ratio,
+       CASE WHEN b.pajak_in THEN COALESCE(ROUND(t.hjm_rupiah * t.p1_ratio), 0) ELSE 0 END::bigint AS pi_per_pcs,
+       COALESCE(t.express_rupiah, 0)::bigint AS express_per_pcs,
+       COALESCE(t.spv_rupiah, 0)::bigint AS spv_per_pcs,
+       p.urutan
   FROM products p
   JOIN branch_prices bp ON bp.product_id = p.id
+  JOIN branches b ON b.id = bp.branch_id
+  LEFT JOIN LATERAL (
+        SELECT tv.hjm_rupiah, tv.p1_ratio, tv.express_rupiah, tv.spv_rupiah
+          FROM product_variants v
+          JOIN branch_tariff_versions tv ON tv.variant_id = v.id
+         WHERE v.product_id = p.id
+           AND v.tariff_parent_variant_id IS NULL
+           AND tv.branch_id = bp.branch_id
+           AND tv.superseded_at IS NULL AND tv.is_available
+           AND tv.final_item_rupiah = bp.harga
+         ORDER BY v.created_at, v.id LIMIT 1
+       ) t ON true
  WHERE bp.branch_id = $1 AND p.is_active
  ORDER BY p.urutan, p.nama
 `
 
 type ListProductsForBranchRow struct {
-	ID        string `json:"id"`
-	Nama      string `json:"nama"`
-	Jenis     string `json:"jenis"`
-	Deskripsi string `json:"deskripsi"`
-	Harga     int64  `json:"harga"`
-	Urutan    int32  `json:"urutan"`
+	ID            string `json:"id"`
+	Nama          string `json:"nama"`
+	Jenis         string `json:"jenis"`
+	Deskripsi     string `json:"deskripsi"`
+	Harga         int64  `json:"harga"`
+	HargaDasar    int64  `json:"harga_dasar"`
+	P1Ratio       string `json:"p1_ratio"`
+	PiPerPcs      int64  `json:"pi_per_pcs"`
+	ExpressPerPcs int64  `json:"express_per_pcs"`
+	SpvPerPcs     int64  `json:"spv_per_pcs"`
+	Urutan        int32  `json:"urutan"`
 }
 
 // Hanya produk yang benar-benar dijual ke cabang tersebut (punya baris harga).
@@ -518,6 +549,11 @@ func (q *Queries) ListProductsForBranch(ctx context.Context, branchID string) ([
 			&i.Jenis,
 			&i.Deskripsi,
 			&i.Harga,
+			&i.HargaDasar,
+			&i.P1Ratio,
+			&i.PiPerPcs,
+			&i.ExpressPerPcs,
+			&i.SpvPerPcs,
 			&i.Urutan,
 		); err != nil {
 			return nil, err

@@ -339,8 +339,8 @@ describe("Customer Portal — detail pesanan (F1-11)", () => {
     expect(screen.getByText("dikirim pagi")).toBeDefined();
     expect(screen.getByRole("button", { name: "Ubah" })).toBeDefined();
     expect(screen.getByRole("button", { name: "Hapus draft" })).toBeDefined();
-    // Draft tidak menampilkan kolom serial number.
-    expect(screen.queryByRole("columnheader", { name: "Serial number" })).toBeNull();
+    // Draft memakai urutan kolom yang sama, tetapi serial baru diterbitkan saat submit.
+    expect(screen.getByRole("columnheader", { name: "Serial Number" })).toBeDefined();
   });
 
   it("menghapus draft setelah konfirmasi modal", async () => {
@@ -370,8 +370,33 @@ describe("Customer Portal — detail pesanan (F1-11)", () => {
     expect(screen.queryByRole("button", { name: "Hapus draft" })).toBeNull();
     expect(screen.getByText(/sudah dikirim/)).toBeDefined();
     // Pesanan yang sudah dikirim menampilkan serial number.
-    expect(screen.getByRole("columnheader", { name: "Serial number" })).toBeDefined();
+    expect(screen.getByRole("columnheader", { name: "Serial Number" })).toBeDefined();
     expect(screen.getByText("20261008001")).toBeDefined();
+    expect(screen.getByText("TK A")).toBeDefined();
+    expect(screen.getAllByRole("link", { name: "Pesanan" }).some((link) => link.getAttribute("href") === "/pesanan")).toBe(true);
+  });
+
+  it("tetap menampilkan snapshot Tempo order lama setelah izin cabang berubah", async () => {
+    fetchPesanan({
+      allowTransfer: true,
+      cabangCNC: false,
+      cabangTempo: false,
+      detail: {
+        ...terkirim,
+        is_tempo: true,
+        status: "approved_unpaid",
+        tempo_paid_amount: 125000,
+        tempo_due_date: "2026-11-05",
+      },
+    });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o2")} />);
+
+    expect(await screen.findByRole("heading", { name: "2026-10-01" })).toBeDefined();
+    expect(screen.getByText("Tempo")).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Pembayaran Tempo" })).toBeDefined();
+    expect(screen.getByText("2026-11-05")).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Bukti transfer" })).toBeNull();
   });
 });
 
@@ -404,7 +429,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
       // Harga/total dihitung server; nama instansi melekat pada baris.
       expect(JSON.parse(String(kirim?.init?.body))).toEqual({
         catatan: "dikirim pagi",
-        lines: [{ product_id: "p1", qty: 2, nama_instansi: "TK A" }],
+        lines: [{ product_id: "p1", qty: 2, nama_instansi: "TK A", keterangan: "" }],
       });
     });
   });
@@ -436,8 +461,8 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
       const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders"));
       expect(kirim).toBeDefined();
       expect(JSON.parse(String(kirim?.init?.body)).lines).toEqual([
-        { product_id: "p1", qty: 1, nama_instansi: "TK A" },
-        { product_id: "p1", qty: 1, nama_instansi: "SD B" },
+        { product_id: "p1", qty: 1, nama_instansi: "TK A", keterangan: "" },
+        { product_id: "p1", qty: 1, nama_instansi: "SD B", keterangan: "" },
       ]);
     });
   });
@@ -474,7 +499,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
       expect(kirim?.url.endsWith("/orders/o1")).toBe(true);
       expect(JSON.parse(String(kirim?.init?.body))).toEqual({
         catatan: "dikirim pagi",
-        lines: [{ product_id: "p1", qty: 4, nama_instansi: "TK A" }],
+        lines: [{ product_id: "p1", qty: 4, nama_instansi: "TK A", keterangan: "" }],
       });
     });
   });
@@ -648,6 +673,41 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
     expect(form.get("expected_journal_version")).toBe("7");
   });
 
+  it("mengirim pesanan Tempo tanpa bukti dan menyerahkan tanggal bisnis kepada server", async () => {
+    const panggilan = fetchPesanan({ allowTransfer: false, cabangCNC: false, cabangTempo: true });
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).queryByLabelText(/Bukti transfer/)).toBeNull();
+    const pilihanTempo = within(dialog).getByRole("radio", { name: /^Tempo/ });
+    fireEvent.click(pilihanTempo);
+    const tombolKirim = within(dialog).getByRole("button", { name: "Kirim pesanan" });
+    await waitFor(() => expect((tombolKirim as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(tombolKirim);
+
+    await waitFor(() => expect(panggilan.some((p) => p.url.endsWith("/orders/o1/submit"))).toBe(true));
+    const form = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"))?.init?.body as FormData;
+    expect(form.get("payment_mode")).toBe("tempo");
+    expect(form.getAll("file")).toHaveLength(0);
+    // Tanggal/periode tidak pernah dikirim browser; server menetapkannya dari
+    // jam bisnis WIB yang diuji terpisah pada PostgreSQL dengan fixed clock.
+    expect(Array.from(form.keys())).toEqual(["payment_mode"]);
+  });
+
+  it("order baru hanya menawarkan cara bayar yang saat ini diizinkan", async () => {
+    fetchPesanan({ allowTransfer: true, cabangCNC: false, cabangTempo: false });
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).getByRole("radio", { name: /Transfer di muka/ })).toBeDefined();
+    expect(within(dialog).queryByRole("radio", { name: /Deposit \(Cash & Carry\)/ })).toBeNull();
+    expect(within(dialog).queryByRole("radio", { name: /^Tempo/ })).toBeNull();
+  });
+
   it("cabang C&C bersaldo cukup dibayar penuh dari deposit tanpa bukti", async () => {
     const panggilan = fetchPesanan({ cabangCNC: true, saldoDeposit: 500000 });
 
@@ -694,6 +754,34 @@ describe("Customer Portal — kirim pesanan (F1-14)", () => {
     const form = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"))?.init?.body as FormData;
     expect(form.getAll("file").length).toBe(1);
     expect(form.get("expected_journal_version")).toBe("7");
+  });
+
+  it("cabang C&C bersaldo nol wajib mengunggah bukti untuk seluruh total", async () => {
+    const panggilan = fetchPesanan({ cabangCNC: true, saldoDeposit: 0 });
+
+    render(<RouterProvider router={buatRouter("/pesanan/o1")} />);
+    await screen.findByRole("heading", { name: "Draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Kirim pesanan" }));
+    const dialog = await screen.findByRole("dialog");
+
+    const rincian = await within(dialog).findByTestId("rincian-bayar");
+    expect(within(rincian).getByTestId("sisa-transfer").textContent).toMatch(/300\.000/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+    expect(await within(dialog).findByText(/Unggah bukti transfer untuk sisanya/)).toBeDefined();
+    expect(panggilan.some((p) => p.url.endsWith("/submit"))).toBe(false);
+
+    const berkas = new File(["seluruh-total"], "transfer-penuh.jpg", { type: "image/jpeg" });
+    fireEvent.change(within(dialog).getByLabelText(/Bukti transfer sisa pembayaran/), {
+      target: { files: [berkas] },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kirim pesanan" }));
+    await waitFor(() => {
+      expect(panggilan.some((p) => p.url.endsWith("/orders/o1/submit"))).toBe(true);
+    });
+    const form = panggilan.find((p) => p.url.endsWith("/orders/o1/submit"))?.init?.body as FormData;
+    expect(form.get("payment_mode")).toBe("deposit");
+    expect(form.get("expected_journal_version")).toBe("7");
+    expect(form.getAll("file")).toHaveLength(1);
   });
 
   it("saldo yang berubah saat dikirim memuat ulang saldo dan menjelaskan alasannya", async () => {
@@ -761,7 +849,9 @@ describe("Customer Portal — bukti transfer (F1-13)", () => {
     expect(await screen.findByText("transfer-cicilan-1.jpg")).toBeDefined();
     expect(screen.getByText("koreksi-admin.pdf")).toBeDefined();
     // Unggahan cabang tidak bernama; unggahan admin menandai namanya (AP-ORD-06).
-    expect(screen.getByText("Cabang")).toBeDefined();
+    expect(
+      screen.getAllByText("Cabang").some((el) => el.closest("td")?.getAttribute("data-label") === "Pengunggah"),
+    ).toBe(true);
     expect(screen.getByText("Admin Budi")).toBeDefined();
     expect(screen.getByText("200 KB")).toBeDefined();
   });

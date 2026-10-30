@@ -10,6 +10,7 @@ Tanggal: 26 Oktober 2026. Implementasi ada pada branch `feat/tempo-receivables`.
 - Bukti memakai `payment_proofs.purpose=tempo_repayment`. Alokasi lintas invoice dicatat pada `tempo_allocations`; `verification_proof_splits` tetap untuk verifikasi satu pesanan dan tidak dapat mewakili pembayaran lintas tagihan tanpa merusak relasi lamanya.
 - Surat Tagihan PDF versi per bulan terbit dari job harian; pengingat H-3/H/H+1/H+7. Admin memiliki ringkasan piutang, umur piutang dan ekspor XLSX.
 - Flag Special dihapus dari aplikasi dan kontrak API. Kolom `branches.is_special` tetap ada secara dorman untuk kompatibilitas migrasi.
+- Setiap order line menyimpan Nama Instansi, Ket, serta snapshot komponen Produksi, PI, Expres, dan Bea SPV. P1 hanya diterapkan untuk cabang dengan flag PI aktif; Expres dan Bea SPV adalah nominal per pcs. Editor pesanan, detail Admin/Cabang, invoice PDF, laporan, dan XLSX memakai urutan kolom bisnis yang sama.
 
 ## Aturan operasional
 

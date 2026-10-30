@@ -790,6 +790,100 @@ func TestPGPiutangCabangAdminDanEksporSelaras(t *testing.T) {
 	}
 }
 
+// TMP-24: ringkasan Cabang dan Admin harus berasal dari ledger yang sama,
+// memisahkan tiga bucket umur berdasarkan due date, dan tetap menampilkan
+// bukti pending tanpa menguranginya dari saldo piutang.
+func TestPGOverviewPiutangTigaBucketDanPendingSelaras(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	svc := receivable.New(f.pool, f.jobs)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	branch := auth.Actor{UserID: f.userA, Kind: auth.KindBranch, BranchID: f.branchA, Nama: "Cabang A"}
+	orders := []struct {
+		id     string
+		amount int64
+		age    int
+	}{
+		{tempoSubmitted(t, f, "2026-06-10", 100000), 100000, 70},
+		{tempoSubmitted(t, f, "2026-07-10", 200000), 200000, 40},
+		{tempoSubmitted(t, f, "2026-08-10", 300000), 300000, 10},
+	}
+	for _, row := range orders {
+		if _, err := svc.Approve(ctx, manager, row.id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.pool.Exec(ctx, `UPDATE tempo_charges
+ SET due_date=(now() AT TIME ZONE 'Asia/Jakarta')::date-$2::int WHERE order_id=$1`, row.id, row.age); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	paid, err := svc.UploadProof(ctx, branch, f.objek, receivable.UploadInput{
+		Amount: 50000, BankAccountID: f.bankDefault, Filename: "terverifikasi.jpg", Body: []byte{0xff, 0xd8, 0xff, 71},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Decide(ctx, manager, paid.ID, "verify", 50000, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UploadProof(ctx, branch, f.objek, receivable.UploadInput{
+		Amount: 20000, BankAccountID: f.bankDefault, Filename: "pending.jpg", Body: []byte{0xff, 0xd8, 0xff, 72},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	branchCookies, _ := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	adminCookies, _ := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	read := func(path string, cookies []*http.Cookie) map[string]any {
+		t.Helper()
+		status, body, _ := apiReq(t, http.DefaultClient, http.MethodGet, f.srv.URL+path, "", cookies, "")
+		if status != http.StatusOK {
+			t.Fatalf("overview %s: %d (%v)", path, status, body)
+		}
+		return dataMap(t, body)
+	}
+	branchView := read("/api/v1/tempo/overview", branchCookies)
+	adminView := read("/api/v1/admin/tempo/overview", adminCookies)
+	for nama, got := range map[string]map[string]any{"cabang": branchView, "admin": adminView} {
+		if num(got["total_receivable"]) != 550000 || num(got["overdue"]) != 550000 ||
+			num(got["age_0_30"]) != 300000 || num(got["age_31_60"]) != 200000 ||
+			num(got["age_over_60"]) != 50000 || num(got["pending_proof"]) != 20000 {
+			t.Fatalf("ringkasan %s salah: %v", nama, got)
+		}
+		items, ok := got["items"].([]any)
+		if !ok {
+			t.Fatalf("rincian %s tidak berbentuk daftar: %T", nama, got["items"])
+		}
+		var jumlahOverdue int
+		var sisaOverdue int64
+		for _, raw := range items {
+			item := raw.(map[string]any)
+			remaining := int64(num(item["remaining"]))
+			if item["status"] == "lewat_jatuh_tempo" && remaining > 0 {
+				jumlahOverdue++
+				sisaOverdue += remaining
+			}
+		}
+		if jumlahOverdue != 3 || sisaOverdue != int64(num(got["overdue"])) {
+			t.Fatalf("chip overdue %s harus sama dengan 3 rincian aktif/total %d: count=%d sum=%d", nama, int64(num(got["overdue"])), jumlahOverdue, sisaOverdue)
+		}
+	}
+	if !reflect.DeepEqual(branchView["items"], adminView["items"]) {
+		t.Fatalf("rincian Cabang/Admin berbeda: %v vs %v", branchView["items"], adminView["items"])
+	}
+	var remaining, pending int64
+	if err := f.pool.QueryRow(ctx, `SELECT
+	 (SELECT COALESCE(sum(amount-paid_amount),0)::bigint FROM tempo_charges WHERE branch_id=$1),
+	 (SELECT COALESCE(sum(declared_amount),0)::bigint FROM tempo_receipts WHERE branch_id=$1 AND status='pending')`, f.branchA).
+		Scan(&remaining, &pending); err != nil || remaining != 550000 || pending != 20000 {
+		t.Fatalf("ledger DB tidak cocok: remaining=%d pending=%d err=%v", remaining, pending, err)
+	}
+}
+
 func TestPGStatusTagihanBerubahPadaBatasHariWIB(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
@@ -1448,6 +1542,17 @@ func TestPGTempoSubmitSnapshotDanTahanPesanan(t *testing.T) {
 	if status, body := submit(fourth); status != 200 {
 		t.Fatalf("toggle off harus melepas hold: %d %+v", status, body)
 	}
+	var actorNama string
+	var auditAt time.Time
+	var sebelum, sesudah bool
+	if err := f.pool.QueryRow(ctx, `SELECT actor_nama,at,(before->>'tahan_bila_telat')::boolean,(after->>'tahan_bila_telat')::boolean
+ FROM audit_logs WHERE entity='branch' AND action='update' AND entity_id=$1 ORDER BY id DESC LIMIT 1`, f.branchA).
+		Scan(&actorNama, &auditAt, &sebelum, &sesudah); err != nil {
+		t.Fatalf("baca audit pelepasan hold: %v", err)
+	}
+	if actorNama != "Rina" || auditAt.IsZero() || !sebelum || sesudah {
+		t.Fatalf("audit pelepasan hold tidak lengkap: aktor=%q at=%v before=%v after=%v", actorNama, auditAt, sebelum, sesudah)
+	}
 }
 
 func TestPGHoldTempoDihitungUlangSesudahTolakDanBayarSebagian(t *testing.T) {
@@ -1569,6 +1674,49 @@ func TestPGPilihanPembayaranCampuranDanTahanHanyaTempo(t *testing.T) {
 	}
 	if err := f.pool.QueryRow(ctx, `SELECT is_tempo,is_cnc FROM orders WHERE id=$1`, depositOrder).Scan(&tempo, &cnc); err != nil || tempo || !cnc {
 		t.Fatalf("snapshot deposit: %v %v %v", tempo, cnc, err)
+	}
+
+	// CAB-08: perubahan izin pembayaran setelah pesanan terkirim tidak boleh
+	// menulis ulang snapshot pesanan lama. Draft yang sudah ada dievaluasi lagi
+	// saat submit, dan pesanan baru hanya boleh memakai izin terbaru.
+	draftSebelumPerubahan := makeDraft()
+	adminCookies, adminCSRF := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	status, body := depositReq(t, http.MethodPut,
+		f.srv.URL+"/api/v1/admin/branches/"+f.branchA,
+		`{"allow_transfer":true,"is_cnc":false,"is_tempo":false}`,
+		adminCookies, adminCSRF, "")
+	if status != http.StatusOK {
+		t.Fatalf("ubah izin cabang menjadi hanya Transfer: %d %+v", status, body)
+	}
+
+	var oldTempo, oldDeposit bool
+	if err := f.pool.QueryRow(ctx, `SELECT is_tempo FROM orders WHERE id=$1`, first).Scan(&oldTempo); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT is_cnc FROM orders WHERE id=$1`, depositOrder).Scan(&oldDeposit); err != nil {
+		t.Fatal(err)
+	}
+	if !oldTempo || !oldDeposit {
+		t.Fatalf("snapshot order lama berubah setelah izin dicabut: tempo=%v deposit=%v", oldTempo, oldDeposit)
+	}
+
+	if status, body := submit(draftSebelumPerubahan, "deposit", strconv.FormatInt(version, 10), nil); status != http.StatusConflict || kodeErrorVerifikasi(body) != "PAYMENT_MODE_CHANGED" {
+		t.Fatalf("draft lama harus memakai izin terbaru saat submit: %d %+v", status, body)
+	}
+	var statusDraft string
+	if err := f.pool.QueryRow(ctx, `SELECT status::text FROM orders WHERE id=$1`, draftSebelumPerubahan).Scan(&statusDraft); err != nil || statusDraft != "draft" {
+		t.Fatalf("submit mode tercabut tidak boleh mengubah draft: status=%s err=%v", statusDraft, err)
+	}
+
+	orderBaru := makeDraft()
+	if status, body := submit(orderBaru, "tempo", "", nil); status != http.StatusConflict || kodeErrorVerifikasi(body) != "PAYMENT_MODE_CHANGED" {
+		t.Fatalf("order baru tidak boleh memakai Tempo yang dicabut: %d %+v", status, body)
+	}
+	if status, body := submit(orderBaru, "transfer", "", map[string][]byte{"transfer-baru.jpg": berkasJPEGUji("izin-transfer-baru")}); status != http.StatusOK {
+		t.Fatalf("order baru harus dapat memakai Transfer yang masih aktif: %d %+v", status, body)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT is_tempo,is_cnc FROM orders WHERE id=$1`, orderBaru).Scan(&tempo, &cnc); err != nil || tempo || cnc {
+		t.Fatalf("snapshot order baru harus Transfer: tempo=%v deposit=%v err=%v", tempo, cnc, err)
 	}
 }
 

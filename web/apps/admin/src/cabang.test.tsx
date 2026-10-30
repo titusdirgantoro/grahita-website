@@ -38,6 +38,7 @@ const CABANG = [
     is_cnc: false,
     is_tempo: true,
     tanggal_bayar: 5,
+    tahan_bila_telat: true,
     pajak_in: true,
     is_active: true,
     token_prefix: "GRH-7K4Q",
@@ -244,6 +245,50 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
     );
   });
 
+  it("mengubah kepala cabang, telepon, dan PI tanpa mengirim flag Special", async () => {
+    const panggilan = stubFetch((url, init) => {
+      if (url.endsWith("/admin/branches/br-a") && init?.method === "PUT") {
+        return json({
+          data: {
+            ...CABANG[0],
+            nama_kepala: "Dewi Lestari",
+            telepon: "+6281234567890",
+            pajak_in: true,
+          },
+        });
+      }
+      return undefined;
+    });
+
+    render(<RouterProvider router={buatRouter("/cabang")} />);
+    const dialog = await bukaDetail("Grahita Bandung");
+    fireEvent.change(within(dialog).getByLabelText("Nama kepala cabang"), {
+      target: { value: "Dewi Lestari" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Telepon"), {
+      target: { value: "+6281234567890" },
+    });
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Pajak In (PI)" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan" }));
+
+    await waitFor(() => {
+      const put = panggilan.find(
+        (p) => p.url.endsWith("/admin/branches/br-a") && p.init?.method === "PUT",
+      );
+      expect(put).toBeDefined();
+      const body = JSON.parse(String(put?.init?.body));
+      expect(body.nama_kepala).toBe("Dewi Lestari");
+      expect(body.telepon).toBe("+6281234567890");
+      expect(body.pajak_in).toBe(true);
+      expect(body).not.toHaveProperty("is_special");
+      expect(body).not.toHaveProperty("special");
+    });
+
+    // Kontrak daftar yang dirender juga tidak membawa atau menampilkan flag lama.
+    expect(CABANG.every((c) => !("is_special" in c) && !("special" in c))).toBe(true);
+    expect(screen.queryByText("Special")).toBeNull();
+  });
+
   it("tambah cabang mengirim POST ber-CSRF lalu memuat ulang daftar", async () => {
     const panggilan = stubFetch();
 
@@ -312,6 +357,28 @@ describe("Admin Portal — /cabang (F1-06b)", () => {
       expect(post).toBeDefined();
       const body = JSON.parse(String(post?.init?.body));
       expect([body.allow_transfer, body.is_cnc, body.is_tempo, body.tanggal_bayar]).toEqual([true, true, true, 5]);
+    });
+  });
+
+  it("Manager mematikan tahan Tempo pada cabang bertunggakan lewat form cabang", async () => {
+    const panggilan = stubFetch((url, init) => {
+      if (url.endsWith("/admin/branches/br-b") && init?.method === "PUT") {
+        return json({ data: { ...CABANG[1], tahan_bila_telat: false } });
+      }
+      return undefined;
+    });
+    render(<RouterProvider router={buatRouter("/cabang")} />);
+
+    const dialog = await bukaDetail("Grahita Bekasi");
+    const tahan = within(dialog).getByRole("switch", { name: "Tahan pilihan Tempo bila tagihan lewat jatuh tempo" });
+    expect(tahan.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(tahan);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Simpan" }));
+
+    await waitFor(() => {
+      const put = panggilan.find((p) => p.url.endsWith("/admin/branches/br-b") && p.init?.method === "PUT");
+      expect(put).toBeDefined();
+      expect(JSON.parse(String(put?.init?.body)).tahan_bila_telat).toBe(false);
     });
   });
 

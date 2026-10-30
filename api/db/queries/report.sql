@@ -41,7 +41,15 @@ SELECT o.tanggal,
        COALESCE(l.serial_number, '')                                AS serial_number,
        l.qty,
        l.harga_satuan,
+       CASE WHEN l.harga_dasar=0 AND l.harga_satuan>0 AND l.pi_per_pcs=0 AND l.express_per_pcs=0 AND l.spv_per_pcs=0
+            THEN l.harga_satuan ELSE l.harga_dasar END::bigint AS harga_dasar,
+       (l.qty * CASE WHEN l.harga_dasar=0 AND l.harga_satuan>0 AND l.pi_per_pcs=0 AND l.express_per_pcs=0 AND l.spv_per_pcs=0
+                     THEN l.harga_satuan ELSE l.harga_dasar END)::bigint AS produksi,
+       (l.qty*l.pi_per_pcs)::bigint AS pi,
+       (l.qty*l.express_per_pcs)::bigint AS express,
+       (l.qty*l.spv_per_pcs)::bigint AS bea_spv,
        COALESCE(l.subtotal, 0)::bigint                              AS subtotal,
+       l.keterangan,
        o.status::text                                               AS status,
        o.done_at,
        COALESCE((SELECT vl.metode::text

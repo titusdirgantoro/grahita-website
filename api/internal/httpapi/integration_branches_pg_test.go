@@ -530,9 +530,25 @@ func TestPGCrudCabangKonflikEmailDanAudit(t *testing.T) {
 	// ---- ubah email cabang menyelaraskan email login akun cabang ----
 	// Cabang A sudah punya akun (f.userA) dengan alamat a@example.test.
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/branches/"+f.branchA,
-		`{"email":"cabang-a-baru@example.test","telepon":"0221"}`, cookiesMgr, csrfMgr)
+		`{"nama_kepala":"Kepala A Baru","email":"cabang-a-baru@example.test","telepon":"0221","pajak_in":true}`, cookiesMgr, csrfMgr)
 	if status != http.StatusOK {
 		t.Fatalf("ubah email cabang harus 200, dapat %d (%v)", status, body)
+	}
+	dataUbah := body["data"].(map[string]any)
+	if dataUbah["nama_kepala"] != "Kepala A Baru" || dataUbah["telepon"] != "0221" || dataUbah["pajak_in"] != true {
+		t.Fatalf("respons perubahan profil/PI tidak sesuai: %v", dataUbah)
+	}
+	if _, ada := dataUbah["is_special"]; ada {
+		t.Fatalf("flag Special lama tidak boleh bocor lewat API detail: %v", dataUbah)
+	}
+	var kepalaBaru, teleponBaru string
+	var piBaru bool
+	if err := f.pool.QueryRow(ctx, `SELECT nama_kepala, telepon, pajak_in FROM branches WHERE id=$1`, f.branchA).
+		Scan(&kepalaBaru, &teleponBaru, &piBaru); err != nil {
+		t.Fatalf("baca perubahan profil cabang: %v", err)
+	}
+	if kepalaBaru != "Kepala A Baru" || teleponBaru != "0221" || !piBaru {
+		t.Fatalf("profil/PI tidak tersimpan di DB: kepala=%q telepon=%q pi=%v", kepalaBaru, teleponBaru, piBaru)
 	}
 	var emailLogin string
 	if err := f.pool.QueryRow(ctx, `SELECT email::text FROM branch_users WHERE id = $1`, f.userA).Scan(&emailLogin); err != nil {

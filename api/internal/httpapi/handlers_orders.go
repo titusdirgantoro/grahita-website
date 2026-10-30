@@ -26,6 +26,7 @@ type draftLineRequest struct {
 	ProductID    string `json:"product_id" validate:"required"`
 	Qty          int    `json:"qty" validate:"required,gt=0"`
 	NamaInstansi string `json:"nama_instansi" validate:"required,max=160"`
+	Keterangan   string `json:"keterangan" validate:"omitempty,max=250"`
 }
 
 // draftRequest adalah body POST /api/v1/orders dan PUT /api/v1/orders/{id}.
@@ -38,7 +39,7 @@ type draftRequest struct {
 func (r draftRequest) draftInput() order.DraftInput {
 	lines := make([]order.LineInput, 0, len(r.Lines))
 	for _, l := range r.Lines {
-		lines = append(lines, order.LineInput{ProductID: strings.TrimSpace(l.ProductID), Qty: l.Qty, NamaInstansi: l.NamaInstansi})
+		lines = append(lines, order.LineInput{ProductID: strings.TrimSpace(l.ProductID), Qty: l.Qty, NamaInstansi: l.NamaInstansi, Keterangan: l.Keterangan})
 	}
 	return order.DraftInput{Catatan: r.Catatan, Lines: lines}
 }

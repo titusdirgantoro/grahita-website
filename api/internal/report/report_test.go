@@ -423,7 +423,7 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 	}
 	cocokJudul := []string{
 		"Tanggal", "Nomor Invoice", "Versi", "Cabang", "Kepala Cabang", "C&C", "PI",
-		"Produk", "Nama Instansi", "Jenis", "Serial Number", "Qty", "Harga Satuan", "Subtotal", "Status",
+		"Produk", "Nama Instansi", "Jenis", "Serial Number", "Qty", "Harga Satuan", "Harga/Pcs", "Produksi", "PI", "Expres", "Bea SPV", "Subtotal", "Ket", "Status",
 		"Tanggal Verifikasi", "Metode Verifikasi",
 	}
 	if len(baris) == 0 || len(baris[0]) != len(cocokJudul) {
@@ -443,7 +443,7 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 	if baris[1][8] != "TK A" || baris[2][8] != "" {
 		t.Errorf("nama instansi hanya ada pada baris produk yang memilikinya: %v", baris)
 	}
-	if baris[1][15] != "2026-09-30 14:05" || baris[1][16] != "manual" {
+	if baris[1][21] != "2026-09-30 14:05" || baris[1][22] != "manual" {
 		t.Errorf("kolom verifikasi salah: %v", baris[1])
 	}
 	if baris[2][10] != "-" {
@@ -459,8 +459,8 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 		t.Errorf("header harus ter-freeze: %+v", panes)
 	}
 
-	// Format Rupiah pada kolom harga satuan & subtotal (M dan N).
-	for _, sel := range []string{"M2", "N2", "N3"} {
+	// Format Rupiah pada kolom harga satuan, komponen, dan subtotal (M sampai S).
+	for _, sel := range []string{"M2", "N2", "O2", "P2", "Q2", "R2", "S2", "S3"} {
 		id, err := f.GetCellStyle(SheetLaporan, sel)
 		if err != nil {
 			t.Fatalf("gaya sel %s: %v", sel, err)
@@ -479,8 +479,8 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 	if baris[1][12] != "100000" {
 		t.Errorf("harga satuan harus angka 100000, dapat %q", baris[1][12])
 	}
-	if baris[2][13] != "3000" {
-		t.Errorf("subtotal packaging harus angka 3000, dapat %q", baris[2][13])
+	if baris[2][18] != "3000" {
+		t.Errorf("subtotal packaging harus angka 3000, dapat %q", baris[2][18])
 	}
 	if baris[1][11] != "2" {
 		t.Errorf("qty harus angka 2, dapat %q", baris[1][11])

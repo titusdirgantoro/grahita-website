@@ -97,8 +97,13 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- name: InsertOrderLineProduct :exec
 -- subtotal TIDAK diisi: kolomnya GENERATED ALWAYS (qty * harga_satuan).
 -- harga_satuan sudah diambil server dari branch_prices cabang sesi.
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, qty, harga_satuan)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, keterangan,
+                         qty, harga_satuan, harga_dasar, pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs)
+VALUES (sqlc.arg(order_id), sqlc.arg(line_no), 'product', sqlc.arg(product_id),
+        sqlc.arg(nama_snapshot), sqlc.arg(nama_instansi), sqlc.arg(keterangan),
+        sqlc.arg(qty), sqlc.arg(harga_satuan), sqlc.arg(harga_dasar),
+        (sqlc.arg(pi_ratio)::text)::numeric, sqlc.arg(pi_per_pcs),
+        sqlc.arg(express_per_pcs), sqlc.arg(spv_per_pcs));
 
 -- name: InsertOrderLinePackaging :exec
 -- Baris biaya packaging pesanan sertifikat (PRD CP-SER-02): tanpa product_id,
@@ -106,12 +111,21 @@ VALUES ($1, $2, 'product', $3, $4, $5, $6, $7);
 -- Harga packaging adalah snapshot `biaya_packaging` yang dibaca server dari
 -- domain pengaturan — tidak pernah datang dari klien. Indeks unik parsial
 -- order_lines_satu_packaging menjaga agar baris ini tetap tunggal per pesanan.
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
-VALUES ($1, $2, 'packaging', NULL, $3, 1, $4);
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan, harga_dasar)
+VALUES ($1, $2, 'packaging', NULL, $3, 1, $4, $4);
 
 -- name: ListOrderLines :many
-SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instansi,
-       qty, harga_satuan, subtotal, serial_number
+SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instansi, keterangan,
+       qty, harga_satuan,
+       CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
+            THEN harga_satuan ELSE harga_dasar END::bigint AS harga_dasar,
+       pi_ratio::text AS pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs,
+       (qty * CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
+                   THEN harga_satuan ELSE harga_dasar END)::bigint AS produksi,
+       (qty * pi_per_pcs)::bigint AS pi,
+       (qty * express_per_pcs)::bigint AS express,
+       (qty * spv_per_pcs)::bigint AS bea_spv,
+       subtotal, serial_number
   FROM order_lines
  WHERE order_id = $1
  ORDER BY line_no;
@@ -149,6 +163,7 @@ SELECT l.line_no,
        l.jenis::text          AS jenis,
        l.nama_snapshot,
        l.nama_instansi,
+       l.keterangan,
 
        l.qty,
        (p.id IS NOT NULL)::bool     AS produk_ada,
@@ -156,13 +171,34 @@ SELECT l.line_no,
        COALESCE(p.nama, '')         AS produk_nama,
 
        COALESCE(p.jenis::text, '')::text AS produk_jenis,
-       COALESCE(bp.harga, 0)::bigint AS harga_cabang,
+       CASE WHEN tv.hjm_rupiah IS NULL THEN COALESCE(bp.harga, 0)
+            ELSE tv.hjm_rupiah
+              + CASE WHEN b.pajak_in THEN ROUND(tv.hjm_rupiah * tv.p1_ratio)::bigint ELSE 0 END
+              + COALESCE(tv.express_rupiah, 0) + tv.spv_rupiah END::bigint AS harga_cabang,
+       COALESCE(tv.hjm_rupiah, bp.harga, 0)::bigint AS harga_dasar,
+       CASE WHEN b.pajak_in THEN COALESCE(tv.p1_ratio, 0) ELSE 0 END::text AS pi_ratio,
+       CASE WHEN b.pajak_in THEN COALESCE(ROUND(tv.hjm_rupiah * tv.p1_ratio), 0) ELSE 0 END::bigint AS pi_per_pcs,
+       COALESCE(tv.express_rupiah, 0)::bigint AS express_per_pcs,
+       COALESCE(tv.spv_rupiah, 0)::bigint AS spv_per_pcs,
        (bp.product_id IS NOT NULL)::bool AS ada_harga_cabang
   FROM order_lines l
+  JOIN orders o ON o.id = l.order_id
+  JOIN branches b ON b.id = o.branch_id
   LEFT JOIN products p ON p.id = l.product_id
   LEFT JOIN branch_prices bp
          ON bp.product_id = l.product_id
         AND bp.branch_id = sqlc.arg(branch_id)::uuid
+  LEFT JOIN LATERAL (
+        SELECT t.hjm_rupiah, t.p1_ratio, t.express_rupiah, t.spv_rupiah
+          FROM product_variants v
+          JOIN branch_tariff_versions t ON t.variant_id = v.id
+         WHERE v.product_id = l.product_id
+           AND v.tariff_parent_variant_id IS NULL
+           AND t.branch_id = sqlc.arg(branch_id)::uuid
+           AND t.superseded_at IS NULL AND t.is_available
+           AND t.final_item_rupiah = bp.harga
+         ORDER BY v.created_at, v.id LIMIT 1
+       ) tv ON true
  WHERE l.order_id = sqlc.arg(order_id)::uuid
  ORDER BY l.line_no;
 
@@ -172,7 +208,12 @@ SELECT l.line_no,
 -- order_lines_recalc menyinkronkan orders.total.
 UPDATE order_lines
    SET nama_snapshot = sqlc.arg(nama_snapshot),
-       harga_satuan  = sqlc.arg(harga_satuan)
+       harga_satuan  = sqlc.arg(harga_satuan),
+       harga_dasar = sqlc.arg(harga_dasar),
+       pi_ratio = (sqlc.arg(pi_ratio)::text)::numeric,
+       pi_per_pcs = sqlc.arg(pi_per_pcs),
+       express_per_pcs = sqlc.arg(express_per_pcs),
+       spv_per_pcs = sqlc.arg(spv_per_pcs)
  WHERE order_id = sqlc.arg(order_id)::uuid
    AND line_no = sqlc.arg(line_no)::int;
 

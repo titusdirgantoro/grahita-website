@@ -39,6 +39,11 @@ export interface ProdukKatalog {
   jenis: string;
   deskripsi?: string;
   harga: number;
+  harga_dasar?: number;
+  p1?: string;
+  pi_per_pcs?: number;
+  express_per_pcs?: number;
+  spv_per_pcs?: number;
   /** Hanya pada produk Sertifikat: biaya packaging per pesanan (PRD CP-KAT-04). */
   biaya_packaging?: number;
 }
@@ -49,8 +54,18 @@ export interface BarisPesanan {
   product_id?: string;
   nama: string;
   nama_instansi: string;
+  keterangan?: string;
   qty: number;
   harga_satuan: number;
+  harga_dasar?: number;
+  pi_ratio?: string;
+  pi_per_pcs?: number;
+  express_per_pcs?: number;
+  spv_per_pcs?: number;
+  produksi?: number;
+  pi?: number;
+  express?: number;
+  bea_spv?: number;
   subtotal: number;
   serial_number?: string;
 }
@@ -293,6 +308,7 @@ export function PesananPage({ statusAwal }: { statusAwal?: string }) {
 export function PesananDetailPage({ id }: { id: string }) {
   const navigate = useNavigate();
   const { data, memuat, galat, muatUlang } = useApi<Pesanan>(`/orders/${id}`);
+  const cabang = useApi<{ nama: string }>("/me/branch");
   const [konfirmasi, setKonfirmasi] = useState(false);
   const [hapusGalat, setHapusGalat] = useState<string | null>(null);
   const [menghapus, setMenghapus] = useState(false);
@@ -340,7 +356,6 @@ export function PesananDetailPage({ id }: { id: string }) {
   }
 
   const draft = data.status === "draft";
-  const tampilSerial = !draft;
 
   return (
     <>
@@ -412,23 +427,29 @@ export function PesananDetailPage({ id }: { id: string }) {
             <Table stack="narrow" caption="Baris pesanan">
               <thead>
                 <tr>
-                  <th scope="col">Produk</th>
+                  <th scope="col">No</th>
+                  <th scope="col">Serial Number</th>
                   <th scope="col">Nama instansi</th>
-                  {tampilSerial ? <th scope="col">Serial number</th> : null}
-                  <th scope="col" className="num">
-                    Qty
-                  </th>
-                  <th scope="col" className="num">
-                    Harga
-                  </th>
-                  <th scope="col" className="num">
-                    Subtotal
-                  </th>
+                  <th scope="col">Cabang</th>
+                  <th scope="col" className="num">Jml Pcs</th>
+                  <th scope="col">Produk</th>
+                  <th scope="col" className="num">Harga/Pcs</th>
+                  <th scope="col" className="num">Produksi</th>
+                  <th scope="col" className="num">PI</th>
+                  <th scope="col" className="num">Expres</th>
+                  <th scope="col" className="num">Bea SPV</th>
+                  <th scope="col" className="num">Total Tagihan</th>
+                  <th scope="col">Ket</th>
                 </tr>
               </thead>
               <tbody>
                 {(data.lines ?? []).map((l) => (
                   <tr key={l.line_no}>
+                    <td>{l.line_no}</td>
+                    <td className={styles.muted}>{l.serial_number || (draft ? "Dibuat saat dikirim" : "—")}</td>
+                    <td>{l.nama_instansi || "—"}</td>
+                    <td>{cabang.data?.nama ?? "—"}</td>
+                    <td className="num">{l.qty}</td>
                     <td>
                       {l.jenis === "packaging" ? (
                         <>
@@ -437,17 +458,19 @@ export function PesananDetailPage({ id }: { id: string }) {
                       ) : null}
                       {l.nama}
                     </td>
-                    <td>{l.nama_instansi || "—"}</td>
-                    {tampilSerial ? <td className={styles.muted}>{l.serial_number || "—"}</td> : null}
-                    <td className="num">{l.qty}</td>
-                    <td className="num">{rupiah.format(l.harga_satuan)}</td>
+                    <td className="num">{rupiah.format(l.harga_dasar ?? l.harga_satuan)}</td>
+                    <td className="num">{rupiah.format(l.produksi ?? l.subtotal)}</td>
+                    <td className="num">{l.pi ? rupiah.format(l.pi) : "—"}</td>
+                    <td className="num">{l.express ? rupiah.format(l.express) : "—"}</td>
+                    <td className="num">{l.bea_spv ? rupiah.format(l.bea_spv) : "—"}</td>
                     <td className="num">{rupiah.format(l.subtotal)}</td>
+                    <td>{l.keterangan || "—"}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={tampilSerial ? 5 : 4}>Total</td>
+                  <td colSpan={12}>Total</td>
                   <td className="num">
                     <b>{rupiah.format(data.total)}</b>
                   </td>
@@ -963,6 +986,7 @@ interface BarisEditor {
   productId: string;
   qty: number;
   namaInstansi: string;
+  keterangan: string;
 }
 
 /**
@@ -975,10 +999,11 @@ interface BarisEditor {
 export function PesananEditorPage({ id }: { id?: string }) {
   const navigate = useNavigate();
   const katalog = useApi<ProdukKatalog[]>("/catalog");
+  const cabang = useApi<{ nama: string }>("/me/branch");
   // Draft hanya dimuat saat mengubah pesanan yang sudah ada.
   const pesanan = useApi<Pesanan>(id ? `/orders/${id}` : "/orders", Boolean(id));
 
-  const [baris, setBaris] = useState<BarisEditor[]>([{ kunci: 1, productId: "", qty: 1, namaInstansi: "" }]);
+  const [baris, setBaris] = useState<BarisEditor[]>([{ kunci: 1, productId: "", qty: 1, namaInstansi: "", keterangan: "" }]);
   const [catatan, setCatatan] = useState("");
   const [galat, setGalat] = useState<string | null>(null);
   const [menyimpan, setMenyimpan] = useState(false);
@@ -989,8 +1014,8 @@ export function PesananEditorPage({ id }: { id?: string }) {
     if (!id || !pesanan.data || siap) return;
     const barisAwal = (pesanan.data.lines ?? [])
       .filter((l) => l.jenis === "product" && l.product_id)
-      .map((l, i) => ({ kunci: i + 1, productId: l.product_id as string, qty: l.qty, namaInstansi: l.nama_instansi ?? "" }));
-    setBaris(barisAwal.length > 0 ? barisAwal : [{ kunci: 1, productId: "", qty: 1, namaInstansi: "" }]);
+      .map((l, i) => ({ kunci: i + 1, productId: l.product_id as string, qty: l.qty, namaInstansi: l.nama_instansi ?? "", keterangan: l.keterangan ?? "" }));
+    setBaris(barisAwal.length > 0 ? barisAwal : [{ kunci: 1, productId: "", qty: 1, namaInstansi: "", keterangan: "" }]);
     setCatatan(pesanan.data.catatan ?? "");
     setSiap(true);
   }, [id, pesanan.data, siap]);
@@ -1022,7 +1047,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
   }, []);
 
   const tambahBaris = useCallback(() => {
-    setBaris((lama) => [...lama, { kunci: Math.max(...lama.map((b) => b.kunci)) + 1, productId: "", qty: 1, namaInstansi: "" }]);
+    setBaris((lama) => [...lama, { kunci: Math.max(...lama.map((b) => b.kunci)) + 1, productId: "", qty: 1, namaInstansi: "", keterangan: "" }]);
   }, []);
 
   const hapusBaris = useCallback((kunci: number) => {
@@ -1053,7 +1078,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
     try {
       const body = {
         catatan,
-        lines: dipakai.map((b) => ({ product_id: b.productId, qty: Number(b.qty), nama_instansi: b.namaInstansi.trim() })),
+        lines: dipakai.map((b) => ({ product_id: b.productId, qty: Number(b.qty), nama_instansi: b.namaInstansi.trim(), keterangan: b.keterangan.trim() })),
       };
       const hasil = id
         ? await api.put<Pesanan>(`/orders/${id}`, body)
@@ -1086,7 +1111,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
     );
   }
 
-  const memuat = katalog.memuat || (id !== undefined && (pesanan.memuat || !siap));
+  const memuat = katalog.memuat || cabang.memuat || (id !== undefined && (pesanan.memuat || !siap));
 
   return (
     <>
@@ -1123,18 +1148,45 @@ export function PesananEditorPage({ id }: { id?: string }) {
             <>
               <div className={styles.lines}>
                 <div className={styles.linesHead} aria-hidden="true">
-                  <span>Produk</span>
+                  <span>No</span>
+                  <span>Serial Number</span>
                   <span>Nama instansi</span>
-                  <span>Qty</span>
-                  <span className="num">Harga satuan</span>
-                  <span className="num">Subtotal</span>
-                  <span />
+                  <span>Cabang</span>
+                  <span>Jml Pcs</span>
+                  <span>Produk</span>
+                  <span className="num">Harga/Pcs</span>
+                  <span className="num">Produksi</span>
+                  <span className="num">PI</span>
+                  <span className="num">Expres</span>
+                  <span className="num">Bea SPV</span>
+                  <span className="num">Total Tagihan</span>
+                  <span>Ket</span>
                 </div>
                 {baris.map((b, i) => {
                   const p = perId.get(b.productId);
                   const qty = Number(b.qty) || 0;
                   return (
                     <div className={styles.line} key={b.kunci}>
+                      <div className={styles.lNo}><span className={styles.mLbl}>No</span>{i + 1}</div>
+                      <div className={styles.lSerial}><span className={styles.mLbl}>Serial Number</span><span className="muted small">Dibuat saat dikirim</span></div>
+                      <div className={styles.lInstansi}>
+                        <label className={styles.mLbl} htmlFor={`instansi-${b.kunci}`}>Nama instansi</label>
+                        <Input id={`instansi-${b.kunci}`} aria-label={`Nama instansi baris ${i + 1}`} required
+                          value={b.namaInstansi} placeholder="Contoh: TK Al-Fatih"
+                          onChange={(e) => ubahBaris(b.kunci, { namaInstansi: Array.from(e.target.value).slice(0, 160).join("") })} />
+                      </div>
+                      <div className={styles.lCabang}><span className={styles.mLbl}>Cabang</span>{cabang.data?.nama ?? "—"}</div>
+                      <div className={styles.lQty}>
+                        <span className={styles.mLbl}>Jml Pcs</span>
+                        <div className={styles.stepper}>
+                          <Button variant="secondary" icon="minus" iconOnly aria-label={`Kurangi qty baris ${i + 1}`}
+                            disabled={qty <= 1} onClick={() => ubahBaris(b.kunci, { qty: Math.max(1, qty - 1) })} />
+                          <Input inputMode="numeric" aria-label={`Qty baris ${i + 1}`} value={String(b.qty)}
+                            onChange={(e) => { const angka = Number(e.target.value.replace(/[^0-9]/g, "")); ubahBaris(b.kunci, { qty: Number.isNaN(angka) ? 0 : angka }); }} />
+                          <Button variant="secondary" icon="plus" iconOnly aria-label={`Tambah qty baris ${i + 1}`}
+                            onClick={() => ubahBaris(b.kunci, { qty: qty + 1 })} />
+                        </div>
+                      </div>
                       <div className={styles.lProd}>
                         <label className="sr" htmlFor={`produk-${b.kunci}`}>
                           Produk baris {i + 1}
@@ -1158,53 +1210,17 @@ export function PesananEditorPage({ id }: { id?: string }) {
                           })}
                         </Select>
                       </div>
-                      <div className={styles.lInstansi}>
-                        <label className={styles.mLbl} htmlFor={`instansi-${b.kunci}`}>Nama instansi</label>
-                        <Input
-                          id={`instansi-${b.kunci}`}
-                          aria-label={`Nama instansi baris ${i + 1}`}
-                          required
-                          value={b.namaInstansi}
-                          placeholder="Contoh: TK Al-Fatih"
-                          onChange={(e) => ubahBaris(b.kunci, { namaInstansi: Array.from(e.target.value).slice(0, 160).join("") })}
-                        />
-                      </div>
-                      <div className={styles.lQty}>
-                        <span className={styles.mLbl}>Qty</span>
-                        <div className={styles.stepper}>
-                          <Button
-                            variant="secondary"
-                            icon="minus"
-                            iconOnly
-                            aria-label={`Kurangi qty baris ${i + 1}`}
-                            disabled={qty <= 1}
-                            onClick={() => ubahBaris(b.kunci, { qty: Math.max(1, qty - 1) })}
-                          />
-                          <Input
-                            inputMode="numeric"
-                            aria-label={`Qty baris ${i + 1}`}
-                            value={String(b.qty)}
-                            onChange={(e) => {
-                              const angka = Number(e.target.value.replace(/[^0-9]/g, ""));
-                              ubahBaris(b.kunci, { qty: Number.isNaN(angka) ? 0 : angka });
-                            }}
-                          />
-                          <Button
-                            variant="secondary"
-                            icon="plus"
-                            iconOnly
-                            aria-label={`Tambah qty baris ${i + 1}`}
-                            onClick={() => ubahBaris(b.kunci, { qty: qty + 1 })}
-                          />
-                        </div>
-                      </div>
                       <div className={`${styles.lHarga} num`}>
-                        <span className={styles.mLbl}>Harga satuan</span>
-                        {p ? rupiah.format(p.harga) : "—"}
+                        <span className={styles.mLbl}>Harga/Pcs</span>{p ? rupiah.format(p.harga_dasar ?? p.harga) : "—"}
                       </div>
-                      <div className={`${styles.lSub} num`}>
-                        <span className={styles.mLbl}>Subtotal</span>
-                        <b>{p ? rupiah.format(p.harga * qty) : "—"}</b>
+                      <div className={`${styles.lProduksi} num`}><span className={styles.mLbl}>Produksi</span>{p ? rupiah.format((p.harga_dasar ?? p.harga) * qty) : "—"}</div>
+                      <div className={`${styles.lPI} num`}><span className={styles.mLbl}>PI</span>{p && p.pi_per_pcs ? rupiah.format(p.pi_per_pcs * qty) : "—"}</div>
+                      <div className={`${styles.lExpress} num`}><span className={styles.mLbl}>Expres</span>{p && p.express_per_pcs ? rupiah.format(p.express_per_pcs * qty) : "—"}</div>
+                      <div className={`${styles.lSPV} num`}><span className={styles.mLbl}>Bea SPV</span>{p && p.spv_per_pcs ? rupiah.format(p.spv_per_pcs * qty) : "—"}</div>
+                      <div className={`${styles.lSub} num`}><span className={styles.mLbl}>Total Tagihan</span><b>{p ? rupiah.format(p.harga * qty) : "—"}</b></div>
+                      <div className={styles.lKet}><label className={styles.mLbl} htmlFor={`ket-${b.kunci}`}>Ket</label>
+                        <Input id={`ket-${b.kunci}`} aria-label={`Keterangan baris ${i + 1}`} value={b.keterangan}
+                          placeholder="Opsional" onChange={(e) => ubahBaris(b.kunci, { keterangan: Array.from(e.target.value).slice(0, 250).join("") })} />
                       </div>
                       <div className={styles.lDel}>
                         <Button
@@ -1221,22 +1237,30 @@ export function PesananEditorPage({ id }: { id?: string }) {
                 })}
                 {adaSertifikat ? (
                   <div className={`${styles.line} ${styles.linePack}`} data-testid="baris-packaging">
+                    <div className={styles.lNo}>—</div>
+                    <div className={styles.lSerial}>—</div>
+                    <div className={styles.lInstansi}>—</div>
+                    <div className={styles.lCabang}>{cabang.data?.nama ?? "—"}</div>
+                    <div className={styles.lQty}>
+                      <span className={styles.mLbl}>Jml Pcs</span>1
+                    </div>
                     <div className={styles.lProd}>
                       <i className="ph ph-lock-simple" aria-hidden="true" />
                       Biaya packaging
                     </div>
-                    <div className={styles.lInstansi}>—</div>
-                    <div className={styles.lQty}>
-                      <span className={styles.mLbl}>Qty</span>1
-                    </div>
                     <div className={`${styles.lHarga} num`}>
-                      <span className={styles.mLbl}>Harga satuan</span>
+                      <span className={styles.mLbl}>Harga/Pcs</span>
                       {rupiah.format(biayaPackaging)}
                     </div>
+                    <div className={`${styles.lProduksi} num`}><span className={styles.mLbl}>Produksi</span>{rupiah.format(biayaPackaging)}</div>
+                    <div className={`${styles.lPI} num`}><span className={styles.mLbl}>PI</span>—</div>
+                    <div className={`${styles.lExpress} num`}><span className={styles.mLbl}>Expres</span>—</div>
+                    <div className={`${styles.lSPV} num`}><span className={styles.mLbl}>Bea SPV</span>—</div>
                     <div className={`${styles.lSub} num`}>
-                      <span className={styles.mLbl}>Subtotal</span>
+                      <span className={styles.mLbl}>Total Tagihan</span>
                       <b>{rupiah.format(biayaPackaging)}</b>
                     </div>
+                    <div className={styles.lKet}>Otomatis</div>
                     <div className={styles.lDel} />
                   </div>
                 ) : null}

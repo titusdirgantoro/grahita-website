@@ -187,6 +187,65 @@ ON o.done_verification_log_id=s.verification_log_id WHERE o.id=$1 AND s.amount_s
 	}
 }
 
+// DEP-08: satu pesanan Rp100.000 dibayar tepat dengan debit deposit Rp70.000
+// dan satu bukti transfer Rp30.000. Alokasi deposit saja belum boleh membuat
+// pesanan Done; keputusan verifikasi terakhir harus mengikat kedua sumber
+// tanpa mendebit deposit untuk kedua kalinya.
+func TestPGSettlementDepositTujuhPuluhTransferTigaPuluh(t *testing.T) {
+	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
+	orderID := insertOrderSubmitted(t, f, f.branchA, "2026-10-708", 100000)
+	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	versi := kreditCabang(t, f, cookiesA, csrfA, 70000, "dep08")
+	alokasiID := alokasiHTTP(t, f, cookiesA, csrfA, orderID, 70000, versi, 0, "dep08-alok")
+
+	var statusSebelum string
+	if err := f.pool.QueryRow(context.Background(), `SELECT status::text FROM orders WHERE id=$1`, orderID).Scan(&statusSebelum); err != nil {
+		t.Fatal(err)
+	}
+	if statusSebelum != "submitted" {
+		t.Fatalf("alokasi deposit saja belum boleh menyelesaikan order: %s", statusSebelum)
+	}
+	status, res := depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/orders/"+orderID+"/payment", "", cookiesA, "", "")
+	if status != http.StatusOK || num(dataObj(res)["committed_deposit"]) != 70000 || num(dataObj(res)["remaining_due"]) != 30000 {
+		t.Fatalf("rincian sebelum transfer harus 70000/30000, dapat %d (%v)", status, res)
+	}
+
+	proofID := buktiOrder(t, f, orderID, "dep08-transfer-30000")
+	cookiesMgr, csrfMgr := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	status, res = verifyKey(t, f, cookiesMgr, csrfMgr, orderID,
+		settlementBody(f, 0, []string{alokasiID}, []splitUji{{proofID, 30000, 30000, 0}}), "")
+	if status != http.StatusOK {
+		t.Fatalf("verifikasi split 70000/30000 harus 200, dapat %d (%v)", status, res)
+	}
+	set := dataObj(res)["settlement"].(map[string]any)
+	if num(set["deposit_amount"]) != 70000 || num(set["transfer_amount"]) != 30000 || num(set["new_credit_to_deposit"]) != 0 {
+		t.Fatalf("settlement akhir harus 70000/30000 tanpa kredit baru: %v", set)
+	}
+
+	var akhir string
+	var doneDeposit, doneTransfer int64
+	if err := f.pool.QueryRow(context.Background(), `SELECT status::text,done_deposit_amount,done_transfer_amount FROM orders WHERE id=$1`, orderID).
+		Scan(&akhir, &doneDeposit, &doneTransfer); err != nil {
+		t.Fatal(err)
+	}
+	if akhir != "done" || doneDeposit != 70000 || doneTransfer != 30000 {
+		t.Fatalf("order akhir salah: status=%s sumber=%d/%d", akhir, doneDeposit, doneTransfer)
+	}
+	if n := hitungSQL(t, f, `SELECT COALESCE(-sum(amount),0) FROM branch_deposit_transactions WHERE order_id=$1`, orderID); n != 70000 {
+		t.Fatalf("journal debit order harus tepat 70000, dapat %d", n)
+	}
+	if n := hitungSQL(t, f, `SELECT COALESCE(sum(amount_snapshot),0) FROM verification_deposit_sources s JOIN orders o ON o.done_verification_log_id=s.verification_log_id WHERE o.id=$1`, orderID); n != 70000 {
+		t.Fatalf("snapshot sumber deposit harus tepat 70000, dapat %d", n)
+	}
+	if n := hitungSQL(t, f, `SELECT COALESCE(sum(applied_to_order),0) FROM verification_proof_splits WHERE payment_proof_id=$1`, proofID); n != 30000 {
+		t.Fatalf("sumber transfer harus tepat 30000, dapat %d", n)
+	}
+	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != 0 {
+		t.Fatalf("saldo setelah debit tepat harus nol, dapat %d", saldo)
+	}
+}
+
 // TestPGSettlementLebihBayarHanyaSuperadmin: lebih bayar tidak pernah Done
 // tanpa keputusan; kredit deposit hanya Superadmin ber-key, retry idempoten,
 // dan key dipakai ulang untuk keputusan lain ditolak.

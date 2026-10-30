@@ -245,14 +245,21 @@ CREATE TABLE order_lines (
     product_id      uuid REFERENCES products(id) ON DELETE RESTRICT,
     nama_snapshot   text   NOT NULL,                  -- nama produk saat dipesan
     nama_instansi   text   NOT NULL DEFAULT '',       -- per baris; kosong hanya data lama/packaging
+    keterangan      text   NOT NULL DEFAULT '',       -- Ket per baris, maksimal 250 karakter
     qty             int    NOT NULL CHECK (qty > 0),
-    harga_satuan    bigint NOT NULL CHECK (harga_satuan >= 0),
+    harga_dasar     bigint NOT NULL DEFAULT 0 CHECK (harga_dasar >= 0),
+    pi_ratio        numeric NOT NULL DEFAULT 0 CHECK (pi_ratio BETWEEN 0 AND 1),
+    pi_per_pcs      bigint NOT NULL DEFAULT 0 CHECK (pi_per_pcs >= 0),
+    express_per_pcs bigint NOT NULL DEFAULT 0 CHECK (express_per_pcs >= 0),
+    spv_per_pcs     bigint NOT NULL DEFAULT 0 CHECK (spv_per_pcs >= 0),
+    harga_satuan    bigint NOT NULL CHECK (harga_satuan >= 0), -- total komponen per pcs
     subtotal        bigint GENERATED ALWAYS AS (qty * harga_satuan) STORED,
     serial_number   text,                             -- YYYYMMDDXXX, hanya jenis 'product'
     created_at      timestamptz NOT NULL DEFAULT now(),
 
     UNIQUE (order_id, line_no),
     CONSTRAINT serial_unik UNIQUE (serial_number),
+    CONSTRAINT order_lines_keterangan_length CHECK (char_length(keterangan) <= 250),
     CONSTRAINT packaging_tanpa_produk CHECK (
         (jenis = 'product'   AND product_id IS NOT NULL) OR
         (jenis = 'packaging' AND product_id IS NULL AND qty = 1))

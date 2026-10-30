@@ -77,8 +77,12 @@ SELECT l.line_no,
        COALESCE(l.product_id::text, '')::text AS product_id,
        l.nama_snapshot,
        l.nama_instansi,
+       l.keterangan,
        l.qty,
        l.harga_satuan,
+       CASE WHEN l.harga_dasar=0 AND l.harga_satuan>0 AND l.pi_per_pcs=0 AND l.express_per_pcs=0 AND l.spv_per_pcs=0
+            THEN l.harga_satuan ELSE l.harga_dasar END::bigint AS harga_dasar,
+       l.pi_ratio::text AS pi_ratio, l.pi_per_pcs, l.express_per_pcs, l.spv_per_pcs,
        COALESCE(l.serial_number, '')::text AS serial_number,
        COALESCE(p.jenis::text, '')::text   AS produk_jenis,
        COALESCE(p.nama, '')                AS produk_nama,
@@ -111,8 +115,12 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- Baris lama memakai serial lama apa adanya; baris baru memakai serial dari
 -- counter dengan periode tanggal pesanan asli.
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
-                         nama_instansi, qty, harga_satuan, serial_number)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7, $8);
+                         nama_instansi, keterangan, qty, harga_satuan, harga_dasar,
+                         pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, serial_number)
+VALUES (sqlc.arg(order_id), sqlc.arg(line_no), 'product', sqlc.arg(product_id), sqlc.arg(nama_snapshot),
+        sqlc.arg(nama_instansi), sqlc.arg(keterangan), sqlc.arg(qty), sqlc.arg(harga_satuan), sqlc.arg(harga_dasar),
+        (sqlc.arg(pi_ratio)::text)::numeric, sqlc.arg(pi_per_pcs), sqlc.arg(express_per_pcs),
+        sqlc.arg(spv_per_pcs), sqlc.arg(serial_number));
 
 -- name: SetOrderVersi :execrows
 -- Menaikkan versi pesanan SATU langkah (0 -> 1, 1 -> 2, ...); nomor invoice

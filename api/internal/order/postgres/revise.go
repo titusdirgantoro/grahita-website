@@ -70,29 +70,41 @@ var _ order.RevisionRepository = (*Repo)(nil)
 
 // barisLama adalah satu baris pesanan versi lama beserta jenis produk master.
 type barisLama struct {
-	LineNo       int
-	Jenis        string
-	ProductID    string
-	Nama         string
-	NamaInstansi string
-	Qty          int
-	HargaSatuan  int64
-	Serial       string
-	ProdukJenis  string
-	ProdukAda    bool
-	ProdukNama   string
+	LineNo        int
+	Jenis         string
+	ProductID     string
+	Nama          string
+	NamaInstansi  string
+	Keterangan    string
+	Qty           int
+	HargaSatuan   int64
+	HargaDasar    int64
+	PIRatio       string
+	PIPerPcs      int64
+	ExpressPerPcs int64
+	SPVPerPcs     int64
+	Serial        string
+	ProdukJenis   string
+	ProdukAda     bool
+	ProdukNama    string
 }
 
 // barisFinal adalah satu baris yang akan ditulis sebagai versi baru.
 type barisFinal struct {
-	LineNo       int
-	Jenis        string
-	ProductID    string
-	Nama         string
-	NamaInstansi string
-	Qty          int
-	HargaSatuan  int64
-	Serial       string
+	LineNo        int
+	Jenis         string
+	ProductID     string
+	Nama          string
+	NamaInstansi  string
+	Keterangan    string
+	Qty           int
+	HargaSatuan   int64
+	HargaDasar    int64
+	PIRatio       string
+	PIPerPcs      int64
+	ExpressPerPcs int64
+	SPVPerPcs     int64
+	Serial        string
 }
 
 // Revise menjalankan revisi invoice satu pesanan dalam SATU transaksi (lihat
@@ -179,17 +191,23 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	lama := make([]barisLama, 0, len(rowsLama))
 	for _, l := range rowsLama {
 		lama = append(lama, barisLama{
-			LineNo:       int(l.LineNo),
-			Jenis:        l.Jenis,
-			ProductID:    l.ProductID,
-			Nama:         l.NamaSnapshot,
-			NamaInstansi: l.NamaInstansi,
-			Qty:          int(l.Qty),
-			HargaSatuan:  l.HargaSatuan,
-			Serial:       l.SerialNumber,
-			ProdukJenis:  l.ProdukJenis,
-			ProdukAda:    l.ProdukAda,
-			ProdukNama:   l.ProdukNama,
+			LineNo:        int(l.LineNo),
+			Jenis:         l.Jenis,
+			ProductID:     l.ProductID,
+			Nama:          l.NamaSnapshot,
+			NamaInstansi:  l.NamaInstansi,
+			Keterangan:    l.Keterangan,
+			Qty:           int(l.Qty),
+			HargaSatuan:   l.HargaSatuan,
+			HargaDasar:    l.HargaDasar,
+			PIRatio:       l.PiRatio,
+			PIPerPcs:      l.PiPerPcs,
+			ExpressPerPcs: l.ExpressPerPcs,
+			SPVPerPcs:     l.SpvPerPcs,
+			Serial:        l.SerialNumber,
+			ProdukJenis:   l.ProdukJenis,
+			ProdukAda:     l.ProdukAda,
+			ProdukNama:    l.ProdukNama,
 		})
 	}
 	if len(lama) == 0 {
@@ -234,14 +252,20 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 			continue
 		}
 		if err := q.InsertOrderLineProductWithSerial(ctx, sqlc.InsertOrderLineProductWithSerialParams{
-			OrderID:      req.OrderID,
-			LineNo:       int32(l.LineNo),
-			ProductID:    pgtypes.UUID(l.ProductID),
-			NamaSnapshot: l.Nama,
-			NamaInstansi: l.NamaInstansi,
-			Qty:          int32(l.Qty),
-			HargaSatuan:  l.HargaSatuan,
-			SerialNumber: pgtypes.Text(l.Serial),
+			OrderID:       req.OrderID,
+			LineNo:        int32(l.LineNo),
+			ProductID:     pgtypes.UUID(l.ProductID),
+			NamaSnapshot:  l.Nama,
+			NamaInstansi:  l.NamaInstansi,
+			Keterangan:    l.Keterangan,
+			Qty:           int32(l.Qty),
+			HargaSatuan:   l.HargaSatuan,
+			HargaDasar:    l.HargaDasar,
+			PiRatio:       l.PIRatio,
+			PiPerPcs:      l.PIPerPcs,
+			ExpressPerPcs: l.ExpressPerPcs,
+			SpvPerPcs:     l.SPVPerPcs,
+			SerialNumber:  pgtypes.Text(l.Serial),
 		}); err != nil {
 			return order.ReviseOutcome{}, fmt.Errorf("query InsertOrderLineProductWithSerial: %w", err)
 		}
@@ -410,13 +434,19 @@ func (r *Repo) susunBarisFinal(ctx context.Context, q *sqlc.Queries, row sqlc.Lo
 	}
 
 	type baru struct {
-		productID   string
-		nama        string
-		instansi    string
-		produkJenis string
-		qty         int
-		harga       int64
-		serial      string
+		productID     string
+		nama          string
+		instansi      string
+		keterangan    string
+		produkJenis   string
+		qty           int
+		harga         int64
+		serial        string
+		hargaDasar    int64
+		piRatio       string
+		piPerPcs      int64
+		expressPerPcs int64
+		spvPerPcs     int64
 	}
 	// barisBaru menampung hasil sementara; serial baris baru diisi setelah
 	// seluruh baris divalidasi supaya nomor tidak terpakai bila revisi batal.
@@ -436,13 +466,22 @@ func (r *Repo) susunBarisFinal(ctx context.Context, q *sqlc.Queries, row sqlc.Lo
 				productID:   l.ProductID,
 				nama:        l.Nama,
 				instansi:    l.NamaInstansi,
+				keterangan:  l.Keterangan,
 				produkJenis: l.ProdukJenis,
 				qty:         in.Qty,
 				harga:       in.HargaSatuan,
 				serial:      l.Serial,
+				hargaDasar:  l.HargaDasar, piRatio: l.PIRatio, piPerPcs: l.PIPerPcs,
+				expressPerPcs: l.ExpressPerPcs, spvPerPcs: l.SPVPerPcs,
 			}
 			if in.NamaInstansi != nil {
 				b.instansi = *in.NamaInstansi
+			}
+			if in.Keterangan != nil {
+				b.keterangan = *in.Keterangan
+			}
+			if in.HargaSatuan != l.HargaSatuan {
+				b.hargaDasar, b.piRatio, b.piPerPcs, b.expressPerPcs, b.spvPerPcs = in.HargaSatuan, "0", 0, 0, 0
 			}
 		} else {
 			p, err := q.GetProductForRevise(ctx, in.ProductID)
@@ -466,6 +505,11 @@ func (r *Repo) susunBarisFinal(ctx context.Context, q *sqlc.Queries, row sqlc.Lo
 				produkJenis: p.Jenis,
 				qty:         in.Qty,
 				harga:       in.HargaSatuan,
+				hargaDasar:  in.HargaSatuan,
+				piRatio:     "0",
+			}
+			if in.Keterangan != nil {
+				b.keterangan = *in.Keterangan
 			}
 			butuhSerial++
 		}
@@ -522,9 +566,12 @@ func (r *Repo) susunBarisFinal(ctx context.Context, q *sqlc.Queries, row sqlc.Lo
 			ProductID:    b.productID,
 			Nama:         b.nama,
 			NamaInstansi: b.instansi,
+			Keterangan:   b.keterangan,
 			Qty:          b.qty,
 			HargaSatuan:  b.harga,
-			Serial:       b.serial,
+			HargaDasar:   b.hargaDasar, PIRatio: b.piRatio, PIPerPcs: b.piPerPcs,
+			ExpressPerPcs: b.expressPerPcs, SPVPerPcs: b.spvPerPcs,
+			Serial: b.serial,
 		})
 	}
 
@@ -537,6 +584,8 @@ func (r *Repo) susunBarisFinal(ctx context.Context, q *sqlc.Queries, row sqlc.Lo
 			Nama:        order.NamaBiayaPackaging,
 			Qty:         1,
 			HargaSatuan: req.BiayaPackaging,
+			HargaDasar:  req.BiayaPackaging,
+			PIRatio:     "0",
 		})
 	}
 	if len(final) == 0 {
@@ -577,13 +626,19 @@ func snapshotBarisLama(lines []barisLama) []map[string]any {
 	out := make([]map[string]any, 0, len(lines))
 	for _, l := range lines {
 		baris := map[string]any{
-			"line_no":       l.LineNo,
-			"jenis":         l.Jenis,
-			"nama":          l.Nama,
-			"nama_instansi": l.NamaInstansi,
-			"qty":           l.Qty,
-			"harga_satuan":  l.HargaSatuan,
-			"subtotal":      int64(l.Qty) * l.HargaSatuan,
+			"line_no":         l.LineNo,
+			"jenis":           l.Jenis,
+			"nama":            l.Nama,
+			"nama_instansi":   l.NamaInstansi,
+			"keterangan":      l.Keterangan,
+			"qty":             l.Qty,
+			"harga_satuan":    l.HargaSatuan,
+			"harga_dasar":     l.HargaDasar,
+			"pi_ratio":        l.PIRatio,
+			"pi_per_pcs":      l.PIPerPcs,
+			"express_per_pcs": l.ExpressPerPcs,
+			"spv_per_pcs":     l.SPVPerPcs,
+			"subtotal":        int64(l.Qty) * l.HargaSatuan,
 		}
 		if l.ProductID != "" {
 			baris["product_id"] = l.ProductID
@@ -601,13 +656,19 @@ func snapshotBaris(lines []barisFinal) []map[string]any {
 	out := make([]map[string]any, 0, len(lines))
 	for _, l := range lines {
 		baris := map[string]any{
-			"line_no":       l.LineNo,
-			"jenis":         l.Jenis,
-			"nama":          l.Nama,
-			"nama_instansi": l.NamaInstansi,
-			"qty":           l.Qty,
-			"harga_satuan":  l.HargaSatuan,
-			"subtotal":      int64(l.Qty) * l.HargaSatuan,
+			"line_no":         l.LineNo,
+			"jenis":           l.Jenis,
+			"nama":            l.Nama,
+			"nama_instansi":   l.NamaInstansi,
+			"keterangan":      l.Keterangan,
+			"qty":             l.Qty,
+			"harga_satuan":    l.HargaSatuan,
+			"harga_dasar":     l.HargaDasar,
+			"pi_ratio":        l.PIRatio,
+			"pi_per_pcs":      l.PIPerPcs,
+			"express_per_pcs": l.ExpressPerPcs,
+			"spv_per_pcs":     l.SPVPerPcs,
+			"subtotal":        int64(l.Qty) * l.HargaSatuan,
 		}
 		if l.ProductID != "" {
 			baris["product_id"] = l.ProductID
@@ -625,15 +686,25 @@ func garisKeluar(lines []barisFinal) []order.Line {
 	out := make([]order.Line, 0, len(lines))
 	for _, l := range lines {
 		out = append(out, order.Line{
-			LineNo:       l.LineNo,
-			Jenis:        l.Jenis,
-			ProductID:    l.ProductID,
-			Nama:         l.Nama,
-			NamaInstansi: l.NamaInstansi,
-			Qty:          l.Qty,
-			HargaSatuan:  l.HargaSatuan,
-			Subtotal:     int64(l.Qty) * l.HargaSatuan,
-			SerialNumber: l.Serial,
+			LineNo:        l.LineNo,
+			Jenis:         l.Jenis,
+			ProductID:     l.ProductID,
+			Nama:          l.Nama,
+			NamaInstansi:  l.NamaInstansi,
+			Keterangan:    l.Keterangan,
+			Qty:           l.Qty,
+			HargaSatuan:   l.HargaSatuan,
+			HargaDasar:    l.HargaDasar,
+			PIRatio:       l.PIRatio,
+			PIPerPcs:      l.PIPerPcs,
+			ExpressPerPcs: l.ExpressPerPcs,
+			SPVPerPcs:     l.SPVPerPcs,
+			Produksi:      int64(l.Qty) * l.HargaDasar,
+			PI:            int64(l.Qty) * l.PIPerPcs,
+			Express:       int64(l.Qty) * l.ExpressPerPcs,
+			BeaSPV:        int64(l.Qty) * l.SPVPerPcs,
+			Subtotal:      int64(l.Qty) * l.HargaSatuan,
+			SerialNumber:  l.Serial,
 		})
 	}
 	return out

@@ -149,7 +149,13 @@ type Line struct {
 	SerialNumber      string `json:"serial_number"`
 	Qty               int    `json:"qty"`
 	HargaSatuan       int64  `json:"harga_satuan"`
+	HargaDasar        int64  `json:"harga_dasar"`
+	Produksi          int64  `json:"produksi"`
+	PI                int64  `json:"pi"`
+	Express           int64  `json:"express"`
+	BeaSPV            int64  `json:"bea_spv"`
 	Subtotal          int64  `json:"subtotal"`
+	Keterangan        string `json:"keterangan"`
 	Status            string `json:"status"`
 	TanggalVerifikasi string `json:"tanggal_verifikasi,omitempty"`
 	MetodeVerifikasi  string `json:"metode_verifikasi,omitempty"`

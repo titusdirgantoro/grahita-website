@@ -218,6 +218,84 @@ func TestPGBankRekeningTransaksionalDanNonaktif(t *testing.T) {
 	}
 }
 
+// TestPGBankTanpaRekeningDepositPenuhDanKurang menutup aturan MAS-07 untuk
+// metode Deposit: saldo yang menutup seluruh order tidak membutuhkan tujuan
+// transfer, sedangkan kekurangan saldo tetap fail-closed tanpa rekening
+// efektif dan tidak boleh mendebit saldo sebagian.
+func TestPGBankTanpaRekeningDepositPenuhDanKurang(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_cnc=true,allow_transfer=false WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `DELETE FROM branch_bank_accounts WHERE branch_id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	seedSaldoDeposit(t, f, f.branchA, 150000)
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	produk := produkKode(t, f, "P-01")
+	versiSaldo := func() string {
+		t.Helper()
+		var versi int64
+		if err := f.pool.QueryRow(ctx, `SELECT journal_version FROM branch_deposit_accounts WHERE branch_id=$1`, f.branchA).Scan(&versi); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("%d", versi)
+	}
+
+	// Rp100.000 tertutup penuh oleh saldo Rp150.000: submit tetap sah tanpa
+	// rekening dan tanpa bukti karena tidak ada transfer yang harus dituju.
+	full := buatDraftHTTP(t, f, cookies, csrf, produk, 1)
+	fullID := full["id"].(string)
+	resp, body := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+fullID+"/submit", cookies, csrf, nil, versiSaldo())
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Deposit tertutup penuh tanpa rekening harus 200, dapat %d (%v)", resp.StatusCode, body)
+	}
+	var saldo int64
+	if err := f.pool.QueryRow(ctx, `SELECT balance FROM branch_deposit_accounts WHERE branch_id=$1`, f.branchA).Scan(&saldo); err != nil {
+		t.Fatal(err)
+	}
+	if saldo != 50000 {
+		t.Fatalf("saldo setelah order penuh harus 50000, dapat %d", saldo)
+	}
+
+	// Order berikutnya Rp100.000 hanya tertutup Rp50.000. Unggah bukti dan
+	// submit dengan bukti sintetis sama-sama harus ditolak sampai rekening
+	// efektif tersedia, tanpa alokasi maupun nomor pesanan.
+	kurang := buatDraftHTTP(t, f, cookies, csrf, produk, 1)
+	kurangID := kurang["id"].(string)
+	status := unggahBuktiHTTP(t, f.srv.URL+"/api/v1/orders/"+kurangID+"/proofs", cookies, csrf,
+		map[string][]byte{"kurang.jpg": berkasJPEGUji("deposit-kurang-tanpa-rekening")})
+	if status != http.StatusConflict {
+		t.Fatalf("unggah kekurangan tanpa rekening harus 409, dapat %d", status)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO payment_proofs
+		(order_id,branch_id,storage_key,nama_file,mime_type,ukuran_byte,sha256,uploaded_by_kind,uploaded_by_id)
+		VALUES($1,$2,'proofs/mas07','kurang.jpg','image/jpeg',4,decode('07070707','hex'),'branch',$3)`,
+		kurangID, f.branchA, f.userA); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+kurangID+"/submit", cookies, csrf, nil, versiSaldo())
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("Deposit kurang tanpa rekening harus 409, dapat %d (%v)", resp.StatusCode, body)
+	}
+	assertErrorShape(t, body, "BRANCH_BANK_ACCOUNT_UNAVAILABLE")
+	var statusOrder string
+	var nomor *string
+	if err := f.pool.QueryRow(ctx, `SELECT status::text,nomor FROM orders WHERE id=$1`, kurangID).Scan(&statusOrder, &nomor); err != nil {
+		t.Fatal(err)
+	}
+	if statusOrder != "draft" || nomor != nil {
+		t.Fatalf("order gagal harus tetap draft tanpa nomor: %s %v", statusOrder, nomor)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT balance FROM branch_deposit_accounts WHERE branch_id=$1`, f.branchA).Scan(&saldo); err != nil {
+		t.Fatal(err)
+	}
+	if saldo != 50000 || hitungBaris(t, f, "deposit_allocations", "order_id", kurangID) != 0 {
+		t.Fatalf("penolakan tidak boleh mendebit saldo/alokasi: saldo=%d", saldo)
+	}
+}
+
 func TestPGSettingsValidasiAuditDanSnapshotPackaging(t *testing.T) {
 	f := newPGFixture(t)
 	base := f.srv.URL + "/api/v1"

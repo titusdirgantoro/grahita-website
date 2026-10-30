@@ -41,13 +41,13 @@ export function rasioKePersen(rasio: string): string {
  * hitungTarif menghitung round_half_up(HJM + HJM × P1 + SPV) ke Rupiah, sama
  * seperti server (pembulatan sekali setelah ketiga komponen dijumlahkan).
  */
-export function hitungTarif(hjm: number, rasio: string, spv: number): number | null {
+export function hitungTarif(hjm: number, rasio: string, spv: number, express = 0): number | null {
   const cocok = POLA_RASIO.exec(rasio);
-  if (!cocok || !Number.isSafeInteger(hjm) || !Number.isSafeInteger(spv) || hjm < 0 || spv < 0) return null;
+  if (!cocok || !Number.isSafeInteger(hjm) || !Number.isSafeInteger(spv) || !Number.isSafeInteger(express) || hjm < 0 || spv < 0 || express < 0) return null;
   const pecahan = cocok[2] ?? "";
   const penyebut = 10n ** BigInt(pecahan.length);
   const h = BigInt(hjm);
-  const pembilang = (h + BigInt(spv)) * penyebut + h * BigInt(cocok[1] + pecahan);
+  const pembilang = (h + BigInt(express) + BigInt(spv)) * penyebut + h * BigInt(cocok[1] + pecahan);
   const hasil = (2n * pembilang + penyebut) / (2n * penyebut);
   return hasil > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(hasil);
 }

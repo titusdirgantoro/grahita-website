@@ -182,19 +182,29 @@ func (q *Queries) InsertInvoiceRevision(ctx context.Context, arg InsertInvoiceRe
 
 const insertOrderLineProductWithSerial = `-- name: InsertOrderLineProductWithSerial :exec
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
-                         nama_instansi, qty, harga_satuan, serial_number)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7, $8)
+                         nama_instansi, keterangan, qty, harga_satuan, harga_dasar,
+                         pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, serial_number)
+VALUES ($1, $2, 'product', $3, $4,
+        $5, $6, $7, $8, $9,
+        ($10::text)::numeric, $11, $12,
+        $13, $14)
 `
 
 type InsertOrderLineProductWithSerialParams struct {
-	OrderID      string      `json:"order_id"`
-	LineNo       int32       `json:"line_no"`
-	ProductID    pgtype.UUID `json:"product_id"`
-	NamaSnapshot string      `json:"nama_snapshot"`
-	NamaInstansi string      `json:"nama_instansi"`
-	Qty          int32       `json:"qty"`
-	HargaSatuan  int64       `json:"harga_satuan"`
-	SerialNumber pgtype.Text `json:"serial_number"`
+	OrderID       string      `json:"order_id"`
+	LineNo        int32       `json:"line_no"`
+	ProductID     pgtype.UUID `json:"product_id"`
+	NamaSnapshot  string      `json:"nama_snapshot"`
+	NamaInstansi  string      `json:"nama_instansi"`
+	Keterangan    string      `json:"keterangan"`
+	Qty           int32       `json:"qty"`
+	HargaSatuan   int64       `json:"harga_satuan"`
+	HargaDasar    int64       `json:"harga_dasar"`
+	PiRatio       string      `json:"pi_ratio"`
+	PiPerPcs      int64       `json:"pi_per_pcs"`
+	ExpressPerPcs int64       `json:"express_per_pcs"`
+	SpvPerPcs     int64       `json:"spv_per_pcs"`
+	SerialNumber  pgtype.Text `json:"serial_number"`
 }
 
 // Baris produk saat revisi. `subtotal` TIDAK diisi (kolomnya GENERATED ALWAYS).
@@ -207,8 +217,14 @@ func (q *Queries) InsertOrderLineProductWithSerial(ctx context.Context, arg Inse
 		arg.ProductID,
 		arg.NamaSnapshot,
 		arg.NamaInstansi,
+		arg.Keterangan,
 		arg.Qty,
 		arg.HargaSatuan,
+		arg.HargaDasar,
+		arg.PiRatio,
+		arg.PiPerPcs,
+		arg.ExpressPerPcs,
+		arg.SpvPerPcs,
 		arg.SerialNumber,
 	)
 	return err
@@ -274,8 +290,12 @@ SELECT l.line_no,
        COALESCE(l.product_id::text, '')::text AS product_id,
        l.nama_snapshot,
        l.nama_instansi,
+       l.keterangan,
        l.qty,
        l.harga_satuan,
+       CASE WHEN l.harga_dasar=0 AND l.harga_satuan>0 AND l.pi_per_pcs=0 AND l.express_per_pcs=0 AND l.spv_per_pcs=0
+            THEN l.harga_satuan ELSE l.harga_dasar END::bigint AS harga_dasar,
+       l.pi_ratio::text AS pi_ratio, l.pi_per_pcs, l.express_per_pcs, l.spv_per_pcs,
        COALESCE(l.serial_number, '')::text AS serial_number,
        COALESCE(p.jenis::text, '')::text   AS produk_jenis,
        COALESCE(p.nama, '')                AS produk_nama,
@@ -287,17 +307,23 @@ SELECT l.line_no,
 `
 
 type ListOrderLinesForReviseRow struct {
-	LineNo       int32  `json:"line_no"`
-	Jenis        string `json:"jenis"`
-	ProductID    string `json:"product_id"`
-	NamaSnapshot string `json:"nama_snapshot"`
-	NamaInstansi string `json:"nama_instansi"`
-	Qty          int32  `json:"qty"`
-	HargaSatuan  int64  `json:"harga_satuan"`
-	SerialNumber string `json:"serial_number"`
-	ProdukJenis  string `json:"produk_jenis"`
-	ProdukNama   string `json:"produk_nama"`
-	ProdukAda    bool   `json:"produk_ada"`
+	LineNo        int32  `json:"line_no"`
+	Jenis         string `json:"jenis"`
+	ProductID     string `json:"product_id"`
+	NamaSnapshot  string `json:"nama_snapshot"`
+	NamaInstansi  string `json:"nama_instansi"`
+	Keterangan    string `json:"keterangan"`
+	Qty           int32  `json:"qty"`
+	HargaSatuan   int64  `json:"harga_satuan"`
+	HargaDasar    int64  `json:"harga_dasar"`
+	PiRatio       string `json:"pi_ratio"`
+	PiPerPcs      int64  `json:"pi_per_pcs"`
+	ExpressPerPcs int64  `json:"express_per_pcs"`
+	SpvPerPcs     int64  `json:"spv_per_pcs"`
+	SerialNumber  string `json:"serial_number"`
+	ProdukJenis   string `json:"produk_jenis"`
+	ProdukNama    string `json:"produk_nama"`
+	ProdukAda     bool   `json:"produk_ada"`
 }
 
 // Seluruh baris pesanan versi berjalan beserta jenis produk master. `jenis`
@@ -319,8 +345,14 @@ func (q *Queries) ListOrderLinesForRevise(ctx context.Context, orderID string) (
 			&i.ProductID,
 			&i.NamaSnapshot,
 			&i.NamaInstansi,
+			&i.Keterangan,
 			&i.Qty,
 			&i.HargaSatuan,
+			&i.HargaDasar,
+			&i.PiRatio,
+			&i.PiPerPcs,
+			&i.ExpressPerPcs,
+			&i.SpvPerPcs,
 			&i.SerialNumber,
 			&i.ProdukJenis,
 			&i.ProdukNama,

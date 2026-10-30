@@ -12,8 +12,8 @@
 //     dinonaktifkan (order_lines.product_id ON DELETE RESTRICT).
 //   - Setiap mutasi produk/harga dicatat ke audit_logs DI DALAM transaksi yang
 //     sama dengan perubahannya (PRD AP-KAT-06, SystemDesign.md §5.4).
-//   - Harga sel matriks SELALU dihitung server dari komponen HJM, P1, dan SPV
-//     (tarif = HJM + HJM×P1 + SPV, lihat paket tarif). Setiap perubahan sel
+//   - Harga sel matriks SELALU dihitung server dari komponen HJM, P1, Expres,
+//     dan SPV (tarif = HJM + HJM×P1 + Expres + SPV, lihat paket tarif). Setiap perubahan sel
 //     menjadi versi tarif append-only (branch_tariff_versions) dan tarif
 //     finalnya diproyeksikan ke branch_prices yang dibaca katalog dan pesanan.
 //   - Perubahan harga TIDAK menyentuh pesanan yang sudah ada: harga pada order
@@ -83,12 +83,17 @@ type Product struct {
 // harga khususnya. Produk tanpa baris harga tidak pernah muncul di sini
 // (PRD CP-KAT-02).
 type BranchProduct struct {
-	ID        string `json:"id"`
-	Nama      string `json:"nama"`
-	Jenis     string `json:"jenis"`
-	Deskripsi string `json:"deskripsi,omitempty"`
-	Harga     int64  `json:"harga"`
-	Urutan    int    `json:"urutan"`
+	ID         string `json:"id"`
+	Nama       string `json:"nama"`
+	Jenis      string `json:"jenis"`
+	Deskripsi  string `json:"deskripsi,omitempty"`
+	Harga      int64  `json:"harga"`
+	HargaDasar int64  `json:"harga_dasar"`
+	P1         string `json:"p1"`
+	PI         int64  `json:"pi_per_pcs"`
+	Express    int64  `json:"express_per_pcs"`
+	SPV        int64  `json:"spv_per_pcs"`
+	Urutan     int    `json:"urutan"`
 	// BiayaPackaging hanya terisi untuk produk Sertifikat: biaya packaging per
 	// pesanan yang ditambahkan otomatis (PRD CP-KAT-04, CP-SER-02). Nilainya
 	// diisi lapisan transport dari setelan server yang berlaku supaya portal
@@ -132,20 +137,22 @@ type PriceCell struct {
 	ProductID string `json:"product_id"`
 	// Harga adalah tarif final satu item yang dibaca katalog cabang & pesanan.
 	Harga int64 `json:"harga"`
-	// HJM, P1 (rasio desimal 0–1, "0.1" = 10%), dan SPV pembentuk Harga; nil
+	// HJM, P1 (rasio desimal 0–1, "0.1" = 10%), Expres, dan SPV pembentuk Harga; nil
 	// untuk sel tanpa rincian (Sumber SumberLama).
-	HJM    *int64  `json:"hjm"`
-	P1     *string `json:"p1"`
-	SPV    *int64  `json:"spv"`
-	Sumber string  `json:"sumber"`
+	HJM     *int64  `json:"hjm"`
+	P1      *string `json:"p1"`
+	SPV     *int64  `json:"spv"`
+	Express *int64  `json:"express"`
+	Sumber  string  `json:"sumber"`
 }
 
-// Komponen adalah masukan tarif satu sel: HJM dan SPV dalam Rupiah, P1 rasio
+// Komponen adalah masukan tarif satu sel: HJM, Expres, dan SPV dalam Rupiah, P1 rasio
 // desimal 0–1 (kosong = 0).
 type Komponen struct {
-	HJM int64  `json:"hjm"`
-	P1  string `json:"p1"`
-	SPV int64  `json:"spv"`
+	HJM     int64  `json:"hjm"`
+	P1      string `json:"p1"`
+	Express int64  `json:"express"`
+	SPV     int64  `json:"spv"`
 }
 
 // TarifSel adalah komponen yang sudah divalidasi beserta tarif final dan
@@ -163,8 +170,8 @@ var maxDesimalP1 = big.NewRat(1_000_000, 1)
 // HitungTarif memvalidasi komponen dan menghitung tarif finalnya. Produk
 // Sertifikat hanya boleh berkomponen nol (PRD CP-SER-01).
 func HitungTarif(k Komponen, jenis string) (TarifSel, error) {
-	if k.HJM < 0 || k.SPV < 0 {
-		return TarifSel{}, fmt.Errorf("%w: HJM dan SPV tidak boleh negatif", ErrInvalidData)
+	if k.HJM < 0 || k.Express < 0 || k.SPV < 0 {
+		return TarifSel{}, fmt.Errorf("%w: HJM, Expres, dan SPV tidak boleh negatif", ErrInvalidData)
 	}
 	p1, err := tarif.ParseRasio(k.P1)
 	if err != nil {
@@ -173,17 +180,17 @@ func HitungTarif(k Komponen, jenis string) (TarifSel, error) {
 	if !new(big.Rat).Mul(p1, maxDesimalP1).IsInt() {
 		return TarifSel{}, fmt.Errorf("%w: P1 maksimal empat angka di belakang koma persen", ErrInvalidData)
 	}
-	if jenis == JenisSertifikat && (k.HJM != 0 || k.SPV != 0 || p1.Sign() != 0) {
+	if jenis == JenisSertifikat && (k.HJM != 0 || k.Express != 0 || k.SPV != 0 || p1.Sign() != 0) {
 		return TarifSel{}, fmt.Errorf("%w: produk Sertifikat selalu berharga 0", ErrInvalidData)
 	}
-	final, ok := tarif.Final(k.HJM, p1, k.SPV)
+	final, ok := tarif.FinalDenganExpress(k.HJM, p1, k.Express, k.SPV)
 	if !ok {
 		return TarifSel{}, fmt.Errorf("%w: tarif terlalu besar", ErrInvalidData)
 	}
 	return TarifSel{
-		Komponen: Komponen{HJM: k.HJM, P1: tarif.Desimal(p1), SPV: k.SPV},
+		Komponen: Komponen{HJM: k.HJM, P1: tarif.Desimal(p1), Express: k.Express, SPV: k.SPV},
 		Final:    final,
-		Sidik:    tarif.SidikTersedia(k.HJM, p1, k.SPV, final),
+		Sidik:    tarif.SidikTersediaDenganExpress(k.HJM, p1, k.Express, k.SPV, final),
 	}, nil
 }
 
@@ -193,9 +200,16 @@ func HitungTarif(k Komponen, jenis string) (TarifSel, error) {
 func TarifDariSel(c PriceCell) (TarifSel, error) {
 	k := Komponen{HJM: c.Harga}
 	if c.HJM != nil && c.P1 != nil && c.SPV != nil {
-		k = Komponen{HJM: *c.HJM, P1: *c.P1, SPV: *c.SPV}
+		k = Komponen{HJM: *c.HJM, P1: *c.P1, Express: valueInt64(c.Express), SPV: *c.SPV}
 	}
 	return HitungTarif(k, JenisReguler)
+}
+
+func valueInt64(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // SamaDengan melaporkan apakah sel sudah memuat tarif t persis (komponen dan
@@ -207,7 +221,7 @@ func (c PriceCell) SamaDengan(t TarifSel) bool {
 	p1Sel, err1 := tarif.ParseRasio(*c.P1)
 	p1Baru, err2 := tarif.ParseRasio(t.P1)
 	return err1 == nil && err2 == nil && p1Sel.Cmp(p1Baru) == 0 &&
-		*c.HJM == t.HJM && *c.SPV == t.SPV && c.Harga == t.Final
+		*c.HJM == t.HJM && valueInt64(c.Express) == t.Express && *c.SPV == t.SPV && c.Harga == t.Final
 }
 
 // auditSel adalah isi before/after audit untuk satu sel harga.

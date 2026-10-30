@@ -202,13 +202,19 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 			continue
 		}
 		if err := q.InsertOrderLineProduct(ctx, sqlc.InsertOrderLineProductParams{
-			OrderID:      orderID,
-			LineNo:       int32(l.LineNo),
-			ProductID:    pgtypes.UUID(l.ProductID),
-			NamaSnapshot: l.Nama,
-			NamaInstansi: l.NamaInstansi,
-			Qty:          int32(l.Qty),
-			HargaSatuan:  l.HargaSatuan,
+			OrderID:       orderID,
+			LineNo:        int32(l.LineNo),
+			ProductID:     pgtypes.UUID(l.ProductID),
+			NamaSnapshot:  l.Nama,
+			NamaInstansi:  l.NamaInstansi,
+			Keterangan:    l.Keterangan,
+			Qty:           int32(l.Qty),
+			HargaSatuan:   l.HargaSatuan,
+			HargaDasar:    l.HargaDasar,
+			PiRatio:       l.PIRatio,
+			PiPerPcs:      l.PIPerPcs,
+			ExpressPerPcs: l.ExpressPerPcs,
+			SpvPerPcs:     l.SPVPerPcs,
 		}); err != nil {
 			return fmt.Errorf("query InsertOrderLineProduct: %w", err)
 		}
@@ -348,11 +354,17 @@ WHERE branch_id=$1 AND ends_on >= $2::date)`, req.BranchID, req.Tanggal).Scan(&g
 			Qty:            int(row.Qty),
 			NamaLama:       row.NamaSnapshot,
 			NamaInstansi:   row.NamaInstansi,
+			Keterangan:     row.Keterangan,
 			ProdukAda:      row.ProdukAda,
 			ProdukAktif:    row.ProdukAktif,
 			ProdukNama:     row.ProdukNama,
 			ProdukJenis:    row.ProdukJenis,
 			HargaCabang:    row.HargaCabang,
+			HargaDasar:     row.HargaDasar,
+			PIRatio:        row.PiRatio,
+			PIPerPcs:       row.PiPerPcs,
+			ExpressPerPcs:  row.ExpressPerPcs,
+			SPVPerPcs:      row.SpvPerPcs,
 			AdaHargaCabang: row.AdaHargaCabang,
 		})
 	}
@@ -430,10 +442,15 @@ WHERE branch_id=$1 AND ends_on >= $2::date)`, req.BranchID, req.Tanggal).Scan(&g
 	// 5. Tulis snapshot final, serial, lalu transisi status.
 	for _, s := range snapshots {
 		if err := q.UpdateOrderLineSnapshot(ctx, sqlc.UpdateOrderLineSnapshotParams{
-			NamaSnapshot: s.Nama,
-			HargaSatuan:  s.HargaSatuan,
-			OrderID:      req.ID,
-			LineNo:       int32(s.LineNo),
+			NamaSnapshot:  s.Nama,
+			HargaSatuan:   s.HargaSatuan,
+			HargaDasar:    s.HargaDasar,
+			PiRatio:       s.PIRatio,
+			PiPerPcs:      s.PIPerPcs,
+			ExpressPerPcs: s.ExpressPerPcs,
+			SpvPerPcs:     s.SPVPerPcs,
+			OrderID:       req.ID,
+			LineNo:        int32(s.LineNo),
 		}); err != nil {
 			return order.Order{}, fmt.Errorf("query UpdateOrderLineSnapshot: %w", err)
 		}
@@ -629,15 +646,25 @@ func loadOrder(ctx context.Context, q *sqlc.Queries, id, branchID string) (order
 	}
 	for _, l := range lines {
 		out.Lines = append(out.Lines, order.Line{
-			LineNo:       int(l.LineNo),
-			Jenis:        l.Jenis,
-			ProductID:    pgtypes.UUIDString(l.ProductID),
-			Nama:         l.NamaSnapshot,
-			NamaInstansi: l.NamaInstansi,
-			Qty:          int(l.Qty),
-			HargaSatuan:  l.HargaSatuan,
-			Subtotal:     l.Subtotal.Int64,
-			SerialNumber: pgtypes.TextOr(l.SerialNumber),
+			LineNo:        int(l.LineNo),
+			Jenis:         l.Jenis,
+			ProductID:     pgtypes.UUIDString(l.ProductID),
+			Nama:          l.NamaSnapshot,
+			NamaInstansi:  l.NamaInstansi,
+			Keterangan:    l.Keterangan,
+			Qty:           int(l.Qty),
+			HargaSatuan:   l.HargaSatuan,
+			HargaDasar:    l.HargaDasar,
+			PIRatio:       l.PiRatio,
+			PIPerPcs:      l.PiPerPcs,
+			ExpressPerPcs: l.ExpressPerPcs,
+			SPVPerPcs:     l.SpvPerPcs,
+			Produksi:      l.Produksi,
+			PI:            l.Pi,
+			Express:       l.Express,
+			BeaSPV:        l.BeaSpv,
+			Subtotal:      l.Subtotal.Int64,
+			SerialNumber:  pgtypes.TextOr(l.SerialNumber),
 		})
 	}
 	return out, nil

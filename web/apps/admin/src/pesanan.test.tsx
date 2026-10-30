@@ -193,6 +193,7 @@ function stubPesanan(opsi?: {
   reviseTertahan?: Promise<unknown>;
   /** Rincian GET /admin/orders/{id}/payment (C4); bawaan transfer saja. */
   pembayaran?: PembayaranPesanan;
+  role?: "manager" | "superadmin";
 }): StubUji {
   const panggilan: string[] = [];
   const posts: { url: string; body: unknown; headers: Record<string, string> }[] = [];
@@ -207,13 +208,13 @@ function stubPesanan(opsi?: {
 
       if (url.endsWith("/auth/me")) {
         return json({
-          data: { user: { id: "a1", kind: "admin", role: "manager", nama: "Budi", email: "budi@example.test" } },
+          data: { user: { id: "a1", kind: "admin", role: opsi?.role ?? "manager", nama: "Budi", email: "budi@example.test" } },
         });
       }
       if (init?.method === "POST") {
         posts.push({
           url,
-          body: init.body ? JSON.parse(String(init.body)) : null,
+          body: init.body instanceof FormData ? init.body : init.body ? JSON.parse(String(init.body)) : null,
           headers: (init.headers ?? {}) as Record<string, string>,
         });
         if (url.includes("/notes")) return json({ data: opsi?.detail ?? DETAIL_UJI });
@@ -439,14 +440,39 @@ describe("Riwayat pemesanan admin (F1-15)", () => {
     expect(screen.getByText("Invoice")).toBeDefined();
   });
 
+  it("admin mengunggah bukti tambahan sebagai multipart lalu menyegarkan bukti dan timeline", async () => {
+    const { posts, panggilan } = stubPesanan({ proofs: [] });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+
+    await screen.findByRole("heading", { name: "2026-10-01" });
+    const file = new File(["bukti-admin"], "tambahan-admin.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText("Tambah bukti atas nama cabang"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Unggah bukti tambahan" }));
+
+    await waitFor(() => {
+      expect(posts.some((p) => p.url.endsWith(`/admin/orders/${DETAIL_ID}/proofs`))).toBe(true);
+    });
+    const unggah = posts.find((p) => p.url.endsWith(`/admin/orders/${DETAIL_ID}/proofs`));
+    expect(unggah?.body).toBeInstanceOf(FormData);
+    expect((unggah?.body as FormData).getAll("file")).toEqual([file]);
+    expect((unggah?.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+    await waitFor(() => {
+      expect(panggilan.filter((url) => url.endsWith(`/admin/orders/${DETAIL_ID}/proofs`)).length).toBeGreaterThanOrEqual(2);
+      expect(panggilan.filter((url) => url.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   it("menyimpan catatan internal lewat POST /notes", async () => {
     const { posts, panggilan } = stubPesanan();
     render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
     await screen.findByText("Bio Magnetik");
 
     const sebelum = panggilan.length;
-    const catatan = screen.getByLabelText("Note admin");
+    const catatan = await screen.findByDisplayValue("Sudah dihubungi cabang");
     fireEvent.change(catatan, { target: { value: "tindak lanjut pusat" } });
+    expect((catatan as HTMLTextAreaElement).value).toBe("tindak lanjut pusat");
     fireEvent.click(screen.getByRole("button", { name: "Simpan catatan" }));
 
     await waitFor(() => {
@@ -555,6 +581,24 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
     expect(await screen.findByText(/setelah seluruh bukti mempunyai hasil OCR tersimpan/)).toBeDefined();
   });
 
+  it("nilai ulang rekening mengantre reevaluasi dan menyegarkan detail", async () => {
+    const proofOCR = [{ id: "p1", order_id: DETAIL_ID, nama_file: "bukti.png", mime_type: "image/png", ukuran_byte: 1000, uploaded_by_kind: "branch", created_at: "2026-10-01T03:30:00Z", ocr_at: "2026-10-01T03:31:00Z", ocr_bank: "BCA", ocr_rek_akhir: "1234", ocr_confidence: 0.98 }];
+    const { posts, panggilan } = stubPesanan({ aiAktif: true, proofs: proofOCR });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    const tombol = await screen.findByRole("button", { name: "Nilai ulang rekening" });
+    await waitFor(() => expect((tombol as HTMLButtonElement).disabled).toBe(false));
+    const sebelum = panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length;
+
+    fireEvent.click(tombol);
+
+    await waitFor(() => {
+      expect(posts.some((p) => p.url.endsWith(`/admin/orders/${DETAIL_ID}/verification/reevaluate-destination`))).toBe(true);
+    });
+    await waitFor(() => {
+      expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
+    });
+  });
+
   it("menyetujui lewat modal: total, nominal terbaca + selisih, lalu POST /verify dan menyegarkan detail", async () => {
     const { posts, panggilan } = stubPesanan();
     render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
@@ -591,6 +635,32 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => {
       expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
+    });
+  });
+
+  it("menyetujui dua bukti Transfer dengan rekening efektif untuk masing-masing bukti", async () => {
+    const proofs = [
+      { id: "p1", order_id: DETAIL_ID, nama_file: "bukti-1.png", mime_type: "image/png", ukuran_byte: 1000, uploaded_by_kind: "branch", created_at: "2026-10-01T03:30:00Z" },
+      { id: "p2", order_id: DETAIL_ID, nama_file: "bukti-2.pdf", mime_type: "application/pdf", ukuran_byte: 2000, uploaded_by_kind: "branch", created_at: "2026-10-01T03:31:00Z" },
+    ];
+    const { posts } = stubPesanan({ proofs });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("bukti-2.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Rekening tujuan bukti-1.png")).toBeDefined();
+    expect(within(dialog).getByLabelText("Rekening tujuan bukti-2.pdf")).toBeDefined();
+    fireEvent.change(within(dialog).getByLabelText("Nominal di bukti transfer"), { target: { value: "200000" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Setujui & selesaikan" }));
+
+    await waitFor(() => expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true));
+    expect(posts.find((p) => p.url === URL_VERIFY)?.body).toEqual({
+      hasil: "cocok",
+      total_terbaca: 200000,
+      proof_destinations: [
+        { payment_proof_id: "p1", bank_account_id: "ba-1" },
+        { payment_proof_id: "p2", bank_account_id: "ba-1" },
+      ],
     });
   });
 
@@ -633,6 +703,45 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
       deposit_allocation_ids: ["al-1"],
       proof_splits: [
         { payment_proof_id: "p1", bank_account_id: "ba-1", approved_nominal: 150000, applied_to_order: 150000, credited_to_deposit_total: 0 },
+      ],
+    });
+    expect(kirim?.headers["Idempotency-Key"]).toBeTruthy();
+  });
+
+  it("Superadmin dapat memisahkan lebih bayar ke saldo Deposit", async () => {
+    const { posts } = stubPesanan({
+      role: "superadmin",
+      pembayaran: {
+        order_id: DETAIL_ID,
+        status: "submitted",
+        versi: 0,
+        current_total: 200000,
+        committed_deposit: 50000,
+        remaining_due: 150000,
+        is_lunas: false,
+        allocations: [
+          { id: "al-1", order_version: 0, amount: 50000, reversed_amount: 0, active_amount: 50000, created_at: "2026-10-01T03:10:00Z" },
+        ],
+        balance: { branch_id: "b1", available_balance: 10000, journal_version: 7, pending_topup_count: 0, pending_topup_amount_declared: 0 },
+      },
+    });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    await screen.findByText("Bio Magnetik");
+    fireEvent.click(screen.getByRole("button", { name: "Verifikasi" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/Disetujui/), { target: { value: "170000" } });
+    fireEvent.change(within(dialog).getByLabelText("Untuk pesanan"), { target: { value: "150000" } });
+    expect(within(dialog).getByText(/Rp 20.000/)).toBeDefined();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Setujui & selesaikan" }));
+
+    await waitFor(() => expect(posts.some((p) => p.url === URL_VERIFY)).toBe(true));
+    const kirim = posts.find((p) => p.url === URL_VERIFY);
+    expect(kirim?.body).toEqual({
+      hasil: "cocok",
+      expected_order_version: 0,
+      deposit_allocation_ids: ["al-1"],
+      proof_splits: [
+        { payment_proof_id: "p1", bank_account_id: "ba-1", approved_nominal: 170000, applied_to_order: 150000, credited_to_deposit_total: 20000 },
       ],
     });
     expect(kirim?.headers["Idempotency-Key"]).toBeTruthy();
@@ -824,7 +933,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     const kirim = posts.find((p) => p.url === URL_REVISE);
     expect(kirim?.body).toEqual({
       alasan: "salah harga jual",
-      lines: [{ line_no: 1, nama_instansi: "TK A", qty: 5, harga_satuan: 120000 }],
+      lines: [{ line_no: 1, nama_instansi: "TK A", qty: 5, harga_satuan: 120000, keterangan: "" }],
     });
     expect(kirim?.headers["X-CSRF-Token"]).toBe("uji-csrf");
     expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
@@ -859,7 +968,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     await waitFor(() => expect(posts.some((p) => p.url === URL_REVISE)).toBe(true));
     expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
       alasan: "ganti produk",
-      lines: [{ product_id: "pr-2", nama_instansi: "SD B", qty: 1, harga_satuan: 150000 }],
+      lines: [{ product_id: "pr-2", nama_instansi: "SD B", qty: 1, harga_satuan: 150000, keterangan: "" }],
     });
   });
 
@@ -906,7 +1015,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1));
     expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
       alasan: "ganti produk",
-      lines: [{ product_id: "pr-2", nama_instansi: "TK C", qty: 1, harga_satuan: 150000 }],
+      lines: [{ product_id: "pr-2", nama_instansi: "TK C", qty: 1, harga_satuan: 150000, keterangan: "" }],
     });
   });
 
@@ -959,7 +1068,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1));
     expect(posts.find((p) => p.url === URL_REVISE)?.body).toEqual({
       alasan: "ubah qty",
-      lines: [{ line_no: 1, nama_instansi: "TK A", qty: 2, harga_satuan: 120000 }],
+      lines: [{ line_no: 1, nama_instansi: "TK A", qty: 2, harga_satuan: 120000, keterangan: "" }],
     });
   });
 

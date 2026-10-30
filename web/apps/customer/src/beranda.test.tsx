@@ -32,7 +32,7 @@ interface Panggilan {
   init?: RequestInit;
 }
 
-function fetchBeranda(orders: Pesanan[]) {
+function fetchBeranda(orders: Pesanan[], tempo?: Record<string, unknown>) {
   const panggilan: Panggilan[] = [];
   vi.stubGlobal(
     "fetch",
@@ -40,6 +40,7 @@ function fetchBeranda(orders: Pesanan[]) {
       panggilan.push({ url: input, init });
       if (input.endsWith("/auth/me")) return json({ data: { user: penggunaCabang } });
       if (input.endsWith("/orders")) return json({ data: orders });
+      if (input.endsWith("/tempo/overview") && tempo) return json({ data: tempo });
       return json({ error: { code: "NOT_FOUND", message: "tidak ada" } }, 404);
     }),
   );
@@ -167,6 +168,44 @@ describe("Customer Portal — Beranda (F1-19)", () => {
     expect(barisTempo?.textContent).not.toContain("Menunggu verifikasi");
     expect(screen.getByTestId("kpi-menunggu").textContent?.trim()).toBe("1");
     expect(screen.getByText("Admin Pusat sedang meninjau pesanan Anda.")).toBeDefined();
+  });
+
+  it("menampilkan banner tunggakan dari ringkasan cabang sesi tanpa meminta data cabang lain", async () => {
+    const bulan = bulanGeser(0);
+    const panggilan = fetchBeranda(
+      [
+        pesanan({ id: "draft", status: "draft", nomor: undefined, tanggal: undefined }),
+        pesanan({ id: "submitted", status: "submitted", tanggal: `${bulan}-02` }),
+        pesanan({ id: "tempo", status: "approved_unpaid", tanggal: `${bulan}-03`, is_tempo: true }),
+        pesanan({ id: "done", status: "done", tanggal: `${bulan}-04` }),
+      ],
+      {
+        total_receivable: 175000,
+        overdue: 125000,
+        pending_proof: 0,
+        hold_active: true,
+        age_0_30: 125000,
+        age_31_60: 50000,
+        age_over_60: 0,
+        items: [
+          { id: "bill-1", period_month: "2026-09", due_date: "2026-10-05", total: 125000, paid: 0, remaining: 125000, status: "lewat_jatuh_tempo" },
+          { id: "bill-2", period_month: "2026-10", due_date: "2026-11-05", total: 50000, paid: 0, remaining: 50000, status: "menunggu_bayar" },
+        ],
+      },
+    );
+
+    render(<RouterProvider router={buatRouter("/")} />);
+
+    expect(await screen.findByText(/Tagihan 2026-09 lewat jatuh tempo, sisa/)).toBeDefined();
+    expect(screen.getByText(/Rp\s?125\.000/)).toBeDefined();
+    expect(screen.getByText(/Pilihan Tempo ditahan/)).toBeDefined();
+    const tabel = screen.getByRole("table", { name: "Lima pesanan terakhir cabang" });
+    expect(within(tabel).getAllByText("Draft")).toHaveLength(2);
+    expect(within(tabel).getByText("Menunggu verifikasi")).toBeDefined();
+    expect(within(tabel).getByText("Disetujui — belum lunas")).toBeDefined();
+    expect(within(tabel).getByText("Selesai")).toBeDefined();
+    expect(panggilan.some((p) => p.url.endsWith("/tempo/overview"))).toBe(true);
+    expect(panggilan.some((p) => p.url.includes("branch_id") || p.url.includes("branchId"))).toBe(false);
   });
 
   it("menampilkan galat dari API, bukan angka palsu", async () => {

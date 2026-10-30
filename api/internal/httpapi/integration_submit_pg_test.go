@@ -573,6 +573,100 @@ func TestPGSubmitHargaDanNamaMasterBerubah(t *testing.T) {
 	if hargaDB != 150000 || totalDB != 300000 {
 		t.Errorf("database harus menyimpan snapshot terbaru: harga=%d total=%d", hargaDB, totalDB)
 	}
+
+	// Master berubah lagi SETELAH submit. Detail API dan database harus tetap
+	// memakai snapshot saat submit, bukan harga/nama master terbaru.
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE branch_prices SET harga = 175000 WHERE branch_id = $1 AND product_id = $2`, f.branchA, produk); err != nil {
+		t.Fatalf("ubah harga setelah submit: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE products SET nama = 'Bio Magnetik Edisi Berikutnya' WHERE id = $1`, produk); err != nil {
+		t.Fatalf("ubah nama setelah submit: %v", err)
+	}
+	status, detail, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/orders/"+id, "", cookiesA, "")
+	if status != http.StatusOK {
+		t.Fatalf("detail order submitted harus 200, dapat %d (%v)", status, detail)
+	}
+	detailData := detail["data"].(map[string]any)
+	detailLines := detailData["lines"].([]any)
+	detailLine := detailLines[0].(map[string]any)
+	if detailLine["harga_satuan"] != float64(150000) || detailLine["nama"] != "Bio Magnetik Edisi Baru" {
+		t.Fatalf("detail historis harus mempertahankan snapshot submit: %v", detailLine)
+	}
+	if detailData["total"] != float64(300000) {
+		t.Fatalf("total historis harus tetap 300000, dapat %v", detailData["total"])
+	}
+	if err := f.pool.QueryRow(ctx,
+		`SELECT (SELECT harga_satuan FROM order_lines WHERE order_id = $1), total FROM orders WHERE id = $1`,
+		id).Scan(&hargaDB, &totalDB); err != nil {
+		t.Fatalf("baca snapshot setelah master berubah lagi: %v", err)
+	}
+	if hargaDB != 150000 || totalDB != 300000 {
+		t.Fatalf("snapshot DB berubah setelah master kedua: harga=%d total=%d", hargaDB, totalDB)
+	}
+}
+
+// TestPGSubmitMenyimpanSnapshotKomponen memastikan submit menyimpan komponen
+// tarif dan keterangan per baris. Perubahan master sesudah submit tidak boleh
+// mengubah rincian invoice/order yang sudah terbentuk.
+func TestPGSubmitMenyimpanSnapshotKomponen(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	produk := produkKode(t, f, "P-01")
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET pajak_in = true WHERE id = $1`, f.branchA); err != nil {
+		t.Fatalf("aktifkan PI: %v", err)
+	}
+
+	adminCookies, adminCSRF := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut, f.srv.URL+"/api/v1/admin/prices",
+		fmt.Sprintf(`{"items":[{"branch_id":%q,"product_id":%q,"hjm":100000,"p1":"0.1","express":1500,"spv":2500}]}`, f.branchA, produk),
+		adminCookies, adminCSRF)
+	if status != http.StatusOK {
+		t.Fatalf("atur tarif berkomponen: %d (%v)", status, body)
+	}
+
+	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"TK Komponen","qty":2,"keterangan":"Kirim pagi"}]}`, produk), cookies, csrf)
+	if status != http.StatusCreated {
+		t.Fatalf("buat draft: %d (%v)", status, body)
+	}
+	id := dataMap(t, body)["id"].(string)
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'snapshot-komponen', 'b.jpg', 'image/jpeg', 10, '\x01', 'branch')`, id); err != nil {
+		t.Fatalf("seed bukti: %v", err)
+	}
+
+	resp, submitted := multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+id+"/submit", cookies, csrf, nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("submit: %d (%v)", resp.StatusCode, submitted)
+	}
+	baris := dataMap(t, submitted)["lines"].([]any)[0].(map[string]any)
+	for nama, mau := range map[string]float64{
+		"harga_dasar": 100000, "pi_per_pcs": 10000, "express_per_pcs": 1500,
+		"spv_per_pcs": 2500, "harga_satuan": 114000, "produksi": 200000,
+		"pi": 20000, "express": 3000, "bea_spv": 5000, "subtotal": 228000,
+	} {
+		if baris[nama] != mau {
+			t.Fatalf("snapshot %s: mau %.0f, dapat %v (baris=%v)", nama, mau, baris[nama], baris)
+		}
+	}
+	if baris["keterangan"] != "Kirim pagi" || dataMap(t, submitted)["total"] != float64(228000) {
+		t.Fatalf("keterangan/total snapshot salah: order=%v baris=%v", dataMap(t, submitted), baris)
+	}
+
+	var dasar, pi, expres, spv, harga int64
+	var ket string
+	if err := f.pool.QueryRow(ctx, `SELECT harga_dasar,pi_per_pcs,express_per_pcs,spv_per_pcs,harga_satuan,keterangan
+		FROM order_lines WHERE order_id=$1`, id).Scan(&dasar, &pi, &expres, &spv, &harga, &ket); err != nil {
+		t.Fatalf("baca snapshot DB: %v", err)
+	}
+	if dasar != 100000 || pi != 10000 || expres != 1500 || spv != 2500 || harga != 114000 || ket != "Kirim pagi" {
+		t.Fatalf("snapshot DB salah: dasar=%d pi=%d expres=%d spv=%d harga=%d ket=%q", dasar, pi, expres, spv, harga, ket)
+	}
 }
 
 // TestPGSubmitCNCMemotongDepositAtomik memverifikasi CP-CNC-02 di PostgreSQL:
@@ -675,6 +769,27 @@ func TestPGSubmitCNCMemotongDepositAtomik(t *testing.T) {
 	}
 	if s, _ := saldo(); terpakai(id2) != sisaSaldo || s != 0 {
 		t.Fatalf("seluruh saldo %d harus terpakai pesanan campuran: terpakai %d saldo %d", sisaSaldo, terpakai(id2), s)
+	}
+
+	// ORD-08: saldo tepat nol tetap memakai mode Deposit, tetapi seluruh total
+	// harus ditutup bukti transfer. Tidak boleh ada debit/alokasi bernilai nol.
+	_, dilihat = saldo()
+	d0 := buatDraftHTTP(t, f, cookiesA, csrfA, produk, 1)
+	id0, _ := d0["id"].(string)
+	if resp, body := multipartSubmit(t, urlSubmit(id0), cookiesA, csrfA, nil, dilihat); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("deposit saldo nol tanpa bukti harus 400, dapat %d (%v)", resp.StatusCode, body)
+	}
+	resp, body = multipartSubmit(t, urlSubmit(id0), cookiesA, csrfA,
+		map[string][]byte{"bukti-nol.jpg": berkasJPEGUji("bukti-deposit-saldo-nol")}, dilihat)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("deposit saldo nol dengan bukti penuh harus 200, dapat %d (%v)", resp.StatusCode, body)
+	}
+	if s, _ := saldo(); s != 0 || terpakai(id0) != 0 {
+		t.Fatalf("saldo nol tidak boleh membuat debit/alokasi nol: saldo=%d terpakai=%d", s, terpakai(id0))
+	}
+	var buktiNol int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM payment_proofs WHERE order_id=$1`, id0).Scan(&buktiNol); err != nil || buktiNol != 1 {
+		t.Fatalf("deposit saldo nol harus menyimpan satu bukti transfer: count=%d err=%v", buktiNol, err)
 	}
 
 	// Dua submit berebut saldo yang sama: tepat satu menang, yang lain melihat

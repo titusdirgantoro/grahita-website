@@ -207,6 +207,20 @@ export function PenggunaPage() {
     }
   }
 
+  async function kirimUlangUndangan(row: AdminUser) {
+    setSibuk(`resend-${row.id}`);
+    setGalat(null);
+    try {
+      await api.post(`/admin/users/admin/${row.id}/resend`);
+      tampilkan(`Undangan dikirim ulang ke ${row.email}`);
+      await muatAdmin();
+    } catch (err) {
+      setGalat(pesanGalat(err));
+    } finally {
+      setSibuk("");
+    }
+  }
+
   return (
     <>
       <PageHead
@@ -253,6 +267,7 @@ export function PenggunaPage() {
         ) : (
           <TabelAdmin
             baris={admins ?? []}
+            sibuk={sibuk}
             onUbah={(row) => {
               setGalatForm(null);
               setForm({
@@ -265,6 +280,7 @@ export function PenggunaPage() {
                 is_active: row.is_active,
               });
             }}
+            onKirimUlang={kirimUlangUndangan}
           />
         )}
       </Card>
@@ -418,7 +434,17 @@ function TabelCabang({
   );
 }
 
-function TabelAdmin({ baris, onUbah }: { baris: AdminUser[]; onUbah: (row: AdminUser) => void }) {
+function TabelAdmin({
+  baris,
+  sibuk,
+  onUbah,
+  onKirimUlang,
+}: {
+  baris: AdminUser[];
+  sibuk: string;
+  onUbah: (row: AdminUser) => void;
+  onKirimUlang: (row: AdminUser) => void;
+}) {
   if (baris.length === 0) {
     return <EmptyState icon="users-three">Belum ada admin terdaftar.</EmptyState>;
   }
@@ -447,6 +473,15 @@ function TabelAdmin({ baris, onUbah }: { baris: AdminUser[]; onUbah: (row: Admin
               <Badge tone={TONE_STATUS_ADMIN[row.status]}>{LABEL_STATUS_ADMIN[row.status]}</Badge>
             </td>
             <td className="num">
+              {row.status === "undangan" ? (
+                <Button
+                  variant="ghost"
+                  disabled={sibuk === `resend-${row.id}`}
+                  onClick={() => onKirimUlang(row)}
+                >
+                  {sibuk === `resend-${row.id}` ? "Mengirim…" : "Kirim ulang undangan"}
+                </Button>
+              ) : null}
               <Button variant="ghost" onClick={() => onUbah(row)}>
                 Ubah
               </Button>

@@ -174,8 +174,8 @@ func (q *Queries) InsertOrderEvent(ctx context.Context, arg InsertOrderEventPara
 }
 
 const insertOrderLinePackaging = `-- name: InsertOrderLinePackaging :exec
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan)
-VALUES ($1, $2, 'packaging', NULL, $3, 1, $4)
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, qty, harga_satuan, harga_dasar)
+VALUES ($1, $2, 'packaging', NULL, $3, 1, $4, $4)
 `
 
 type InsertOrderLinePackagingParams struct {
@@ -201,18 +201,29 @@ func (q *Queries) InsertOrderLinePackaging(ctx context.Context, arg InsertOrderL
 }
 
 const insertOrderLineProduct = `-- name: InsertOrderLineProduct :exec
-INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, qty, harga_satuan)
-VALUES ($1, $2, 'product', $3, $4, $5, $6, $7)
+INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, keterangan,
+                         qty, harga_satuan, harga_dasar, pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs)
+VALUES ($1, $2, 'product', $3,
+        $4, $5, $6,
+        $7, $8, $9,
+        ($10::text)::numeric, $11,
+        $12, $13)
 `
 
 type InsertOrderLineProductParams struct {
-	OrderID      string      `json:"order_id"`
-	LineNo       int32       `json:"line_no"`
-	ProductID    pgtype.UUID `json:"product_id"`
-	NamaSnapshot string      `json:"nama_snapshot"`
-	NamaInstansi string      `json:"nama_instansi"`
-	Qty          int32       `json:"qty"`
-	HargaSatuan  int64       `json:"harga_satuan"`
+	OrderID       string      `json:"order_id"`
+	LineNo        int32       `json:"line_no"`
+	ProductID     pgtype.UUID `json:"product_id"`
+	NamaSnapshot  string      `json:"nama_snapshot"`
+	NamaInstansi  string      `json:"nama_instansi"`
+	Keterangan    string      `json:"keterangan"`
+	Qty           int32       `json:"qty"`
+	HargaSatuan   int64       `json:"harga_satuan"`
+	HargaDasar    int64       `json:"harga_dasar"`
+	PiRatio       string      `json:"pi_ratio"`
+	PiPerPcs      int64       `json:"pi_per_pcs"`
+	ExpressPerPcs int64       `json:"express_per_pcs"`
+	SpvPerPcs     int64       `json:"spv_per_pcs"`
 }
 
 // subtotal TIDAK diisi: kolomnya GENERATED ALWAYS (qty * harga_satuan).
@@ -224,31 +235,56 @@ func (q *Queries) InsertOrderLineProduct(ctx context.Context, arg InsertOrderLin
 		arg.ProductID,
 		arg.NamaSnapshot,
 		arg.NamaInstansi,
+		arg.Keterangan,
 		arg.Qty,
 		arg.HargaSatuan,
+		arg.HargaDasar,
+		arg.PiRatio,
+		arg.PiPerPcs,
+		arg.ExpressPerPcs,
+		arg.SpvPerPcs,
 	)
 	return err
 }
 
 const listOrderLines = `-- name: ListOrderLines :many
-SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instansi,
-       qty, harga_satuan, subtotal, serial_number
+SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instansi, keterangan,
+       qty, harga_satuan,
+       CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
+            THEN harga_satuan ELSE harga_dasar END::bigint AS harga_dasar,
+       pi_ratio::text AS pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs,
+       (qty * CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
+                   THEN harga_satuan ELSE harga_dasar END)::bigint AS produksi,
+       (qty * pi_per_pcs)::bigint AS pi,
+       (qty * express_per_pcs)::bigint AS express,
+       (qty * spv_per_pcs)::bigint AS bea_spv,
+       subtotal, serial_number
   FROM order_lines
  WHERE order_id = $1
  ORDER BY line_no
 `
 
 type ListOrderLinesRow struct {
-	ID           string      `json:"id"`
-	LineNo       int32       `json:"line_no"`
-	Jenis        string      `json:"jenis"`
-	ProductID    pgtype.UUID `json:"product_id"`
-	NamaSnapshot string      `json:"nama_snapshot"`
-	NamaInstansi string      `json:"nama_instansi"`
-	Qty          int32       `json:"qty"`
-	HargaSatuan  int64       `json:"harga_satuan"`
-	Subtotal     pgtype.Int8 `json:"subtotal"`
-	SerialNumber pgtype.Text `json:"serial_number"`
+	ID            string      `json:"id"`
+	LineNo        int32       `json:"line_no"`
+	Jenis         string      `json:"jenis"`
+	ProductID     pgtype.UUID `json:"product_id"`
+	NamaSnapshot  string      `json:"nama_snapshot"`
+	NamaInstansi  string      `json:"nama_instansi"`
+	Keterangan    string      `json:"keterangan"`
+	Qty           int32       `json:"qty"`
+	HargaSatuan   int64       `json:"harga_satuan"`
+	HargaDasar    int64       `json:"harga_dasar"`
+	PiRatio       string      `json:"pi_ratio"`
+	PiPerPcs      int64       `json:"pi_per_pcs"`
+	ExpressPerPcs int64       `json:"express_per_pcs"`
+	SpvPerPcs     int64       `json:"spv_per_pcs"`
+	Produksi      int64       `json:"produksi"`
+	Pi            int64       `json:"pi"`
+	Express       int64       `json:"express"`
+	BeaSpv        int64       `json:"bea_spv"`
+	Subtotal      pgtype.Int8 `json:"subtotal"`
+	SerialNumber  pgtype.Text `json:"serial_number"`
 }
 
 func (q *Queries) ListOrderLines(ctx context.Context, orderID string) ([]ListOrderLinesRow, error) {
@@ -267,8 +303,18 @@ func (q *Queries) ListOrderLines(ctx context.Context, orderID string) ([]ListOrd
 			&i.ProductID,
 			&i.NamaSnapshot,
 			&i.NamaInstansi,
+			&i.Keterangan,
 			&i.Qty,
 			&i.HargaSatuan,
+			&i.HargaDasar,
+			&i.PiRatio,
+			&i.PiPerPcs,
+			&i.ExpressPerPcs,
+			&i.SpvPerPcs,
+			&i.Produksi,
+			&i.Pi,
+			&i.Express,
+			&i.BeaSpv,
 			&i.Subtotal,
 			&i.SerialNumber,
 		); err != nil {
@@ -287,6 +333,7 @@ SELECT l.line_no,
        l.jenis::text          AS jenis,
        l.nama_snapshot,
        l.nama_instansi,
+       l.keterangan,
 
        l.qty,
        (p.id IS NOT NULL)::bool     AS produk_ada,
@@ -294,13 +341,34 @@ SELECT l.line_no,
        COALESCE(p.nama, '')         AS produk_nama,
 
        COALESCE(p.jenis::text, '')::text AS produk_jenis,
-       COALESCE(bp.harga, 0)::bigint AS harga_cabang,
+       CASE WHEN tv.hjm_rupiah IS NULL THEN COALESCE(bp.harga, 0)
+            ELSE tv.hjm_rupiah
+              + CASE WHEN b.pajak_in THEN ROUND(tv.hjm_rupiah * tv.p1_ratio)::bigint ELSE 0 END
+              + COALESCE(tv.express_rupiah, 0) + tv.spv_rupiah END::bigint AS harga_cabang,
+       COALESCE(tv.hjm_rupiah, bp.harga, 0)::bigint AS harga_dasar,
+       CASE WHEN b.pajak_in THEN COALESCE(tv.p1_ratio, 0) ELSE 0 END::text AS pi_ratio,
+       CASE WHEN b.pajak_in THEN COALESCE(ROUND(tv.hjm_rupiah * tv.p1_ratio), 0) ELSE 0 END::bigint AS pi_per_pcs,
+       COALESCE(tv.express_rupiah, 0)::bigint AS express_per_pcs,
+       COALESCE(tv.spv_rupiah, 0)::bigint AS spv_per_pcs,
        (bp.product_id IS NOT NULL)::bool AS ada_harga_cabang
   FROM order_lines l
+  JOIN orders o ON o.id = l.order_id
+  JOIN branches b ON b.id = o.branch_id
   LEFT JOIN products p ON p.id = l.product_id
   LEFT JOIN branch_prices bp
          ON bp.product_id = l.product_id
         AND bp.branch_id = $1::uuid
+  LEFT JOIN LATERAL (
+        SELECT t.hjm_rupiah, t.p1_ratio, t.express_rupiah, t.spv_rupiah
+          FROM product_variants v
+          JOIN branch_tariff_versions t ON t.variant_id = v.id
+         WHERE v.product_id = l.product_id
+           AND v.tariff_parent_variant_id IS NULL
+           AND t.branch_id = $1::uuid
+           AND t.superseded_at IS NULL AND t.is_available
+           AND t.final_item_rupiah = bp.harga
+         ORDER BY v.created_at, v.id LIMIT 1
+       ) tv ON true
  WHERE l.order_id = $2::uuid
  ORDER BY l.line_no
 `
@@ -315,12 +383,18 @@ type ListOrderLinesForSubmitRow struct {
 	Jenis          string `json:"jenis"`
 	NamaSnapshot   string `json:"nama_snapshot"`
 	NamaInstansi   string `json:"nama_instansi"`
+	Keterangan     string `json:"keterangan"`
 	Qty            int32  `json:"qty"`
 	ProdukAda      bool   `json:"produk_ada"`
 	ProdukAktif    bool   `json:"produk_aktif"`
 	ProdukNama     string `json:"produk_nama"`
 	ProdukJenis    string `json:"produk_jenis"`
 	HargaCabang    int64  `json:"harga_cabang"`
+	HargaDasar     int64  `json:"harga_dasar"`
+	PiRatio        string `json:"pi_ratio"`
+	PiPerPcs       int64  `json:"pi_per_pcs"`
+	ExpressPerPcs  int64  `json:"express_per_pcs"`
+	SpvPerPcs      int64  `json:"spv_per_pcs"`
 	AdaHargaCabang bool   `json:"ada_harga_cabang"`
 }
 
@@ -343,12 +417,18 @@ func (q *Queries) ListOrderLinesForSubmit(ctx context.Context, arg ListOrderLine
 			&i.Jenis,
 			&i.NamaSnapshot,
 			&i.NamaInstansi,
+			&i.Keterangan,
 			&i.Qty,
 			&i.ProdukAda,
 			&i.ProdukAktif,
 			&i.ProdukNama,
 			&i.ProdukJenis,
 			&i.HargaCabang,
+			&i.HargaDasar,
+			&i.PiRatio,
+			&i.PiPerPcs,
+			&i.ExpressPerPcs,
+			&i.SpvPerPcs,
 			&i.AdaHargaCabang,
 		); err != nil {
 			return nil, err
@@ -604,16 +684,26 @@ func (q *Queries) UpdateOrderDraft(ctx context.Context, arg UpdateOrderDraftPara
 const updateOrderLineSnapshot = `-- name: UpdateOrderLineSnapshot :exec
 UPDATE order_lines
    SET nama_snapshot = $1,
-       harga_satuan  = $2
- WHERE order_id = $3::uuid
-   AND line_no = $4::int
+       harga_satuan  = $2,
+       harga_dasar = $3,
+       pi_ratio = ($4::text)::numeric,
+       pi_per_pcs = $5,
+       express_per_pcs = $6,
+       spv_per_pcs = $7
+ WHERE order_id = $8::uuid
+   AND line_no = $9::int
 `
 
 type UpdateOrderLineSnapshotParams struct {
-	NamaSnapshot string `json:"nama_snapshot"`
-	HargaSatuan  int64  `json:"harga_satuan"`
-	OrderID      string `json:"order_id"`
-	LineNo       int32  `json:"line_no"`
+	NamaSnapshot  string `json:"nama_snapshot"`
+	HargaSatuan   int64  `json:"harga_satuan"`
+	HargaDasar    int64  `json:"harga_dasar"`
+	PiRatio       string `json:"pi_ratio"`
+	PiPerPcs      int64  `json:"pi_per_pcs"`
+	ExpressPerPcs int64  `json:"express_per_pcs"`
+	SpvPerPcs     int64  `json:"spv_per_pcs"`
+	OrderID       string `json:"order_id"`
+	LineNo        int32  `json:"line_no"`
 }
 
 // Menyegarkan snapshot satu baris saat submit. subtotal ikut berubah karena
@@ -623,6 +713,11 @@ func (q *Queries) UpdateOrderLineSnapshot(ctx context.Context, arg UpdateOrderLi
 	_, err := q.db.Exec(ctx, updateOrderLineSnapshot,
 		arg.NamaSnapshot,
 		arg.HargaSatuan,
+		arg.HargaDasar,
+		arg.PiRatio,
+		arg.PiPerPcs,
+		arg.ExpressPerPcs,
+		arg.SpvPerPcs,
 		arg.OrderID,
 		arg.LineNo,
 	)

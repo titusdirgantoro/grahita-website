@@ -428,7 +428,7 @@ FROM deposit_allocations WHERE order_id=$1`, in.OrderID).Scan(&committed); err !
 	a, account, err := AllocateLocked(ctx, tx, DebitLocked{
 		BranchID: in.BranchID, OrderID: in.OrderID, OrderVersion: orderVersion, Amount: in.Amount,
 		IdempotencyKey: in.IdempotencyKey, RequestFingerprint: in.RequestFingerprint,
-		ActorKind: in.ActorKind, ActorID: in.ActorID,
+		ActorKind: in.ActorKind, ActorID: in.ActorID, Reason: in.Reason,
 	})
 	if err != nil {
 		return deposit.AllocationResult{}, err

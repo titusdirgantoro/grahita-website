@@ -13,6 +13,8 @@
   background: var(--surface);
   border-radius: 20px;
   width: min(560px, 100%);
+  min-width: 0;
+  max-width: 100%;
   max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
@@ -42,6 +44,7 @@
 .body {
   padding: 4px 20px 16px;
   overflow: auto;
+  min-width: 0;
   display: grid;
   gap: 16px;
 }

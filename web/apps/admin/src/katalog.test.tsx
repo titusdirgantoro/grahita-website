@@ -95,7 +95,7 @@ describe("Admin Portal — /katalog (F1-08)", () => {
 
     render(<RouterProvider router={buatRouter("/katalog")} />);
 
-    expect(await screen.findByText("Bio Magnetik")).toBeDefined();
+    expect(await screen.findByText("Bio Magnetik", {}, { timeout: 10_000 })).toBeDefined();
     // Produk nonaktif tetap tampil di admin agar bisa diaktifkan kembali.
     expect(screen.getByText("Sertifikat Produk")).toBeDefined();
     // "Nonaktif" muncul sebagai badge produk sekaligus opsi filter status.
@@ -137,8 +137,8 @@ describe("Admin Portal — /katalog (F1-08)", () => {
     });
   });
 
-  it("Memilih jenis Sertifikat mengunci harga default ke 0", async () => {
-    stubFetch();
+  it("Menambah Sertifikat mengunci harga default ke 0 dan mengirim jenis yang benar", async () => {
+    const panggilan = stubFetch();
 
     render(<RouterProvider router={buatRouter("/katalog")} />);
     expect(await screen.findByText("Bio Magnetik")).toBeDefined();
@@ -149,9 +149,60 @@ describe("Admin Portal — /katalog (F1-08)", () => {
     const harga = screen.getByLabelText("Harga default") as HTMLInputElement;
     expect(harga.disabled).toBe(true);
     expect(harga.value).toBe("0");
+    fireEvent.change(screen.getByLabelText("Nama produk"), { target: { value: "Sertifikat Baru" } });
+    fireEvent.change(screen.getByLabelText("Urutan tampil"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
+
+    await waitFor(() => {
+      const post = panggilan.find((p) => p.url.endsWith("/admin/products") && p.init?.method === "POST");
+      expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+        nama: "Sertifikat Baru",
+        jenis: "sertifikat",
+        harga_default: 0,
+        urutan: 7,
+        is_active: true,
+      });
+    });
   });
 
-  it("Tab Matriks menampilkan tarif beserta HJM · P1 · SPV dan mengirim komponen dari editor", async () => {
+  it("Mengubah urutan dan status produk lalu menghapus produk yang belum dipakai", async () => {
+    const konfirmasi = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const panggilan = stubFetch((url, init) => {
+      if (url.endsWith("/admin/products/pr-1") && init?.method === "PUT") {
+        return json({ data: { ...PRODUK[0], nama: "Bio Magnetik Baru", urutan: 8, is_active: false } });
+      }
+      if (url.endsWith("/admin/products/pr-1") && init?.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      return undefined;
+    });
+
+    render(<RouterProvider router={buatRouter("/katalog")} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Bio Magnetik/ }));
+    fireEvent.change(await screen.findByLabelText("Nama produk"), { target: { value: "Bio Magnetik Baru" } });
+    fireEvent.change(screen.getByLabelText("Urutan tampil"), { target: { value: "8" } });
+    fireEvent.click(screen.getByLabelText("Aktif"));
+    fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
+
+    await waitFor(() => {
+      const put = panggilan.find((p) => p.url.endsWith("/admin/products/pr-1") && p.init?.method === "PUT");
+      expect(JSON.parse(String(put?.init?.body))).toMatchObject({
+        nama: "Bio Magnetik Baru",
+        urutan: 8,
+        is_active: false,
+      });
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Bio Magnetik/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Hapus" }));
+    await waitFor(() => {
+      expect(panggilan.some((p) => p.url.endsWith("/admin/products/pr-1") && p.init?.method === "DELETE")).toBe(true);
+    });
+    expect(konfirmasi).toHaveBeenCalledWith("Hapus produk Bio Magnetik? Tindakan ini tidak bisa dibatalkan.");
+    konfirmasi.mockRestore();
+  });
+
+  it("Tab Matriks menampilkan tarif beserta HJM · P1 · Expres · SPV dan mengirim komponen dari editor", async () => {
     const panggilan = stubFetch();
 
     render(<RouterProvider router={buatRouter("/katalog")} />);
@@ -160,7 +211,7 @@ describe("Admin Portal — /katalog (F1-08)", () => {
 
     const selA = await screen.findByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang A" });
     expect(selA.textContent).toMatch(/112\.500/);
-    expect(selA.textContent).toContain("100.000 · 10% · 2.500");
+    expect(selA.textContent).toContain("100.000 · 10% · 0 · 2.500");
     // Cabang B belum dijual.
     expect(screen.getByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang B" }).textContent).toBe("Tidak dijual");
 
@@ -177,7 +228,7 @@ describe("Admin Portal — /katalog (F1-08)", () => {
       expect(put).toBeDefined();
       // Harga jual tidak dikirim: server menghitungnya dari komponen.
       expect(JSON.parse(String(put?.init?.body))).toEqual({
-        items: [{ branch_id: "br-a", product_id: "pr-1", hjm: 34100, p1: "0.1", spv: 2500 }],
+        items: [{ branch_id: "br-a", product_id: "pr-1", hjm: 34100, p1: "0.1", express: 0, spv: 2500 }],
       });
     });
   });
@@ -201,6 +252,30 @@ describe("Admin Portal — /katalog (F1-08)", () => {
     });
   });
 
+  it("Editor tarif menolak HJM/SPV negatif atau desimal tanpa mengubah nilainya diam-diam", async () => {
+    const panggilan = stubFetch();
+
+    render(<RouterProvider router={buatRouter("/katalog")} />);
+    expect(await screen.findByText("Bio Magnetik")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Matriks harga" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang A" }));
+
+    const hjm = await screen.findByLabelText("HJM (Rp)");
+    fireEvent.change(hjm, { target: { value: "-1" } });
+    fireEvent.blur(hjm);
+    expect(await screen.findByText("HJM harus bilangan bulat 0 atau lebih.")).toBeDefined();
+    expect(screen.getByTestId("pratinjau-tarif").textContent).toBe("—");
+    expect((screen.getByRole("button", { name: "Simpan" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(hjm, { target: { value: "34100" } });
+    const spv = screen.getByLabelText("SPV (Rp)");
+    fireEvent.change(spv, { target: { value: "1.5" } });
+    fireEvent.blur(spv);
+    expect(await screen.findByText("SPV harus bilangan bulat 0 atau lebih.")).toBeDefined();
+    expect((screen.getByRole("button", { name: "Simpan" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(panggilan.some((p) => p.url.endsWith("/admin/prices") && p.init?.method === "PUT")).toBe(false);
+  });
+
   it("Salin harga ke semua cabang mengirim POST /admin/prices/copy", async () => {
     const panggilan = stubFetch();
 
@@ -217,6 +292,36 @@ describe("Admin Portal — /katalog (F1-08)", () => {
       const post = panggilan.find((p) => p.url.endsWith("/admin/prices/copy") && p.init?.method === "POST");
       expect(post).toBeDefined();
       expect(JSON.parse(String(post?.init?.body))).toEqual({ from_branch_id: "br-a", semua: true });
+    });
+  });
+
+  it("Salin harga ke satu cabang lalu editor tetap dapat mengubah satu sel tujuan", async () => {
+    const panggilan = stubFetch();
+
+    render(<RouterProvider router={buatRouter("/katalog")} />);
+    expect(await screen.findByText("Bio Magnetik", {}, { timeout: 10_000 })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Matriks harga" }));
+    await screen.findByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang A" });
+
+    fireEvent.change(screen.getByLabelText("Salin harga dari"), { target: { value: "br-a" } });
+    fireEvent.change(screen.getByLabelText("Ke"), { target: { value: "br-b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salin harga" }));
+    await waitFor(() => {
+      const post = panggilan.find((p) => p.url.endsWith("/admin/prices/copy") && p.init?.method === "POST");
+      expect(JSON.parse(String(post?.init?.body))).toEqual({ from_branch_id: "br-a", to_branch_ids: ["br-b"] });
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Tarif Bio Magnetik untuk Grahita Cabang B" }));
+    fireEvent.change(await screen.findByLabelText("HJM (Rp)"), { target: { value: "50000" } });
+    fireEvent.change(screen.getByLabelText("P1 (%)"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("SPV (Rp)"), { target: { value: "1000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan" }));
+
+    await waitFor(() => {
+      const put = panggilan.find((p) => p.url.endsWith("/admin/prices") && p.init?.method === "PUT");
+      expect(JSON.parse(String(put?.init?.body))).toEqual({
+        items: [{ branch_id: "br-b", product_id: "pr-1", hjm: 50000, p1: "0.05", express: 0, spv: 1000 }],
+      });
     });
   });
 });

@@ -54,6 +54,7 @@ interface SelHarga {
   harga: number;
   hjm: number | null;
   p1: string | null;
+  express: number | null;
   spv: number | null;
   sumber: "import" | "manual" | "legacy";
 }
@@ -103,11 +104,23 @@ function pesanGalat(err: unknown): string {
   return "Terjadi kesalahan. Coba lagi.";
 }
 
-/** angka mengubah masukan pengguna menjadi bilangan bulat harga (null = kosong). */
+/** angka mengubah masukan longgar pada form produk menjadi bilangan bulat harga. */
 function angka(raw: string): number | null {
   const bersih = raw.replace(/[^0-9]/g, "");
   if (bersih === "") return null;
   return Number.parseInt(bersih, 10);
+}
+
+/**
+ * angkaTarif hanya menerima bilangan bulat non-negatif. Editor tarif tidak
+ * boleh mengubah diam-diam `-1` menjadi `1` atau `1.5` menjadi `15`, karena
+ * angka itu langsung memengaruhi harga jual cabang.
+ */
+function angkaTarif(raw: string): number | null {
+  const teks = raw.trim();
+  if (!/^\d+$/.test(teks)) return null;
+  const nilai = Number(teks);
+  return Number.isSafeInteger(nilai) ? nilai : null;
 }
 
 /**
@@ -421,7 +434,7 @@ export function TabProduk() {
 /** rincianSel meringkas komponen sel sebagai "HJM · P1 · SPV". */
 function rincianSel(sel: SelHarga): string {
   if (sel.hjm === null || sel.p1 === null || sel.spv === null) return "Tanpa rincian";
-  return `${bilangan.format(sel.hjm)} · ${rasioKePersen(sel.p1)}% · ${bilangan.format(sel.spv)}`;
+  return `${bilangan.format(sel.hjm)} · ${rasioKePersen(sel.p1)}% · ${bilangan.format(sel.express ?? 0)} · ${bilangan.format(sel.spv)}`;
 }
 
 /** TabMatriks menampilkan grid Produk × Cabang; tiap sel dibuka di editor tarif. */
@@ -465,7 +478,7 @@ export function TabMatriks() {
    * tidak dijual), lalu memuat ulang matriks agar sel menampilkan tarif dan
    * rincian yang dihitung server.
    */
-  async function simpanSel(target: EditSel, komponen: { hjm: number; p1: string; spv: number } | null) {
+  async function simpanSel(target: EditSel, komponen: { hjm: number; p1: string; express: number; spv: number } | null) {
     setSibuk(`${target.cabang.id}:${target.produk.id}`);
     try {
       await api.put("/admin/prices", {
@@ -537,8 +550,8 @@ export function TabMatriks() {
         </div>
       ) : null}
       <p className="muted small" style={{ marginBottom: 12 }}>
-        Setiap sel berisi tarif per item = <strong>HJM + (HJM × P1) + SPV</strong>, dihitung server dan
-        dibulatkan ke rupiah terdekat. Baris kecil di bawah tarif: HJM · P1 · SPV. Klik sel untuk mengubah
+        Setiap sel berisi tarif per item = <strong>HJM + (HJM × P1) + Expres + SPV</strong>, dihitung server dan
+        dibulatkan ke rupiah terdekat. Baris kecil di bawah tarif: HJM · P1 · Expres · SPV. Klik sel untuk mengubah
         komponennya.
       </p>
       {memuat ? (
@@ -578,7 +591,7 @@ export function TabMatriks() {
                           type="button"
                           className={sel ? styles.selTarif : `${styles.selTarif} ${styles.selKosong}`}
                           aria-label={`Tarif ${p.nama} untuk ${c.nama}`}
-                          title={sel ? `HJM · P1 · SPV: ${rincianSel(sel)}` : "Tidak dijual ke cabang ini"}
+                          title={sel ? `HJM · P1 · Expres · SPV: ${rincianSel(sel)}` : "Tidak dijual ke cabang ini"}
                           disabled={sibuk === `${c.id}:${p.id}`}
                           onClick={() => setEdit({ produk: p, cabang: c, sel })}
                         >
@@ -633,7 +646,7 @@ export function TabMatriks() {
       </div>
       <p className="muted small">
         Salin harga <strong>menggantikan</strong> matriks cabang tujuan dengan isi cabang sumber, termasuk HJM,
-        P1, dan SPV-nya.
+        P1, Expres, dan SPV-nya.
       </p>
 
       {edit ? (
@@ -663,7 +676,7 @@ function EditorTarif({
   edit: EditSel;
   sibuk: boolean;
   onTutup: () => void;
-  onSimpan: (komponen: { hjm: number; p1: string; spv: number } | null) => Promise<string | null>;
+  onSimpan: (komponen: { hjm: number; p1: string; express: number; spv: number } | null) => Promise<string | null>;
 }) {
   const { produk, cabang, sel } = edit;
   const sertifikat = produk.jenis === "sertifikat";
@@ -672,24 +685,41 @@ function EditorTarif({
     sertifikat ? "0" : sel ? String(sel.hjm ?? sel.harga) : produk.harga_default ? String(produk.harga_default) : "",
   );
   const [p1, setP1] = useState(sel?.p1 ? rasioKePersen(sel.p1) : "0");
+  const [express, setExpress] = useState(sel?.express !== null && sel?.express !== undefined ? String(sel.express) : "0");
   const [spv, setSpv] = useState(sel?.spv !== null && sel?.spv !== undefined ? String(sel.spv) : "0");
   const [galat, setGalat] = useState<string | null>(null);
+  const [disentuh, setDisentuh] = useState({ hjm: false, express: false, spv: false });
 
-  const nilaiHjm = angka(hjm);
-  const nilaiSpv = angka(spv) ?? 0;
+  const nilaiHjm = angkaTarif(hjm);
+  const nilaiSpv = spv.trim() === "" ? 0 : angkaTarif(spv);
+  const nilaiExpress = express.trim() === "" ? 0 : angkaTarif(express);
   const rasio = persenKeRasio(p1);
-  const final = nilaiHjm !== null && rasio !== null ? hitungTarif(nilaiHjm, rasio, nilaiSpv) : null;
+  const final = nilaiHjm !== null && nilaiExpress !== null && nilaiSpv !== null && rasio !== null ? hitungTarif(nilaiHjm, rasio, nilaiSpv, nilaiExpress) : null;
+  const galatHjm = disentuh.hjm && nilaiHjm === null ? "HJM harus bilangan bulat 0 atau lebih." : undefined;
+  const galatSpv = disentuh.spv && nilaiSpv === null ? "SPV harus bilangan bulat 0 atau lebih." : undefined;
+  const galatExpress = disentuh.express && nilaiExpress === null ? "Expres harus bilangan bulat 0 atau lebih." : undefined;
 
   async function simpan() {
     if (nilaiHjm === null) {
-      setGalat("Isi HJM. Untuk berhenti menjual produk ke cabang ini, pakai tombol Tidak dijual.");
+      setDisentuh((lama) => ({ ...lama, hjm: true }));
+      setGalat("Periksa kembali komponen tarif yang belum valid.");
+      return;
+    }
+    if (nilaiSpv === null) {
+      setDisentuh((lama) => ({ ...lama, spv: true }));
+      setGalat("Periksa kembali komponen tarif yang belum valid.");
+      return;
+    }
+    if (nilaiExpress === null) {
+      setDisentuh((lama) => ({ ...lama, express: true }));
+      setGalat("Periksa kembali komponen tarif yang belum valid.");
       return;
     }
     if (rasio === null) {
       setGalat("P1 harus persen 0–100, maksimal empat angka di belakang koma.");
       return;
     }
-    setGalat(await onSimpan({ hjm: nilaiHjm, p1: rasio, spv: nilaiSpv }));
+    setGalat(await onSimpan({ hjm: nilaiHjm, p1: rasio, express: nilaiExpress, spv: nilaiSpv }));
   }
 
   async function tidakDijual() {
@@ -735,13 +765,14 @@ function EditorTarif({
           </Notice>
         ) : null}
         <div className={styles.tarifGrid}>
-          <Field label="HJM (Rp)" htmlFor="tarif-hjm" hint="Harga jual dasar per item">
+          <Field label="HJM (Rp)" htmlFor="tarif-hjm" hint="Harga jual dasar per item" error={galatHjm}>
             <Input
               id="tarif-hjm"
               inputMode="numeric"
               value={hjm}
               disabled={sertifikat}
               onChange={(e) => setHjm(e.target.value)}
+              onBlur={() => setDisentuh((lama) => ({ ...lama, hjm: true }))}
             />
           </Field>
           <Field label="P1 (%)" htmlFor="tarif-p1" hint="Persentase dari HJM">
@@ -753,13 +784,19 @@ function EditorTarif({
               onChange={(e) => setP1(e.target.value)}
             />
           </Field>
-          <Field label="SPV (Rp)" htmlFor="tarif-spv" hint="Biaya supervisi per item">
+          <Field label="Expres (Rp)" htmlFor="tarif-express" hint="Biaya expres per item" error={galatExpress}>
+            <Input id="tarif-express" inputMode="numeric" value={express} disabled={sertifikat}
+              onChange={(e) => setExpress(e.target.value)}
+              onBlur={() => setDisentuh((lama) => ({ ...lama, express: true }))} />
+          </Field>
+          <Field label="SPV (Rp)" htmlFor="tarif-spv" hint="Biaya supervisi per item" error={galatSpv}>
             <Input
               id="tarif-spv"
               inputMode="numeric"
               value={spv}
               disabled={sertifikat}
               onChange={(e) => setSpv(e.target.value)}
+              onBlur={() => setDisentuh((lama) => ({ ...lama, spv: true }))}
             />
           </Field>
         </div>
@@ -768,7 +805,7 @@ function EditorTarif({
           <strong className="tabular" data-testid="pratinjau-tarif">
             {final === null ? "—" : rupiah.format(final)}
           </strong>
-          <span className="muted small">HJM + (HJM × P1) + SPV, dibulatkan ke rupiah terdekat</span>
+          <span className="muted small">HJM + (HJM × P1) + Expres + SPV, dibulatkan ke rupiah terdekat</span>
         </div>
       </Form>
     </Modal>

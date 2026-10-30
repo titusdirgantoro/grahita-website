@@ -35,6 +35,10 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    // CSP produksi hanya mengizinkan font dari origin portal. Memaksa semua
+    // font menjadi berkas menjaga subset kecil @fontsource agar tidak diubah
+    // Vite menjadi data: URL yang kemudian ditolak browser.
+    assetsInlineLimit: 0,
   },
   test: {
     environment: "jsdom",

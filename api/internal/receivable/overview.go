@@ -110,6 +110,14 @@ func (s *Service) Overview(ctx context.Context, actor auth.Actor) (Overview, err
 			return Overview{}, err
 		}
 		out.HoldActive = holdEnabled && out.Overdue > 0 && !(grace && out.PendingProof >= out.Overdue)
+	} else {
+		// Admin melihat antrean seluruh cabang, jadi ringkasannya juga harus
+		// memakai total bukti pending seluruh cabang. Bukti pending tetap tidak
+		// mengurangi piutang sebelum keputusan verifikasi.
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(declared_amount),0)::bigint
+ FROM tempo_receipts WHERE status='pending'`).Scan(&out.PendingProof); err != nil {
+			return Overview{}, err
+		}
 	}
 	return out, nil
 }

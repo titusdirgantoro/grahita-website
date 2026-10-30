@@ -127,6 +127,11 @@ type lineView struct {
 	Instansi string
 	Qty      string
 	Harga    string
+	Produksi string
+	PI       string
+	Express  string
+	BeaSPV   string
+	Ket      string
 	Subtotal string
 	Serial   string
 }
@@ -159,6 +164,9 @@ type invoiceView struct {
 	JumlahItem  string
 	Total       string
 	Produksi    string
+	PI          string
+	Express     string
+	BeaSPV      string
 	Terbilang   string
 	BarisKosong []int
 	Lines       []lineView
@@ -200,6 +208,10 @@ func barisKosong(jumlah, minimum int) []int {
 func viewLines(o Order) []lineView {
 	out := make([]lineView, 0, len(o.Lines))
 	for _, l := range o.Lines {
+		hargaDasar, produksi := l.HargaDasar, l.Produksi
+		if hargaDasar == 0 && l.HargaSatuan > 0 && l.PI == 0 && l.Express == 0 && l.BeaSPV == 0 {
+			hargaDasar, produksi = l.HargaSatuan, l.Subtotal
+		}
 		serial := strings.TrimSpace(l.SerialNumber)
 		if serial == "" {
 			serial = "—"
@@ -209,12 +221,24 @@ func viewLines(o Order) []lineView {
 			Nama:     l.Nama,
 			Instansi: l.NamaInstansi,
 			Qty:      fmt.Sprintf("%d", l.Qty),
-			Harga:    FormatAngka(l.HargaSatuan),
+			Harga:    FormatAngka(hargaDasar),
+			Produksi: FormatAngka(produksi),
+			PI:       formatKomponen(l.PI),
+			Express:  formatKomponen(l.Express),
+			BeaSPV:   formatKomponen(l.BeaSPV),
+			Ket:      strings.TrimSpace(l.Keterangan),
 			Subtotal: FormatAngka(l.Subtotal),
 			Serial:   serial,
 		})
 	}
 	return out
+}
+
+func formatKomponen(v int64) string {
+	if v == 0 {
+		return "—"
+	}
+	return FormatAngka(v)
 }
 
 // viewRekening menyusun daftar rekening pembayaran yang dicetak di invoice.
@@ -236,9 +260,16 @@ func versiRevisi(versi int) string {
 }
 
 func newInvoiceView(o Order) invoiceView {
-	var produksi int64
+	var produksi, pi, express, spv int64
 	for _, l := range o.Lines {
-		produksi += l.Subtotal
+		lineProduksi := l.Produksi
+		if lineProduksi == 0 && l.HargaSatuan > 0 && l.PI == 0 && l.Express == 0 && l.BeaSPV == 0 {
+			lineProduksi = l.Subtotal
+		}
+		produksi += lineProduksi
+		pi += l.PI
+		express += l.Express
+		spv += l.BeaSPV
 	}
 	var jadwalTempo []tempoDueView
 	if o.IsTempo && len(o.TempoDueParts) > 1 {
@@ -264,6 +295,9 @@ func newInvoiceView(o Order) invoiceView {
 		JumlahItem:  fmt.Sprintf("%d", jumlahItem(o.Lines)),
 		Total:       FormatRupiah(o.Total),
 		Produksi:    FormatAngka(produksi),
+		PI:          formatKomponen(pi),
+		Express:     formatKomponen(express),
+		BeaSPV:      formatKomponen(spv),
 		Terbilang:   TerbilangRupiah(o.Total),
 		BarisKosong: barisKosong(len(o.Lines), 11),
 		Lines:       viewLines(o),
@@ -415,12 +449,12 @@ body { margin: 0; color: #22202b; font: 9px Arial, Helvetica, sans-serif; -webki
 </section>
 <table class="baris" aria-label="Rincian invoice">
   <colgroup><col style="width:3%"><col style="width:9%"><col style="width:17%"><col style="width:8%"><col style="width:4%"><col style="width:10%"><col style="width:8%"><col style="width:8%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:10%"><col style="width:5%"></colgroup>
-  <thead><tr><th rowspan="2">No</th><th rowspan="2">Serial Number</th><th rowspan="2">Nama Instansi</th><th rowspan="2">Cabang</th><th rowspan="2">Jml Pcs</th><th rowspan="2">Produk</th><th rowspan="2">Harga per Pcs</th><th colspan="4">Tagihan</th><th rowspan="2">Total Tagihan</th><th rowspan="2">Ket</th></tr>
-    <tr><th>Produksi</th><th>PI (5%)</th><th>Expres</th><th>Bea SPV</th></tr></thead>
-  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td class="center">{{.Qty}}</td><td>{{.Nama}}</td><td class="num">{{.Harga}}</td><td class="num">{{.Subtotal}}</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="num">{{.Subtotal}}</td><td></td></tr>{{end}}
-    {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}
+  <thead><tr><th rowspan="2">No</th><th rowspan="2">Serial Number</th><th rowspan="2">Nama Instansi</th><th rowspan="2">Cabang</th><th rowspan="2">Jml Pcs</th><th rowspan="2">Produk</th><th rowspan="2">Harga/Pcs</th><th colspan="4">Tagihan</th><th rowspan="2">Total Tagihan</th><th rowspan="2">Ket</th></tr>
+    <tr><th>Produksi</th><th>PI</th><th>Expres</th><th>Bea SPV</th></tr></thead>
+  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td class="center">{{.Qty}}</td><td>{{.Nama}}</td><td class="num">{{.Harga}}</td><td class="num">{{.Produksi}}</td><td class="num">{{.PI}}</td><td class="num">{{.Express}}</td><td class="num">{{.BeaSPV}}</td><td class="num">{{.Subtotal}}</td><td>{{if .Ket}}{{.Ket}}{{else}}—{{end}}</td></tr>{{end}}
+    {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}
   </tbody>
-  <tfoot><tr><td colspan="4">JUMLAH</td><td class="center">{{.JumlahItem}}</td><td colspan="2"></td><td class="num">{{.Produksi}}</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="num">{{.Total}}</td><td></td></tr></tfoot>
+  <tfoot><tr><td colspan="4">JUMLAH</td><td class="center">{{.JumlahItem}}</td><td colspan="2"></td><td class="num">{{.Produksi}}</td><td class="num">{{.PI}}</td><td class="num">{{.Express}}</td><td class="num">{{.BeaSPV}}</td><td class="num">{{.Total}}</td><td></td></tr></tfoot>
 </table>
 <section class="closing">
   <div><div class="small-label">Terbilang</div><div class="terbilang"># {{.Terbilang}} #</div>
@@ -490,7 +524,7 @@ body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webk
 {{if .Continued}}<div class="continued">SURAT JALAN {{$.Nomor}} — lanjutan</div>{{end}}
 <table class="baris" aria-label="Rincian surat jalan"><colgroup><col style="width:5%"><col style="width:17%"><col style="width:29%"><col style="width:15%"><col style="width:16%"><col style="width:8%"><col style="width:10%"></colgroup>
   <thead><tr><th>No</th><th>Serial Number</th><th>Nama Instansi</th><th>Asal Cabang</th><th>Produk</th><th>Jumlah</th><th>Ket</th></tr></thead>
-  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td>{{.Nama}}</td><td class="center">{{.Qty}}</td><td></td></tr>{{end}}
+  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td>{{.Nama}}</td><td class="center">{{.Qty}}</td><td>{{if .Ket}}{{.Ket}}{{else}}—{{end}}</td></tr>{{end}}
     {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}</tbody>
   {{if .Last}}<tfoot><tr><td colspan="5" style="text-align:right">JUMLAH</td><td class="center">{{$.TotalQty}}</td><td></td></tr></tfoot>{{end}}</table>
 {{end}}

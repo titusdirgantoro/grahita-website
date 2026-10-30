@@ -33,6 +33,7 @@ type DebitLocked struct {
 	RequestFingerprint []byte
 	ActorKind          string
 	ActorID            string
+	Reason             string
 }
 
 // AllocateLocked menulis journal `order_allocation_debit` + baris alokasi dan
@@ -46,10 +47,10 @@ func AllocateLocked(ctx context.Context, tx pgx.Tx, in DebitLocked) (deposit.All
 	var transactionID string
 	if err := tx.QueryRow(ctx, `INSERT INTO branch_deposit_transactions(
 branch_id,kind,amount,order_id,order_version,idempotency_key_hash,request_fingerprint,
-actor_kind,actor_id)
-VALUES($1,'order_allocation_debit',$2,$3,$4,$5,$6,$7::actor_kind,$8) RETURNING id`,
+actor_kind,actor_id,reason)
+VALUES($1,'order_allocation_debit',$2,$3,$4,$5,$6,$7::actor_kind,$8,$9) RETURNING id`,
 		in.BranchID, -in.Amount, in.OrderID, in.OrderVersion, keyHash(in.IdempotencyKey),
-		in.RequestFingerprint, in.ActorKind, nullableUUID(in.ActorID)).Scan(&transactionID); err != nil {
+		in.RequestFingerprint, in.ActorKind, nullableUUID(in.ActorID), nullableText(in.Reason)).Scan(&transactionID); err != nil {
 		return deposit.Allocation{}, deposit.Account{}, mapConstraint(err)
 	}
 	var a deposit.Allocation

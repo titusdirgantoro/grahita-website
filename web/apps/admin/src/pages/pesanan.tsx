@@ -103,8 +103,14 @@ interface BarisPesanan {
   jenis: string;
   nama: string;
   nama_instansi: string;
+  keterangan?: string;
   qty: number;
   harga_satuan: number;
+  harga_dasar?: number;
+  produksi?: number;
+  pi?: number;
+  express?: number;
+  bea_spv?: number;
   subtotal: number;
   serial_number?: string;
 }
@@ -194,6 +200,7 @@ interface BarisRevisi {
   product_id?: string;
   nama: string;
   nama_instansi: string;
+  keterangan: string;
   serial_number?: string;
   qty: string;
   harga: string;
@@ -779,7 +786,7 @@ export function statusPesanan(p: Pick<PesananAdmin, "status" | "verif_status">):
 export function PesananDetailAdminPage() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { data, memuat, galat, muatUlang } = useApi<PesananDetail>(`/admin/orders/${id}`);
-  const { data: bukti } = useApi<BuktiTransfer[]>(`/admin/orders/${id}/proofs`);
+  const { data: bukti, muatUlang: muatBukti } = useApi<BuktiTransfer[]>(`/admin/orders/${id}/proofs`);
   const { data: rekeningOrder, muatUlang: muatRekeningOrder } = useApi<RekeningOrder>(
     `/admin/orders/${id}/bank-accounts`,
     data?.status === "submitted",
@@ -805,6 +812,9 @@ export function PesananDetailAdminPage() {
   const [sibukCatatan, setSibukCatatan] = useState(false);
   const [galatCatatan, setGalatCatatan] = useState<string | null>(null);
   const [zoom, setZoom] = useState<{ url: string; nama: string } | null>(null);
+  const [berkasBukti, setBerkasBukti] = useState<File[]>([]);
+  const [sibukBukti, setSibukBukti] = useState(false);
+  const [galatBukti, setGalatBukti] = useState<string | null>(null);
   const [sibukEmail, setSibukEmail] = useState<string | null>(null);
   const [sibukDokumen, setSibukDokumen] = useState(false);
   const [sibukTempo, setSibukTempo] = useState(false);
@@ -905,6 +915,32 @@ export function PesananDetailAdminPage() {
       throw err;
     }
   }, [id]);
+
+  /** unggahBukti mengirim bukti tambahan sebagai admin tanpa mengubah pemilik pesanan. */
+  const unggahBukti = useCallback(async (e: FormEvent) => {
+    e.preventDefault();
+    if (berkasBukti.length === 0) {
+      setGalatBukti("Pilih minimal satu berkas bukti.");
+      return;
+    }
+    setSibukBukti(true);
+    setGalatBukti(null);
+    try {
+      const form = new FormData();
+      for (const berkas of berkasBukti) form.append("file", berkas);
+      await api.postForm<BuktiTransfer[]>(`/admin/orders/${id}/proofs`, form);
+      setBerkasBukti([]);
+      const input = document.getElementById("bukti-admin") as HTMLInputElement | null;
+      if (input) input.value = "";
+      muatBukti();
+      muatUlang();
+      tampilkan("Bukti tambahan berhasil diunggah atas nama cabang.");
+    } catch (err) {
+      setGalatBukti(pesanGalat(err));
+    } finally {
+      setSibukBukti(false);
+    }
+  }, [berkasBukti, id, muatBukti, muatUlang, tampilkan]);
 
   /**
    * unduhDokumen mengambil tautan presigned berumur pendek untuk satu dokumen
@@ -1110,6 +1146,7 @@ export function PesananDetailAdminPage() {
           line_no: l.line_no,
           nama: l.nama,
           nama_instansi: l.nama_instansi ?? "",
+          keterangan: l.keterangan ?? "",
           serial_number: l.serial_number,
           qty: String(l.qty),
           harga: String(l.harga_satuan),
@@ -1147,6 +1184,7 @@ export function PesananDetailAdminPage() {
         product_id: p.id,
         nama: p.nama,
         nama_instansi: "",
+        keterangan: "",
         qty: "1",
         harga: String(p.harga),
       },
@@ -1191,8 +1229,8 @@ export function PesananDetailAdminPage() {
       }
       lines.push(
         b.line_no > 0
-          ? { line_no: b.line_no, qty, harga_satuan: harga, ...(b.nama_instansi.trim() ? { nama_instansi: b.nama_instansi.trim() } : {}) }
-          : { product_id: b.product_id, nama_instansi: b.nama_instansi.trim(), qty, harga_satuan: harga },
+          ? { line_no: b.line_no, qty, harga_satuan: harga, nama_instansi: b.nama_instansi.trim(), keterangan: b.keterangan.trim() }
+          : { product_id: b.product_id, nama_instansi: b.nama_instansi.trim(), keterangan: b.keterangan.trim(), qty, harga_satuan: harga },
       );
     }
     const rencanaRev = susunRencanaReversal(rencana);
@@ -1352,29 +1390,37 @@ export function PesananDetailAdminPage() {
             <Table stack="narrow" caption="Order line pesanan">
               <thead>
                 <tr>
-                  <th scope="col">Produk</th>
+                  <th scope="col">No</th>
+                  <th scope="col">Serial Number</th>
                   <th scope="col">Nama instansi</th>
-                  <th scope="col">Serial number</th>
-                  <th scope="col" className="num">
-                    Qty
-                  </th>
-                  <th scope="col" className="num">
-                    Harga
-                  </th>
-                  <th scope="col" className="num">
-                    Subtotal
-                  </th>
+                  <th scope="col">Cabang</th>
+                  <th scope="col" className="num">Jml Pcs</th>
+                  <th scope="col">Produk</th>
+                  <th scope="col" className="num">Harga/Pcs</th>
+                  <th scope="col" className="num">Produksi</th>
+                  <th scope="col" className="num">PI</th>
+                  <th scope="col" className="num">Expres</th>
+                  <th scope="col" className="num">Bea SPV</th>
+                  <th scope="col" className="num">Total Tagihan</th>
+                  <th scope="col">Ket</th>
                 </tr>
               </thead>
               <tbody>
                 {data.lines.map((l) => (
                   <tr key={l.line_no}>
-                    <td>{l.nama}</td>
-                    <td>{l.nama_instansi || "—"}</td>
+                    <td>{l.line_no}</td>
                     <td className="tabular muted">{l.serial_number || "—"}</td>
+                    <td>{l.nama_instansi || "—"}</td>
+                    <td>{data.branch_nama}</td>
                     <td className="num tabular">{l.qty}</td>
-                    <td className="num tabular">{rupiah.format(l.harga_satuan)}</td>
+                    <td>{l.nama}</td>
+                    <td className="num tabular">{rupiah.format(l.harga_dasar ?? l.harga_satuan)}</td>
+                    <td className="num tabular">{rupiah.format(l.produksi ?? l.subtotal)}</td>
+                    <td className="num tabular">{l.pi ? rupiah.format(l.pi) : "—"}</td>
+                    <td className="num tabular">{l.express ? rupiah.format(l.express) : "—"}</td>
+                    <td className="num tabular">{l.bea_spv ? rupiah.format(l.bea_spv) : "—"}</td>
                     <td className="num tabular">{rupiah.format(l.subtotal)}</td>
+                    <td>{l.keterangan || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1583,6 +1629,23 @@ export function PesananDetailAdminPage() {
 
           <Card>
             <CardHead title="Bukti transfer" tools={<Badge tone="neutral">{`${(bukti ?? []).length} berkas`}</Badge>} />
+            {data.status !== "draft" ? (
+              <form onSubmit={(e) => void unggahBukti(e)} style={{ marginBottom: 16 }}>
+                {galatBukti ? <Notice tone="danger">{galatBukti}</Notice> : null}
+                <Field label="Tambah bukti atas nama cabang" htmlFor="bukti-admin">
+                  <Input
+                    id="bukti-admin"
+                    type="file"
+                    accept="image/jpeg,image/png,application/pdf"
+                    multiple
+                    onChange={(e) => setBerkasBukti(Array.from(e.target.files ?? []))}
+                  />
+                </Field>
+                <Button type="submit" variant="secondary" disabled={sibukBukti || berkasBukti.length === 0}>
+                  {sibukBukti ? "Mengunggah…" : "Unggah bukti tambahan"}
+                </Button>
+              </form>
+            ) : null}
             {(bukti ?? []).length === 0 ? (
               <p className="muted small">Belum ada bukti transfer.</p>
             ) : (
@@ -1903,6 +1966,7 @@ export function PesananDetailAdminPage() {
               <tr>
                 <th scope="col">Produk</th>
                 <th scope="col">Nama instansi</th>
+                <th scope="col">Ket</th>
                 <th scope="col" className="num">
                   Qty
                 </th>
@@ -1920,6 +1984,8 @@ export function PesananDetailAdminPage() {
                     {b.line_no === 0 ? <Badge tone="rev">Baru</Badge> : null}
                     {b.serial_number ? <div className="muted small">{b.serial_number}</div> : null}
                   </td>
+                  <td><Input aria-label={`Keterangan ${b.nama}`} maxLength={250} value={b.keterangan}
+                    placeholder="Opsional" onChange={(e) => ubahBaris(b.kunci, { keterangan: e.target.value })} /></td>
                   <td>
                     <Input
                       aria-label={`Nama instansi ${b.nama} baris ${b.kunci}`}

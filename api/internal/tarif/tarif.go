@@ -1,4 +1,4 @@
-// Package tarif menghitung tarif satu item dari komponen HJM, P1, dan SPV
+// Package tarif menghitung tarif satu item dari komponen HJM, P1, Expres, dan SPV
 // (docs/design/master-impact-import.md §7) dan sidik komponennya.
 //
 // Satu-satunya sumber rumus untuk impor master Impact maupun edit manual
@@ -38,6 +38,16 @@ func SidikTersedia(hjm int64, p1 *big.Rat, spv, final int64) string {
 	return Sidik("available", strconv.FormatInt(hjm, 10), p1.RatString(), strconv.FormatInt(spv, 10), strconv.FormatInt(final, 10))
 }
 
+// SidikTersediaDenganExpress memperluas sidik tarif untuk komponen Expres.
+// Tarif tanpa Expres tetap memakai SidikTersedia agar impor lama dan edit
+// manual dengan Expres 0 tetap dikenali sebagai komponen yang sama.
+func SidikTersediaDenganExpress(hjm int64, p1 *big.Rat, express, spv, final int64) string {
+	if express == 0 {
+		return SidikTersedia(hjm, p1, spv, final)
+	}
+	return Sidik("available", strconv.FormatInt(hjm, 10), p1.RatString(), strconv.FormatInt(express, 10), strconv.FormatInt(spv, 10), strconv.FormatInt(final, 10))
+}
+
 // ParseRasio membaca P1 sebagai rasio eksak 0–1 (mis. "0.1", "0.05", "1/10").
 // Teks kosong berarti 0.
 func ParseRasio(teks string) (*big.Rat, error) {
@@ -66,11 +76,18 @@ func Desimal(r *big.Rat) string {
 // Pembulatan hanya sekali setelah ketiga komponen dijumlahkan. ok=false bila
 // komponen negatif atau hasilnya melampaui int64.
 func Final(hjm int64, p1 *big.Rat, spv int64) (int64, bool) {
-	if hjm < 0 || spv < 0 || p1 == nil || p1.Sign() < 0 {
+	return FinalDenganExpress(hjm, p1, 0, spv)
+}
+
+// FinalDenganExpress menghitung tarif satu item:
+// round_half_up(HJM + HJM×P1 + Expres + SPV).
+func FinalDenganExpress(hjm int64, p1 *big.Rat, express, spv int64) (int64, bool) {
+	if hjm < 0 || express < 0 || spv < 0 || p1 == nil || p1.Sign() < 0 {
 		return 0, false
 	}
 	raw := new(big.Rat).SetInt64(hjm)
 	raw.Add(raw, new(big.Rat).Mul(new(big.Rat).SetInt64(hjm), p1))
+	raw.Add(raw, new(big.Rat).SetInt64(express))
 	raw.Add(raw, new(big.Rat).SetInt64(spv))
 	return roundHalfUp(raw)
 }

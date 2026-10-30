@@ -80,7 +80,7 @@ function dashboardUji(nilai: boolean, patch?: Partial<DashboardData>): Dashboard
  * stubDashboard memasang fetch semu untuk dashboard, master cabang, dan
  * riwayat pemesanan (tujuan chip diklik).
  */
-function stubDashboard(opsi?: { peran?: string; nilai?: boolean }) {
+function stubDashboard(opsi?: { peran?: string; nilai?: boolean; emailGagal?: number; tempo?: { overdue: number; total_receivable: number; items: Array<{ status: string; remaining: number }> } }) {
   const peran = opsi?.peran ?? "manager";
   const nilai = opsi?.nilai ?? peran === "superadmin";
   const panggilan: string[] = [];
@@ -106,7 +106,17 @@ function stubDashboard(opsi?: { peran?: string; nilai?: boolean }) {
         });
       }
       if (url.includes("/admin/dashboard")) {
-        return json({ data: dashboardUji(nilai) });
+        const data = dashboardUji(nilai);
+        if (opsi?.emailGagal !== undefined) {
+          data.chip = data.chip.map((item) => item.kunci === "email_gagal" ? { ...item, jumlah: opsi.emailGagal! } : item);
+        }
+        return json({ data });
+      }
+      if (url.includes("/admin/tempo/overview")) {
+        return json({ data: opsi?.tempo ?? { overdue: 0, total_receivable: 0, pending_proof: 0, age_0_30: 0, age_31_60: 0, age_over_60: 0, items: [] } });
+      }
+      if (url.includes("/admin/tempo/repayments") || url.includes("/admin/tempo/statements")) {
+        return json({ data: [] });
       }
       if (url.includes("/admin/orders")) {
         return json({
@@ -168,6 +178,16 @@ describe("Dashboard admin (F1-20, tata letak admin_v2.html)", () => {
     });
   });
 
+  it("chip email gagal tampil dan membuka daftar email gagal", async () => {
+    const { panggilan } = stubDashboard({ emailGagal: 1 });
+    render(<RouterProvider router={buatRouter("/")} />);
+
+    fireEvent.click(await screen.findByText("1 email gagal"));
+    await waitFor(() => {
+      expect(panggilan.some((u) => u.includes("/admin/orders?") && u.includes("email_gagal=true"))).toBe(true);
+    });
+  });
+
   it("chip dapat disembunyikan lalu ditampilkan kembali", async () => {
     stubDashboard();
     render(<RouterProvider router={buatRouter("/")} />);
@@ -181,6 +201,30 @@ describe("Dashboard admin (F1-20, tata letak admin_v2.html)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Tampilkan semua chip" }));
     expect(await screen.findByLabelText("Sembunyikan: 3 menunggu verifikasi")).toBeDefined();
+  });
+
+  it("chip overdue menghitung hanya tagihan bersisa, membuka daftar yang sama, dan dapat disembunyikan", async () => {
+    const { panggilan } = stubDashboard({ tempo: {
+      overdue: 375000,
+      total_receivable: 500000,
+      items: [
+        { status: "lewat_jatuh_tempo", remaining: 250000 },
+        { status: "lewat_jatuh_tempo", remaining: 125000 },
+        { status: "lewat_jatuh_tempo", remaining: 0 },
+        { status: "menunggu_bayar", remaining: 125000 },
+      ],
+    } });
+    render(<RouterProvider router={buatRouter("/")} />);
+
+    let chip = await screen.findByText(/2 tagihan lewat jatuh tempo/);
+    expect(chip.textContent).toMatch(/375\.000/);
+    fireEvent.click(screen.getByLabelText("Sembunyikan tagihan lewat jatuh tempo"));
+    await waitFor(() => expect(screen.queryByText(/2 tagihan lewat jatuh tempo/)).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Tampilkan semua chip" }));
+    chip = await screen.findByText(/2 tagihan lewat jatuh tempo/);
+    fireEvent.click(chip);
+    expect(await screen.findByText("Tagihan cabang")).toBeDefined();
+    await waitFor(() => expect(panggilan.filter((u) => u.includes("/admin/tempo/overview")).length).toBeGreaterThanOrEqual(2));
   });
 
   it("filter cabang & periode dari URL dikirim sebagai query string dan tampil di topbar", async () => {

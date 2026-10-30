@@ -371,6 +371,168 @@ func TestPGDepositKreditHanyaSuperadmin(t *testing.T) {
 	}
 }
 
+// DEP-14: antrean admin, detail cabang, dan portal cabang harus membaca state
+// deposit yang sama. Pending/review tidak menambah saldo; verify menulis satu
+// transaksi bersumber bukti, dan replay keputusan tidak menggandakannya.
+func TestPGDepositAntreanDetailRiwayatDanBuktiTerekonsiliasi(t *testing.T) {
+	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
+	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	cookiesMgr, csrfMgr := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	cookiesSA, csrfSA := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	buat := func(key string, amount int64) string {
+		status, body := topupHTTP(t, f, cookiesA, csrfA, key, f.bankDefault, amount, berkasJPEGUji(key))
+		if status != http.StatusCreated {
+			t.Fatalf("buat top-up %s: %d (%v)", key, status, body)
+		}
+		return dataObj(body)["id"].(string)
+	}
+	pendingID := buat("dep14-pending", 120000)
+	reviewID := buat("dep14-review", 130000)
+	verifiedID := buat("dep14-verified", 140000)
+
+	status, body := depositReq(t, http.MethodPost,
+		f.srv.URL+"/api/v1/admin/deposit-topups/"+reviewID+"/decision",
+		`{"action":"review","reason":"Perlu pencocokan mutasi bank"}`, cookiesMgr, csrfMgr, "")
+	if status != http.StatusOK || dataObj(body)["topup"].(map[string]any)["status"] != "needs_review" {
+		t.Fatalf("review top-up harus needs_review: %d (%v)", status, body)
+	}
+	verifyBody := `{"action":"verify","approved_amount":140000,"reason":"Nominal dan rekening cocok"}`
+	verifyURL := f.srv.URL + "/api/v1/admin/deposit-topups/" + verifiedID + "/decision"
+	status, body = depositReq(t, http.MethodPost, verifyURL, verifyBody, cookiesSA, csrfSA, "dep14-verify")
+	if status != http.StatusOK || dataObj(body)["topup"].(map[string]any)["status"] != "verified" {
+		t.Fatalf("verify top-up harus verified: %d (%v)", status, body)
+	}
+	status, body = depositReq(t, http.MethodPost, verifyURL, verifyBody, cookiesSA, csrfSA, "dep14-verify")
+	if status != http.StatusOK || dataObj(body)["replayed"] != true {
+		t.Fatalf("retry verify harus replay: %d (%v)", status, body)
+	}
+
+	status, body = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/deposit", "", cookiesA, "", "")
+	if status != http.StatusOK {
+		t.Fatalf("ringkasan cabang: %d (%v)", status, body)
+	}
+	summary := dataObj(body)
+	if num(summary["available_balance"]) != 140000 || num(summary["journal_version"]) != 1 ||
+		num(summary["pending_topup_count"]) != 2 || num(summary["pending_topup_amount_declared"]) != 250000 {
+		t.Fatalf("ringkasan cabang tidak cocok: %v", summary)
+	}
+
+	status, body = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/deposit/topups?limit=50", "", cookiesA, "", "")
+	if status != http.StatusOK || num(body["meta"].(map[string]any)["total"]) != 3 || len(body["data"].([]any)) != 3 {
+		t.Fatalf("riwayat top-up cabang harus tiga baris: %d (%v)", status, body)
+	}
+	status, body = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/deposit/transactions?limit=50", "", cookiesA, "", "")
+	if status != http.StatusOK || num(body["meta"].(map[string]any)["total"]) != 1 || len(body["data"].([]any)) != 1 {
+		t.Fatalf("riwayat transaksi cabang harus satu kredit: %d (%v)", status, body)
+	}
+	txAPI := body["data"].([]any)[0].(map[string]any)
+	if txAPI["kind"] != "topup_credit" || num(txAPI["amount"]) != 140000 || txAPI["topup_id"] != verifiedID {
+		t.Fatalf("sumber nominal transaksi cabang salah: %v", txAPI)
+	}
+
+	status, body = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/admin/deposits", "", cookiesMgr, "", "")
+	if status != http.StatusOK {
+		t.Fatalf("antrean cabang admin: %d (%v)", status, body)
+	}
+	var overview map[string]any
+	for _, raw := range body["data"].([]any) {
+		row := raw.(map[string]any)
+		if row["branch_id"] == f.branchA {
+			overview = row
+		}
+	}
+	if overview == nil || num(overview["available_balance"]) != 140000 ||
+		num(overview["pending_topup_count"]) != 2 || num(overview["pending_topup_amount_declared"]) != 250000 {
+		t.Fatalf("overview admin tidak sama dengan DB/cabang: %v", overview)
+	}
+
+	status, body = depositReq(t, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/deposit-topups?branch_id="+f.branchA+"&limit=50", "", cookiesMgr, "", "")
+	if status != http.StatusOK || num(body["meta"].(map[string]any)["total"]) != 3 || len(body["data"].([]any)) != 3 {
+		t.Fatalf("antrean top-up admin harus tiga baris: %d (%v)", status, body)
+	}
+	status, body = depositReq(t, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/deposit-topups?branch_id="+f.branchA+"&status=needs_review", "", cookiesMgr, "", "")
+	if status != http.StatusOK || num(body["meta"].(map[string]any)["total"]) != 1 ||
+		body["data"].([]any)[0].(map[string]any)["id"] != reviewID {
+		t.Fatalf("filter needs_review admin salah: %d (%v)", status, body)
+	}
+
+	status, body = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/admin/deposits/"+f.branchA, "", cookiesMgr, "", "")
+	detail := dataObj(body)
+	if status != http.StatusOK || detail["reconciled"] != true || len(detail["topups"].([]any)) != 3 ||
+		len(detail["transactions"].([]any)) != 1 || num(detail["available_balance"]) != 140000 {
+		t.Fatalf("detail deposit admin tidak terekonsiliasi: %d (%v)", status, body)
+	}
+	for _, id := range []string{pendingID, reviewID, verifiedID} {
+		status, proof := depositReq(t, http.MethodGet,
+			f.srv.URL+"/api/v1/admin/deposit-topups/"+id+"/proof", "", cookiesMgr, "", "")
+		if status != http.StatusOK || dataObj(proof)["url"] == "" {
+			t.Fatalf("bukti top-up %s harus dapat dibuka admin: %d (%v)", id, status, proof)
+		}
+	}
+
+	var txAmount, declared, approved int64
+	var proofLinked bool
+	if err := f.pool.QueryRow(context.Background(), `SELECT t.amount,dt.declared_amount,v.approved_amount,
+		t.source_proof_id=dt.payment_proof_id FROM branch_deposit_transactions t
+		JOIN deposit_verification_logs v ON v.id=t.deposit_verification_log_id
+		JOIN deposit_topups dt ON dt.id=v.topup_id WHERE dt.id=$1`, verifiedID).
+		Scan(&txAmount, &declared, &approved, &proofLinked); err != nil {
+		t.Fatalf("baca sumber kredit terverifikasi: %v", err)
+	}
+	if txAmount != 140000 || declared != 140000 || approved != 140000 || !proofLinked {
+		t.Fatalf("nominal/sumber kredit salah: tx=%d declared=%d approved=%d proof=%v", txAmount, declared, approved, proofLinked)
+	}
+	if n := hitungSQL(t, f, `SELECT count(*) FROM branch_deposit_transactions WHERE deposit_verification_log_id IS NOT NULL`); n != 1 {
+		t.Fatalf("replay status tidak boleh menggandakan transaksi, dapat %d", n)
+	}
+}
+
+// DEP-01: endpoint deposit selalu terikat cabang sesi. Cabang non-C&C tetap
+// boleh membuka saldo/riwayat miliknya (misalnya kredit lebih bayar lama),
+// tetapi tidak boleh top-up dan tidak pernah melihat data cabang lain.
+func TestPGDepositAksesCabangNonCNCDanIsolasiData(t *testing.T) {
+	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
+	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	_ = kreditCabang(t, f, cookiesA, csrfA, 80000, "dep01-a")
+	if _, err := f.pool.Exec(context.Background(), `UPDATE branches SET is_cnc=false,allow_transfer=true WHERE id=$1`, f.branchA); err != nil {
+		t.Fatalf("ubah cabang A menjadi non-C&C: %v", err)
+	}
+	var topupA string
+	if err := f.pool.QueryRow(context.Background(), `SELECT id FROM deposit_topups WHERE branch_id=$1`, f.branchA).Scan(&topupA); err != nil {
+		t.Fatalf("baca top-up cabang A: %v", err)
+	}
+	cookiesB, csrfB := pgLogin(t, f.srv, "b@example.test", "rahasia123")
+
+	status, body := depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/deposit", "", cookiesA, "", "")
+	if status != http.StatusOK || num(dataObj(body)["available_balance"]) != 80000 {
+		t.Fatalf("cabang A non-C&C harus tetap melihat saldo sendiri: %d (%v)", status, body)
+	}
+	status, body = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/deposit", "", cookiesB, "", "")
+	if status != http.StatusOK || num(dataObj(body)["available_balance"]) != 0 || num(dataObj(body)["journal_version"]) != 0 {
+		t.Fatalf("cabang B non-C&C harus melihat saldo nol miliknya: %d (%v)", status, body)
+	}
+
+	for _, endpoint := range []string{"/api/v1/deposit/topups?limit=50", "/api/v1/deposit/transactions?limit=50"} {
+		status, body = depositReq(t, http.MethodGet, f.srv.URL+endpoint, "", cookiesB, "", "")
+		if status != http.StatusOK || num(body["meta"].(map[string]any)["total"]) != 0 || len(body["data"].([]any)) != 0 {
+			t.Fatalf("data cabang A bocor ke cabang B pada %s: %d (%v)", endpoint, status, body)
+		}
+	}
+	status, _ = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/deposit/topups/"+topupA+"/proof", "", cookiesB, "", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("cabang B tidak boleh membuka bukti cabang A, dapat %d", status)
+	}
+	status, body = topupHTTP(t, f, cookiesB, csrfB, "dep01-b", f.bankDefault, 50000, berkasJPEGUji("dep01-b"))
+	if status != http.StatusForbidden || errCode(body) != "DEPOSIT_CNC_ONLY" {
+		t.Fatalf("cabang non-C&C tidak boleh top-up: %d (%v)", status, body)
+	}
+}
+
 // TestPGDepositAlokasiParalelDanIsolasi: alokasi paralel ke beberapa order dari
 // saldo yang sama tidak pernah melebihi saldo; cabang lain dan versi basi
 // ditolak; saldo kurang ditolak tanpa pengurangan diam-diam.
@@ -484,6 +646,75 @@ func TestPGDepositAlokasiParalelDanIsolasi(t *testing.T) {
 	status, res = depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderA+"/deposit-allocations", kurang, cookiesA, csrfA, "a-kurang")
 	if status != http.StatusConflict || errCode(res) != "DEPOSIT_BALANCE_INSUFFICIENT" {
 		t.Fatalf("saldo kurang harus 409 DEPOSIT_BALANCE_INSUFFICIENT, dapat %d (%v)", status, res)
+	}
+}
+
+// DEP-09: order Submitted dapat menerima tambahan alokasi sesudah submit dari
+// cabang pemilik maupun admin. Alokasi admin wajib beralasan, dan journal
+// menyimpan actor, alasan, versi, serta sumber debit yang tepat.
+func TestPGDepositTambahAlokasiSubmittedCabangDanAdmin(t *testing.T) {
+	f := newPGFixture(t)
+	jadikanCNC(t, f, f.branchA)
+	cookiesA, csrfA := pgLogin(t, f.srv, "a@example.test", "rahasia123")
+	versi := kreditCabang(t, f, cookiesA, csrfA, 200000, "dep09")
+	orderCabang := insertOrderSubmitted(t, f, f.branchA, "2026-10-901", 100000)
+	orderAdmin := insertOrderSubmitted(t, f, f.branchA, "2026-10-902", 100000)
+
+	status, res := depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/orders/"+orderCabang+"/deposit-allocations",
+		fmt.Sprintf(`{"amount":40000,"expected_journal_version":%d,"expected_order_version":0}`, versi),
+		cookiesA, csrfA, "dep09-cabang")
+	if status != http.StatusCreated || num(dataObj(res)["remaining_due"]) != 60000 {
+		t.Fatalf("alokasi cabang harus 201 dan menyisakan 60000, dapat %d (%v)", status, res)
+	}
+	versi = num(dataObj(res)["balance"].(map[string]any)["journal_version"])
+
+	cookiesMgr, csrfMgr := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	adminURL := f.srv.URL + "/api/v1/admin/orders/" + orderAdmin + "/deposit-allocations"
+	bodyTanpaAlasan := fmt.Sprintf(`{"amount":50000,"expected_journal_version":%d,"expected_order_version":0}`, versi)
+	status, res = depositReq(t, http.MethodPost, adminURL, bodyTanpaAlasan, cookiesMgr, csrfMgr, "dep09-admin-tanpa-alasan")
+	if status != http.StatusBadRequest {
+		t.Fatalf("alokasi admin tanpa alasan harus 400, dapat %d (%v)", status, res)
+	}
+	if n := hitungSQL(t, f, `SELECT count(*) FROM deposit_allocations WHERE order_id=$1`, orderAdmin); n != 0 {
+		t.Fatalf("alokasi admin ditolak tidak boleh menulis data: %d", n)
+	}
+
+	alasan := "Permintaan cabang melalui layanan pelanggan"
+	bodyAdmin := fmt.Sprintf(`{"amount":50000,"expected_journal_version":%d,"expected_order_version":0,"reason":%q}`, versi, alasan)
+	status, res = depositReq(t, http.MethodPost, adminURL, bodyAdmin, cookiesMgr, csrfMgr, "dep09-admin")
+	if status != http.StatusCreated || num(dataObj(res)["remaining_due"]) != 50000 {
+		t.Fatalf("alokasi admin beralasan harus 201 dan menyisakan 50000, dapat %d (%v)", status, res)
+	}
+	versi = num(dataObj(res)["balance"].(map[string]any)["journal_version"])
+	if saldo, versiAkhir, _, _ := saldoCabang(t, f, cookiesA); saldo != 110000 || versiAkhir != versi {
+		t.Fatalf("dua alokasi harus menyisakan saldo 110000 pada versi %d, dapat saldo=%d versi=%d", versi, saldo, versiAkhir)
+	}
+
+	status, res = depositReq(t, http.MethodPost, adminURL,
+		fmt.Sprintf(`{"amount":50000,"expected_journal_version":%d,"expected_order_version":0,"reason":"Alasan berbeda"}`, versi-1),
+		cookiesMgr, csrfMgr, "dep09-admin")
+	if status != http.StatusConflict || errCode(res) != "IDEMPOTENCY_KEY_REUSED" {
+		t.Fatalf("key admin dengan alasan berbeda harus 409 IDEMPOTENCY_KEY_REUSED, dapat %d (%v)", status, res)
+	}
+
+	for _, tc := range []struct {
+		orderID, kind, actorID, reason string
+		amount                         int64
+	}{
+		{orderCabang, "branch", f.userA, "", -40000},
+		{orderAdmin, "admin", f.adminMgr, alasan, -50000},
+	} {
+		var amount int64
+		var kind, actorID, reason string
+		if err := f.pool.QueryRow(context.Background(), `SELECT t.amount,t.actor_kind::text,t.actor_id::text,
+			COALESCE(t.reason,'') FROM deposit_allocations a JOIN branch_deposit_transactions t
+			ON t.id=a.debit_transaction_id WHERE a.order_id=$1`, tc.orderID).
+			Scan(&amount, &kind, &actorID, &reason); err != nil {
+			t.Fatalf("baca sumber alokasi %s: %v", tc.orderID, err)
+		}
+		if amount != tc.amount || kind != tc.kind || actorID != tc.actorID || reason != tc.reason {
+			t.Fatalf("sumber alokasi %s salah: amount=%d kind=%s actor=%s reason=%q", tc.orderID, amount, kind, actorID, reason)
+		}
 	}
 }
 

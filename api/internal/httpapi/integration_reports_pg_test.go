@@ -589,6 +589,11 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	if len(barisEkspor) != 4 {
 		t.Fatalf("sheet laporan harus 4 baris (header+3), dapat %d", len(barisEkspor))
 	}
+	for _, header := range barisEkspor[0] {
+		if strings.Contains(strings.ToLower(header), "special") {
+			t.Fatalf("flag Special lama tidak boleh muncul pada ekspor: %v", barisEkspor[0])
+		}
+	}
 	// Kolom status sesuai filter; baris packaging milik pesanan sertifikat ikut
 	// (satu baris per order line, AP-REP-01).
 	jenisTampil := map[string]int{}
@@ -879,6 +884,7 @@ func TestPGReportEkspor50kBarisTidakOOM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("baca berkas ekspor: %v", err)
 	}
+	t.Logf("ekspor %d baris menghasilkan XLSX %d byte", totalBaris, len(isi))
 	f, err := excelize.OpenReader(bytes.NewReader(isi))
 	if err != nil {
 		t.Fatalf("buka ekspor: %v", err)

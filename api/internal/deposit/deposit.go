@@ -100,6 +100,7 @@ type AllocationInput struct {
 	RequestFingerprint     []byte
 	ActorKind              string
 	ActorID                string
+	Reason                 string
 }
 
 type Allocation struct {

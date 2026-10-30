@@ -234,7 +234,13 @@ func keLine(row sqlc.ListReportOrderLinesRow) report.Line {
 		SerialNumber:     row.SerialNumber,
 		Qty:              int(row.Qty),
 		HargaSatuan:      row.HargaSatuan,
+		HargaDasar:       row.HargaDasar,
+		Produksi:         row.Produksi,
+		PI:               row.Pi,
+		Express:          row.Express,
+		BeaSPV:           row.BeaSpv,
 		Subtotal:         row.Subtotal,
+		Keterangan:       row.Keterangan,
 		Status:           row.Status,
 		MetodeVerifikasi: row.MetodeVerifikasi,
 	}

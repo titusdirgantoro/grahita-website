@@ -160,6 +160,7 @@ type SubmitLine struct {
 	Jenis        string
 	Qty          int
 	NamaInstansi string
+	Keterangan   string
 
 	// NamaLama adalah snapshot yang tersimpan di draft; dipakai sebagai
 	// cadangan bila teks master kosong.
@@ -172,6 +173,11 @@ type SubmitLine struct {
 
 	ProdukJenis    string
 	HargaCabang    int64
+	HargaDasar     int64
+	PIRatio        string
+	PIPerPcs       int64
+	ExpressPerPcs  int64
+	SPVPerPcs      int64
 	AdaHargaCabang bool
 }
 
@@ -180,7 +186,12 @@ type SnapshotSubmit struct {
 	LineNo int
 	Nama   string
 
-	HargaSatuan int64
+	HargaSatuan   int64
+	HargaDasar    int64
+	PIRatio       string
+	PIPerPcs      int64
+	ExpressPerPcs int64
+	SPVPerPcs     int64
 }
 
 // SiapkanSubmit menegakkan aturan isi pesanan SAAT SUBMIT dan menghitung
@@ -227,6 +238,8 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 				// Nama baris biaya packaging adalah teks baku server.
 				Nama:        NamaBiayaPackaging,
 				HargaSatuan: biayaPackaging,
+				HargaDasar:  biayaPackaging,
+				PIRatio:     "0",
 			})
 		case JenisProduct:
 			produk++
@@ -255,7 +268,12 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 				LineNo: l.LineNo,
 				Nama:   nama,
 
-				HargaSatuan: harga,
+				HargaSatuan:   harga,
+				HargaDasar:    l.HargaDasar,
+				PIRatio:       l.PIRatio,
+				PIPerPcs:      l.PIPerPcs,
+				ExpressPerPcs: l.ExpressPerPcs,
+				SPVPerPcs:     l.SPVPerPcs,
 			})
 		default:
 			return nil, fmt.Errorf("%w: jenis baris %q tidak dikenal", ErrInvalidData, l.Jenis)

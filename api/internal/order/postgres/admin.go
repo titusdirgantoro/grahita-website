@@ -206,15 +206,25 @@ func (r *Repo) GetAdmin(ctx context.Context, id string, emailGagalIDs []string) 
 	out.Lines = make([]order.Line, 0, len(lines))
 	for _, l := range lines {
 		out.Lines = append(out.Lines, order.Line{
-			LineNo:       int(l.LineNo),
-			Jenis:        l.Jenis,
-			ProductID:    pgtypes.UUIDString(l.ProductID),
-			Nama:         l.NamaSnapshot,
-			NamaInstansi: l.NamaInstansi,
-			Qty:          int(l.Qty),
-			HargaSatuan:  l.HargaSatuan,
-			Subtotal:     l.Subtotal.Int64,
-			SerialNumber: pgtypes.TextOr(l.SerialNumber),
+			LineNo:        int(l.LineNo),
+			Jenis:         l.Jenis,
+			ProductID:     pgtypes.UUIDString(l.ProductID),
+			Nama:          l.NamaSnapshot,
+			NamaInstansi:  l.NamaInstansi,
+			Keterangan:    l.Keterangan,
+			Qty:           int(l.Qty),
+			HargaSatuan:   l.HargaSatuan,
+			HargaDasar:    l.HargaDasar,
+			PIRatio:       l.PiRatio,
+			PIPerPcs:      l.PiPerPcs,
+			ExpressPerPcs: l.ExpressPerPcs,
+			SPVPerPcs:     l.SpvPerPcs,
+			Produksi:      l.Produksi,
+			PI:            l.Pi,
+			Express:       l.Express,
+			BeaSPV:        l.BeaSpv,
+			Subtotal:      l.Subtotal.Int64,
+			SerialNumber:  pgtypes.TextOr(l.SerialNumber),
 		})
 	}
 

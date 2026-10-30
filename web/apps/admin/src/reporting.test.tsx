@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,10 @@ function json(data: unknown) {
   return new Response(JSON.stringify({ data }), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("Reporting admin", () => {
   it("menampilkan instansi per baris dan mengekspor filter yang sedang dipakai", async () => {
@@ -46,5 +49,74 @@ describe("Reporting admin", () => {
     expect(JSON.parse(ekspor?.body ?? "{}").cabang).toEqual(["b1"]);
     fireEvent.click(await screen.findByRole("button", { name: "Unduh Excel" }));
     await waitFor(() => expect(window.open).toHaveBeenCalledWith("https://example.test/laporan.xlsx", "_blank", "noopener,noreferrer"));
+  });
+
+  it("memantau ekspor queued lalu proses sampai selesai sebelum mengizinkan unduh", async () => {
+    const status: Array<"proses" | "selesai"> = ["proses", "selesai"];
+    const panggilan: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+      const url = String(input);
+      panggilan.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/auth/me")) return json({ user: { id: "a1", kind: "admin", role: "superadmin", nama: "Admin", email: "admin@example.test" } });
+      if (url.endsWith("/admin/branches")) return json([]);
+      if (url.includes("/admin/reports/order-lines")) return json({ items: [], total: 0, total_subtotal: 0, halaman: 1, per_halaman: 25 });
+      if (url.endsWith("/admin/reports/export") && init?.method === "POST") {
+        return json({ id: "job-antre", status: "queued", jumlah_baris: 0 });
+      }
+      if (url.endsWith("/admin/reports/export/job-antre")) {
+        const berikut = status.shift() ?? "selesai";
+        return json({ id: "job-antre", status: berikut, jumlah_baris: berikut === "selesai" ? 7 : 0 });
+      }
+      throw new Error(`request tidak dikenal: ${init?.method ?? "GET"} ${url}`);
+    }));
+
+    const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: ["/reporting"] }) });
+    render(<RouterProvider router={router} />);
+    await screen.findByText("Belum ada baris laporan untuk filter ini.");
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Ekspor Excel" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("Ekspor sedang diproses. Berkas akan tersedia di sini.")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Unduh Excel" })).toBeNull();
+
+    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve(); });
+    expect(panggilan.filter((p) => p.endsWith("/admin/reports/export/job-antre"))).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Unduh Excel" })).toBeNull();
+
+    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve(); });
+    expect(panggilan.filter((p) => p.endsWith("/admin/reports/export/job-antre"))).toHaveLength(2);
+    expect(screen.getByText("7 baris siap diunduh.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Unduh Excel" })).toBeDefined();
+    vi.useRealTimers();
+  });
+
+  it("menampilkan galat ekspor, menahan unduh, lalu membuat pekerjaan baru saat dicoba lagi", async () => {
+    let jumlahPost = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return json({ user: { id: "a1", kind: "admin", role: "superadmin", nama: "Admin", email: "admin@example.test" } });
+      if (url.endsWith("/admin/branches")) return json([]);
+      if (url.includes("/admin/reports/order-lines")) return json({ items: [], total: 0, total_subtotal: 0, halaman: 1, per_halaman: 25 });
+      if (url.endsWith("/admin/reports/export") && init?.method === "POST") {
+        jumlahPost++;
+        if (jumlahPost === 1) return json({ id: "job-gagal", status: "gagal", jumlah_baris: 0, pesan: "object storage sedang penuh" });
+        return json({ id: "job-ulangan", status: "selesai", jumlah_baris: 11 });
+      }
+      throw new Error(`request tidak dikenal: ${init?.method ?? "GET"} ${url}`);
+    }));
+
+    const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: ["/reporting"] }) });
+    render(<RouterProvider router={router} />);
+    await screen.findByText("Belum ada baris laporan untuk filter ini.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Ekspor Excel" }));
+    expect(await screen.findByText("object storage sedang penuh")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Unduh Excel" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ekspor Excel" }));
+    expect(await screen.findByText("11 baris siap diunduh.")).toBeDefined();
+    expect(jumlahPost).toBe(2);
+    expect(screen.getByRole("button", { name: "Unduh Excel" })).toBeDefined();
   });
 });

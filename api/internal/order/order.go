@@ -124,6 +124,7 @@ const (
 	MaxLines        = 100
 	maxQty          = 1_000_000
 	MaxNamaInstansi = 160
+	MaxKeterangan   = 250
 )
 
 // uuidRe dipakai untuk menolak id yang jelas bukan UUID dengan jawaban 404
@@ -144,11 +145,21 @@ type Line struct {
 	ProductID    string `json:"product_id,omitempty"`
 	Nama         string `json:"nama"`
 	NamaInstansi string `json:"nama_instansi"`
+	Keterangan   string `json:"keterangan"`
 
-	Qty          int    `json:"qty"`
-	HargaSatuan  int64  `json:"harga_satuan"`
-	Subtotal     int64  `json:"subtotal"`
-	SerialNumber string `json:"serial_number,omitempty"`
+	Qty           int    `json:"qty"`
+	HargaSatuan   int64  `json:"harga_satuan"`
+	HargaDasar    int64  `json:"harga_dasar"`
+	PIRatio       string `json:"pi_ratio"`
+	PIPerPcs      int64  `json:"pi_per_pcs"`
+	ExpressPerPcs int64  `json:"express_per_pcs"`
+	SPVPerPcs     int64  `json:"spv_per_pcs"`
+	Produksi      int64  `json:"produksi"`
+	PI            int64  `json:"pi"`
+	Express       int64  `json:"express"`
+	BeaSPV        int64  `json:"bea_spv"`
+	Subtotal      int64  `json:"subtotal"`
+	SerialNumber  string `json:"serial_number,omitempty"`
 }
 
 // Order adalah pesanan satu cabang. Lines hanya diisi pada detail
@@ -187,6 +198,7 @@ type LineInput struct {
 	ProductID    string
 	Qty          int
 	NamaInstansi string
+	Keterangan   string
 }
 
 // DraftInput adalah isi draft yang dikirim klien.
@@ -414,11 +426,15 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 	for i, baris := range in.Lines {
 		pid := strings.TrimSpace(baris.ProductID)
 		instansi := strings.TrimSpace(baris.NamaInstansi)
+		keterangan := strings.TrimSpace(baris.Keterangan)
 		if pid == "" {
 			return "", nil, fmt.Errorf("%w: baris %d belum memilih produk", ErrInvalidData, i+1)
 		}
 		if instansi == "" || len([]rune(instansi)) > MaxNamaInstansi {
 			return "", nil, fmt.Errorf("%w: nama instansi baris %d wajib diisi, maksimal %d karakter", ErrInvalidData, i+1, MaxNamaInstansi)
+		}
+		if len([]rune(keterangan)) > MaxKeterangan {
+			return "", nil, fmt.Errorf("%w: keterangan baris %d maksimal %d karakter", ErrInvalidData, i+1, MaxKeterangan)
 		}
 		p, ok := dijual[pid]
 		if !ok {
@@ -435,9 +451,17 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 		}
 
 		harga := p.Harga
+		hargaDasar, piPerPcs, expressPerPcs, spvPerPcs, piRatio := p.HargaDasar, p.PI, p.Express, p.SPV, p.P1
+		if hargaDasar == 0 && harga > 0 && piPerPcs == 0 && expressPerPcs == 0 && spvPerPcs == 0 {
+			hargaDasar = harga
+		}
+		if piRatio == "" {
+			piRatio = "0"
+		}
 		if p.Jenis == catalog.JenisSertifikat {
 			// CP-SER-01/BR-06: harga Sertifikat SELALU 0 berapa pun qty.
 			harga = 0
+			hargaDasar, piPerPcs, expressPerPcs, spvPerPcs, piRatio = 0, 0, 0, 0, "0"
 			sertifikat++
 		} else {
 			reguler++
@@ -448,10 +472,20 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 			ProductID:    pid,
 			Nama:         p.Nama,
 			NamaInstansi: instansi,
+			Keterangan:   keterangan,
 
-			Qty:         baris.Qty,
-			HargaSatuan: harga,
-			Subtotal:    int64(baris.Qty) * harga,
+			Qty:           baris.Qty,
+			HargaSatuan:   harga,
+			HargaDasar:    hargaDasar,
+			PIRatio:       piRatio,
+			PIPerPcs:      piPerPcs,
+			ExpressPerPcs: expressPerPcs,
+			SPVPerPcs:     spvPerPcs,
+			Produksi:      int64(baris.Qty) * hargaDasar,
+			PI:            int64(baris.Qty) * piPerPcs,
+			Express:       int64(baris.Qty) * expressPerPcs,
+			BeaSPV:        int64(baris.Qty) * spvPerPcs,
+			Subtotal:      int64(baris.Qty) * harga,
 		})
 	}
 
@@ -489,6 +523,9 @@ func packagingLine(lineNo int, biaya int64) Line {
 
 		Qty:         1,
 		HargaSatuan: biaya,
+		HargaDasar:  biaya,
+		PIRatio:     "0",
+		Produksi:    biaya,
 		Subtotal:    biaya,
 	}
 }

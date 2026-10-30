@@ -180,6 +180,44 @@ describe("Admin Portal — /pengaturan (F1-09)", () => {
     });
   });
 
+  it("Superadmin menyimpan seluruh batas transaksi dan izin revisi dalam satu perubahan", async () => {
+    const panggilan = stubFetch("superadmin");
+
+    render(<RouterProvider router={buatRouter("/pengaturan")} />);
+    await screen.findByLabelText("Biaya packaging (Rp)");
+
+    const perubahan: Array<[string, string]> = [
+      ["Biaya packaging (Rp)", "4500"],
+      ["Masa berlaku token registrasi (hari)", "21"],
+      ["Masa berlaku tautan reset (menit)", "90"],
+      ["Ukuran maksimal bukti transfer (MB)", "8"],
+      ["Jumlah maksimal file bukti", "7"],
+      ["Jumlah digit urut nomor invoice", "4"],
+    ];
+    for (const [nama, nilai] of perubahan) {
+      fireEvent.change(screen.getByLabelText(nama), { target: { value: nilai } });
+    }
+    fireEvent.click(screen.getByRole("switch", { name: "Manager boleh merevisi invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Simpan pengaturan" }));
+
+    await waitFor(() => {
+      const put = panggilan.find((p) => p.url.endsWith("/admin/settings") && p.init?.method === "PUT");
+      expect(put).toBeDefined();
+      expect(JSON.parse(String(put?.init?.body))).toEqual({
+        values: {
+          biaya_packaging: 4500,
+          token_hari: 21,
+          reset_menit: 90,
+          max_mb: 8,
+          max_file: 7,
+          digit_invoice: 4,
+          manager_boleh_revisi: false,
+        },
+      });
+      expect((put?.init?.headers as Record<string, string>)["X-CSRF-Token"]).toBe("token-uji");
+    });
+  });
+
   it("Galat validasi rentang ditampilkan pada field yang bersangkutan", async () => {
     stubFetch("superadmin", (url, init) => {
       if (url.endsWith("/admin/settings") && init?.method === "PUT") {

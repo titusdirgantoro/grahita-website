@@ -8,6 +8,7 @@ describe("komponen tarif matriks harga", () => {
     expect(hitungTarif(100000, "0.1", 2500)).toBe(112500);
     expect(hitungTarif(10001, "0.05", 0)).toBe(10501);
     expect(hitungTarif(10005, "0.1", 0)).toBe(11006);
+    expect(hitungTarif(27500, "0.05", 2500, 1500)).toBe(32875);
   });
 
   it("persen yang diketik dan rasio API saling bolak-balik tanpa kehilangan presisi", () => {

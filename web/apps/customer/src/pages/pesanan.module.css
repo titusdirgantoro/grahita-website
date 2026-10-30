@@ -77,9 +77,10 @@
 .linesHead,
 .line {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1.2fr) 110px 120px 120px 36px;
-  gap: 12px;
+  grid-template-columns: 44px 128px minmax(180px, 1.5fr) 130px 110px minmax(170px, 1.2fr) 120px 120px 100px 110px 110px 130px minmax(150px, 1fr);
+  gap: 10px;
   align-items: center;
+  min-width: 1780px;
 }
 
 .linesHead {
@@ -93,6 +94,8 @@
 .line {
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
+  position: relative;
+  padding-right: 48px;
 }
 
 .stepper {
@@ -132,13 +135,18 @@
 }
 
 .lHarga,
+.lProduksi,
+.lPI,
+.lExpress,
+.lSPV,
 .lSub {
   text-align: right;
 }
 
 .lDel {
-  display: flex;
-  justify-content: flex-end;
+  position: absolute;
+  right: 0;
+  top: 8px;
 }
 
 /* Baris biaya packaging pesanan Sertifikat (F1-12): dibuat dan dikunci server,
@@ -247,6 +255,8 @@
    baris berubah menjadi dua kolom berlabel seperti prototype mobile. */
 .lines {
   container-type: inline-size;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 @container (max-width: 799px) {
@@ -256,6 +266,7 @@
 
   .line {
     grid-template-columns: 1fr 1fr;
+    min-width: 0;
     gap: 8px 12px;
     padding: 14px 0;
     position: relative;
@@ -263,10 +274,15 @@
 
   .lProd {
     grid-column: 1 / -1;
-    padding-right: 44px;
   }
 
   .lInstansi {
+    grid-column: 1 / -1;
+  }
+
+  .lSerial,
+  .lCabang,
+  .lKet {
     grid-column: 1 / -1;
   }
 
@@ -283,6 +299,10 @@
   }
 
   .lHarga,
+  .lProduksi,
+  .lPI,
+  .lExpress,
+  .lSPV,
   .lSub {
     text-align: left;
   }
