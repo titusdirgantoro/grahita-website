@@ -106,6 +106,9 @@ describe("Customer Portal — Beranda (F1-19)", () => {
     expect(screen.getByTestId("kpi-total-periode").textContent).toContain("500.000");
     expect(screen.getByTestId("kpi-menunggu").textContent?.trim()).toBe("1");
     expect(screen.getByTestId("kpi-draft").textContent?.trim()).toBe("1");
+    expect(
+      screen.getByRole("region", { name: "Ringkasan periode berjalan" }).getAttribute("tabindex"),
+    ).toBe("0");
 
     // Pesanan C&C (dibayar deposit) tetap "Menunggu verifikasi" sampai Pusat
     // memverifikasi; beranda tidak lagi punya pengingat jatuh tempo.

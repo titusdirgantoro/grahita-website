@@ -160,7 +160,11 @@ export function BerandaPage() {
         <Notice tone="danger">{galat}</Notice>
       ) : (
         <div className={styles.stack}>
-          <section className={styles.kpis} aria-label="Ringkasan periode berjalan">
+          <section
+            className={styles.kpis}
+            aria-label="Ringkasan periode berjalan"
+            tabIndex={0}
+          >
             <Card>
               <div className={styles.kpi}>
                 <div>

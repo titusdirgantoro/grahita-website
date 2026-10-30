@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "../cn";
 import { Icon } from "../icon";
@@ -39,6 +39,29 @@ export interface AdminShellProps {
 }
 
 /**
+ * useMediaQuery menjaga state aksesibilitas drawer sejalan dengan breakpoint
+ * CSS. Tanpa ini, sidebar yang sudah digeser ke luar layar tetap menerima Tab.
+ */
+function useMediaQuery(query: string) {
+  const baca = () =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(query).matches
+      : false;
+  const [cocok, setCocok] = useState(baca);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const ubah = (event: MediaQueryListEvent) => setCocok(event.matches);
+    setCocok(media.matches);
+    media.addEventListener("change", ubah);
+    return () => media.removeEventListener("change", ubah);
+  }, [query]);
+
+  return cocok;
+}
+
+/**
  * AdminShell memetakan tata letak admin_v2.html:
  *  - sidebar kartu 232px yang bisa diciutkan jadi 72px (`.collapsed`)
  *  - di <900px sidebar menjadi drawer (`translateX`) dengan scrim + tombol menu
@@ -58,6 +81,17 @@ export function AdminShell({
 }: AdminShellProps) {
   const [ciut, setCiut] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const layarSempit = useMediaQuery("(max-width: 899px)");
+  const drawerTertutup = layarSempit && !drawer;
+  const sebelumnyaTerbuka = useRef(false);
+  const pembungkusMenu = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (layarSempit && sebelumnyaTerbuka.current && !drawer) {
+      pembungkusMenu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+    sebelumnyaTerbuka.current = drawer;
+  }, [drawer, layarSempit]);
 
   useEffect(() => {
     if (!drawer) return;
@@ -74,7 +108,13 @@ export function AdminShell({
   return (
     <div className={cn(styles.shell, ciut && styles.collapsed, drawer && styles.drawer)}>
       <div className={styles.scrim} onClick={() => setDrawer(false)} aria-hidden="true" />
-      <aside className={styles.side} id="admin-sidebar" aria-label="Navigasi">
+      <aside
+        className={styles.side}
+        id="admin-sidebar"
+        aria-label="Navigasi"
+        aria-hidden={drawerTertutup || undefined}
+        inert={drawerTertutup || undefined}
+      >
         <div className={styles.top}>
           <Brand labelClassName={styles.wordmark} />
           <Button
@@ -136,7 +176,7 @@ export function AdminShell({
 
       <main className={styles.main}>
         <div className={styles.topbar}>
-          <div className={styles.l}>
+          <div className={styles.l} ref={pembungkusMenu}>
             <Button
               iconOnly
               icon="list"

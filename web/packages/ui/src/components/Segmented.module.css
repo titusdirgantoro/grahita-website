@@ -25,7 +25,9 @@
   background: none;
   cursor: pointer;
   font-weight: 500;
-  color: var(--text-muted);
+  /* Teks nonaktif tetap perlu AA di atas --seg-bg yang bernuansa brand.
+     --text-muted jatuh di bawah 4.5:1 pada palet Portal Cabang. */
+  color: var(--text);
 }
 
 .seg button[aria-pressed="true"] {

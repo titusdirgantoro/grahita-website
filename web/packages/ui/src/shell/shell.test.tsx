@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { AdminShell } from "./AdminShell";
 import { CustomerShell } from "./CustomerShell";
 import { bolehLihat, filterGroups, filterNav, isActive, type NavGroup, type NavItem } from "./nav";
 import adminStyles from "./AdminShell.module.css";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const NAV_CUSTOMER: NavItem[] = [
   { to: "/", label: "Beranda", icon: "squares-four", bottomLabel: "Beranda" },
@@ -210,6 +212,40 @@ describe("AdminShell", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(root.className).not.toContain(adminStyles.drawer);
+  });
+
+  it("mengeluarkan sidebar mobile yang tertutup dari urutan fokus", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      media: "(max-width: 899px)",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+
+    const { container } = render(
+      <AdminShell groups={NAV_ADMIN} active="/" account={{ nama: "Rina", role: "superadmin" }}>
+        <p>isi</p>
+      </AdminShell>,
+    );
+    const sidebar = container.querySelector<HTMLElement>("#admin-sidebar");
+    const tombol = screen.getByRole("button", { name: "Buka menu" });
+
+    expect(sidebar?.hasAttribute("inert")).toBe(true);
+    expect(sidebar?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("link", { name: /Dashboard/ })).toBeNull();
+
+    fireEvent.click(tombol);
+    expect(sidebar?.hasAttribute("inert")).toBe(false);
+    expect(sidebar?.getAttribute("aria-hidden")).toBeNull();
+    expect(screen.getByRole("link", { name: /Dashboard/ })).toBeDefined();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(sidebar?.hasAttribute("inert")).toBe(true);
+    expect(document.activeElement).toBe(tombol);
   });
 
   it("memanggil onLogout dari tombol keluar", () => {
