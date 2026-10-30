@@ -134,15 +134,38 @@ describe("Badge & Chip", () => {
     expect(onToggle).toHaveBeenCalledWith(true);
   });
 
-  it("Chip menyediakan tombol silang yang memanggil onRemove", () => {
+  it("Chip memisahkan aksi utama dan hapus menjadi dua tombol saudara", () => {
+    const onToggle = vi.fn();
     const onRemove = vi.fn();
     render(
-      <Chip onRemove={onRemove} removeLabel="Sembunyikan chip">
+      <Chip pressed={false} onToggle={onToggle} onRemove={onRemove} removeLabel="Sembunyikan chip">
         perlu review
       </Chip>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Sembunyikan chip" }));
+
+    const utama = screen.getByRole("button", { name: "perlu review" });
+    const remove = screen.getByRole("button", { name: "Sembunyikan chip" });
+    const wrapper = utama.parentElement;
+
+    expect(wrapper).toBe(remove.parentElement);
+    expect(utama.contains(remove)).toBe(false);
+    expect(wrapper?.querySelector("button button")).toBeNull();
+    expect(wrapper?.querySelectorAll("button")).toHaveLength(2);
+    expect(utama.tabIndex).toBe(0);
+    expect(remove.tabIndex).toBe(0);
+
+    utama.focus();
+    expect(document.activeElement).toBe(utama);
+    remove.focus();
+    expect(document.activeElement).toBe(remove);
+
+    fireEvent.click(utama);
+    expect(onToggle).toHaveBeenCalledWith(true);
+    expect(onRemove).not.toHaveBeenCalled();
+
+    fireEvent.click(remove);
     expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
   it("PillNote merender teks", () => {

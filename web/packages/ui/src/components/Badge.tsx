@@ -53,6 +53,35 @@ export function Chip({
   className,
   ...rest
 }: ChipProps) {
+  if (onRemove) {
+    return (
+      <span
+        className={cn(styles.chipGroup, className)}
+        data-pressed={pressed || undefined}
+        data-disabled={rest.disabled || undefined}
+      >
+        <button
+          type="button"
+          className={styles.chipMain}
+          aria-pressed={pressed ?? undefined}
+          onClick={onToggle ? () => onToggle(!pressed) : undefined}
+          {...rest}
+        >
+          {children}
+        </button>
+        <button
+          type="button"
+          className={styles.chipX}
+          aria-label={removeLabel}
+          disabled={rest.disabled}
+          onClick={onRemove}
+        >
+          <Icon name="x" />
+        </button>
+      </span>
+    );
+  }
+
   return (
     <button
       type="button"
@@ -62,27 +91,6 @@ export function Chip({
       {...rest}
     >
       {children}
-      {onRemove ? (
-        <span
-          className={styles.chipX}
-          role="button"
-          tabIndex={0}
-          aria-label={removeLabel}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              e.stopPropagation();
-              onRemove();
-            }
-          }}
-        >
-          <Icon name="x" />
-        </span>
-      ) : null}
     </button>
   );
 }

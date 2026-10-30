@@ -60,46 +60,87 @@
   color: #fff;
 }
 
-.chip {
+.chip,
+.chipGroup {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   height: 32px;
-  padding: 0 10px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface);
   font-size: 13px;
-  cursor: pointer;
   white-space: nowrap;
+  color: var(--text);
 }
 
-.chip[aria-pressed="true"] {
+.chip {
+  gap: 6px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.chipGroup {
+  gap: 0;
+  padding: 0;
+}
+
+.chip[aria-pressed="true"],
+.chipGroup[data-pressed="true"] {
   background: var(--ink);
   border-color: var(--ink);
   color: #fff;
 }
 
-.chip:disabled {
+.chip:disabled,
+.chipGroup[data-disabled="true"] {
   opacity: 0.45;
+}
+
+.chip:disabled,
+.chipMain:disabled,
+.chipX:disabled {
   cursor: not-allowed;
+}
+
+.chipMain {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 7px 0 0 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .chipX {
   display: inline-grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  margin-right: -4px;
-  border: none;
-  background: none;
+  align-self: stretch;
+  width: 32px;
+  border: 0;
+  border-left: 1px solid var(--line-strong);
+  border-radius: 0 7px 7px 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   padding: 0;
 }
 
+.chipGroup[data-pressed="true"] .chipX {
+  border-left-color: rgb(255 255 255 / 0.28);
+}
+
+.chipMain:hover,
 .chipX:hover {
   background: var(--surface-sunken);
+}
+
+.chipGroup[data-pressed="true"] .chipMain:hover,
+.chipGroup[data-pressed="true"] .chipX:hover {
+  background: rgb(255 255 255 / 0.14);
 }
 
 .chipX :global(.ph) {
