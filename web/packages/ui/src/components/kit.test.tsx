@@ -209,6 +209,8 @@ describe("Table", () => {
         </tbody>
       </Table>,
     );
+    const region = screen.getByRole("region", { name: "Tabel: Daftar pesanan cabang" });
+    expect(region.tabIndex).toBe(0);
     expect(screen.getByText("Daftar pesanan cabang")).toBeDefined();
     expect(screen.getByRole("table")).toBeDefined();
     expect(screen.getByText("2026-10-01")).toBeDefined();
