@@ -1965,7 +1965,7 @@ func TestPGTempoDailyMemversikanPersetujuanLamaDanKoreksi(t *testing.T) {
 	}
 }
 
-func TestPGPengingatHMinus3TanggalAwalBulanTetapTerkirim(t *testing.T) {
+func TestPGPengingatHMinus3TanggalAwalBulanDilewati(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
 	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,allow_transfer=false,tanggal_bayar=1 WHERE id=$1`, f.branchA); err != nil {
@@ -1984,13 +1984,12 @@ func TestPGPengingatHMinus3TanggalAwalBulanTetapTerkirim(t *testing.T) {
 		t.Fatalf("ulang pengingat H-3: %v", err)
 	}
 	var count int
-	var generic bool
-	if err := f.pool.QueryRow(ctx, `SELECT count(*),COALESCE(bool_and(generic),false)
- FROM tempo_reminders WHERE branch_id=$1 AND due_date='2099-11-01' AND stage='h_minus_3'`, f.branchA).Scan(&count, &generic); err != nil {
+	if err := f.pool.QueryRow(ctx, `SELECT count(*)
+ FROM tempo_reminders WHERE branch_id=$1 AND due_date='2099-11-01' AND stage='h_minus_3'`, f.branchA).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 || !generic {
-		t.Fatalf("pengingat H-3 umum harus sekali: count=%d generic=%v", count, generic)
+	if count != 0 {
+		t.Fatalf("pengingat H-3 tanggal bayar 1 harus dilewati: count=%d", count)
 	}
 	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
 	if due, err := svc.Approve(ctx, manager, id); err != nil || due != "2099-11-01" {
@@ -2039,8 +2038,8 @@ func TestPGPengingatHMinus3TanggalAwalBulanTetapTerkirim(t *testing.T) {
  AND payload->>'branch_id'=$1`, f.branchA).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 4 {
-		t.Fatalf("empat tahap harus menghasilkan tepat empat email, dapat %d", count)
+	if count != 3 {
+		t.Fatalf("tanggal bayar 1 hanya mengirim H, H+1, H+7, dapat %d email", count)
 	}
 }
 
@@ -2079,11 +2078,22 @@ func TestPGPengingatTempoTanggalBayarDuaTigaDanLima(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_reminders WHERE branch_id=$1`, f.branchA).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 12 {
-		t.Fatalf("tiga jatuh tempo × empat tahap harus 12 pengingat, dapat %d", count)
+	if count != 10 {
+		t.Fatalf("tanggal bayar 2/3 melewati H-3 dan tanggal 5 punya empat tahap: dapat %d", count)
 	}
 	for _, dueDay := range []int{2, 3, 5} {
 		for _, stage := range []string{"h_minus_3", "due", "h_plus_1", "h_plus_7"} {
+			if stage == "h_minus_3" && dueDay <= 3 {
+				if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM tempo_reminders
+ WHERE branch_id=$1 AND due_date=$2::date AND stage=$3`, f.branchA,
+					time.Date(2099, 11, dueDay, 0, 0, 0, 0, time.UTC), stage).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				if count != 0 {
+					t.Fatalf("H-3 due %d harus dilewati, dapat %d", dueDay, count)
+				}
+				continue
+			}
 			var generic bool
 			var amount int64
 			if err := f.pool.QueryRow(ctx, `SELECT generic,amount FROM tempo_reminders
@@ -2091,7 +2101,7 @@ func TestPGPengingatTempoTanggalBayarDuaTigaDanLima(t *testing.T) {
 				time.Date(2099, 11, dueDay, 0, 0, 0, 0, time.UTC), stage).Scan(&generic, &amount); err != nil {
 				t.Fatalf("pengingat due %d stage %s tidak ada: %v", dueDay, stage, err)
 			}
-			if generic != (stage == "h_minus_3" && dueDay <= 3) || amount != 100000 {
+			if generic || amount != 100000 {
 				t.Fatalf("pengingat due %d stage %s: generic=%v amount=%d", dueDay, stage, generic, amount)
 			}
 		}
@@ -2100,7 +2110,7 @@ func TestPGPengingatTempoTanggalBayarDuaTigaDanLima(t *testing.T) {
  AND payload->>'branch_id'=$1`, f.branchA).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 12 {
+	if count != 10 {
 		t.Fatalf("setiap pengingat harus tepat satu email, dapat %d", count)
 	}
 }

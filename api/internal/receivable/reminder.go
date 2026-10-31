@@ -11,8 +11,8 @@ import (
 )
 
 // SendReminders sends one email per branch, due date and stage. For pay days
-// 1–3, H-3 is intentionally generic: the monthly statement has not yet been
-// issued, so no final amount is claimed in that email.
+// 1–3, H-3 is skipped because the monthly statement has not yet been issued;
+// the first reminder for those branches is sent on the due date.
 func (s *Service) SendReminders(ctx context.Context, now time.Time) error {
 	today := now.In(jakarta)
 	today = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, jakarta)
@@ -22,18 +22,18 @@ func (s *Service) SendReminders(ctx context.Context, now time.Time) error {
 	}{{"h_minus_3", 3}, {"due", 0}, {"h_plus_1", -1}, {"h_plus_7", -7}}
 	for _, stage := range stages {
 		due := today.AddDate(0, 0, stage.offset)
+		// Cabang bertanggal bayar 1–3 belum memiliki Surat Tagihan final pada
+		// H-3 (tanggalnya masih berada pada bulan sebelumnya). Sesuai keputusan
+		// bisnis, tahap ini dilewati seluruhnya; pengingat pertama adalah hari H.
+		if stage.name == "h_minus_3" && due.Day() <= 3 {
+			continue
+		}
 		rows, err := s.pool.Query(ctx, `SELECT b.id::text,b.email::text,
  COALESCE(sum(o.amount-o.paid_amount),0)::bigint
- FROM branches b LEFT JOIN tempo_charges o ON o.branch_id=b.id
+ FROM branches b JOIN tempo_charges o ON o.branch_id=b.id
  AND o.amount>o.paid_amount AND o.due_date=$1::date
- WHERE b.is_active AND b.email IS NOT NULL AND (o.id IS NOT NULL OR
- ($2::boolean AND EXISTS (SELECT 1 FROM orders ord WHERE ord.branch_id=b.id
- AND ord.is_tempo AND ord.tanggal_bayar_snapshot=$3
- AND ord.tanggal >= (date_trunc('month',$1::date)-interval '1 month')::date
- AND ord.tanggal < date_trunc('month',$1::date)::date
- AND (ord.status='submitted' OR EXISTS (SELECT 1 FROM tempo_charges cc
-   WHERE cc.order_id=ord.id AND cc.amount>cc.paid_amount)))))
- GROUP BY b.id,b.email`, due, stage.name == "h_minus_3" && due.Day() <= 3, due.Day())
+ WHERE b.is_active AND b.email IS NOT NULL
+ GROUP BY b.id,b.email`, due)
 		if err != nil {
 			return err
 		}
@@ -56,7 +56,7 @@ func (s *Service) SendReminders(ctx context.Context, now time.Time) error {
 		}
 		rows.Close()
 		for _, c := range candidates {
-			generic := stage.name == "h_minus_3" && due.Day() <= 3
+			generic := false
 			if c.amount == 0 && !generic {
 				continue
 			}
