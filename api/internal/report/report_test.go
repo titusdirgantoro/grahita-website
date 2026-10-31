@@ -376,12 +376,20 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 	pertama.TanggalVerifikasi = "2026-09-30 14:05"
 	pertama.MetodeVerifikasi = "manual"
 	pertama.IsCNC = true
+	pertama.HargaDasar = 90000
+	pertama.Produksi = 180000
+	pertama.PI = 10000
+	pertama.Express = 2000
+	pertama.BeaSPV = 8000
+	pertama.Keterangan = "Prioritas"
 	kedua := barisUji(t, "2026-10-01", "2026-10-01", 2, br2)
 	kedua.Jenis = "packaging"
 	kedua.NamaInstansi = ""
 	kedua.SerialNumber = ""
 	kedua.Qty = 1
 	kedua.HargaSatuan = 3000
+	kedua.HargaDasar = 3000
+	kedua.Produksi = 3000
 	kedua.Subtotal = 3000
 	repo.TambahLines(pertama, kedua)
 
@@ -422,9 +430,8 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 		t.Fatalf("baca sheet laporan: %v", err)
 	}
 	cocokJudul := []string{
-		"Tanggal", "Nomor Invoice", "Versi", "Cabang", "Kepala Cabang", "C&C", "PI",
-		"Produk", "Nama Instansi", "Jenis", "Serial Number", "Qty", "Harga Satuan", "Harga/Pcs", "Produksi", "PI", "Expres", "Bea SPV", "Subtotal", "Ket", "Status",
-		"Tanggal Verifikasi", "Metode Verifikasi",
+		"No", "Serial Number", "Nama Instansi", "Cabang", "Jml Pcs", "Produk", "Harga/Pcs",
+		"Produksi", "PI", "Expres", "Bea SPV", "Total Tagihan", "Ket",
 	}
 	if len(baris) == 0 || len(baris[0]) != len(cocokJudul) {
 		t.Fatalf("header tidak sesuai: %v", baris)
@@ -437,17 +444,17 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 	if len(baris) != 3 {
 		t.Fatalf("sheet laporan harus 3 baris (header + 2 data), dapat %d", len(baris))
 	}
-	if baris[1][5] != "Ya" {
-		t.Errorf("C&C harus Ya: %v", baris[1])
+	if baris[1][0] != "1" || baris[2][0] != "2" {
+		t.Errorf("nomor baris harus mengikuti line number: %v", baris)
 	}
-	if baris[1][8] != "TK A" || baris[2][8] != "" {
+	if baris[1][2] != "TK A" || baris[2][2] != "" {
 		t.Errorf("nama instansi hanya ada pada baris produk yang memilikinya: %v", baris)
 	}
-	if baris[1][21] != "2026-09-30 14:05" || baris[1][22] != "manual" {
-		t.Errorf("kolom verifikasi salah: %v", baris[1])
+	if baris[1][3] != "Cabang "+br1 || baris[2][3] != "Cabang "+br2 {
+		t.Errorf("cabang salah: %v", baris)
 	}
-	if baris[2][10] != "-" {
-		t.Errorf("serial kosong harus tampil '-', dapat %q", baris[2][10])
+	if baris[2][1] != "-" {
+		t.Errorf("serial kosong harus tampil '-', dapat %q", baris[2][1])
 	}
 
 	// Header dibekukan (AP-REP-04).
@@ -459,8 +466,8 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 		t.Errorf("header harus ter-freeze: %+v", panes)
 	}
 
-	// Format Rupiah pada kolom harga satuan, komponen, dan subtotal (M sampai S).
-	for _, sel := range []string{"M2", "N2", "O2", "P2", "Q2", "R2", "S2", "S3"} {
+	// Format Rupiah pada Harga/Pcs, komponen, dan Total Tagihan (G sampai L).
+	for _, sel := range []string{"G2", "H2", "I2", "J2", "K2", "L2", "L3"} {
 		id, err := f.GetCellStyle(SheetLaporan, sel)
 		if err != nil {
 			t.Fatalf("gaya sel %s: %v", sel, err)
@@ -476,14 +483,14 @@ func TestIsiBerkasXLSXSesuaiKontrak(t *testing.T) {
 
 	// Nilai uang tetap ANGKA (bisa dijumlahkan), bukan teks — baris dibaca
 	// mentah (nilai tampilan sudah diformat Rupiah oleh numFmt di atas).
-	if baris[1][12] != "100000" {
-		t.Errorf("harga satuan harus angka 100000, dapat %q", baris[1][12])
+	if baris[1][6] != "90000" {
+		t.Errorf("harga per pcs harus angka 90000, dapat %q", baris[1][6])
 	}
-	if baris[2][18] != "3000" {
-		t.Errorf("subtotal packaging harus angka 3000, dapat %q", baris[2][18])
+	if baris[2][11] != "3000" {
+		t.Errorf("total tagihan packaging harus angka 3000, dapat %q", baris[2][11])
 	}
-	if baris[1][11] != "2" {
-		t.Errorf("qty harus angka 2, dapat %q", baris[1][11])
+	if baris[1][4] != "2" {
+		t.Errorf("jumlah pcs harus angka 2, dapat %q", baris[1][4])
 	}
 
 	// Sheet rekap bulanan per cabang: 2 bulan × 2 cabang + header.

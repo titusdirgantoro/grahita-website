@@ -193,23 +193,25 @@ export function ReportingPage() {
             <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <thead><tr>
-                  <th scope="col">Tanggal</th><th scope="col">Invoice</th><th scope="col">Cabang</th>
-                  <th scope="col">Nama Instansi</th><th scope="col">Produk</th><th scope="col">Serial Number</th>
-                  <th scope="col" className={styles.num}>Qty</th><th scope="col" className={styles.num}>Harga/Pcs</th>
+                  <th scope="col" className={styles.num}>No</th><th scope="col">Serial Number</th>
+                  <th scope="col">Nama Instansi</th><th scope="col">Cabang</th>
+                  <th scope="col" className={styles.num}>Jml Pcs</th><th scope="col">Produk</th>
+                  <th scope="col" className={styles.num}>Harga/Pcs</th>
                   <th scope="col" className={styles.num}>Produksi</th><th scope="col" className={styles.num}>PI</th>
                   <th scope="col" className={styles.num}>Expres</th><th scope="col" className={styles.num}>Bea SPV</th>
-                  <th scope="col" className={styles.num}>Total Tagihan</th><th scope="col">Ket</th><th scope="col">Status</th>
+                  <th scope="col" className={styles.num}>Total Tagihan</th><th scope="col">Ket</th>
                 </tr></thead>
                 <tbody>{laporan.data.items.map((baris) => (
                   <tr key={`${baris.nomor}-${baris.versi}-${baris.line_no}`}>
-                    <td>{baris.tanggal}</td><td>{baris.nomor}{baris.versi ? `-R${baris.versi}` : ""}</td>
-                    <td>{baris.cabang}</td><td>{baris.nama_instansi || "—"}</td><td>{baris.produk}</td>
-                    <td>{baris.serial_number || "—"}</td><td className={styles.num}>{baris.qty}</td>
-                    <td className={styles.num}>{uang.format(baris.harga_dasar ?? 0)}</td><td className={styles.num}>{uang.format(baris.produksi ?? baris.subtotal)}</td>
+                    <td className={styles.num}>{baris.line_no}</td><td>{baris.serial_number || "—"}</td>
+                    <td>{baris.nama_instansi || "—"}</td><td>{baris.cabang}</td>
+                    <td className={styles.num}>{baris.qty}</td><td>{baris.produk}</td>
+                    <td className={styles.num}>{uang.format(baris.harga_dasar ?? 0)}</td>
+                    <td className={styles.num}>{uang.format(baris.produksi ?? baris.subtotal)}</td>
                     <td className={styles.num}>{baris.pi ? uang.format(baris.pi) : "—"}</td>
                     <td className={styles.num}>{baris.express ? uang.format(baris.express) : "—"}</td>
                     <td className={styles.num}>{baris.bea_spv ? uang.format(baris.bea_spv) : "—"}</td>
-                    <td className={styles.num}>{uang.format(baris.subtotal)}</td><td>{baris.keterangan || "—"}</td><td>{baris.status}</td>
+                    <td className={styles.num}>{uang.format(baris.subtotal)}</td><td>{baris.keterangan || "—"}</td>
                   </tr>
                 ))}</tbody>
               </table>

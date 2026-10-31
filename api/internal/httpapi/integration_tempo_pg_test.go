@@ -274,7 +274,7 @@ func TestPGPesananHistorisTetapTerbacaSesudahProdukNonaktif(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if instansi, err := reportBook.GetCellValue(report.SheetLaporan, "I2"); err != nil || instansi != "—" {
+	if instansi, err := reportBook.GetCellValue(report.SheetLaporan, "C2"); err != nil || instansi != "—" {
 		t.Fatalf("ekspor laporan historis harus menampilkan dash: %q %v", instansi, err)
 	}
 	_ = reportBook.Close()

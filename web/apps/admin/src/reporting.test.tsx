@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -25,8 +25,8 @@ describe("Reporting admin", () => {
       if (url.endsWith("/admin/branches")) return json([{ id: "b1", nama: "Bandung" }]);
       if (url.includes("/admin/reports/order-lines")) return json({
         items: [
-          { tanggal: "2026-10-27", nomor: "2026-10-001", versi: 0, cabang: "Bandung", line_no: 1, produk: "Bio Magnetik", nama_instansi: "TK A", serial_number: "20261027001", qty: 2, subtotal: 200000, status: "done" },
-          { tanggal: "2026-10-27", nomor: "2026-10-001", versi: 0, cabang: "Bandung", line_no: 2, produk: "Bio Magnetik", nama_instansi: "SD B", serial_number: "20261027002", qty: 1, subtotal: 100000, status: "done" },
+          { tanggal: "2026-10-27", nomor: "2026-10-001", versi: 0, cabang: "Bandung", line_no: 1, produk: "Bio Magnetik", nama_instansi: "TK A", serial_number: "20261027001", qty: 2, harga_dasar: 90000, produksi: 180000, pi: 10000, express: 2000, bea_spv: 8000, subtotal: 200000, keterangan: "Prioritas", status: "done" },
+          { tanggal: "2026-10-27", nomor: "2026-10-001", versi: 0, cabang: "Bandung", line_no: 2, produk: "Bio Magnetik", nama_instansi: "SD B", serial_number: "20261027002", qty: 1, harga_dasar: 90000, produksi: 90000, pi: 5000, express: 1000, bea_spv: 4000, subtotal: 100000, keterangan: "Reguler", status: "done" },
         ], total: 2, total_subtotal: 300000, halaman: 1, per_halaman: 25,
       });
       if (url.endsWith("/admin/reports/export") && method === "POST") return json({ id: "job-1", status: "selesai", jumlah_baris: 2 });
@@ -39,6 +39,18 @@ describe("Reporting admin", () => {
 
     expect(await screen.findByText("TK A")).toBeDefined();
     expect(screen.getByText("SD B")).toBeDefined();
+    const tabel = screen.getByRole("table");
+    expect(within(tabel).getAllByRole("columnheader").map((header) => header.textContent?.trim())).toEqual([
+      "No", "Serial Number", "Nama Instansi", "Cabang", "Jml Pcs", "Produk", "Harga/Pcs",
+      "Produksi", "PI", "Expres", "Bea SPV", "Total Tagihan", "Ket",
+    ]);
+    expect(within(tabel).getByText("20261027001")).toBeDefined();
+    expect(within(tabel).getByText("Prioritas")).toBeDefined();
+    const barisPertama = within(tabel).getAllByRole("row")[1];
+    expect(within(barisPertama).getAllByRole("cell").map((cell) => cell.textContent?.replace(/\s/g, ""))).toEqual([
+      "1", "20261027001", "TKA", "Bandung", "2", "BioMagnetik", "Rp90.000",
+      "Rp180.000", "Rp10.000", "Rp2.000", "Rp8.000", "Rp200.000", "Prioritas",
+    ]);
     fireEvent.change(screen.getByLabelText("Cabang"), { target: { value: "b1" } });
     fireEvent.click(screen.getByRole("button", { name: "Terapkan filter" }));
     await waitFor(() => expect(panggilan.some((p) => p.url.includes("cabang=b1"))).toBe(true));

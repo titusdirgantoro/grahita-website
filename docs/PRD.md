@@ -229,7 +229,7 @@ Field: Bank (BCA / BRI), Nama di rekening, Nomor rekening, Aktif. Rekening aktif
 |---|---|---|
 | AP-REP-01 | Baris laporan = order line dari seluruh pesanan (bukan per pesanan), termasuk nama instansi per baris pada API dan ekspor Excel. | Must |
 | AP-REP-02 | Filter: rentang tanggal, cabang (multi), status, jenis produk, C&C, PI. | Must |
-| AP-REP-03 | Laporan dan ekspor memuat tanggal, nomor invoice, versi, cabang, kepala cabang, C&C, flag PI, produk, nama instansi, jenis, serial number, qty, harga per pcs, Produksi, PI, Expres, Bea SPV, total baris, Ket, status, tanggal verifikasi, dan metode verifikasi. | Must |
+| AP-REP-03 | Tabel laporan dan sheet utama ekspor memakai urutan: No, Serial Number, Nama Instansi, Cabang, Jml Pcs, Produk, Harga/Pcs, Produksi, PI, Expres, Bea SPV, Total Tagihan, Ket. Metadata tanggal, invoice, status, jenis, C&C, dan flag PI tetap tersedia sebagai filter laporan. | Must |
 | AP-REP-04 | Ekspor Excel (.xlsx) dengan header ter-freeze dan format angka Rupiah; ekspor besar diproses asinkron lalu diunduh. | Must |
 | AP-REP-05 | Ringkasan bulanan per cabang (rekap) sebagai sheet kedua. | Should |
 

@@ -589,28 +589,36 @@ func TestPGReportLaporanOrderLine(t *testing.T) {
 	if len(barisEkspor) != 4 {
 		t.Fatalf("sheet laporan harus 4 baris (header+3), dapat %d", len(barisEkspor))
 	}
-	for _, header := range barisEkspor[0] {
-		if strings.Contains(strings.ToLower(header), "special") {
-			t.Fatalf("flag Special lama tidak boleh muncul pada ekspor: %v", barisEkspor[0])
+	headerEkspor := []string{
+		"No", "Serial Number", "Nama Instansi", "Cabang", "Jml Pcs", "Produk", "Harga/Pcs",
+		"Produksi", "PI", "Expres", "Bea SPV", "Total Tagihan", "Ket",
+	}
+	if len(barisEkspor[0]) != len(headerEkspor) {
+		t.Fatalf("jumlah kolom ekspor harus %d, dapat %d: %v", len(headerEkspor), len(barisEkspor[0]), barisEkspor[0])
+	}
+	for i, header := range headerEkspor {
+		if barisEkspor[0][i] != header {
+			t.Errorf("header ekspor kolom %d harus %q, dapat %q", i+1, header, barisEkspor[0][i])
 		}
 	}
-	// Kolom status sesuai filter; baris packaging milik pesanan sertifikat ikut
-	// (satu baris per order line, AP-REP-01).
-	jenisTampil := map[string]int{}
+	// Filter cabang sudah diterapkan dan baris packaging milik pesanan
+	// sertifikat ikut (satu baris per order line, AP-REP-01).
+	produkTampil := map[string]int{}
+	jumlahTanpaSerial := 0
 	for _, b := range barisEkspor[1:] {
-		if b[14] != "done" {
-			t.Errorf("baris ekspor harus berstatus done (sesuai filter): %v", b)
-		}
 		if b[3] != "Grahita Cabang B" {
 			t.Errorf("baris ekspor harus milik cabang B (sesuai filter): %v", b)
 		}
-		jenisTampil[b[9]]++
+		produkTampil[b[5]]++
+		if b[1] == "-" {
+			jumlahTanpaSerial++
+		}
 	}
-	if jenisTampil["product"] != 2 || jenisTampil["packaging"] != 1 {
-		t.Errorf("ekspor cabang B harus memuat 2 baris produk + 1 packaging, dapat %v", jenisTampil)
+	if produkTampil["Bio Magnetik"] != 1 || produkTampil["Sertifikat Halal"] != 1 || produkTampil["Biaya Packaging"] != 1 || jumlahTanpaSerial != 1 {
+		t.Errorf("ekspor cabang B harus memuat 2 produk dan 1 packaging tanpa serial, produk=%v tanpa_serial=%d", produkTampil, jumlahTanpaSerial)
 	}
-	// Format Rupiah pada kolom harga satuan (M).
-	idGaya, err := f.GetCellStyle(report.SheetLaporan, "M2")
+	// Format Rupiah pada kolom Harga/Pcs (G).
+	idGaya, err := f.GetCellStyle(report.SheetLaporan, "G2")
 	if err != nil {
 		t.Fatalf("gaya sel harga: %v", err)
 	}
@@ -893,11 +901,11 @@ func TestPGReportEkspor50kBarisTidakOOM(t *testing.T) {
 	if sheet := f.GetSheetList(); len(sheet) != 2 {
 		t.Fatalf("ekspor harus 2 sheet, dapat %v", sheet)
 	}
-	pertama, err := f.GetCellValue(report.SheetLaporan, "B2")
+	pertama, err := f.GetCellValue(report.SheetLaporan, "F2")
 	if err != nil || pertama == "" {
 		t.Errorf("baris data pertama harus terisi: %q (%v)", pertama, err)
 	}
-	terakhir := fmt.Sprintf("B%d", totalBaris+1)
+	terakhir := fmt.Sprintf("F%d", totalBaris+1)
 	isiTerakhir, err := f.GetCellValue(report.SheetLaporan, terakhir)
 	if err != nil {
 		t.Fatalf("baca baris terakhir %s: %v", terakhir, err)
@@ -905,7 +913,7 @@ func TestPGReportEkspor50kBarisTidakOOM(t *testing.T) {
 	if isiTerakhir == "" {
 		t.Errorf("baris terakhir %s harus terisi, berarti berkas terpotong", terakhir)
 	}
-	kosong, err := f.GetCellValue(report.SheetLaporan, fmt.Sprintf("B%d", totalBaris+2))
+	kosong, err := f.GetCellValue(report.SheetLaporan, fmt.Sprintf("F%d", totalBaris+2))
 	if err != nil {
 		t.Fatalf("baca baris setelah terakhir: %v", err)
 	}

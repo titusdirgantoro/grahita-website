@@ -20,35 +20,24 @@ const (
 const LayoutVerifikasi = "2006-01-02 15:04"
 
 // kolomLaporan adalah urutan kolom laporan (PRD §4.7 AP-REP-03).
-// Urutan ini tidak boleh diubah tanpa mengubah pengujian dan
-// kontrak OpenAPI.
+// Urutan ini sama dengan tabel laporan, pemesanan, dan dokumen transaksi.
 var kolomLaporan = []struct {
 	judul string
 	lebar float64
 }{
-	{"Tanggal", 12},
-	{"Nomor Invoice", 20},
-	{"Versi", 7},
-	{"Cabang", 26},
-	{"Kepala Cabang", 22},
-	{"C&C", 6},
-	{"PI", 6},
-	{"Produk", 34},
-	{"Nama Instansi", 36},
-	{"Jenis", 10},
+	{"No", 6},
 	{"Serial Number", 20},
-	{"Qty", 6},
-	{"Harga Satuan", 15},
+	{"Nama Instansi", 36},
+	{"Cabang", 26},
+	{"Jml Pcs", 8},
+	{"Produk", 34},
 	{"Harga/Pcs", 15},
 	{"Produksi", 15},
 	{"PI", 15},
 	{"Expres", 15},
 	{"Bea SPV", 15},
-	{"Subtotal", 15},
+	{"Total Tagihan", 16},
 	{"Ket", 28},
-	{"Status", 10},
-	{"Tanggal Verifikasi", 19},
-	{"Metode Verifikasi", 17},
 }
 
 // kolomRekap adalah urutan kolom sheet rekap bulanan per cabang (AP-REP-05).
@@ -209,19 +198,12 @@ func (p *penulisXLSX) TulisBaris(l Line) error {
 		instansi = "—"
 	}
 	nilai := []any{
-		l.Tanggal,
-		l.Nomor,
-		l.Versi,
-		l.Cabang,
-		l.KepalaCabang,
-		yaTidak(l.IsCNC),
-		yaTidak(l.PajakIn),
-		l.Produk,
-		instansi,
-		l.Jenis,
+		excelize.Cell{StyleID: p.gaya.angka, Value: l.LineNo},
 		serialTampil(l.SerialNumber),
+		instansi,
+		l.Cabang,
 		excelize.Cell{StyleID: p.gaya.angka, Value: l.Qty},
-		excelize.Cell{StyleID: p.gaya.rupiah, Value: l.HargaSatuan},
+		l.Produk,
 		excelize.Cell{StyleID: p.gaya.rupiah, Value: l.HargaDasar},
 		excelize.Cell{StyleID: p.gaya.rupiah, Value: l.Produksi},
 		excelize.Cell{StyleID: p.gaya.rupiah, Value: l.PI},
@@ -229,9 +211,6 @@ func (p *penulisXLSX) TulisBaris(l Line) error {
 		excelize.Cell{StyleID: p.gaya.rupiah, Value: l.BeaSPV},
 		excelize.Cell{StyleID: p.gaya.rupiah, Value: l.Subtotal},
 		excelize.Cell{StyleID: p.gaya.teks, Value: l.Keterangan},
-		l.Status,
-		l.TanggalVerifikasi,
-		l.MetodeVerifikasi,
 	}
 	if err := p.sw.SetRow(sel, nilai, excelize.RowOpts{StyleID: p.gaya.teks}); err != nil {
 		return fmt.Errorf("tulis baris %d: %w", p.baris, err)
@@ -429,14 +408,6 @@ func tulisKeTemp(dir, pattern string, tulis func(io.Writer) (int64, error)) (str
 	}
 	sukses = true
 	return f.Name(), size, nil
-}
-
-// yaTidak menyajikan atribut boolean pada berkas laporan.
-func yaTidak(v bool) string {
-	if v {
-		return "Ya"
-	}
-	return "Tidak"
 }
 
 // serialTampil menampilkan serial number; baris packaging tidak punya serial.
