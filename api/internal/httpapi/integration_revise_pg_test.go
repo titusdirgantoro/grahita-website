@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -169,12 +170,13 @@ func reviseBody(alasan, lines string) string {
 	return `{"alasan":"` + alasan + `","lines":[` + lines + `]}`
 }
 
+var urutanKeyRevisiUji atomic.Uint64
+
 // reviseHTTP mengirim permintaan revisi dan mengembalikan status + body.
 func reviseHTTP(t *testing.T, f *pgFixture, cookies []*http.Cookie, csrf, id, body string) (int, map[string]any) {
 	t.Helper()
-	status, decoded, _ := apiReq(t, http.DefaultClient, http.MethodPost,
-		f.srv.URL+"/api/v1/admin/orders/"+id+"/revise", body, cookies, csrf)
-	return status, decoded
+	return depositReq(t, http.MethodPost, f.srv.URL+"/api/v1/admin/orders/"+id+"/revise",
+		body, cookies, csrf, fmt.Sprintf("revision-test-%d", urutanKeyRevisiUji.Add(1)))
 }
 
 // jalankanPekerjaanRevisi menjalankan pekerjaan worker "revisi_invoice" untuk
@@ -1292,8 +1294,8 @@ func TestPGRevisiPDFNyataVersiLamaDanBaru(t *testing.T) {
 	// Revisi total tetap agar versi baru tetap Done dan dapat dirender.
 	reqBody := reviseBody("koreksi komposisi versi nyata",
 		`{"line_no":1,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":200000},{"line_no":2,"nama_instansi":"Instansi Uji","qty":1,"harga_satuan":50000}`)
-	st, hasil, _ := apiReq(t, http.DefaultClient, http.MethodPost,
-		srv.URL+"/api/v1/admin/orders/"+pesanan.ID+"/revise", reqBody, sa, csrfSA)
+	st, hasil := depositReq(t, http.MethodPost,
+		srv.URL+"/api/v1/admin/orders/"+pesanan.ID+"/revise", reqBody, sa, csrfSA, "revision-real-pdf")
 	if st != http.StatusOK {
 		t.Fatalf("revisi harus 200, dapat %d (%v)", st, hasil)
 	}

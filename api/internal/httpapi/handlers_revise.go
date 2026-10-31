@@ -21,6 +21,7 @@ type reviseLineRequest struct {
 	LineNo       int     `json:"line_no"`
 	ProductID    string  `json:"product_id"`
 	NamaInstansi *string `json:"nama_instansi"`
+	Keterangan   *string `json:"keterangan"`
 	Qty          int     `json:"qty"`
 	HargaSatuan  int64   `json:"harga_satuan"`
 }
@@ -54,6 +55,7 @@ func (a *API) adminOrderRevise(w http.ResponseWriter, r *http.Request) error {
 			LineNo:       l.LineNo,
 			ProductID:    l.ProductID,
 			NamaInstansi: l.NamaInstansi,
+			Keterangan:   l.Keterangan,
 			Qty:          l.Qty,
 			HargaSatuan:  l.HargaSatuan,
 		})

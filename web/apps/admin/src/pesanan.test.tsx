@@ -936,6 +936,7 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
       lines: [{ line_no: 1, nama_instansi: "TK A", qty: 5, harga_satuan: 120000, keterangan: "" }],
     });
     expect(kirim?.headers["X-CSRF-Token"]).toBe("uji-csrf");
+    expect(kirim?.headers["Idempotency-Key"]).toBeTruthy();
     expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(1);
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -1114,6 +1115,9 @@ describe("Revisi invoice pesanan Done (F2-25, PRD §4.3 AP-REV-01..05)", () => {
     // Dokumen sudah siap: pengajuan ulang MANUAL diterima 200 dan modal tertutup.
     fireEvent.click(within(dialog).getByRole("button", { name: "Simpan revisi" }));
     await waitFor(() => expect(posts.filter((p) => p.url === URL_REVISE).length).toBe(2));
+    const retry = posts.filter((p) => p.url === URL_REVISE);
+    expect(retry[0]?.headers["Idempotency-Key"]).toBeTruthy();
+    expect(retry[1]?.headers["Idempotency-Key"]).toBe(retry[0]?.headers["Idempotency-Key"]);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 

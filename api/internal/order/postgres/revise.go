@@ -149,6 +149,11 @@ func (r *Repo) Revise(ctx context.Context, req order.ReviseRequest) (order.Revis
 	if row.BranchID != preliminaryBranch {
 		return order.ReviseOutcome{}, fmt.Errorf("%w: cabang pesanan berubah", order.ErrInvalidData)
 	}
+	if replay, ok, err := loadRevisionReplay(ctx, tx, req); err != nil {
+		return order.ReviseOutcome{}, err
+	} else if ok {
+		return replay, nil
+	}
 
 	// 2. Revisi hanya untuk pesanan yang sudah selesai.
 	if row.Status != order.StatusDone && !(row.IsTempo && row.Status == order.StatusApprovedUnpaid) {
@@ -388,11 +393,7 @@ FROM deposit_allocations WHERE order_id=$1`, req.OrderID).Scan(&committed); err 
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return order.ReviseOutcome{}, fmt.Errorf("commit revisi: %w", err)
-	}
-
-	return order.ReviseOutcome{
+	out := order.ReviseOutcome{
 		OrderID:    req.OrderID,
 		Nomor:      row.Nomor,
 		Versi:      versiBaru,
@@ -409,7 +410,15 @@ FROM deposit_allocations WHERE order_id=$1`, req.OrderID).Scan(&committed); err 
 			AdminNama:  strings.TrimSpace(req.Actor.Nama),
 			CreatedAt:  revisiRow.CreatedAt.UTC().Format(rfc3339),
 		},
-	}, nil
+	}
+	if err := storeRevisionReplay(ctx, tx, req, out); err != nil {
+		return order.ReviseOutcome{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return order.ReviseOutcome{}, fmt.Errorf("commit revisi: %w", err)
+	}
+
+	return out, nil
 }
 
 // susunBarisFinal menyusun daftar baris versi baru dari baris lama + daftar

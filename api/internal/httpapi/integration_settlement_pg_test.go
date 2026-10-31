@@ -343,7 +343,7 @@ func TestPGSettlementRevisiTurunReversalPlanDanCarryForward(t *testing.T) {
 		status          int
 		code            string
 	}{
-		{"tanpa plan", `[]`, "", http.StatusConflict, "REVISION_REVERSAL_PLAN_REQUIRED"},
+		{"tanpa plan", `[]`, "rev-tanpa-plan", http.StatusConflict, "REVISION_REVERSAL_PLAN_REQUIRED"},
 		{"plan kurang", `[{"allocation_id":"` + alokasi + `","amount":50000,"reason":"kurang"}]`, "rev-kurang", http.StatusConflict, "REVISION_REVERSAL_PLAN_REQUIRED"},
 		{"alokasi asing", `[{"allocation_id":"01900000-0000-7000-8000-000000000001","amount":70000,"reason":"asing"}]`, "rev-asing", http.StatusConflict, "REVISION_REVERSAL_PLAN_INVALID"},
 		{"tanpa key", `[{"allocation_id":"` + alokasi + `","amount":70000,"reason":"cukup"}]`, "", http.StatusBadRequest, "VALIDATION_FAILED"},
@@ -375,6 +375,17 @@ FROM orders WHERE id=$1`, id).Scan(&st, &sub); err != nil {
 	}
 	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != saldoAwal+70000 {
 		t.Fatalf("reversal plan harus mengembalikan 70000, saldo %d -> %d", saldoAwal, saldo)
+	}
+	reversalPlan := `[{"allocation_id":"` + alokasi + `","amount":70000,"reason":"Total revisi turun"}]`
+	status, retryRevisi := revisi(reversalPlan, "rev-cukup")
+	if status != http.StatusOK || dataObj(retryRevisi)["replayed"] != true {
+		t.Fatalf("retry wrapper reversal harus replay 200: %d %v", status, retryRevisi)
+	}
+	if saldo, _, _, _ := saldoCabang(t, f, cookiesA); saldo != saldoAwal+70000 {
+		t.Fatalf("retry wrapper tidak boleh mengembalikan deposit dua kali: %d", saldo)
+	}
+	if n := hitungSQL(t, f, `SELECT reversed_amount FROM deposit_allocations WHERE id=$1`, alokasi); n != 70000 {
+		t.Fatalf("retry wrapper mengubah reversed_amount menjadi %d", n)
 	}
 
 	status, res = depositReq(t, http.MethodGet, f.srv.URL+"/api/v1/orders/"+id+"/payment", "", cookiesA, "", "")

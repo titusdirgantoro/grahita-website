@@ -41,6 +41,14 @@ func methodNotAllowedErr() error {
 // mapDomainErr menerjemahkan sentinel error domain ke bentuk HTTP.
 // Semua sentinel dipetakan di satu tempat supaya kode status konsisten.
 func mapDomainErr(err error) error {
+	if errors.Is(err, order.ErrRevisionKeyRequired) {
+		return apierr.Validation("Permintaan revisi tidak valid.",
+			map[string]string{"idempotency_key": "header Idempotency-Key wajib untuk setiap revisi"})
+	}
+	if errors.Is(err, order.ErrRevisionKeyInvalid) {
+		return apierr.Validation("Permintaan revisi tidak valid.",
+			map[string]string{"idempotency_key": "harus 8 sampai 200 karakter"})
+	}
 	if mapped, ok := depositErr(err); ok {
 		return mapped
 	}
@@ -187,6 +195,9 @@ func mapDomainErr(err error) error {
 		// yang dijawab 200 harus punya invoice sendiri.
 		return apierr.Conflict("INVOICE_NOT_READY",
 			"Invoice versi ini belum selesai dirender sehingga revisi belum dapat dilakukan. Coba lagi setelah proses dokumennya selesai.")
+	case errors.Is(err, order.ErrRevisionIdempotencyReused):
+		return apierr.Conflict("IDEMPOTENCY_KEY_REUSED",
+			"Idempotency-Key sudah dipakai untuk permintaan revisi lain.")
 	case errors.Is(err, order.ErrInvalidData):
 		return apierr.Validation("Data pesanan tidak valid.",
 			map[string]string{"pesanan": err.Error()})

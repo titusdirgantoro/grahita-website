@@ -1238,7 +1238,10 @@ export function PesananDetailAdminPage() {
       setGalatRevisi(rencanaRev.galat);
       return;
     }
-    if (rencanaRev.plan.length > 0) kunciRevisi.current ??= buatIdempotencyKey();
+    // Satu key mewakili satu niat revisi untuk seluruh mode pembayaran.
+    // Pertahankan key ketika request gagal/putus agar retry manual menerima
+    // replay transaksi yang sama, termasuk bila respons 200 pertama hilang.
+    kunciRevisi.current ??= buatIdempotencyKey();
     setSibukRevisi(true);
     setGalatRevisi(null);
     try {
@@ -1250,7 +1253,7 @@ export function PesananDetailAdminPage() {
           lines,
           ...(rencanaRev.plan.length > 0 ? { deposit_reversals: rencanaRev.plan } : {}),
         },
-        rencanaRev.plan.length > 0 && kunciRevisi.current ? { idempotencyKey: kunciRevisi.current } : {},
+        { idempotencyKey: kunciRevisi.current },
       );
       kunciRevisi.current = null;
       muatBayar();

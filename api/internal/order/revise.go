@@ -74,8 +74,14 @@ var (
 	// ErrReversalPlanInvalid: item plan salah order/cabang, nominal/alasan
 	// tidak sah, duplikat, atau plan dikirim untuk total yang tidak turun.
 	ErrReversalPlanInvalid = errors.New("reversal plan deposit revisi tidak valid")
-	// ErrRevisionKeyRequired: plan reversal wajib membawa Idempotency-Key.
-	ErrRevisionKeyRequired = errors.New("header Idempotency-Key wajib untuk reversal plan")
+	// ErrRevisionKeyRequired: seluruh revisi wajib membawa Idempotency-Key agar
+	// retry setelah timeout/putus koneksi tidak menciptakan versi kedua.
+	ErrRevisionKeyRequired = errors.New("header Idempotency-Key wajib untuk revisi")
+	// ErrRevisionKeyInvalid menjaga kontrak transport dan domain tetap sama.
+	ErrRevisionKeyInvalid = errors.New("header Idempotency-Key harus 8 sampai 200 karakter")
+	// ErrRevisionIdempotencyReused mencegah satu key dipakai untuk order atau
+	// payload revisi lain. Retry payload yang sama dikembalikan sebagai replay.
+	ErrRevisionIdempotencyReused = errors.New("idempotency key revisi dipakai untuk permintaan lain")
 )
 
 // DepositReversalInput adalah satu item reversal plan revisi turun.
@@ -89,6 +95,8 @@ type DepositReversalInput struct {
 const (
 	MaxAlasanRevisi  = 500
 	MaxCatatanRevisi = 2000
+	MinRevisionKey   = 8
+	MaxRevisionKey   = 200
 )
 
 // Teks & ikon timeline revisi.
@@ -159,6 +167,7 @@ type ReviseOutcome struct {
 	DeltaTotal int64    `json:"delta_total"`
 	Lines      []Line   `json:"lines"`
 	Revisi     Revision `json:"revisi"`
+	Replayed   bool     `json:"replayed"`
 }
 
 // ReviseRequest adalah seluruh masukan transaksi revisi. Aktor dan entri audit
@@ -186,6 +195,10 @@ type ReviseRequest struct {
 
 // RevisionRepository menjalankan satu transaksi revisi lengkap.
 type RevisionRepository interface {
+	// Replay mengembalikan hasil revisi committed dengan key+payload identik.
+	// Pemeriksaan ini tidak bergantung queue maupun setelan yang mungkin sudah
+	// berubah setelah transaksi pertama berhasil.
+	Replay(ctx context.Context, req ReviseRequest) (ReviseOutcome, bool, error)
 	// Revise menegakkan seluruh perubahan revisi dalam SATU transaksi:
 	// mengunci baris pesanan, memastikan status Done, menyimpan snapshot versi
 	// lama + menaikkan versi, mengganti baris (serial lama dipertahankan, baris
@@ -234,11 +247,11 @@ func (s *RevisionService) Revise(ctx context.Context, actor auth.Actor, orderID 
 	if err := revisiActor(actor); err != nil {
 		return ReviseOutcome{}, err
 	}
-	id := strings.TrimSpace(orderID)
+	id := strings.ToLower(strings.TrimSpace(orderID))
 	if !uuidRe.MatchString(id) {
 		return ReviseOutcome{}, ErrNotFound
 	}
-	if s.cfg == nil || s.repo == nil {
+	if s.repo == nil {
 		return ReviseOutcome{}, ErrQueueUnavailable
 	}
 
@@ -262,6 +275,29 @@ func (s *RevisionService) Revise(ctx context.Context, actor auth.Actor, orderID 
 	if err != nil {
 		return ReviseOutcome{}, err
 	}
+	key := strings.TrimSpace(in.IdempotencyKey)
+	if key == "" {
+		return ReviseOutcome{}, ErrRevisionKeyRequired
+	}
+	if len([]rune(key)) < MinRevisionKey || len([]rune(key)) > MaxRevisionKey {
+		return ReviseOutcome{}, ErrRevisionKeyInvalid
+	}
+
+	// Bentuk request canonical sebelum membaca setelan. Replay committed harus
+	// tetap dapat dijawab ketika toggle/queue/config berubah sesudah transaksi
+	// pertama; tidak ada mutasi baru pada jalur ini.
+	req := ReviseRequest{
+		OrderID: id, Alasan: alasan, Catatan: catatan, AdminID: actor.UserID,
+		Actor: actor, Lines: lines, DepositReversals: plan, IdempotencyKey: key,
+	}
+	if replay, ok, err := s.repo.Replay(ctx, req); err != nil {
+		return ReviseOutcome{}, err
+	} else if ok {
+		return replay, nil
+	}
+	if s.cfg == nil {
+		return ReviseOutcome{}, ErrQueueUnavailable
+	}
 
 	// Izin Manager dibaca SERVER dari setelan (PRD §4.9). Superadmin tidak
 	// pernah bergantung pada toggle.
@@ -283,19 +319,8 @@ func (s *RevisionService) Revise(ctx context.Context, actor auth.Actor, orderID 
 		return ReviseOutcome{}, fmt.Errorf("%w: biaya packaging tidak valid", ErrInvalidData)
 	}
 
-	req := ReviseRequest{
-		OrderID:        id,
-		Alasan:         alasan,
-		Catatan:        catatan,
-		AdminID:        actor.UserID,
-		Actor:          actor,
-		Lines:          lines,
-		BiayaPackaging: biaya,
-		TeksEvent:      TeksEventRevisi(actor.Nama, alasan),
-		// Reversal plan mengembalikan debit committed: hak admin.verify (C0 §5.0).
-		DepositReversals: plan,
-		IdempotencyKey:   strings.TrimSpace(in.IdempotencyKey),
-	}
+	req.BiayaPackaging = biaya
+	req.TeksEvent = TeksEventRevisi(actor.Nama, alasan)
 	// Audit disusun di sini supaya aktor + IP request tercatat; Before/After
 	// diisi repository dari baris yang dikunci (tidak pernah snapshot basi).
 	req.Audit = audit.NewEntry(ctx, actor, audit.EntityOrder, id, audit.ActionRevise, nil, nil)
@@ -310,9 +335,6 @@ func validasiReversalPlan(actor auth.Actor, in ReviseInput) ([]DepositReversalIn
 	}
 	if !actor.Can(auth.CapAdminVerify) {
 		return nil, ErrForbidden
-	}
-	if strings.TrimSpace(in.IdempotencyKey) == "" {
-		return nil, ErrRevisionKeyRequired
 	}
 	seen := map[string]bool{}
 	out := make([]DepositReversalInput, 0, len(in.DepositReversals))
@@ -351,7 +373,7 @@ func validasiBarisRevisi(in []ReviseLineInput) ([]ReviseLine, error) {
 		if l.HargaSatuan < 0 {
 			return nil, fmt.Errorf("%w: harga baris %d tidak boleh negatif", ErrInvalidData, i+1)
 		}
-		pid := strings.TrimSpace(l.ProductID)
+		pid := strings.ToLower(strings.TrimSpace(l.ProductID))
 		if l.NamaInstansi != nil {
 			instansi := strings.TrimSpace(*l.NamaInstansi)
 			if instansi == "" || len([]rune(instansi)) > MaxNamaInstansi {

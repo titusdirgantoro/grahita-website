@@ -38,10 +38,20 @@ func (c *revConfig) Int(_ context.Context, key string) (int64, error) {
 
 // revRepo menangkap permintaan yang diteruskan service ke repository.
 type revRepo struct {
-	dipanggil int
-	req       ReviseRequest
-	out       ReviseOutcome
-	err       error
+	dipanggil       int
+	replayDipanggil int
+	req             ReviseRequest
+	out             ReviseOutcome
+	err             error
+	replayOut       ReviseOutcome
+	replayOK        bool
+	replayErr       error
+}
+
+func (r *revRepo) Replay(_ context.Context, req ReviseRequest) (ReviseOutcome, bool, error) {
+	r.replayDipanggil++
+	r.req = req
+	return r.replayOut, r.replayOK, r.replayErr
 }
 
 func (r *revRepo) Revise(_ context.Context, req ReviseRequest) (ReviseOutcome, error) {
@@ -75,6 +85,10 @@ func barisFinal(qty int, harga int64) []ReviseLineInput {
 	return []ReviseLineInput{{LineNo: 1, Qty: qty, HargaSatuan: harga}}
 }
 
+func inputRevisi(alasan string, lines []ReviseLineInput) ReviseInput {
+	return ReviseInput{Alasan: alasan, Lines: lines, IdempotencyKey: "revision-unit-key"}
+}
+
 func TestReviseAlasanWajib(t *testing.T) {
 	repo := &revRepo{}
 	svc := NewRevisionService(repo, cfgRevisi(true))
@@ -91,9 +105,67 @@ func TestReviseAlasanTerlaluPanjang(t *testing.T) {
 	repo := &revRepo{}
 	svc := NewRevisionService(repo, cfgRevisi(true))
 	_, err := svc.Revise(context.Background(), aktorSA(), idPesanan,
-		ReviseInput{Alasan: strings.Repeat("a", MaxAlasanRevisi+1), Lines: barisFinal(1, 1000)})
+		inputRevisi(strings.Repeat("a", MaxAlasanRevisi+1), barisFinal(1, 1000)))
 	if !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("alasan terlalu panjang harus ErrInvalidData, dapat %v", err)
+	}
+}
+
+func TestReviseWajibIdempotencyKeyUntukSemuaMode(t *testing.T) {
+	repo := &revRepo{}
+	svc := NewRevisionService(repo, cfgRevisi(true))
+	_, err := svc.Revise(context.Background(), aktorSA(), idPesanan,
+		ReviseInput{Alasan: "salah harga", Lines: barisFinal(1, 1000)})
+	if !errors.Is(err, ErrRevisionKeyRequired) {
+		t.Fatalf("revisi tanpa key harus ErrRevisionKeyRequired, dapat %v", err)
+	}
+	if repo.replayDipanggil != 0 || repo.dipanggil != 0 {
+		t.Fatal("request tanpa key tidak boleh mencapai repository")
+	}
+}
+
+func TestRevisePanjangIdempotencyKeySesuaiKontrak(t *testing.T) {
+	for _, tc := range []struct {
+		nama string
+		key  string
+		ok   bool
+	}{
+		{"satu", "x", false},
+		{"tujuh", strings.Repeat("x", 7), false},
+		{"delapan", strings.Repeat("x", 8), true},
+		{"dua ratus", strings.Repeat("x", 200), true},
+		{"dua ratus satu", strings.Repeat("x", 201), false},
+	} {
+		t.Run(tc.nama, func(t *testing.T) {
+			repo := &revRepo{out: ReviseOutcome{Versi: 1}}
+			svc := NewRevisionService(repo, cfgRevisi(true))
+			in := inputRevisi("salah harga", barisFinal(1, 1000))
+			in.IdempotencyKey = tc.key
+			_, err := svc.Revise(context.Background(), aktorSA(), idPesanan, in)
+			if tc.ok && err != nil {
+				t.Fatalf("key panjang %d harus diterima: %v", len(tc.key), err)
+			}
+			if !tc.ok && !errors.Is(err, ErrRevisionKeyInvalid) {
+				t.Fatalf("key panjang %d harus ErrRevisionKeyInvalid: %v", len(tc.key), err)
+			}
+		})
+	}
+}
+
+func TestReviseReplayMendahuluiPerubahanSetelanDanQueue(t *testing.T) {
+	want := ReviseOutcome{OrderID: idPesanan, Versi: 1, Replayed: true}
+	repo := &revRepo{replayOut: want, replayOK: true}
+	cfg := cfgRevisi(false)
+	cfg.errB = errors.New("setelan tidak tersedia")
+	cfg.errI = errors.New("setelan tidak tersedia")
+	svc := NewRevisionService(repo, cfg)
+	out, err := svc.Revise(context.Background(), aktorMgr(), strings.ToUpper(idPesanan),
+		inputRevisi("salah harga", barisFinal(1, 1000)))
+	if err != nil || out.OrderID != want.OrderID || out.Versi != want.Versi || !out.Replayed {
+		t.Fatalf("replay committed harus bebas setelan/queue: out=%+v err=%v", out, err)
+	}
+	if repo.replayDipanggil != 1 || repo.dipanggil != 0 || repo.req.OrderID != idPesanan {
+		t.Fatalf("replay harus memakai UUID canonical dan tidak mutasi: %+v", repo)
 	}
 }
 
@@ -101,7 +173,7 @@ func TestReviseMenolakAktorBukanAdmin(t *testing.T) {
 	repo := &revRepo{}
 	svc := NewRevisionService(repo, cfgRevisi(true))
 	_, err := svc.Revise(context.Background(), aktorRevCabang(), idPesanan,
-		ReviseInput{Alasan: "salah harga", Lines: barisFinal(1, 1000)})
+		inputRevisi("salah harga", barisFinal(1, 1000)))
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("akun cabang harus 403, dapat %v", err)
 	}
@@ -111,7 +183,7 @@ func TestReviseManagerDitolakSaatToggleMati(t *testing.T) {
 	repo := &revRepo{}
 	svc := NewRevisionService(repo, cfgRevisi(false))
 	_, err := svc.Revise(context.Background(), aktorMgr(), idPesanan,
-		ReviseInput{Alasan: "salah harga", Lines: barisFinal(1, 1000)})
+		inputRevisi("salah harga", barisFinal(1, 1000)))
 	if !errors.Is(err, ErrRevisiTidakDiizinkan) {
 		t.Fatalf("Manager saat toggle mati harus ditolak, dapat %v", err)
 	}
@@ -124,7 +196,7 @@ func TestReviseManagerBolehSaatToggleHidup(t *testing.T) {
 	repo := &revRepo{out: ReviseOutcome{OrderID: idPesanan, Versi: 1}}
 	svc := NewRevisionService(repo, cfgRevisi(true))
 	out, err := svc.Revise(context.Background(), aktorMgr(), idPesanan,
-		ReviseInput{Alasan: "salah harga", Lines: barisFinal(2, 5000)})
+		inputRevisi("salah harga", barisFinal(2, 5000)))
 	if err != nil {
 		t.Fatalf("Manager saat toggle hidup harus boleh: %v", err)
 	}
@@ -142,7 +214,7 @@ func TestReviseSuperadminMengabaikanToggle(t *testing.T) {
 	cfg.errB = errors.New("setelan tidak terbaca")
 	svc := NewRevisionService(repo, cfg)
 	if _, err := svc.Revise(context.Background(), aktorSA(), idPesanan,
-		ReviseInput{Alasan: "koreksi alamat", Lines: barisFinal(1, 100)}); err != nil {
+		inputRevisi("koreksi alamat", barisFinal(1, 100))); err != nil {
 		t.Fatalf("Superadmin tidak boleh bergantung setelan: %v", err)
 	}
 	if repo.dipanggil != 1 {
@@ -154,7 +226,7 @@ func TestReviseIdBukanUUID(t *testing.T) {
 	repo := &revRepo{}
 	svc := NewRevisionService(repo, cfgRevisi(true))
 	_, err := svc.Revise(context.Background(), aktorSA(), "bukan-uuid",
-		ReviseInput{Alasan: "x", Lines: barisFinal(1, 100)})
+		inputRevisi("x", barisFinal(1, 100)))
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("id bukan UUID harus ErrNotFound, dapat %v", err)
 	}
@@ -179,7 +251,7 @@ func TestReviseValidasiBaris(t *testing.T) {
 			repo := &revRepo{}
 			svc := NewRevisionService(repo, cfgRevisi(true))
 			_, err := svc.Revise(context.Background(), aktorSA(), idPesanan,
-				ReviseInput{Alasan: "sebab", Lines: k.lines})
+				inputRevisi("sebab", k.lines))
 			if !errors.Is(err, k.mau) {
 				t.Fatalf("harus %v, dapat %v", k.mau, err)
 			}
@@ -200,7 +272,7 @@ func TestReviseBarisBaruWajibProductID(t *testing.T) {
 		{ProductID: "018f0000-0000-7000-8000-0000000000aa", NamaInstansi: &instansi, Qty: 2, HargaSatuan: 500},
 	}
 	if _, err := svc.Revise(context.Background(), aktorSA(), idPesanan,
-		ReviseInput{Alasan: "tambah baris", Lines: lines}); err != nil {
+		inputRevisi("tambah baris", lines)); err != nil {
 		t.Fatalf("baris final sah harus diterima: %v", err)
 	}
 	if len(repo.req.Lines) != 2 || repo.req.Lines[1].ProductID == "" {
@@ -214,7 +286,7 @@ func TestReviseSetelanTidakTerbacaGagalTerang(t *testing.T) {
 	cfg.errI = errors.New("database mati")
 	svc := NewRevisionService(repo, cfg)
 	if _, err := svc.Revise(context.Background(), aktorMgr(), idPesanan,
-		ReviseInput{Alasan: "x", Lines: barisFinal(1, 1)}); err == nil {
+		inputRevisi("x", barisFinal(1, 1))); err == nil {
 		t.Fatal("kegagalan membaca setelan harus terlihat, bukan diam")
 	}
 }

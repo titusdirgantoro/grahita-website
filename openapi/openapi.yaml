@@ -2570,6 +2570,13 @@ paths:
         dan serial selalu dihitung di dalam transaksi, sehingga rollback tidak
         menyisakan serial atau versi palsu.
 
+        Header `Idempotency-Key` wajib untuk setiap revisi. Retry oleh admin
+        yang sama dengan key dan payload canonical yang sama mengembalikan
+        hasil committed pertama (`replayed: true`) tanpa versi, ledger,
+        timeline, audit, dokumen, email, atau job tambahan. Key admin yang sama
+        tidak boleh dipakai untuk order/payload lain; scope key terpisah antar
+        akun admin.
+
         Revisi juga **gagal-tertutup (fail closed)**: selama invoice VERSI
         BERJALAN pesanan belum dirender, revisi berikutnya dijawab `409`
         `INVOICE_NOT_READY` tanpa menaikkan versi. Pekerjaan lanjutan revisi
@@ -2581,7 +2588,7 @@ paths:
         worker kebetulan berjalan.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKeyOptional"
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2610,7 +2617,7 @@ paths:
                   description: |
                     Reversal plan eksplisit (C0 §3.4, §5.1) — hanya untuk revisi
                     yang menurunkan total; wajib cukup bila deposit committed
-                    melebihi total baru. Butuh `admin.verify` dan Idempotency-Key.
+                    melebihi total baru. Butuh `admin.verify`.
                   items:
                     type: object
                     required: [allocation_id, amount, reason]
@@ -2641,13 +2648,15 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           description: |
-            Tidak ada perubahan yang dilakukan. Dua sebab:
+            Tidak ada perubahan yang dilakukan. Beberapa sebab:
 
             * `ORDER_NOT_DONE` — pesanan belum selesai sehingga belum punya
               invoice untuk direvisi;
             * `INVOICE_NOT_READY` — invoice VERSI BERJALAN pesanan belum
               dirender (pekerjaan dokumen belum selesai), sehingga revisi baru
-              belum boleh menaikkan versi. Ulangi setelah dokumennya siap.
+              belum boleh menaikkan versi. Ulangi setelah dokumennya siap;
+            * `IDEMPOTENCY_KEY_REUSED` — key admin yang sama sudah dipakai
+              untuk order atau payload revisi lain.
             * `REVISION_REVERSAL_PLAN_REQUIRED` / `REVISION_REVERSAL_PLAN_INVALID`
               — total turun di bawah deposit committed tanpa reversal plan yang
               cukup, atau item plan tidak sah; seluruh revisi dibatalkan.
@@ -4318,13 +4327,13 @@ components:
       name: Idempotency-Key
       in: header
       required: false
-      description: Wajib bila keputusan menciptakan kredit deposit (settlement) atau membawa reversal plan (revisi).
+      description: Header kondisional untuk endpoint lama; endpoint revisi memakai parameter wajib terpisah.
       schema: { type: string, minLength: 8, maxLength: 200 }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
-      description: Kunci unik per niat mutasi deposit; retry dengan kunci dan isi sama menghasilkan hasil yang sama.
+      description: Kunci unik per aktor dan niat mutasi; retry dengan kunci dan isi canonical yang sama menghasilkan hasil committed yang sama tanpa side effect tambahan.
       schema: { type: string, minLength: 8, maxLength: 200 }
     OrderIdPath:
       name: id
@@ -5335,7 +5344,7 @@ components:
 
     ReviseResult:
       type: object
-      required: [order_id, nomor, versi, total, jumlah_item, delta_total, lines, revisi]
+      required: [order_id, nomor, versi, total, jumlah_item, delta_total, lines, revisi, replayed]
       description: Hasil satu revisi invoice (F2-25); `versi` = `revisi.versi_baru`.
       properties:
         order_id: { type: string, format: uuid }
@@ -5348,6 +5357,9 @@ components:
           type: array
           items: { $ref: "#/components/schemas/OrderLine" }
         revisi: { $ref: "#/components/schemas/RevisionRow" }
+        replayed:
+          type: boolean
+          description: True bila respons dipulihkan dari transaksi committed dengan Idempotency-Key dan payload identik.
 
     AdminOrderDetail:
       type: object

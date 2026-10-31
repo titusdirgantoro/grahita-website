@@ -139,13 +139,17 @@ func (r *Repo) reviseTempo(ctx context.Context, tx pgx.Tx, q *sqlc.Queries, row 
 	if _, err := r.jobs.InsertTx(ctx, tx, jobs.RevisiInvoiceArgs{OrderID: req.OrderID, Versi: int(row.Versi) + 1}, nil); err != nil {
 		return order.ReviseOutcome{}, err
 	}
+	out := order.ReviseOutcome{OrderID: req.OrderID, Nomor: row.Nomor, Versi: int(row.Versi) + 1,
+		Total: total, JumlahItem: jumlahItem(final), DeltaTotal: delta, Lines: garisKeluar(final),
+		Revisi: order.Revision{ID: revisionID, VersiLama: int(row.Versi), VersiBaru: int(row.Versi) + 1,
+			Alasan: req.Alasan, DeltaTotal: delta, AdminNama: req.Actor.Nama, CreatedAt: created.UTC().Format(rfc3339)}}
+	if err := storeRevisionReplay(ctx, tx, req, out); err != nil {
+		return order.ReviseOutcome{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return order.ReviseOutcome{}, err
 	}
-	return order.ReviseOutcome{OrderID: req.OrderID, Nomor: row.Nomor, Versi: int(row.Versi) + 1,
-		Total: total, JumlahItem: jumlahItem(final), DeltaTotal: delta, Lines: garisKeluar(final),
-		Revisi: order.Revision{ID: revisionID, VersiLama: int(row.Versi), VersiBaru: int(row.Versi) + 1,
-			Alasan: req.Alasan, DeltaTotal: delta, AdminNama: req.Actor.Nama, CreatedAt: created.UTC().Format(rfc3339)}}, nil
+	return out, nil
 }
 
 // reduceTempoCharges removes a downward correction from the newest unpaid

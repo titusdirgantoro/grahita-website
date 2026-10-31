@@ -77,7 +77,6 @@ var depositValidation = []struct {
 	{deposit.ErrInvalidAction, "action", "harus review, reject, atau verify"},
 	{deposit.ErrProofRequired, "proof", "wajib diunggah"},
 	{payment.ErrSettlementKeyRequired, "idempotency_key", "header Idempotency-Key wajib untuk kredit deposit"},
-	{order.ErrRevisionKeyRequired, "idempotency_key", "header Idempotency-Key wajib untuk reversal plan"},
 }
 
 // depositErr menerjemahkan error domain deposit; ok=false bila bukan miliknya.
