@@ -162,10 +162,15 @@ jobs:
           ADMIN_BASE: https://${{ vars.ADMIN_HOST }}
         run: |
           set -eu
-          # /healthz & /readyz sengaja TIDAK diproxy Caddy (hanya /api/*),
-          # jadi pemeriksaan publik memakai meta same-origin.
           for basis in "$CUSTOMER_BASE" "$ADMIN_BASE"; do
-            kode=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$basis/api/v1/meta")
-            echo "$basis/api/v1/meta -> $kode"
-            [ "$kode" = "200" ] || { echo "meta gagal pada $basis"; exit 1; }
+            for jalur in /healthz /readyz /api/v1/meta; do
+              respons=$(mktemp)
+              header=$(mktemp)
+              kode=$(curl -sS -D "$header" -o "$respons" -w '%{http_code}' --max-time 15 "$basis$jalur")
+              tipe=$(awk 'BEGIN{IGNORECASE=1} /^content-type:/{gsub("\r", ""); print $2; exit}' "$header")
+              echo "$basis$jalur -> $kode $tipe"
+              [ "$kode" = "200" ] || { echo "$jalur gagal pada $basis"; exit 1; }
+              case "$tipe" in application/json*) ;; *) echo "$jalur bukan JSON pada $basis"; exit 1 ;; esac
+              rm -f "$respons" "$header"
+            done
           done

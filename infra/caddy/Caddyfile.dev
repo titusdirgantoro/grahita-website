@@ -7,6 +7,13 @@
 :80 {
 	encode gzip
 
+	# Endpoint kesehatan harus tetap JSON dari API. Letakkan sebelum SPA
+	# catch-all agar probe publik tidak menerima index.html dengan status 200.
+	@kesehatan path /healthz /readyz
+	handle @kesehatan {
+		reverse_proxy api:8080
+	}
+
 	handle /api/* {
 		reverse_proxy api:8080
 	}
@@ -21,6 +28,11 @@
 # ---- Admin Portal : http://localhost:8081 ----
 :81 {
 	encode gzip
+
+	@kesehatan path /healthz /readyz
+	handle @kesehatan {
+		reverse_proxy api:8080
+	}
 
 	handle /api/* {
 		reverse_proxy api:8080

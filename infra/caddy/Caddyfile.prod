@@ -52,6 +52,13 @@
 	import keamanan
 	import blokir_internal
 
+	# Probe liveness/readiness publik diproxy langsung ke API. Keduanya tidak
+	# memuat data sensitif dan dibutuhkan load balancer serta smoke deployment.
+	@kesehatan path /healthz /readyz
+	handle @kesehatan {
+		reverse_proxy api:8080
+	}
+
 	# API same-origin: /api/v1 selalu dilayani host yang sama dengan SPA,
 	# sehingga cookie sesi host-only tetap dikirim dan tidak ada CORS.
 	handle /api/* {
@@ -69,6 +76,11 @@
 	encode gzip zstd
 	import keamanan
 	import blokir_internal
+
+	@kesehatan path /healthz /readyz
+	handle @kesehatan {
+		reverse_proxy api:8080
+	}
 
 	handle /api/* {
 		reverse_proxy api:8080
