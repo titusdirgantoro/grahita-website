@@ -2226,6 +2226,14 @@ func TestPGHapusCabangTerjagaOlehPesanan(t *testing.T) {
 
 	// Cabang B punya akun + sesi, tetapi tidak punya pesanan → boleh dihapus.
 	pgLogin(t, f.srv, "b@example.test", "rahasia123")
+	// Token registrasi terpakai menunjuk akun cabang lewat used_by. Ini adalah
+	// bentuk data produksi sesudah cabang menyelesaikan registrasi.
+	if _, err := f.pool.Exec(ctx, `INSERT INTO registration_tokens
+		(branch_id, token_hash, token_prefix, expires_at, used_at, used_by)
+		VALUES ($1, sha256('token-hapus-cabang-terdaftar'::bytea), 'HAPUSREG',
+		        now() + interval '14 days', now(), $2)`, f.branchB, f.userB); err != nil {
+		t.Fatalf("seed token registrasi terpakai: %v", err)
+	}
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodDelete, f.srv.URL+"/api/v1/admin/branches/"+f.branchB,
 		"", cookiesSA, csrfSA)
 	if status != http.StatusNoContent {

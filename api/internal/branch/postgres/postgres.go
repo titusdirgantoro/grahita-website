@@ -313,11 +313,14 @@ func (r *Repo) Delete(ctx context.Context, id string, rec audit.Entry) error {
 	if err := q.DeleteBranchSessions(ctx, pgtypes.UUID(id)); err != nil {
 		return fmt.Errorf("query DeleteBranchSessions: %w", err)
 	}
-	if err := q.DeleteBranchUsers(ctx, id); err != nil {
-		return fmt.Errorf("query DeleteBranchUsers: %w", err)
-	}
+	// Token yang sudah dipakai menunjuk branch_users.used_by dengan FK RESTRICT.
+	// Hapus token lebih dulu agar cabang terdaftar tanpa pesanan tetap dapat
+	// dihapus bersama akun cabangnya.
 	if err := q.DeleteBranchRegistrationTokens(ctx, id); err != nil {
 		return fmt.Errorf("query DeleteBranchRegistrationTokens: %w", err)
+	}
+	if err := q.DeleteBranchUsers(ctx, id); err != nil {
+		return fmt.Errorf("query DeleteBranchUsers: %w", err)
 	}
 	// Konfigurasi cabang tanpa riwayat ekonomi (HasOrders sudah menolak cabang
 	// bersejarah): assignment rekening D2 dan akun deposit kosong ikut dihapus.
