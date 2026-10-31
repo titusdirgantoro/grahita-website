@@ -109,6 +109,44 @@ VALUES($1,$2,'qa/legacy-tempo.jpg','legacy.jpg','image/jpeg',4,'\x010203'::bytea
 	}
 }
 
+// Revisi Tempo harus menyalin seluruh komponen harga snapshot ketika baris
+// lama disisipkan ulang. Tanpa field pi_ratio, query menerima string kosong
+// untuk numeric dan endpoint produksi menjawab 500.
+func TestPGRevisiTempoMempertahankanKomponenHarga(t *testing.T) {
+	f := newPGFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, `UPDATE branches SET is_tempo=true,tanggal_bayar=5 WHERE id=$1`, f.branchA); err != nil {
+		t.Fatal(err)
+	}
+	id := tempoSubmitted(t, f, "2026-10-20", 100000)
+	manager := auth.Actor{UserID: f.adminMgr, Kind: auth.KindAdmin, Role: auth.RoleManager, Nama: "Budi"}
+	if _, err := receivable.New(f.pool, f.jobs).Approve(ctx, manager, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.selesai.PesananSelesai(ctx, id); err != nil {
+		t.Fatalf("render invoice versi awal: %v", err)
+	}
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+	body := reviseBody("Uji revisi Tempo", `{"line_no":1,"nama_instansi":"Instansi Sesudah Revisi","qty":2,"harga_satuan":100000}`)
+	status, hasil := reviseHTTP(t, f, cookies, csrf, id, body)
+	if status != http.StatusOK {
+		t.Fatalf("revisi Tempo harus 200, dapat %d (%v)", status, hasil)
+	}
+	var versi, qty int
+	var hargaDasar, total, delta int64
+	var piRatio string
+	if err := f.pool.QueryRow(ctx, `SELECT o.versi,l.qty,l.harga_dasar,l.pi_ratio::text,o.total,
+COALESCE((SELECT delta_amount FROM tempo_adjustments WHERE order_id=o.id ORDER BY created_at DESC LIMIT 1),0)
+FROM orders o JOIN order_lines l ON l.order_id=o.id WHERE o.id=$1`, id).
+		Scan(&versi, &qty, &hargaDasar, &piRatio, &total, &delta); err != nil {
+		t.Fatal(err)
+	}
+	if versi != 1 || qty != 2 || hargaDasar != 100000 || piRatio != "0" || total != 200000 || delta != 100000 {
+		t.Fatalf("snapshot/ledger revisi Tempo salah: v=%d qty=%d dasar=%d pi=%q total=%d delta=%d",
+			versi, qty, hargaDasar, piRatio, total, delta)
+	}
+}
+
 // TMP-27: Sertifikat Tempo dengan packaging Rp0 memang bernilai Rp0. Saat
 // disetujui, status langsung lunas tanpa charge atau saldo negatif, tetapi
 // dokumen tetap menjadi hak pesanan tersebut.
