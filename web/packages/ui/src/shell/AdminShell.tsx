@@ -102,8 +102,11 @@ export function AdminShell({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [drawer]);
 
+  useEffect(() => {
+    setDrawer(false);
+  }, [active]);
+
   const grupTampil = filterGroups(groups, account.role);
-  const itemProfil = { to: profileTo, label: "Profil", icon: "user-circle" };
 
   return (
     <div className={cn(styles.shell, ciut && styles.collapsed, drawer && styles.drawer)}>
@@ -149,24 +152,20 @@ export function AdminShell({
         ))}
 
         <div className={styles.foot}>
-          <nav className={styles.nav}>
-            <Link
-              to={itemProfil.to}
-              title={itemProfil.label}
-              active={isActive(itemProfil.to, active)}
-            >
-              <span className={styles.ic}>
-                <Icon name={itemProfil.icon} />
-              </span>
-              <span className={styles.lbl}>{itemProfil.label}</span>
-            </Link>
-          </nav>
           <div className={styles.me}>
-            <Avatar nama={account.nama} />
-            <span className={styles.who}>
-              <b>{account.nama}</b>
-              <span>{labelPeran(account.role)}</span>
-            </span>
+            <Link
+              to={profileTo}
+              className={styles.accountLink}
+              title={`Profil ${account.nama}`}
+              aria-label={`Buka profil ${account.nama}`}
+              active={isActive(profileTo, active)}
+            >
+              <Avatar nama={account.nama} />
+              <span className={styles.who}>
+                <b>{account.nama}</b>
+                <span>{labelPeran(account.role)}</span>
+              </span>
+            </Link>
             {onLogout ? (
               <Button iconOnly icon="sign-out" onClick={onLogout} aria-label="Keluar" title="Keluar" />
             ) : null}

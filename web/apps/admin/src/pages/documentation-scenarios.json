@@ -1,0 +1,1196 @@
+[
+  {
+    "title": "Perjalanan end to end wajib",
+    "items": [
+      {
+        "id": "E2E-01",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Superadmin membuat cabang, mengisi satu cara bayar dan rekening, membuat token; cabang registrasi, login, melihat hanya katalog/harga sendiri; token tidak dapat dipakai lagi.",
+        "expected": ""
+      },
+      {
+        "id": "E2E-02",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Cabang Transfer membuat draft tiga baris dengan dua nama instansi berbeda, mengunggah bukti, submit; admin memverifikasi; order `done`, invoice PDF dan Surat Jalan PDF/XLSX terbit, email sesuai flag, ketiga baris dan serial muncul sama pada detail dan laporan.",
+        "expected": ""
+      },
+      {
+        "id": "E2E-03",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Cabang Deposit top-up; hanya Superadmin mengkredit setelah verifikasi; submit memakai saldo dan bukti hanya bila ada kekurangan; admin menyelesaikan settlement; saldo, jurnal, invoice, dan status konsisten.",
+        "expected": ""
+      },
+      {
+        "id": "E2E-04",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Cabang Tempo submit tanpa bukti; Manager menyetujui; order `approved_unpaid`, invoice dan Surat Jalan terbit; pada tanggal 1 berikutnya Surat Tagihan terbit; cabang bayar sebagian, admin verifikasi FIFO, sisa turun; setelah pelunasan order `done`.",
+        "expected": ""
+      },
+      {
+        "id": "E2E-05",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Cabang `UJI-MIX` melihat tiga opsi, mengirim tiga order masing-masing dengan satu opsi. Snapshot cara bayar per order tetap walau izin cabang diubah. Tunggakan Tempo menahan hanya submit Tempo; Transfer dan Deposit masih berfungsi.",
+        "expected": ""
+      },
+      {
+        "id": "E2E-06",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Admin merevisi order selesai dan order Tempo belum lunas, termasuk perubahan instansi per baris; nomor invoice tetap, versi baru dan PDF baru terbit, PDF lama tetap bisa diunduh, total/ledger/tagihan/laporan berubah sesuai delta dan email revisi benar.",
+        "expected": ""
+      },
+      {
+        "id": "E2E-07",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Bukti pelunasan Tempo menutup dua invoice lintas periode; alokasi O1 dahulu lalu O2. Bukti lebih bayar diputuskan Superadmin menjadi kredit Tempo, kredit otomatis membayar invoice Tempo berikutnya dan tidak menambah deposit.",
+        "expected": ""
+      },
+      {
+        "id": "E2E-08",
+        "priority": "P0",
+        "layer": "UI · API · DB · Job",
+        "action": "Bandingkan satu order multi-instansi dari detail cabang dan admin ke PDF invoice, PDF/XLSX Surat Jalan, laporan layar dan ekspor XLSX: jumlah baris, serial, nama instansi, qty, harga snapshot, subtotal dan total identik.",
+        "expected": ""
+      }
+    ]
+  },
+  {
+    "title": "A. Akun, sesi, profil, dan hak akses",
+    "items": [
+      {
+        "id": "AUT-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Login cabang, Manager, Superadmin dengan kredensial sah pada portal masing-masing.",
+        "expected": "Sesi terbentuk; `/auth/me` sesuai peran; menu dan halaman sesuai hak."
+      },
+      {
+        "id": "AUT-02",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Login dengan email/password salah dan email tidak terdaftar.",
+        "expected": "Pesan generik; tidak membocorkan keberadaan akun; tidak ada sesi."
+      },
+      {
+        "id": "AUT-03",
+        "priority": "P1",
+        "layer": "API",
+        "action": "Lebihi batas lima percobaan gagal dalam 15 menit per akun/IP.",
+        "expected": "Percobaan berikutnya dibatasi; login akun lain tidak ikut bocor/terkunci keliru."
+      },
+      {
+        "id": "AUT-04",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Superadmin membuat token cabang valid; cabang validasi token, baca data cabang terkunci, isi telepon/password/konfirmasi, registrasi.",
+        "expected": "Satu akun terbentuk, data master tidak dapat diubah oleh pendaftar, token sekali pakai."
+      },
+      {
+        "id": "AUT-05",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Token salah, kedaluwarsa, sudah dipakai, tergantikan token baru, cabang nonaktif, dan cabang yang sudah punya akun.",
+        "expected": "Pendaftaran ditolak dengan kode/pesan sesuai; tidak ada akun ganda."
+      },
+      {
+        "id": "AUT-06",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Password kurang 8 karakter, konfirmasi berbeda, telepon invalid, field wajib kosong.",
+        "expected": "Validasi klien dan server menolak tanpa membuat akun."
+      },
+      {
+        "id": "AUT-07",
+        "priority": "P0",
+        "layer": "UI+API+Job",
+        "action": "Minta reset untuk email terdaftar dan tidak terdaftar, buka tautan dari email uji, reset password.",
+        "expected": "Respons permintaan sama; tautan sah sekali pakai dan habis sesuai setting; password baru berlaku."
+      },
+      {
+        "id": "AUT-08",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Pakai tautan reset lama/kedaluwarsa; ulangi setelah sukses.",
+        "expected": "Ditolak; sesi lama dibatalkan setelah reset."
+      },
+      {
+        "id": "AUT-09",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Cabang/admin ubah password dari Profil; admin ubah nama tampilan.",
+        "expected": "Butuh password lama, sesi lain keluar; email/role/data master read-only."
+      },
+      {
+        "id": "AUT-10",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Logout dan akses ulang rute privat via URL langsung atau tab lain.",
+        "expected": "Rute dialihkan ke masuk; API 401; cookie sesi tidak dapat dipakai."
+      },
+      {
+        "id": "AUT-11",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Manager membuka Rekening/Reporting/Pengaturan/Audit/User Admin lewat menu dan URL/API langsung.",
+        "expected": "Menu tidak tampil dan API menolak 403; nilai rupiah dashboard tidak bocor."
+      },
+      {
+        "id": "AUT-12",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Cabang mengakses ID order, bukti, invoice, surat tagihan, deposit milik cabang lain.",
+        "expected": "Respons tidak memberi data/tautan cabang lain; tidak ada side effect."
+      }
+    ]
+  },
+  {
+    "title": "B. Master cabang dan pilihan pembayaran",
+    "items": [
+      {
+        "id": "CAB-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Tambah/edit cabang dengan 1, 2, dan 3 cara pembayaran.",
+        "expected": "Set pilihan tersimpan, minimal satu opsi wajib; label Transfer/Deposit/Tempo benar."
+      },
+      {
+        "id": "CAB-02",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Aktifkan Tempo; masukkan tanggal bayar 1, 28, lalu 0/29/kosong; ubah toggle tahan.",
+        "expected": "1–28 diterima, nilai invalid ditolak; field Tempo muncul hanya ketika relevan."
+      },
+      {
+        "id": "CAB-03",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Dua cabang memakai email sama atau email cabang bertabrakan saat edit.",
+        "expected": "Unik ditegakkan server/DB; tidak ada master parsial."
+      },
+      {
+        "id": "CAB-04",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Filter/pencarian/status aktif dan detail cabang; ubah kepala cabang, telepon, PI.",
+        "expected": "Tampilan dan data tersimpan sesuai; flag Special tidak muncul di UI/API/ekspor."
+      },
+      {
+        "id": "CAB-05",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Generate ulang token yang belum dipakai; registrasi dengan token lama dan baru.",
+        "expected": "Lama tidak valid; baru valid tepat sekali; masa berlaku mengikuti setting."
+      },
+      {
+        "id": "CAB-06",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Nonaktifkan cabang dengan akun/order; coba login dan submit.",
+        "expected": "Login/aksi cabang ditolak; order historis/dokumen tetap utuh."
+      },
+      {
+        "id": "CAB-07",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Hapus cabang tanpa order dan dengan order.",
+        "expected": "Yang kosong terhapus; yang punya order ditolak dan diarahkan nonaktifkan."
+      },
+      {
+        "id": "CAB-08",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Ubah cara bayar cabang setelah order telah submit.",
+        "expected": "Order lama memakai snapshot pilihan; order baru memakai izin baru."
+      },
+      {
+        "id": "CAB-09",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Cabut Tempo dari cabang yang masih punya tagihan; buka Tagihan dan bayar.",
+        "expected": "Piutang lama tetap dapat dilihat/diselesaikan melalui API; jangan hilangkan akses pembayaran historis."
+      },
+      {
+        "id": "CAB-10",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Matikan/nyalakan `tahan_bila_telat` pada cabang bertunggakan.",
+        "expected": "Efek submit Tempo segera sesuai toggle; mutasi memiliki aktor/waktu di audit."
+      }
+    ]
+  },
+  {
+    "title": "C. Produk, harga, rekening, katalog cabang",
+    "items": [
+      {
+        "id": "MAS-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "CRUD produk reguler/Sertifikat, ubah urutan dan status aktif.",
+        "expected": "Katalog cabang hanya memuat produk aktif yang punya harga cabang."
+      },
+      {
+        "id": "MAS-02",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Isi matriks HJM, P1%, SPV; cek angka hasil dengan kalkulasi manual.",
+        "expected": "Harga server = HJM + HJM×P1 + SPV dalam Rupiah bulat; input tidak sah ditolak."
+      },
+      {
+        "id": "MAS-03",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Hapus sel harga cabang dan coba order produk itu; bandingkan harga A dua cabang.",
+        "expected": "Produk tanpa sel tidak dijual/dapat diorder; tiap cabang melihat harga sendiri."
+      },
+      {
+        "id": "MAS-04",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Salin harga dari satu cabang ke satu/semua cabang dan edit satu sel sesudahnya.",
+        "expected": "Sel tujuan cocok; cabang lain dan order lama tidak berubah tanpa aksi eksplisit."
+      },
+      {
+        "id": "MAS-05",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Ubah harga/master setelah draft dibuat tetapi sebelum submit; ubah lagi setelah submit.",
+        "expected": "Submit memakai harga master terbaru saat itu; order submitted tetap pada snapshot."
+      },
+      {
+        "id": "MAS-06",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Buat/edit/nonaktifkan rekening BCA/BRI; tetapkan per cabang.",
+        "expected": "Hanya rekening aktif dan diizinkan muncul di instruksi cabang, unggah pelunasan, dan invoice baru."
+      },
+      {
+        "id": "MAS-07",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Cabang tanpa rekening efektif mencoba Transfer, Deposit dengan kekurangan, dan approval Tempo.",
+        "expected": "Langkah yang butuh tujuan pembayaran ditolak; Deposit yang sepenuhnya tertutup saldo mengikuti aturan yang berlaku."
+      },
+      {
+        "id": "MAS-08",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Cabut rekening tepat saat unggah bukti/submit/verifikasi; re-evaluasi rekening tujuan setelah policy berubah.",
+        "expected": "Validasi memakai kebijakan efektif terbaru, tidak menerima tujuan tercabut secara diam-diam; keputusan tercatat."
+      },
+      {
+        "id": "MAS-09",
+        "priority": "P1",
+        "layer": "UI",
+        "action": "Katalog: nama, deskripsi, harga, penanda Sertifikat, pencarian/keadaan kosong, mobile.",
+        "expected": "Informasi konsisten dengan master; tidak ada harga cabang lain."
+      },
+      {
+        "id": "MAS-10",
+        "priority": "P1",
+        "layer": "DB",
+        "action": "Hapus/nonaktifkan produk yang sudah muncul pada order lama.",
+        "expected": "Snapshot order, invoice, laporan historis tetap dapat dibaca."
+      }
+    ]
+  },
+  {
+    "title": "D. Draft, baris instansi, submit, dan penomoran",
+    "items": [
+      {
+        "id": "ORD-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Buat draft 3 baris: produk sama dengan dua instansi berbeda, produk lain dengan instansi ketiga; simpan/edit/hapus satu baris.",
+        "expected": "Satu order berisi baris terpisah, masing-masing menyimpan `nama_instansi`; total live = jumlah subtotal."
+      },
+      {
+        "id": "ORD-02",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Nama instansi kosong/spasi, 160/161 karakter, karakter Unicode, apostrof, tanda `&`, teks mirip HTML; qty 0/negatif/terlalu besar.",
+        "expected": "Batas validasi sesuai kontrak; teks disimpan/ditampilkan aman tanpa eksekusi HTML; nilai uang tidak overflow."
+      },
+      {
+        "id": "ORD-03",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Draft tanpa produk, produk nonaktif/tanpa harga, campur Sertifikat-reguler.",
+        "expected": "Submit ditolak atau UI mencegah campuran dengan penjelasan; nomor belum dialokasikan."
+      },
+      {
+        "id": "ORD-04",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Pilih beberapa Sertifikat untuk instansi berbeda.",
+        "expected": "Harga Sertifikat Rp0, tepat satu baris packaging per order, packaging tidak bisa dihapus."
+      },
+      {
+        "id": "ORD-05",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Ubah biaya packaging setelah draft Sertifikat, lalu setelah submit.",
+        "expected": "Nilai saat submit yang dipakai; order lama tidak berubah."
+      },
+      {
+        "id": "ORD-06",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Save, ubah, hapus draft; buka ulang browser.",
+        "expected": "Data draft persisten; order lain tidak berubah; draft boleh dihapus."
+      },
+      {
+        "id": "ORD-07",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Submit Transfer dengan ≥1 bukti sah, tanpa bukti, dan setelah bukti lebih dari satu.",
+        "expected": "Hanya yang berbukti berhasil; status `submitted`, nomor dan tanggal WIB baru saat submit."
+      },
+      {
+        "id": "ORD-08",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Submit Deposit saldo cukup, saldo kurang, saldo nol.",
+        "expected": "Saldo dipakai hingga min(total,saldo); bukti hanya wajib untuk kekurangan; jurnal tepat sekali."
+      },
+      {
+        "id": "ORD-09",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Submit Tempo tanpa bukti.",
+        "expected": "Berhasil bila diizinkan/tidak ditahan, status `submitted`; belum ada dokumen hingga disetujui."
+      },
+      {
+        "id": "ORD-10",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Cabang tiga mode tidak memilih mode lalu submit; memilih mode yang tidak lagi diizinkan; mengirim dua mode sekaligus lewat API.",
+        "expected": "Server menolak pilihan kosong/invalid; tiap order hanya satu snapshot `transfer`/`deposit`/`tempo`."
+      },
+      {
+        "id": "ORD-11",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Jalankan submit ulang/klik ganda dan 100 submit paralel lintas cabang.",
+        "expected": "Satu transisi per order, invoice `YYYY-MM-XX` unik global per bulan, serial `YYYYMMDDXXX` unik per baris per hari, tanpa nomor hilang karena transaksi gagal."
+      },
+      {
+        "id": "ORD-12",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Submit pada 23:59:59 dan 00:00:00 WIB serta pergantian tahun.",
+        "expected": "Tanggal, awalan serial, dan nomor invoice mengikuti hari/bulan/tahun WIB; counter reset pada periodenya."
+      },
+      {
+        "id": "ORD-13",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Setelah submit, coba edit/hapus via UI dan request langsung.",
+        "expected": "Ditolak; nama instansi, serial, qty, harga tetap kecuali lewat revisi admin."
+      },
+      {
+        "id": "ORD-14",
+        "priority": "P1",
+        "layer": "UI",
+        "action": "Daftar/detail/filter status, timeline submit, nama instansi/serial dan label cara bayar.",
+        "expected": "Data sesuai order; navigasi kembali ke draft/riwayat berfungsi."
+      },
+      {
+        "id": "ORD-15",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Cabang B mengedit/submit/upload ke draft atau order cabang A memakai ID tebak.",
+        "expected": "Ditolak tanpa membocorkan data; penomoran/ledger tidak berubah."
+      },
+      {
+        "id": "ORD-16",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Admin unggah bukti transfer tambahan atas nama cabang setelah submit.",
+        "expected": "Bukti tampil dengan nama pengunggah dan timeline, tidak menjadi milik admin."
+      },
+      {
+        "id": "ORD-17",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Unggah JPG/PNG/PDF sah dan berkas dengan ekstensi/MIME palsu, kosong, melebihi ukuran/jumlah.",
+        "expected": "Hanya tipe/ukuran/jumlah sesuai batas diterima; file gagal tidak meninggalkan referensi DB/objek aktif."
+      },
+      {
+        "id": "ORD-18",
+        "priority": "P1",
+        "layer": "UI",
+        "action": "Beranda cabang setelah draft, submitted, approved_unpaid, done, dan tunggakan.",
+        "expected": "Hitungan/shortcut/pesanan terakhir/banner sesuai status nyata; tidak menampilkan uang milik cabang lain."
+      },
+      {
+        "id": "ORD-19",
+        "priority": "P1",
+        "layer": "UI+PDF+XLSX",
+        "action": "Buka order historis yang dibuat sebelum `nama_instansi` diwajibkan.",
+        "expected": "Detail/dokumen/laporan tetap terbaca; instansi kosong tampil sebagai `—`, bukan error atau data buatan."
+      }
+    ]
+  },
+  {
+    "title": "E. Verifikasi Transfer, rekening tujuan, dan OCR opsional",
+    "items": [
+      {
+        "id": "VER-01",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Manager memeriksa dua bukti Transfer dan menandai nominal/cocok berikut rekening tujuan efektif.",
+        "expected": "Hanya nominal yang disetujui masuk settlement; order `done`, log verifikasi, timeline, audit, job dokumen tercipta satu kali."
+      },
+      {
+        "id": "VER-02",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Nominal kurang, lebih, tidak terbaca, rekening salah: pilih `perlu_review` dengan alasan.",
+        "expected": "Order tetap `submitted`, substatus/alasan terlihat; dokumen/email belum terbit."
+      },
+      {
+        "id": "VER-03",
+        "priority": "P0",
+        "layer": "API",
+        "action": "`perlu_review` tanpa alasan, alasan di luar daftar, `cocok` sambil mengirim alasan review, angka negatif/desimal.",
+        "expected": "Ditolak dengan validasi; tidak ada perubahan status/ledger."
+      },
+      {
+        "id": "VER-04",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Verifikasi cocok dua kali/paralel dengan kunci idempotensi sama dan berbeda.",
+        "expected": "Tidak ada pembayaran/dokumen/email ganda; replay atau konflik sesuai kontrak."
+      },
+      {
+        "id": "VER-05",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Bukti yang sama dicoba dipakai untuk dua keputusan ekonomi/order; `approved_nominal` tidak sama dengan jumlah `applied_to_order` + `credited_to_deposit_total`.",
+        "expected": "Ditolak; tidak ada kredit ganda atau uang tercipta."
+      },
+      {
+        "id": "VER-06",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Bukti diarahkan ke rekening aktif tapi tidak diizinkan untuk cabang, rekening dinonaktifkan, atau assignment berubah saat pemeriksaan.",
+        "expected": "Verifikasi tidak lolos diam-diam; tampil status tujuan dan jalur review/evaluasi ulang."
+      },
+      {
+        "id": "VER-07",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Admin meninjau bukti dengan preview/zoom, menambah catatan internal, melihat log verifikasi/timeline.",
+        "expected": "Berkas terbaca; catatan internal tidak tampak di portal cabang."
+      },
+      {
+        "id": "VER-08",
+        "priority": "P0",
+        "layer": "Job+DB",
+        "action": "AI diaktifkan, bukti jelas dengan nominal, tanggal, bank, rekening dan keyakinan melewati ambang.",
+        "expected": "Job OCR hanya untuk order Transfer/Deposit, hasil dan bukti keputusan terekam; auto-approve hanya bila seluruh syarat terpenuhi."
+      },
+      {
+        "id": "VER-09",
+        "priority": "P0",
+        "layer": "Job+DB",
+        "action": "AI: nominal kurang/lebih, bukti kabur, tanggal terlalu tua, rekening tidak cocok, keyakinan rendah, multi-bukti tidak cocok.",
+        "expected": "Masuk `perlu_review` dengan alasan; AI tidak menolak final dan admin bisa mengambil keputusan."
+      },
+      {
+        "id": "VER-10",
+        "priority": "P0",
+        "layer": "Job+DB",
+        "action": "AI aktif tetapi scheduler/reader/storage gagal ketika submit atau proses.",
+        "expected": "Tidak ada keadaan setengah submit/settle; kegagalan job terlihat dan dapat dipulihkan."
+      },
+      {
+        "id": "VER-11",
+        "priority": "P1",
+        "layer": "API+DB",
+        "action": "Setelah bukti/allowlist berubah, jalankan reevaluasi tujuan rekening dari admin.",
+        "expected": "Keputusan memakai versi policy dan fingerprint bukti terbaru, jejak perubahan tersimpan."
+      },
+      {
+        "id": "VER-12",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Cari order berdasar nomor, cabang, serial; filter verifikasi, mode, email gagal, tanggal; grouping dan paginasi.",
+        "expected": "Daftar mengikuti filter, jumlah dan detail tetap konsisten."
+      },
+      {
+        "id": "VER-13",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Bukti Transfer disetujui lebih besar dari kebutuhan order; Superadmin memilih bagian untuk order dan kredit ke Deposit, Manager mencoba pilihan sama.",
+        "expected": "Jumlah split tepat; hanya Superadmin dapat mencipta kredit Deposit; bukti tidak bisa dikreditkan ulang."
+      }
+    ]
+  },
+  {
+    "title": "F. Deposit Cash & Carry",
+    "items": [
+      {
+        "id": "DEP-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Cabang Deposit melihat saldo, versi jurnal, mutasi, top-up; cabang tanpa Deposit membuka rute/API.",
+        "expected": "Data hanya milik cabang yang berhak; navigasi sesuai izin."
+      },
+      {
+        "id": "DEP-02",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Unggah top-up dengan nominal, rekening efektif, bukti sah.",
+        "expected": "Status pending; saldo belum bertambah; bukti dapat dilihat admin/cabang pemilik."
+      },
+      {
+        "id": "DEP-03",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Top-up tanpa bukti, bukti salah format/terlalu besar/duplikat, rekening bukan milik cabang.",
+        "expected": "Ditolak; tidak muncul kredit ataupun objek yatim."
+      },
+      {
+        "id": "DEP-04",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Manager pilih review/reject beralasan, lalu coba verify.",
+        "expected": "Review/reject tercatat; Manager tidak bisa menambah kredit deposit."
+      },
+      {
+        "id": "DEP-05",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Superadmin verify nominal sama dan berbeda dari nominal deklarasi.",
+        "expected": "Saldo bertambah tepat nilai approved; beda nilai mensyaratkan alasan; jurnal dan audit terhubung ke bukti."
+      },
+      {
+        "id": "DEP-06",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Ulangi approval dengan Idempotency-Key sama dan key sama untuk payload berbeda.",
+        "expected": "Replay tidak menggandakan saldo; payload berbeda ditolak."
+      },
+      {
+        "id": "DEP-07",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Dua submit order bersamaan menggunakan saldo yang sama; saldo berubah setelah modal terbuka.",
+        "expected": "Tidak ada saldo negatif; versi jurnal lama menghasilkan konflik dan UI meminta muat ulang."
+      },
+      {
+        "id": "DEP-08",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Deposit Rp70.000, order Rp100.000, unggah bukti sisanya Rp30.000, verifikasi split.",
+        "expected": "Jurnal debit Rp70.000; order `done` hanya setelah Rp30.000 disetujui; jumlah sumber = total."
+      },
+      {
+        "id": "DEP-09",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Tambah alokasi deposit ke order `submitted` sesudah submit, dari cabang sendiri atau admin beralasan.",
+        "expected": "Saldo dan sisa order turun tepat, versi/jurnal dan sumber transaksi tercatat."
+      },
+      {
+        "id": "DEP-10",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Coba alokasi melebihi saldo/sisa, ke order lain/`done`, versi order/jurnal basi, tanpa Idempotency-Key.",
+        "expected": "Ditolak tanpa debit; replay aman."
+      },
+      {
+        "id": "DEP-11",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Admin reverse sebagian/seluruh alokasi order belum `done` dengan alasan dan key.",
+        "expected": "Saldo kembali tepat, sumber reversal dan audit tercatat."
+      },
+      {
+        "id": "DEP-12",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Reverse tanpa alasan, melebihi alokasi, oleh cabang, atau setelah order `done`.",
+        "expected": "Ditolak, tidak ada mutasi jurnal."
+      },
+      {
+        "id": "DEP-13",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Revisi turun order Deposit hingga kurang dari jumlah deposit yang sudah committed.",
+        "expected": "Reversal plan wajib dan sesuai alokasi; revisi atomik atau seluruhnya gagal."
+      },
+      {
+        "id": "DEP-14",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Tampilkan semua top-up pending/review, saldo cabang, riwayat mutasi, bukti dan sumber nominal.",
+        "expected": "Angka antrean sama dengan API/DB; status tidak menggandakan transaksi."
+      }
+    ]
+  },
+  {
+    "title": "G. Tempo, Surat Tagihan, pelunasan, kredit, dan penahanan",
+    "items": [
+      {
+        "id": "TMP-01",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Submit Tempo 31 Okt 23:59 WIB, admin approve 2 Nov.",
+        "expected": "Masuk periode Oktober; due berdasarkan tanggal bayar yang di-snapshot saat submit; status `approved_unpaid` kecuali total nol."
+      },
+      {
+        "id": "TMP-02",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Approve sebelum, tepat pada, dan sesudah due asli.",
+        "expected": "Due normal bulan berikutnya; jika approval setelah due asli, pindah ke tanggal bayar berikut setelah approval."
+      },
+      {
+        "id": "TMP-03",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Approve Tempo tanpa rekening efektif atau order bukan Tempo/masih draft/sudah approved; klik ganda.",
+        "expected": "Ditolak atau konflik, tidak ada charge/job ganda."
+      },
+      {
+        "id": "TMP-04",
+        "priority": "P0",
+        "layer": "UI+API+Job",
+        "action": "Approve Tempo sah tanpa bukti transfer.",
+        "expected": "Invoice dan Surat Jalan terbit serta email terkirim sesuai penerima; PDF bertanda Tempo dan tanggal due; sisa piutang = total."
+      },
+      {
+        "id": "TMP-05",
+        "priority": "P1",
+        "layer": "API+DB",
+        "action": "Ubah tanggal bayar cabang setelah submit, termasuk di tengah periode.",
+        "expected": "Due order lama tetap snapshot; order baru memakai tanggal baru."
+      },
+      {
+        "id": "TMP-06",
+        "priority": "P0",
+        "layer": "Job+DB",
+        "action": "Lewati akhir bulan dan jalankan job `tempo-daily` pada tanggal 1.",
+        "expected": "Surat Tagihan PDF per cabang/periode terbit, daftar invoice/due/total sesuai; email cabang dan admin ber-flag invoice."
+      },
+      {
+        "id": "TMP-07",
+        "priority": "P0",
+        "layer": "Job+DB",
+        "action": "Jalankan job harian berulang; approval order periode lama atau revisi setelah Surat Tagihan pertama.",
+        "expected": "Job idempoten bila isi sama; perubahan menghasilkan versi baru, PDF versi lama tetap utuh dan dapat diunduh."
+      },
+      {
+        "id": "TMP-08",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Lihat status `berjalan`, `menunggu_bayar`, `lewat_jatuh_tempo`, `lunas`, versi lama dengan kasus tanggal terkontrol.",
+        "expected": "Status berubah tepat pada batas hari WIB; lewat jatuh tempo mulai H+1, tidak bergeser karena libur."
+      },
+      {
+        "id": "TMP-09",
+        "priority": "P0",
+        "layer": "UI+API+DB",
+        "action": "Cabang unggah bukti pelunasan Rp150.000 untuk O1 Rp100.000 dan O2 Rp200.000, Manager verifikasi.",
+        "expected": "O1 lunas/`done`, O2 terbayar Rp50.000/sisa Rp150.000; alokasi FIFO lintas periode, saldo piutang turun Rp150.000."
+      },
+      {
+        "id": "TMP-10",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Cabang unggah beberapa bukti sebagian pada rekening efektif berbeda; admin menolak satu beralasan.",
+        "expected": "Yang pending tidak mengurangi piutang; yang ditolak tetap bersejarah dan tidak dialokasikan."
+      },
+      {
+        "id": "TMP-11",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Nominal pelunasan 0/negatif/desimal/>Rp1 triliun, tanpa rekening/berkas, MIME palsu/>10 MB, berkas identik.",
+        "expected": "Ditolak sebelum/di transaksi; file gagal tidak bisa diunduh dan tak menjadi receipt aktif."
+      },
+      {
+        "id": "TMP-12",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Manager verifikasi nominal > total seluruh piutang; Superadmin memverifikasi kasus sama.",
+        "expected": "Manager ditolak; Superadmin mencatat kelebihannya sebagai kredit Tempo tersendiri."
+      },
+      {
+        "id": "TMP-13",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Buat order Tempo baru setelah kredit disetujui.",
+        "expected": "Kredit otomatis menutup invoice tertua yang terbuka; jurnal kredit/sisa akurat; deposit tidak berubah."
+      },
+      {
+        "id": "TMP-14",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Dua admin memutuskan bukti pelunasan sama bersamaan, atau keputusan kedua setelah reject/verify.",
+        "expected": "Hanya satu keputusan efektif; tidak ada alokasi/kredit ganda."
+      },
+      {
+        "id": "TMP-15",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Tagihan lewat due bersisa dengan toggle tahan aktif: buat/simpan draft, submit Tempo, Transfer, Deposit dari `UJI-MIX`.",
+        "expected": "Draft tetap boleh; hanya Tempo ditolak, dua mode lain boleh bila syarat masing-masing terpenuhi."
+      },
+      {
+        "id": "TMP-16",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Bukti pending yang totalnya kurang dari tunggakan; kemudian tambah sampai menutup semua.",
+        "expected": "Hold tetap saat kurang; setelah cukup, hold ditunda mulai bukti yang pertama kali menutup seluruh tunggakan."
+      },
+      {
+        "id": "TMP-17",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Upload yang menutup tunggakan pada Jumat, periksa Senin/Selasa/Rabu; upload lagi sebelum grace habis.",
+        "expected": "Grace dua hari kerja Mon–Fri, tidak bertambah karena unggahan ulang; setelah habis hold kembali jika masih menunggak."
+      },
+      {
+        "id": "TMP-18",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Bukti pending ditolak/nominal verifikasi kurang dari tunggakan, lalu bukti baru atau pembayaran lengkap.",
+        "expected": "Hold dihitung ulang; lepas otomatis hanya bila sisa tunggakan 0 atau grace sah masih menutupnya."
+      },
+      {
+        "id": "TMP-19",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Superadmin matikan toggle tahan untuk cabang bertunggakan.",
+        "expected": "Submit Tempo langsung dapat dilakukan; perubahan dicatat di audit."
+      },
+      {
+        "id": "TMP-20",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Revisi Tempo positif ketika due lama belum lewat dan setelah lewat.",
+        "expected": "Total/charge/sisa naik tepat; koreksi lewat due memakai tanggal bayar berikutnya untuk tambahan."
+      },
+      {
+        "id": "TMP-21",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Revisi Tempo negatif saat belum dibayar, sebagian dibayar, dan sudah lunas.",
+        "expected": "Sisa turun terlebih dahulu; kelebihan pembayaran jadi kredit hanya lewat otorisasi Superadmin; order/dokumen/tagihan sinkron."
+      },
+      {
+        "id": "TMP-22",
+        "priority": "P0",
+        "layer": "Job",
+        "action": "Jalankan pengingat H-3, H, H+1, H+7 untuk due 5 dan due 1–3.",
+        "expected": "Tepat satu email per tahap/due/cabang; H-3 dilewati untuk tanggal bayar 1–3, sedangkan H/H+1/H+7 tetap berjalan dengan saldo aktual. Tanggal bayar 5 tetap memiliki empat tahap."
+      },
+      {
+        "id": "TMP-23",
+        "priority": "P1",
+        "layer": "Job",
+        "action": "Setelah lunas sebelum tahap berikut, ubah saldo melalui koreksi, atau jalankan reminder berulang.",
+        "expected": "Tidak mengirim duplikat atau tagihan yang sudah tidak bersisa; isi mencerminkan kondisi sah saat pengiriman."
+      },
+      {
+        "id": "TMP-24",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Bandingkan total piutang, overdue, pending proof, aging 0–30/31–60/>60 pada cabang dan admin.",
+        "expected": "Angka = jumlah charge minus paid; aging dihitung dari due, tidak menghitung pending sebagai lunas."
+      },
+      {
+        "id": "TMP-25",
+        "priority": "P1",
+        "layer": "API+XLSX",
+        "action": "Superadmin unduh ekspor piutang; Manager/cabang mencoba.",
+        "expected": "XLSX memuat cabang/periode/due/total/paid/sisa/status/umur sesuai overview; role lain ditolak."
+      },
+      {
+        "id": "TMP-26",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Cabang melihat/unduh Surat Tagihan versi lama/baru dan bukti pembayaran sendiri; coba ID cabang lain.",
+        "expected": "Versi lama berstatus arsip; hanya pemilik dan admin berwenang dapat tautan."
+      },
+      {
+        "id": "TMP-27",
+        "priority": "P1",
+        "layer": "API+DB",
+        "action": "Set biaya packaging Rp0, submit Sertifikat Tempo total Rp0, lalu approve.",
+        "expected": "Order langsung `done`, tidak ada sisa piutang negatif; dokumen tetap terbit."
+      },
+      {
+        "id": "TMP-28",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Submit/approve beberapa order Tempo berjumlah besar ketika piutang lama masih terbuka tetapi belum ditahan karena due belum lewat/toggle off.",
+        "expected": "Tidak ada batas kredit tersembunyi; hanya aturan hold dan validasi angka yang dapat menolak."
+      }
+    ]
+  },
+  {
+    "title": "H. Revisi, dokumen, PDF/XLSX, dan email",
+    "items": [
+      {
+        "id": "DOC-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Revisi order `done` dengan alasan, ubah qty/harga/nama instansi, tambah/hapus baris produk.",
+        "expected": "Nomor tetap, versi naik satu, serial baris lama tetap, baris baru mendapat serial baru; total dihitung server."
+      },
+      {
+        "id": "DOC-02",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Revisi tanpa alasan, dari cabang, Manager saat `manager_boleh_revisi=false`, pada draft/submitted biasa.",
+        "expected": "Ditolak; versi/ledger tidak berubah."
+      },
+      {
+        "id": "DOC-03",
+        "priority": "P0",
+        "layer": "API+Job",
+        "action": "Revisi kedua sebelum PDF versi berjalan selesai dirender; revisi paralel setelah siap.",
+        "expected": "Revisi dini ditolak; revisi sah berurutan tanpa versi PDF yang hilang."
+      },
+      {
+        "id": "DOC-04",
+        "priority": "P0",
+        "layer": "UI+API+Job",
+        "action": "Setelah Transfer/Deposit `done` dan Tempo `approved_unpaid`, tunggu render dokumen.",
+        "expected": "Invoice PDF dan Surat Jalan PDF/XLSX versi tepat tersedia; gagal render terlihat dan retry tidak menggandakan berkas."
+      },
+      {
+        "id": "DOC-05",
+        "priority": "P0",
+        "layer": "PDF",
+        "action": "Bandingkan PDF Invoice dengan contoh bisnis: A4 mendatar, logo/kop, nomor/tanggal/versi, cabang, tabel per baris berisi serial, instansi, produk, qty, harga, subtotal, total, terbilang dan rekening.",
+        "expected": "Isi angka sesuai snapshot dan layout terbaca/cetak baik; tanda tangan tetap ruang kosong."
+      },
+      {
+        "id": "DOC-06",
+        "priority": "P0",
+        "layer": "PDF+XLSX",
+        "action": "Bandingkan PDF dan XLSX Surat Jalan: A4 tegak untuk PDF, satu baris per order line, serial/instansi/cabang/produk/qty/catatan dan total qty.",
+        "expected": "Semua baris selaras; tidak memuat harga yang tidak diperlukan; tanda tangan kosong sesuai template."
+      },
+      {
+        "id": "DOC-07",
+        "priority": "P0",
+        "layer": "PDF",
+        "action": "Pada invoice Tempo, Deposit dan Transfer, cek penanda pembayaran dan due.",
+        "expected": "Tempo menyebut due yang benar, Deposit `LUNAS — CASH & CARRY`, Transfer `LUNAS`; tidak memberi cap lunas pada piutang terbuka."
+      },
+      {
+        "id": "DOC-08",
+        "priority": "P0",
+        "layer": "PDF",
+        "action": "Order dengan 1, 11, 25+ baris, nama instansi panjang, teks Unicode, catatan panjang, Sertifikat+packaging.",
+        "expected": "Tidak terpotong/bertumpuk; header berulang saat multipage; tidak ada halaman kosong yang menyesatkan."
+      },
+      {
+        "id": "DOC-09",
+        "priority": "P0",
+        "layer": "PDF",
+        "action": "Cek kolom PI (5%), Expres, Bea SPV pada template Invoice.",
+        "expected": "Kolom menampilkan `—` karena komponen biaya tersebut belum ada dalam model order; total tidak mengarang pajak/biaya."
+      },
+      {
+        "id": "DOC-10",
+        "priority": "P0",
+        "layer": "UI+API+Storage",
+        "action": "Unduh invoice dari detail dan Riwayat invoice, Surat Jalan dari admin, dokumen revisi lama/baru.",
+        "expected": "URL bertanda tangan berumur pendek, file valid, versi historis tidak tertimpa, otorisasi sesuai peran."
+      },
+      {
+        "id": "DOC-11",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Filter Riwayat invoice per periode, termasuk order Tempo `approved_unpaid` dan semua versi revisi.",
+        "expected": "Order tampil sesuai tanggal; tombol unduh aktif setelah berkas siap, label status akurat."
+      },
+      {
+        "id": "DOC-12",
+        "priority": "P0",
+        "layer": "Job+Email",
+        "action": "Setelah dokumen siap, periksa penerima: invoice ke cabang dan admin `notif_invoice`; Surat Jalan ke admin `notif_surat_jalan` saja.",
+        "expected": "Hanya penerima aktif yang memenuhi flag mendapat jenis dokumen yang benar; undangan/nonaktif tidak menerima."
+      },
+      {
+        "id": "DOC-13",
+        "priority": "P0",
+        "layer": "Job+Email",
+        "action": "Revisi invoice.",
+        "expected": "Invoice versi baru dikirim ulang ke cabang dan admin penerima; riwayat email mencatat versi; Surat Jalan revisi tersedia sebagai dokumen, tanpa kirim ulang otomatis jika kebijakan saat ini begitu."
+      },
+      {
+        "id": "DOC-14",
+        "priority": "P0",
+        "layer": "Job+Email",
+        "action": "Simulasikan SMTP gagal berturut-turut lalu pulih, dan worker mati saat status `sending`.",
+        "expected": "Retry 1m, 5m, 30m, 2j, 6j sesudah percobaan pertama (maks 6 percobaan); lease pulih; status akhirnya terkirim/gagal tanpa duplikasi tak terkendali."
+      },
+      {
+        "id": "DOC-15",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Email gagal muncul pada detail dan chip dashboard; admin kirim ulang.",
+        "expected": "Satu aksi resend terotorisasi, status/riwayat/audit diperbarui; file dan penerima tidak berubah keliru."
+      },
+      {
+        "id": "DOC-16",
+        "priority": "P1",
+        "layer": "Job",
+        "action": "Renderer PDF/storage tidak tersedia saat transisi `done`/approval Tempo.",
+        "expected": "Status bisnis tidak mengklaim file siap; job dapat retry dan email dokumen menunggu file benar."
+      },
+      {
+        "id": "DOC-17",
+        "priority": "P1",
+        "layer": "PDF+API",
+        "action": "Coba teks instansi/catatan berisi HTML/script, tanda kutip, `&`; unduh PDF.",
+        "expected": "Ditampilkan sebagai teks, tidak mengeksekusi konten, tidak merusak struktur PDF."
+      },
+      {
+        "id": "DOC-18",
+        "priority": "P1",
+        "layer": "Storage+PDF",
+        "action": "Unduh PDF lama yang dibuat sebelum template terbaru dan PDF revisi sesudahnya.",
+        "expected": "PDF historis tetap byte-for-byte sama; perubahan template hanya berlaku pada dokumen yang baru dirender."
+      }
+    ]
+  },
+  {
+    "title": "I. Dashboard, reporting dan ekspor",
+    "items": [
+      {
+        "id": "REP-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Dashboard filter cabang dan hari/minggu/bulan/tahun, buka ulang URL.",
+        "expected": "Angka mengikuti periode/cabang; filter URL dapat dipakai ulang."
+      },
+      {
+        "id": "REP-02",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Bandingkan dashboard Superadmin dan Manager.",
+        "expected": "Superadmin melihat nilai rupiah; respons API Manager tidak mengirim nilai yang dilarang, bukan sekadar UI menyembunyikannya."
+      },
+      {
+        "id": "REP-03",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Bandingkan chip menunggu/review/email gagal/overdue dengan daftar detail setelah diklik.",
+        "expected": "Jumlah chip cocok dengan hasil filter; hide/show chip tidak mengubah data server."
+      },
+      {
+        "id": "REP-04",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Grafik bulanan/harian, periode pembanding, komposisi, cabang dan produk teratas, CSV dashboard.",
+        "expected": "Total/label/urutan dan CSV sesuai dataset uji; tidak ada data cabang lain saat filter aktif."
+      },
+      {
+        "id": "REP-05",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Reporting satu order berisi 3 order line dan satu revisi; filter tanggal/cabang/status.",
+        "expected": "Satu baris per item sesuai versi yang berlaku, nama instansi dan serial tepat; total subtotal = jumlah baris yang ditampilkan."
+      },
+      {
+        "id": "REP-06",
+        "priority": "P1",
+        "layer": "API",
+        "action": "Filter lanjutan `cabang` multi, `jenis`, `cnc`, `pi`, batas tanggal, paginasi; input filter salah.",
+        "expected": "API mengembalikan himpunan tepat/menolak nilai invalid; UI saat ini hanya menyediakan tanggal, satu cabang, status."
+      },
+      {
+        "id": "REP-07",
+        "priority": "P0",
+        "layer": "UI+API+Job",
+        "action": "Minta ekspor XLSX dengan filter yang sama, tunggu `queued→proses→selesai`, unduh.",
+        "expected": "Jumlah baris XLSX = total query terfilter; kolom instansi/serial/qty/harga/total serta sheet rekap benar."
+      },
+      {
+        "id": "REP-08",
+        "priority": "P1",
+        "layer": "Job",
+        "action": "Dataset ekspor besar dan ekspor gagal lalu diulang.",
+        "expected": "UI menunjukkan status/galat; file tidak tersedia sebelum selesai, ekspor tidak mengunci portal."
+      },
+      {
+        "id": "REP-09",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Manager/cabang meminta laporan atau link unduh ekspor milik Superadmin.",
+        "expected": "Ditolak 403/404; signed URL tidak bocor lewat API."
+      },
+      {
+        "id": "REP-10",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Ekspor piutang Tempo lalu cocokkan tiap baris dengan menu Tagihan cabang dan admin.",
+        "expected": "Total, terbayar, sisa, due dan aging sama; saldo pending tidak dihitung lunas."
+      }
+    ]
+  },
+  {
+    "title": "J. User management, pengaturan, tutorial, audit, dan master import",
+    "items": [
+      {
+        "id": "ADM-01",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Manager/Superadmin melihat user cabang, aktif/nonaktif, mengirim reset, melihat status belum registrasi.",
+        "expected": "Hak sesuai peran; status/login terakhir dan email benar; akun nonaktif tidak bisa login."
+      },
+      {
+        "id": "ADM-02",
+        "priority": "P0",
+        "layer": "UI+API+Email",
+        "action": "Superadmin undang admin baru, kirim ulang undangan, aktivasi, ubah role/flag email.",
+        "expected": "Akun undangan tidak bisa login sampai aktif; email hanya ke alamat tujuan; hak/menu berubah setelah role berubah."
+      },
+      {
+        "id": "ADM-03",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Turunkan/nonaktifkan Superadmin aktif terakhir; buat email admin duplikat.",
+        "expected": "Ditolak; sistem tetap memiliki Superadmin aktif."
+      },
+      {
+        "id": "ADM-04",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Ubah setting packaging, token/reset TTL, batas berkas, digit invoice, izin revisi Manager, AI.",
+        "expected": "Hanya Superadmin; nilai invalid ditolak; perubahan berlaku pada transaksi baru, data lama tetap snapshot."
+      },
+      {
+        "id": "ADM-05",
+        "priority": "P1",
+        "layer": "UI+API",
+        "action": "Edit tutorial per topik sebagai Superadmin, buka ulang portal cabang tanpa deploy; Manager/cabang coba menulis.",
+        "expected": "Konten terbaru tampil, input disanitasi, role lain 403."
+      },
+      {
+        "id": "ADM-06",
+        "priority": "P0",
+        "layer": "UI+API",
+        "action": "Buka audit log setelah cabang/produk/harga/rekening/user/setting/verify/revisi/top-up/Tempo berubah.",
+        "expected": "Ada aktor, waktu, entitas, aksi, before/after dan alasan yang tepat; urut/filter/paginasi benar."
+      },
+      {
+        "id": "ADM-07",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Periksa audit dan respons API untuk password, token, cookie, presigned URL, isi bukti.",
+        "expected": "Rahasia disamarkan/tidak terekam; akun cabang/Manager tidak dapat membaca audit."
+      },
+      {
+        "id": "ADM-08",
+        "priority": "P1",
+        "layer": "API",
+        "action": "Master Impact: preview → evidence → apply → rollback pada lingkungan uji, termasuk pengulangan dan data tidak valid.",
+        "expected": "Superadmin saja, jejak bukti/rollback konsisten; apply produksi tetap mengikuti guard konfigurasi. Tidak ada layar UI untuk fitur ini."
+      }
+    ]
+  },
+  {
+    "title": "K. Keamanan, keandalan, operasional, dan pengalaman UI",
+    "items": [
+      {
+        "id": "OPS-01",
+        "priority": "P0",
+        "layer": "API",
+        "action": "Mutasi tanpa CSRF, dari Origin tak dikenal, sesi berakhir, atau role salah; GET publik kesehatan/meta.",
+        "expected": "Mutasi ditolak sesuai kode; akses publik terbatas; header keamanan/CORS sesuai kebijakan."
+      },
+      {
+        "id": "OPS-02",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Ulangi request karena timeout pada submit, verifikasi, top-up, alokasi, reversal, revisi, pelunasan.",
+        "expected": "Tidak ada nomor, saldo, charge, dokumen, email, audit ekonomi ganda."
+      },
+      {
+        "id": "OPS-03",
+        "priority": "P0",
+        "layer": "API+DB",
+        "action": "Simulasikan DB/queue/storage gagal sebelum commit dan setelah upload objek sementara.",
+        "expected": "Transaksi atomik; tidak ada state bisnis setengah jadi; objek sementara dibersihkan atau tercatat untuk rekonsiliasi."
+      },
+      {
+        "id": "OPS-04",
+        "priority": "P0",
+        "layer": "Job+DB",
+        "action": "Worker restart saat dokumen/email/statement/export sedang diproses.",
+        "expected": "Pekerjaan diklaim ulang aman; hasil akhir satu versi/keputusan bisnis yang konsisten."
+      },
+      {
+        "id": "OPS-05",
+        "priority": "P0",
+        "layer": "Job+Storage",
+        "action": "Jalankan backup harian DB dan objek, pastikan age-encrypted dan tercatat di Pengaturan; lakukan restore ke DB uji.",
+        "expected": "Dump dan file cocok dengan manifest; jumlah baris/objek dapat dipulihkan; kegagalan backup terlihat."
+      },
+      {
+        "id": "OPS-06",
+        "priority": "P1",
+        "layer": "API+Infra",
+        "action": "`/healthz` dan `/readyz` saat DB, storage, renderer hidup/mati; lihat metrik/alert worker/email/backup.",
+        "expected": "Liveness/readiness membedakan kondisi, alert memberi sinyal saat layanan kritis terganggu."
+      },
+      {
+        "id": "OPS-07",
+        "priority": "P1",
+        "layer": "UI",
+        "action": "Layar desktop, tablet dan ponsel pada dua portal: tabel panjang, modal submit/revisi, PDF preview/unduh, navigasi dan status loading/error/empty.",
+        "expected": "Tidak ada kontrol terpotong; navigasi keyboard dan label input jelas; pesan tidak menyembunyikan aksi penting."
+      },
+      {
+        "id": "OPS-08",
+        "priority": "P1",
+        "layer": "UI",
+        "action": "Jalankan keyboard-only dan pembaca layar pada login, editor order line, pilihan mode bayar, unggah bukti, keputusan admin.",
+        "expected": "Fokus terlihat, urutan logis, label/error terasosiasi, tombol punya nama, kontras memadai."
+      },
+      {
+        "id": "OPS-09",
+        "priority": "P1",
+        "layer": "API",
+        "action": "Input panjang/salah bentuk pada pencarian, filter tanggal/UUID, halaman/limit, nama file dan teks bebas.",
+        "expected": "Validasi mengembalikan 4xx terstruktur; tidak ada SQL/HTML injection atau informasi internal."
+      },
+      {
+        "id": "OPS-10",
+        "priority": "P1",
+        "layer": "API+DB",
+        "action": "Hitung ulang invarian ekonomi setelah seluruh perjalanan: total order = jumlah line; Transfer/Deposit `done` settled; Tempo charge/paid/credit tidak negatif.",
+        "expected": "Semua jumlah cocok dengan jurnal dan dokumen; tidak ada saldo/counter negatif."
+      },
+      {
+        "id": "OPS-11",
+        "priority": "P2",
+        "layer": "UI+API",
+        "action": "Refresh halaman di tengah request, kehilangan jaringan, dua tab mengubah data sama.",
+        "expected": "UI menampilkan galat/konflik dan dapat pulih; tidak mengklaim sukses sebelum respons final."
+      },
+      {
+        "id": "OPS-12",
+        "priority": "P2",
+        "layer": "API+Job",
+        "action": "Uji waktu respons daftar 25/100 baris, PDF 25+ baris, ekspor besar, dan 100 submit paralel pada data uji representatif.",
+        "expected": "Tidak ada timeout/duplikasi; catat angka p95 dan ukuran file sebagai baseline, jangan menetapkan SLA fiktif."
+      }
+    ]
+  }
+]

@@ -46,7 +46,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 40px;
+  min-height: 44px;
   padding: 0 6px;
   border-radius: 999px;
   text-decoration: none;
@@ -91,10 +91,26 @@
 .me {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 6px 0;
+  gap: 4px;
+  padding: 10px 0 0;
   border-top: 1px solid var(--line);
-  margin-top: 8px;
+}
+
+.accountLink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  min-height: 44px;
+  padding: 6px;
+  border-radius: 12px;
+  text-decoration: none;
+}
+
+.accountLink:hover,
+.accountLink[aria-current="page"] {
+  background: var(--surface-sunken);
 }
 
 .me .who {
@@ -125,6 +141,10 @@
 .collapsed .side .wordmark,
 .collapsed .side .me .who {
   display: none;
+}
+
+.collapsed .accountLink {
+  justify-content: center;
 }
 
 .collapsed .side .top {

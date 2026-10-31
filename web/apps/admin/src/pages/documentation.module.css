@@ -1,0 +1,340 @@
+.stack {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.tabs,
+.toc {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tabs a,
+.toc a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 9px 15px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.tabs a:hover,
+.toc a:hover {
+  background: var(--surface-sunken);
+}
+
+.tabs a[aria-current="page"] {
+  background: var(--ink);
+  color: var(--surface);
+  border-color: var(--ink);
+}
+
+.toc a {
+  font-size: 13px;
+  min-height: 38px;
+}
+
+.article {
+  display: grid;
+  gap: 16px;
+  line-height: 1.6;
+}
+
+.article h2 {
+  color: var(--ink);
+  font-size: 19px;
+  line-height: 1.35;
+  scroll-margin-top: 16px;
+}
+
+.article h3 {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.article p,
+.article li,
+.article dd {
+  overflow-wrap: anywhere;
+}
+
+.audience,
+.count {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.steps,
+.flowTop,
+.flowBranches ol {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.steps li + li,
+.flowBranches li + li {
+  margin-top: 10px;
+}
+
+.note {
+  background: var(--brand-50);
+  border-left: 3px solid var(--brand-500);
+  border-radius: 0 10px 10px 0;
+  padding: 12px 14px;
+}
+
+.flowTop {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 20px;
+  padding: 0;
+  list-style: none;
+  counter-reset: flow;
+}
+
+.flowTop li {
+  counter-increment: flow;
+  position: relative;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface-sunken);
+  font-weight: 600;
+  min-width: 0;
+}
+
+.flowTop li::before {
+  content: counter(flow, decimal-leading-zero);
+  display: block;
+  color: var(--brand-700);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.flowTop li:not(:last-child)::after {
+  content: "→";
+  position: absolute;
+  right: -17px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--brand-700);
+  font-size: 18px;
+}
+
+.flowBranches,
+.techGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.flowBranches article,
+.techGrid > div {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-sunken);
+}
+
+.flowBranches h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.searchLabel {
+  font-weight: 600;
+}
+
+.search {
+  width: min(100%, 420px);
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+}
+
+.scenarioGroups {
+  display: grid;
+  gap: 8px;
+}
+
+.scenarioGroups details {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.scenarioGroups summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-weight: 600;
+  background: var(--surface-sunken);
+}
+
+.scenarioGroups summary::before {
+  content: "▸";
+  color: var(--brand-700);
+  margin-right: 2px;
+}
+
+.scenarioGroups details[open] summary::before {
+  content: "▾";
+}
+
+.scenarioGroups summary span {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.scenarioList {
+  list-style: none;
+  margin: 0;
+  padding: 0 16px;
+}
+
+.scenarioList li {
+  padding: 14px 0;
+}
+
+.scenarioList li + li {
+  border-top: 1px solid var(--line);
+}
+
+.scenarioMeta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.scenarioMeta span,
+.expected {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.expected {
+  margin-top: 6px;
+}
+
+.architecture {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-sunken);
+}
+
+.architecture > div:not(.archServices, .archPortals),
+.archPortals > div {
+  width: min(100%, 520px);
+  padding: 12px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  text-align: center;
+  background: var(--surface);
+}
+
+.architecture b,
+.architecture > div > span,
+.archPortals span {
+  display: block;
+}
+
+.architecture > div > span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.archArrow {
+  color: var(--brand-700);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.archPortals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: min(100%, 640px);
+}
+
+.archServices {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.archServices span {
+  display: block;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  text-align: center;
+  font-size: 12px;
+}
+
+.entities {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.entities > div {
+  display: grid;
+  grid-template-columns: minmax(250px, 1fr) 2fr;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.entities dt {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.entities dd {
+  margin: 0;
+}
+
+.techGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .flowTop { grid-template-columns: 1fr; gap: 18px; }
+  .flowTop li:not(:last-child)::after { content: "↓"; top: auto; bottom: -20px; right: 50%; transform: translateX(50%); }
+  .archServices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 680px) {
+  .article { padding: 16px; }
+  .flowBranches,
+  .techGrid,
+  .entities > div { grid-template-columns: 1fr; }
+  .archServices { grid-template-columns: 1fr; }
+  .archPortals { grid-template-columns: 1fr; }
+  .scenarioGroups summary { flex-wrap: wrap; }
+}

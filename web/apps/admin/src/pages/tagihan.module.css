@@ -1,0 +1,15 @@
+.sections {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.summary {
+  display: grid;
+  gap: 8px;
+  line-height: 1.5;
+}
+
+.summary b {
+  font-variant-numeric: tabular-nums;
+}

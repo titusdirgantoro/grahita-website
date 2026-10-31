@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import {
   Link,
   Outlet,
@@ -32,11 +32,16 @@ import { PengaturanPage } from "./pages/pengaturan";
 import { PenggunaPage } from "./pages/pengguna";
 import { GayaPage } from "./pages/gaya";
 import { AuditPage, type FilterAudit } from "./pages/audit";
+const DocumentationPage = lazy(() => import("./pages/documentation").then((module) => ({ default: module.DocumentationPage })));
+
+function DocumentationRoute({ section }: { section: "panduan" | "teknis" }) {
+  return <Suspense fallback={<SkeletonList rows={4} />}><DocumentationPage section={section} /></Suspense>;
+}
 
 /** RouterLink menyambungkan shell (yang lepas router) ke <Link> TanStack. */
-function RouterLink({ to, className, active, children, title }: ShellLinkProps) {
+function RouterLink({ to, className, active, children, title, "aria-label": ariaLabel }: ShellLinkProps) {
   return (
-    <Link to={to} className={className} title={title} aria-current={active ? "page" : undefined}>
+    <Link to={to} className={className} title={title} aria-label={ariaLabel} aria-current={active ? "page" : undefined}>
       {children}
     </Link>
   );
@@ -228,6 +233,8 @@ const auditRoute = createRoute({
   component: AuditPage,
 });
 const profilRoute = createRoute({ getParentRoute: () => shellRoute, path: "/profil", component: ProfilAdminPage });
+const dokumentasiRoute = createRoute({ getParentRoute: () => shellRoute, path: "/dokumentasi", component: () => <DocumentationRoute section="panduan" /> });
+const dokumentasiTeknisRoute = createRoute({ getParentRoute: () => shellRoute, path: "/dokumentasi/teknis", component: () => <DocumentationRoute section="teknis" /> });
 
 const routeTree = rootRoute.addChildren([
   masukRoute,
@@ -246,6 +253,8 @@ const routeTree = rootRoute.addChildren([
     penggunaRoute,
     pengaturanRoute,
     auditRoute,
+    dokumentasiRoute,
+    dokumentasiTeknisRoute,
     profilRoute,
   ]),
 ]);

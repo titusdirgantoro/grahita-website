@@ -57,6 +57,7 @@ export interface ShellLinkProps {
   active: boolean;
   children: ReactNode;
   title?: string;
+  "aria-label"?: string;
 }
 
 /**
@@ -67,12 +68,13 @@ export interface ShellLinkProps {
 export type ShellLink = (props: ShellLinkProps) => ReactNode;
 
 /** Tautan default (tanpa router) — juga dipakai unit test komponen. */
-export function DefaultShellLink({ to, className, active, children, title }: ShellLinkProps) {
+export function DefaultShellLink({ to, className, active, children, title, "aria-label": ariaLabel }: ShellLinkProps) {
   return (
     <a
       href={to}
       className={className}
       title={title}
+      aria-label={ariaLabel}
       aria-current={active ? "page" : undefined}
     >
       {children}

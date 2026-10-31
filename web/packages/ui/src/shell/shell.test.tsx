@@ -171,7 +171,7 @@ describe("AdminShell", () => {
     expect(screen.getByText("Manager")).toBeDefined();
   });
 
-  it("menandai menu aktif dan menampilkan Profil di kaki sidebar", () => {
+  it("menandai menu aktif dan membuka Profil melalui kartu akun", () => {
     render(
       <AdminShell groups={NAV_ADMIN} active="/katalog" account={{ nama: "Rina", role: "superadmin" }}>
         <p>isi</p>
@@ -180,7 +180,9 @@ describe("AdminShell", () => {
     expect(screen.getByRole("link", { name: /Katalog product/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: /Dashboard/ }).getAttribute("aria-current")).toBeNull();
     const sidebar = screen.getByRole("complementary");
-    expect(within(sidebar).getByRole("link", { name: "Profil" })).toBeDefined();
+    const profile = within(sidebar).getByRole("link", { name: "Buka profil Rina" });
+    expect(profile.getAttribute("href")).toBe("/profil");
+    expect(within(sidebar).queryByRole("link", { name: "Profil" })).toBeNull();
   });
 
   it("tombol ciutkan menambahkan kelas collapsed pada shell", () => {
@@ -212,6 +214,22 @@ describe("AdminShell", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(root.className).not.toContain(adminStyles.drawer);
+  });
+
+  it("menutup drawer saat berpindah halaman", () => {
+    const { container, rerender } = render(
+      <AdminShell groups={NAV_ADMIN} active="/" account={{ nama: "Rina", role: "superadmin" }}>
+        <p>isi</p>
+      </AdminShell>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Buka menu" }));
+    expect((container.firstElementChild as HTMLElement).className).toContain(adminStyles.drawer);
+    rerender(
+      <AdminShell groups={NAV_ADMIN} active="/profil" account={{ nama: "Rina", role: "superadmin" }}>
+        <p>isi</p>
+      </AdminShell>,
+    );
+    expect((container.firstElementChild as HTMLElement).className).not.toContain(adminStyles.drawer);
   });
 
   it("mengeluarkan sidebar mobile yang tertutup dari urutan fokus", () => {
