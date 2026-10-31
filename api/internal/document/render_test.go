@@ -234,10 +234,18 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 		mau string
 	}{
 		{"A8", "No"},
-		{"B8", "Nama Barang"},
+		{"B8", "Serial Number"},
 		{"C8", "Nama Instansi"},
-		{"D8", "Qty"},
-		{"E8", "Serial Number"},
+		{"D8", "Cabang"},
+		{"E8", "Jml Pcs"},
+		{"F8", "Produk"},
+		{"G8", "Harga/Pcs"},
+		{"H8", "Produksi"},
+		{"I8", "PI"},
+		{"J8", "Expres"},
+		{"K8", "Bea SPV"},
+		{"L8", "Total Tagihan"},
+		{"M8", "Ket"},
 	}
 	for _, h := range header {
 		if v, _ := f.GetCellValue(sheet, h.sel); v != h.mau {
@@ -247,15 +255,15 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 
 	// Satu baris per order line, urut line_no.
 	mauBaris := [][]string{
-		{"1", "Bio Magnetik", "TK A", "2", "20261008001"},
-		{"2", "Bio Listrik", "SD B", "1", "20261008002"},
-		{"3", "Biaya packaging", "", "1", "-"},
+		{"1", "20261008001", "TK A", "Grahita Bandung", "2", "Bio Magnetik", "2500000", "5000000", "0", "0", "0", "5000000", ""},
+		{"2", "20261008002", "SD B", "Grahita Bandung", "1", "Bio Listrik", "3000", "3000", "0", "0", "0", "3000", ""},
+		{"3", "-", "", "Grahita Bandung", "1", "Biaya packaging", "3000", "3000", "0", "0", "0", "3000", ""},
 	}
 	for i, mau := range mauBaris {
 		row := rowAwal + i
-		for j, kolom := range []string{"A", "B", "C", "D", "E"} {
+		for j, kolom := range []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"} {
 			sel := kolom + itoa(row)
-			v, err := f.GetCellValue(sheet, sel)
+			v, err := f.GetCellValue(sheet, sel, excelize.Options{RawCellValue: true})
 			if err != nil {
 				t.Fatalf("baca %s: %v", sel, err)
 			}
@@ -294,7 +302,7 @@ func TestSuratJalanXLSXSatuBarisPerLine(t *testing.T) {
 	// Area cetak berhenti di baris data TERAKHIR — bukan satu baris setelahnya,
 	// supaya tidak ada baris kosong yang ikut tercetak.
 	mauName := map[string]string{
-		"_xlnm.Print_Area":   fmt.Sprintf("'%s'!$A$1:$E$%d", sheet, rowAwal+len(mauBaris)-1),
+		"_xlnm.Print_Area":   fmt.Sprintf("'%s'!$A$1:$M$%d", sheet, rowAwal+len(mauBaris)-1),
 		"_xlnm.Print_Titles": fmt.Sprintf("'%s'!$%d:$%d", sheet, rowHeader, rowHeader),
 	}
 	for _, dn := range f.GetDefinedName() {
@@ -323,7 +331,8 @@ func TestSuratJalanHTMLKonsistenDenganXLSX(t *testing.T) {
 	html := string(b)
 	for _, s := range []string{"SURAT JALAN", "2026-10-0001", "08 Oktober 2026",
 		"Grahita Bandung", "20261008001", "20261008002", "Bio Magnetik", "Bio Listrik",
-		"A4 portrait", "data:image/png;base64,", "Asal Cabang", "Penerima,", "Pengemudi,"} {
+		"A4 landscape", "data:image/png;base64,", "Jml Pcs", "Harga/Pcs", "Produksi",
+		"Expres", "Bea SPV", "Total Tagihan", "Penerima,", "Pengemudi,"} {
 		if !strings.Contains(html, s) {
 			t.Errorf("surat jalan HTML tidak memuat %q", s)
 		}
@@ -347,7 +356,7 @@ func TestSuratJalanPanjangMembawaBarisBersamaTandaTangan(t *testing.T) {
 		}
 		total := 0
 		for i, page := range pages {
-			if len(page.Lines) == 0 || len(page.Lines) > 24 || len(page.BarisKosong) != 0 || page.Last != (i == len(pages)-1) {
+			if len(page.Lines) == 0 || len(page.Lines) > 13 || len(page.BarisKosong) != 0 || page.Last != (i == len(pages)-1) {
 				t.Fatalf("%d baris, halaman %d tidak layak: %+v", jumlah, i+1, page)
 			}
 			total += len(page.Lines)

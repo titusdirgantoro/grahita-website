@@ -187,6 +187,11 @@ type suratJalanView struct {
 	Pages    []suratJalanPage
 	Jumlah   string
 	TotalQty string
+	Total    string
+	Produksi string
+	PI       string
+	Express  string
+	BeaSPV   string
 }
 
 type suratJalanPage struct {
@@ -310,6 +315,7 @@ func newSuratJalanView(o Order) suratJalanView {
 	for _, l := range o.Lines {
 		totalQty += l.Qty
 	}
+	total := newInvoiceView(o)
 	return suratJalanView{
 		Logo:     logoGrahitaURL,
 		Nomor:    o.Nomor,
@@ -322,6 +328,11 @@ func newSuratJalanView(o Order) suratJalanView {
 		Pages:    suratJalanPages(viewLines(o)),
 		Jumlah:   fmt.Sprintf("%d", len(o.Lines)),
 		TotalQty: fmt.Sprintf("%d", totalQty),
+		Total:    total.Total,
+		Produksi: total.Produksi,
+		PI:       total.PI,
+		Express:  total.Express,
+		BeaSPV:   total.BeaSPV,
 	}
 }
 
@@ -329,12 +340,12 @@ func newSuratJalanView(o Order) suratJalanView {
 // rincian panjang, beberapa baris ikut halaman terakhir agar tanda tangan
 // tidak terdorong sendirian ke lembar berikutnya.
 func suratJalanPages(lines []lineView) []suratJalanPage {
-	if len(lines) <= 22 {
-		return []suratJalanPage{{Lines: lines, BarisKosong: barisKosong(len(lines), 18), Last: true}}
+	if len(lines) <= 13 {
+		return []suratJalanPage{{Lines: lines, BarisKosong: barisKosong(len(lines), 8), Last: true}}
 	}
-	pages := make([]suratJalanPage, 0, (len(lines)+23)/24)
-	for len(lines) > 22 {
-		take := min(24, len(lines)-5)
+	pages := make([]suratJalanPage, 0, (len(lines)+12)/13)
+	for len(lines) > 13 {
+		take := min(13, len(lines)-5)
 		pages = append(pages, suratJalanPage{Lines: lines[:take], Continued: len(pages) > 0})
 		lines = lines[take:]
 	}
@@ -467,16 +478,16 @@ body { margin: 0; color: #22202b; font: 9px Arial, Helvetica, sans-serif; -webki
 <footer class="footer"><span>S.E. &amp; O. — Kesalahan dan kelalaian dikecualikan. Mohon cocokkan rincian sebelum melakukan pembayaran.</span><span>PT GRAHITA INDONESIA</span></footer>
 </body></html>`
 
-// templateSuratJalan memakai identitas dan rincian yang sama, dalam A4 tegak
+// templateSuratJalan memakai identitas dan rincian yang sama, dalam A4 mendatar
 // seperti contoh. Ruang tanda tangan dibiarkan kosong agar penerima dan
 // pengemudi dapat menandatangani hasil cetaknya.
 const templateSuratJalan = `<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8"><title>Surat Jalan {{.Nomor}}</title>
 <style>
-@page { size: A4 portrait; margin: 10mm; }
+@page { size: A4 landscape; margin: 10mm; }
 * { box-sizing: border-box; }
-body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.kop { display: flex; justify-content: space-between; align-items: flex-start; height: 104px; }
+body { margin: 0; color: #22202b; font: 9px Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.kop { display: flex; justify-content: space-between; align-items: flex-start; height: 95px; }
 .logo { display: block; width: 86px; height: 78px; object-fit: contain; object-position: left top; }
 .judul { text-align: right; padding-top: 8px; }
 .judul h1 { margin: 0 0 6px; color: #4a2879; font-size: 30px; letter-spacing: 1px; line-height: 1; }
@@ -485,8 +496,8 @@ body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webk
 .metadata td:first-child { color: #5c5365; text-align: left; }
 .metadata td:last-child { font-weight: bold; }
 .rule { height: 4px; background: linear-gradient(to right, #f9d732 0 17%, #4a2879 17% 100%); }
-.info { display: grid; grid-template-columns: 48% 48%; gap: 4%; margin: 15px 0 16px; min-height: 77px; }
-.recipient { padding: 10px 12px; border-left: 4px solid #4a2879; border-radius: 4px; background: #f3eef9; line-height: 1.45; }
+.info { display: grid; grid-template-columns: 48% 48%; gap: 4%; margin: 12px 0; min-height: 67px; }
+.recipient { padding: 9px 12px; border-left: 4px solid #4a2879; border-radius: 4px; background: #f3eef9; line-height: 1.45; }
 .recipient .label { color: #4a2879; font-size: 9px; font-weight: bold; letter-spacing: .5px; }
 .recipient strong { display: block; font-size: 11px; }
 .recipient .minor { color: #5c5365; font-size: 9px; }
@@ -494,12 +505,14 @@ body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webk
 .transport .row { display: flex; gap: 6px; }
 .transport .row span { min-width: 62px; }
 .transport .blank { border-bottom: 1px solid #b8a7cb; flex: 1; }
-.baris { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8.5px; }
-.baris th, .baris td { border: 1px solid #d9d1e4; padding: 6px 5px; vertical-align: middle; overflow-wrap: anywhere; }
-.baris thead th { background: #4a2879; color: white; border-color: #4a2879; text-align: center; font-size: 8px; text-transform: uppercase; line-height: 1.3; }
+.baris { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8px; }
+.baris th, .baris td { border: 1px solid #d9d1e4; padding: 5px 3px; vertical-align: middle; overflow-wrap: anywhere; }
+.baris thead th { background: #4a2879; color: white; border-color: #4a2879; text-align: center; font-size: 7.4px; text-transform: uppercase; line-height: 1.3; }
+.baris thead tr:nth-child(2) th { background: #5b3987; }
 .baris tbody tr:nth-child(even) { background: #f7f4fb; }
 .baris tbody tr { break-inside: avoid; }
-.baris .empty td { height: 22px; color: transparent; }
+.baris .empty td { height: 18px; color: transparent; }
+.baris .num { text-align: right; white-space: nowrap; }
 .baris .center { text-align: center; }
 .baris tfoot td { background: #fff5c8; color: #33224c; font-weight: bold; }
 .baris thead { display: table-header-group; }
@@ -522,11 +535,13 @@ body { margin: 0; color: #22202b; font: 10px Arial, Helvetica, sans-serif; -webk
   <div class="transport">Kami kirimkan barang-barang di bawah ini dengan:<div class="row"><span>Kendaraan</span><div class="blank"></div></div><div class="row"><span>No. Polisi</span><div class="blank"></div></div></div></section>
 {{range .Pages}}
 {{if .Continued}}<div class="continued">SURAT JALAN {{$.Nomor}} — lanjutan</div>{{end}}
-<table class="baris" aria-label="Rincian surat jalan"><colgroup><col style="width:5%"><col style="width:17%"><col style="width:29%"><col style="width:15%"><col style="width:16%"><col style="width:8%"><col style="width:10%"></colgroup>
-  <thead><tr><th>No</th><th>Serial Number</th><th>Nama Instansi</th><th>Asal Cabang</th><th>Produk</th><th>Jumlah</th><th>Ket</th></tr></thead>
-  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td>{{.Nama}}</td><td class="center">{{.Qty}}</td><td>{{if .Ket}}{{.Ket}}{{else}}—{{end}}</td></tr>{{end}}
-    {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}</tbody>
-  {{if .Last}}<tfoot><tr><td colspan="5" style="text-align:right">JUMLAH</td><td class="center">{{$.TotalQty}}</td><td></td></tr></tfoot>{{end}}</table>
+<table class="baris" aria-label="Rincian surat jalan">
+  <colgroup><col style="width:3%"><col style="width:9%"><col style="width:17%"><col style="width:8%"><col style="width:4%"><col style="width:10%"><col style="width:8%"><col style="width:8%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:10%"><col style="width:5%"></colgroup>
+  <thead><tr><th rowspan="2">No</th><th rowspan="2">Serial Number</th><th rowspan="2">Nama Instansi</th><th rowspan="2">Cabang</th><th rowspan="2">Jml Pcs</th><th rowspan="2">Produk</th><th rowspan="2">Harga/Pcs</th><th colspan="4">Tagihan</th><th rowspan="2">Total Tagihan</th><th rowspan="2">Ket</th></tr>
+    <tr><th>Produksi</th><th>PI</th><th>Expres</th><th>Bea SPV</th></tr></thead>
+  <tbody>{{range .Lines}}<tr><td class="center">{{.No}}</td><td>{{.Serial}}</td><td>{{if .Instansi}}{{.Instansi}}{{else}}—{{end}}</td><td>{{$.Cabang}}</td><td class="center">{{.Qty}}</td><td>{{.Nama}}</td><td class="num">{{.Harga}}</td><td class="num">{{.Produksi}}</td><td class="num">{{.PI}}</td><td class="num">{{.Express}}</td><td class="num">{{.BeaSPV}}</td><td class="num">{{.Subtotal}}</td><td>{{if .Ket}}{{.Ket}}{{else}}—{{end}}</td></tr>{{end}}
+    {{range .BarisKosong}}<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>{{end}}</tbody>
+  {{if .Last}}<tfoot><tr><td colspan="4">JUMLAH</td><td class="center">{{$.TotalQty}}</td><td colspan="2"></td><td class="num">{{$.Produksi}}</td><td class="num">{{$.PI}}</td><td class="num">{{$.Express}}</td><td class="num">{{$.BeaSPV}}</td><td class="num">{{$.Total}}</td><td></td></tr></tfoot>{{end}}</table>
 {{end}}
 <section class="delivery-closing">
 <section class="notes"><div class="label">Catatan</div><div class="box">{{.Catatan}}</div></section>
