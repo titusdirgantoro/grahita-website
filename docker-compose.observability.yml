@@ -70,7 +70,10 @@ services:
       ALERT_SMTP_USER: ${ALERT_SMTP_USER:-}
       ALERT_SMTP_PASS: ${ALERT_SMTP_PASS:-}
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
-    command: ["/bin/sh", "/etc/alertmanager/mulai.sh"]
+    # Image Alertmanager sudah memiliki entrypoint /bin/alertmanager. Gunakan
+    # entrypoint baru agar skrip perender dijalankan oleh shell, bukan dianggap
+    # sebagai argumen biner Alertmanager.
+    entrypoint: ["/bin/sh", "/etc/alertmanager/mulai.sh"]
 
   loki:
     image: grafana/loki:3.5.0
