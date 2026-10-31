@@ -82,6 +82,44 @@ func TestPGCabangBeberapaCaraPembayaranLewatAPI(t *testing.T) {
 	}
 }
 
+// Regresi CAB-09: cabang yang memiliki assignment rekening eksplisit harus
+// tetap dapat mencabut lalu mengaktifkan kembali Tempo. Parameter branch_id
+// pada penguncian assignment harus dikirim sebagai UUID, bukan text.
+func TestPGCabangDenganAssignmentRekeningDapatMengaktifkanUlangTempo(t *testing.T) {
+	f := newPGFixture(t)
+	cookies, csrf := pgLogin(t, f.srv, "rina@example.test", "rahasia123")
+
+	status, body, _ := apiReq(t, http.DefaultClient, http.MethodPut,
+		f.srv.URL+"/api/v1/admin/branches/"+f.branchA,
+		`{"allow_transfer":true,"is_cnc":false,"is_tempo":false}`,
+		cookies, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("cabut Tempo pada cabang dengan assignment rekening: %d %+v", status, body)
+	}
+
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPut,
+		f.srv.URL+"/api/v1/admin/branches/"+f.branchA,
+		`{"allow_transfer":true,"is_cnc":false,"is_tempo":true,"tanggal_bayar":5,"tahan_bila_telat":true}`,
+		cookies, csrf)
+	if status != http.StatusOK {
+		t.Fatalf("aktifkan ulang Tempo pada cabang dengan assignment rekening: %d %+v", status, body)
+	}
+	updated := dataMap(t, body)
+	if updated["is_tempo"] != true || updated["tanggal_bayar"] != float64(5) || updated["tahan_bila_telat"] != true {
+		t.Fatalf("kebijakan Tempo hasil aktivasi ulang salah: %+v", updated)
+	}
+
+	var assignmentAktif int
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM branch_bank_accounts WHERE branch_id=$1 AND is_allowed`,
+		f.branchA).Scan(&assignmentAktif); err != nil {
+		t.Fatalf("periksa assignment rekening: %v", err)
+	}
+	if assignmentAktif != 1 {
+		t.Fatalf("assignment rekening berubah saat aktivasi ulang Tempo: %d", assignmentAktif)
+	}
+}
+
 func (b sessionCreateBarrier) Create(ctx context.Context, s auth.Session, hash []byte, meta auth.RequestMeta) (auth.Session, error) {
 	b.entered <- struct{}{}
 	if b.proceed != nil {

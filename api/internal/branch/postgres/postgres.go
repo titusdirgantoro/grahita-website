@@ -150,7 +150,7 @@ func (r *Repo) Update(ctx context.Context, id string, p branch.Patch, actor auth
 	}
 	accountRows, err := tx.Query(ctx, `SELECT ba.id FROM bank_accounts ba
  JOIN branch_bank_accounts x ON x.bank_account_id=ba.id
- WHERE x.branch_id=$1 AND x.is_allowed ORDER BY ba.id FOR UPDATE`, id)
+ WHERE x.branch_id=$1 AND x.is_allowed ORDER BY ba.id FOR UPDATE`, pgtypes.UUID(id))
 	if err != nil {
 		return branch.Branch{}, fmt.Errorf("kunci rekening assignment cabang: %w", err)
 	}
