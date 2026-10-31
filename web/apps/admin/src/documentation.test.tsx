@@ -26,6 +26,8 @@ describe("Dokumentasi portal admin", () => {
     render(<RouterProvider router={router("/dokumentasi")} />);
     expect(await screen.findByRole("heading", { name: "Katalog 162 skenario end to end" }, { timeout: 15000 })).toBeDefined();
     expect(screen.getByRole("status").textContent).toContain("162 dari 162");
+    expect(screen.getAllByRole("figure", { name: /Diagram alur/ })).toHaveLength(9);
+    expect(screen.getByRole("figure", { name: "Diagram alur 6. Jalur Tempo dan pelunasan" })).toBeDefined();
     const tab = screen.getByRole("navigation", { name: "Jenis dokumentasi" });
     expect(within(tab).getByRole("link", { name: "Panduan Penggunaan" }).getAttribute("aria-current")).toBe("page");
     fireEvent.change(screen.getByRole("searchbox", { name: "Cari skenario" }), { target: { value: "TMP-22" } });
@@ -39,6 +41,9 @@ describe("Dokumentasi portal admin", () => {
     expect(await screen.findByRole("heading", { name: "Arsitektur sistem yang berjalan" }, { timeout: 15000 })).toBeDefined();
     expect(screen.getByRole("img", { name: /Portal cabang dan admin melalui Caddy/ })).toBeDefined();
     expect(screen.getByRole("heading", { name: "Model data dan relasi inti" })).toBeDefined();
+    expect(screen.getAllByRole("img", { name: /Diagram UML database/ })).toHaveLength(5);
+    expect(screen.getByRole("img", { name: /Diagram UML database Piutang Tempo dan Surat Tagihan/ })).toBeDefined();
+    expect(screen.getAllByText(/0\.\.\*/).length).toBeGreaterThan(0);
     const tab = screen.getByRole("navigation", { name: "Jenis dokumentasi" });
     expect(within(tab).getByRole("link", { name: "Dokumentasi Teknis" }).getAttribute("aria-current")).toBe("page");
   });

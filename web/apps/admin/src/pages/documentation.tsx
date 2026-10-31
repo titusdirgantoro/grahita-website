@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { Card, Icon, PageHead } from "@grahita/ui";
 
 import catalog from "./documentation-scenarios.json";
+import { DatabaseUmlDiagrams, GuideFlowDiagram } from "./documentation-diagrams";
 import styles from "./documentation.module.css";
 
 type Section = "panduan" | "teknis";
@@ -148,6 +149,7 @@ function ScenarioCatalog() {
     <Card as="section" className={styles.article}>
       <h2 id="skenario">Katalog 162 skenario end to end</h2>
       <p>Katalog ini memuat seluruh perjalanan, variasi, hasil yang diharapkan, dan kasus kegagalan dari rencana uji sistem. Cari berdasarkan ID, fitur, peran, atau kata kunci. Ini adalah daftar skenario, bukan status hasil pengujian.</p>
+      <GuideFlowDiagram sectionId="skenario" title="Katalog skenario pengujian" />
       <label className={styles.searchLabel} htmlFor="cari-skenario">Cari skenario</label>
       <input id="cari-skenario" className={styles.search} type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Contoh: Tempo, bukti, ORD-11" />
       <p className={styles.count} role="status">{count} dari 162 skenario ditampilkan</p>
@@ -199,6 +201,7 @@ function Guide() {
         <Card as="section" className={styles.article} key={section.id}>
           <h2 id={section.id}>{section.title}</h2>
           <p className={styles.audience}>{section.audience}</p>
+          <GuideFlowDiagram sectionId={section.id} title={section.title} />
           <ol className={styles.steps}>{section.steps.map((step) => <li key={step}>{step}</li>)}</ol>
           <p className={styles.note}><b>Perhatikan:</b> {section.note}</p>
         </Card>
@@ -249,7 +252,8 @@ function Technical() {
       </nav>
       <Card as="section" className={styles.article}>
         <h2 id="relasi">Model data dan relasi inti</h2>
-        <p>Relasi berikut merangkum tabel utama migrasi produksi. Nominal uang disimpan sebagai BIGINT Rupiah bulat; timestamp disimpan UTC lalu ditampilkan dalam WIB.</p>
+        <p>Diagram UML/ERD berikut menampilkan tabel dan foreign key inti dari migrasi database, beserta kardinalitas relasinya. PK berarti primary key; FK berarti foreign key; tanda tanya berarti relasi opsional. Tabel pendukung lain diringkas di bawah diagram. Nominal uang disimpan sebagai BIGINT Rupiah bulat; timestamp disimpan UTC lalu ditampilkan dalam WIB.</p>
+        <DatabaseUmlDiagrams />
         <dl className={styles.entities}>
           {entities.map(([name, explanation]) => <div key={name}><dt>{name}</dt><dd>{explanation}</dd></div>)}
         </dl>

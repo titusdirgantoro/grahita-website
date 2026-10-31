@@ -153,6 +153,211 @@
   gap: 6px;
 }
 
+.sectionFlow,
+.umlFigure {
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-sunken);
+}
+
+.sectionFlow figcaption,
+.umlFigure figcaption {
+  margin-bottom: 14px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.sectionFlowNodes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 22px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sectionFlowNodes li {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  min-height: 100px;
+  padding: 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  line-height: 1.35;
+}
+
+.sectionFlowNodes li:not(:last-child)::after {
+  content: "→";
+  position: absolute;
+  top: 50%;
+  right: -18px;
+  transform: translateY(-50%);
+  color: var(--brand-700);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.sectionFlowNodes .sectionFlowDecision {
+  border-color: var(--brand-700);
+  background: var(--brand-50);
+}
+
+.sectionFlowDecision::before {
+  content: "";
+  position: absolute;
+  right: 13px;
+  top: 15px;
+  width: 13px;
+  height: 13px;
+  transform: rotate(45deg);
+  border: 2px solid var(--brand-700);
+}
+
+.sectionFlowIndex {
+  color: var(--brand-700);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.sectionFlowNodes strong {
+  padding-right: 8px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.sectionFlowContinue {
+  color: var(--brand-700);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sectionFlowBranches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.sectionFlowBranches > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.sectionFlowBranches span:first-child {
+  flex: none;
+  color: var(--brand-700);
+  font-weight: 700;
+}
+
+.sectionFlowBranches p {
+  margin: 0;
+}
+
+.umlStack {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.umlFigure > p {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.umlFigure > .umlScrollHint {
+  display: none;
+  color: var(--brand-700);
+  font-weight: 600;
+}
+
+.umlViewport {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  scroll-behavior: smooth;
+}
+
+.umlViewport:focus-visible {
+  outline: 3px solid var(--brand-700);
+  outline-offset: 2px;
+}
+
+.umlViewport svg {
+  display: block;
+  max-width: none;
+}
+
+.umlEdges line,
+.umlEdges path {
+  fill: none;
+  stroke: var(--brand-700);
+  stroke-width: 2;
+}
+
+.umlEdges text {
+  fill: var(--brand-700);
+  stroke: var(--surface);
+  stroke-width: 4px;
+  paint-order: stroke;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.umlEntity rect {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+
+.umlEntity path {
+  stroke: var(--line-strong);
+}
+
+.umlEntity text {
+  fill: var(--ink);
+  font-size: 13px;
+}
+
+.umlEntity .umlEntityTitle {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.umlRelationList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 20px;
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.umlRelationList code {
+  color: var(--ink);
+  font-size: inherit;
+}
+
 .searchLabel {
   font-weight: 600;
 }
@@ -327,6 +532,8 @@
   .flowTop { grid-template-columns: 1fr; gap: 18px; }
   .flowTop li:not(:last-child)::after { content: "↓"; top: auto; bottom: -20px; right: 50%; transform: translateX(50%); }
   .archServices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sectionFlowNodes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sectionFlowNodes li:nth-child(2)::after { content: "↓"; top: auto; bottom: -21px; right: 50%; transform: translateX(50%); }
 }
 
 @media (max-width: 680px) {
@@ -337,4 +544,11 @@
   .archServices { grid-template-columns: 1fr; }
   .archPortals { grid-template-columns: 1fr; }
   .scenarioGroups summary { flex-wrap: wrap; }
+  .sectionFlowNodes,
+  .sectionFlowBranches { grid-template-columns: 1fr; }
+  .sectionFlowNodes li { min-height: 0; }
+  .sectionFlowNodes li:not(:last-child)::after { content: "↓"; top: auto; bottom: -22px; right: 50%; transform: translateX(50%); }
+  .umlFigure { padding: 12px; }
+  .umlFigure > .umlScrollHint { display: block; }
+  .umlRelationList { grid-template-columns: 1fr; }
 }
