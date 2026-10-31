@@ -71,15 +71,12 @@
   font-size: 13px;
 }
 
-.steps,
-.flowTop,
-.flowBranches ol {
+.steps {
   margin: 0;
   padding-left: 22px;
 }
 
-.steps li + li,
-.flowBranches li + li {
+.steps li + li {
   margin-top: 10px;
 }
 
@@ -90,52 +87,12 @@
   padding: 12px 14px;
 }
 
-.flowTop {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 20px;
-  padding: 0;
-  list-style: none;
-  counter-reset: flow;
-}
-
-.flowTop li {
-  counter-increment: flow;
-  position: relative;
-  padding: 16px;
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  background: var(--surface-sunken);
-  font-weight: 600;
-  min-width: 0;
-}
-
-.flowTop li::before {
-  content: counter(flow, decimal-leading-zero);
-  display: block;
-  color: var(--brand-700);
-  font-size: 12px;
-  margin-bottom: 6px;
-}
-
-.flowTop li:not(:last-child)::after {
-  content: "→";
-  position: absolute;
-  right: -17px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--brand-700);
-  font-size: 18px;
-}
-
-.flowBranches,
 .techGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.flowBranches article,
 .techGrid > div {
   display: grid;
   align-content: start;
@@ -145,12 +102,6 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-sunken);
-}
-
-.flowBranches h3 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .sectionFlow,
@@ -171,104 +122,93 @@
   font-weight: 700;
 }
 
-.sectionFlowNodes {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 22px;
+.flowLegend,
+.flowVariation,
+.flowScrollHint {
   margin: 0;
-  padding: 0;
-  list-style: none;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
-.sectionFlowNodes li {
-  position: relative;
-  display: grid;
-  align-content: start;
-  gap: 7px;
-  min-width: 0;
-  min-height: 100px;
-  padding: 13px;
-  border: 1px solid var(--line-strong);
+.flowChartViewport {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-  line-height: 1.35;
 }
 
-.sectionFlowNodes li:not(:last-child)::after {
-  content: "→";
-  position: absolute;
-  top: 50%;
-  right: -18px;
-  transform: translateY(-50%);
-  color: var(--brand-700);
-  font-size: 20px;
+.flowChartViewport:focus-visible {
+  outline: 3px solid var(--brand-700);
+  outline-offset: 2px;
+}
+
+.flowChartSvg,
+.flowOverviewSvg {
+  display: block;
+  height: auto;
+  margin: 0 auto;
+  font-family: inherit;
+}
+
+.flowChartSvg { width: min(100%, 620px); }
+.flowOverviewSvg { width: min(100%, 700px); }
+
+.flowConnectors path {
+  stroke: var(--brand-700);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.flowArrowHead {
+  fill: var(--brand-700);
+}
+
+.flowTerminal,
+.flowInput,
+.flowDecisionDiamond,
+.flowProcess {
+  stroke: var(--brand-700);
+  stroke-width: 2;
+}
+
+.flowTerminal,
+.flowDecisionDiamond {
+  fill: var(--brand-50);
+}
+
+.flowInput,
+.flowProcess {
+  fill: var(--surface);
+}
+
+.flowShapeText {
+  fill: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.flowBranchLabel {
+  fill: var(--ink);
+  stroke: var(--surface);
+  stroke-width: 5;
+  paint-order: stroke;
+  font-size: 14px;
   font-weight: 700;
 }
 
-.sectionFlowNodes .sectionFlowDecision {
-  border-color: var(--brand-700);
-  background: var(--brand-50);
-}
-
-.sectionFlowDecision::before {
-  content: "";
-  position: absolute;
-  right: 13px;
-  top: 15px;
-  width: 13px;
-  height: 13px;
-  transform: rotate(45deg);
-  border: 2px solid var(--brand-700);
-}
-
-.sectionFlowIndex {
-  color: var(--brand-700);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .02em;
-  text-transform: uppercase;
-}
-
-.sectionFlowNodes strong {
-  padding-right: 8px;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.sectionFlowContinue {
-  color: var(--brand-700);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.sectionFlowBranches {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--line-strong);
-}
-
-.sectionFlowBranches > div {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
+.flowVariation {
   padding: 10px 12px;
   border-radius: 10px;
   background: var(--surface);
-  font-size: 13px;
 }
 
-.sectionFlowBranches span:first-child {
-  flex: none;
+.flowScrollHint {
+  display: none;
   color: var(--brand-700);
-  font-weight: 700;
-}
-
-.sectionFlowBranches p {
-  margin: 0;
+  font-weight: 600;
 }
 
 .umlStack {
@@ -529,25 +469,19 @@
 }
 
 @media (max-width: 1100px) {
-  .flowTop { grid-template-columns: 1fr; gap: 18px; }
-  .flowTop li:not(:last-child)::after { content: "↓"; top: auto; bottom: -20px; right: 50%; transform: translateX(50%); }
   .archServices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sectionFlowNodes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sectionFlowNodes li:nth-child(2)::after { content: "↓"; top: auto; bottom: -21px; right: 50%; transform: translateX(50%); }
 }
 
 @media (max-width: 680px) {
   .article { padding: 16px; }
-  .flowBranches,
   .techGrid,
   .entities > div { grid-template-columns: 1fr; }
   .archServices { grid-template-columns: 1fr; }
   .archPortals { grid-template-columns: 1fr; }
   .scenarioGroups summary { flex-wrap: wrap; }
-  .sectionFlowNodes,
-  .sectionFlowBranches { grid-template-columns: 1fr; }
-  .sectionFlowNodes li { min-height: 0; }
-  .sectionFlowNodes li:not(:last-child)::after { content: "↓"; top: auto; bottom: -22px; right: 50%; transform: translateX(50%); }
+  .flowChartSvg { width: 620px; max-width: none; }
+  .flowOverviewSvg { width: 700px; max-width: none; }
+  .flowScrollHint { display: block; }
   .umlFigure { padding: 12px; }
   .umlFigure > .umlScrollHint { display: block; }
   .umlRelationList { grid-template-columns: 1fr; }

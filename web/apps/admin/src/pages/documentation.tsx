@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
-import { Card, Icon, PageHead } from "@grahita/ui";
+import { Card, PageHead } from "@grahita/ui";
 
 import catalog from "./documentation-scenarios.json";
-import { DatabaseUmlDiagrams, GuideFlowDiagram } from "./documentation-diagrams";
+import { DatabaseUmlDiagrams, GuideFlowDiagram, OverviewFlowDiagram } from "./documentation-diagrams";
 import styles from "./documentation.module.css";
 
 type Section = "panduan" | "teknis";
@@ -126,12 +126,6 @@ const guide = [
   },
 ] as const;
 
-const paymentFlows = [
-  { title: "Transfer", icon: "bank", steps: ["Bukti transfer", "Verifikasi admin / OCR opsional", "Lunas → dokumen"] },
-  { title: "Deposit", icon: "wallet", steps: ["Saldo + bukti bila kurang", "Top-up oleh Superadmin", "Lunas → dokumen"] },
-  { title: "Tempo", icon: "calendar-check", steps: ["Setujui tanpa bukti", "Invoice + Surat Jalan", "Tagihan → FIFO → lunas"] },
-] as const;
-
 function ScenarioCatalog() {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
@@ -181,17 +175,7 @@ function Guide() {
       <Card as="section" className={styles.article}>
         <h2 id="alur">Alur dari awal hingga selesai</h2>
         <p>Mulai dari data master, cabang membuat draft dan memilih satu cara bayar per pesanan. Setiap jalur berakhir pada dokumen dan riwayat; Tempo juga melewati pelunasan piutang.</p>
-        <ol className={styles.flowTop} aria-label="Alur utama pesanan">
-          {["Siapkan cabang, harga, rekening", "Cabang buat draft per instansi", "Pilih cara bayar dan kirim", "Admin proses pembayaran", "Dokumen, tagihan, laporan"].map((step) => <li key={step}>{step}</li>)}
-        </ol>
-        <div className={styles.flowBranches} aria-label="Tiga jalur pembayaran">
-          {paymentFlows.map((flow) => (
-            <article key={flow.title}>
-              <h3><Icon name={flow.icon} /> {flow.title}</h3>
-              <ol>{flow.steps.map((step) => <li key={step}>{step}</li>)}</ol>
-            </article>
-          ))}
-        </div>
+        <OverviewFlowDiagram />
       </Card>
       <nav className={styles.toc} aria-label="Isi panduan">
         {guide.map((section) => <a key={section.id} href={`#${section.id}`}>{section.title}</a>)}

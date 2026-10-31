@@ -26,8 +26,11 @@ describe("Dokumentasi portal admin", () => {
     render(<RouterProvider router={router("/dokumentasi")} />);
     expect(await screen.findByRole("heading", { name: "Katalog 162 skenario end to end" }, { timeout: 15000 })).toBeDefined();
     expect(screen.getByRole("status").textContent).toContain("162 dari 162");
-    expect(screen.getAllByRole("figure", { name: /Diagram alur/ })).toHaveLength(9);
-    expect(screen.getByRole("figure", { name: "Diagram alur 6. Jalur Tempo dan pelunasan" })).toBeDefined();
+    expect(screen.getAllByRole("figure", { name: /Diagram alur/ })).toHaveLength(10);
+    expect(screen.getByRole("img", { name: /Mulai, siapkan master/ })).toBeDefined();
+    const tempoFlow = screen.getByRole("figure", { name: "Diagram alur 6. Jalur Tempo dan pelunasan" });
+    expect(tempoFlow.querySelectorAll("ellipse")).toHaveLength(2);
+    expect(tempoFlow.querySelectorAll("polygon").length).toBeGreaterThan(1);
     const tab = screen.getByRole("navigation", { name: "Jenis dokumentasi" });
     expect(within(tab).getByRole("link", { name: "Panduan Penggunaan" }).getAttribute("aria-current")).toBe("page");
     fireEvent.change(screen.getByRole("searchbox", { name: "Cari skenario" }), { target: { value: "TMP-22" } });
