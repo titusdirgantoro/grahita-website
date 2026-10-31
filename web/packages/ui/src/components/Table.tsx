@@ -65,7 +65,12 @@ export function Table({ children, mobileCards, stack, className, caption }: Tabl
   }, [stack]);
 
   return (
-    <div className={cn(styles.tableWrap, stack && styles.stackWrap)}>
+    <div
+      className={cn(styles.tableWrap, stack && styles.stackWrap)}
+      role="region"
+      aria-label={caption ? `Tabel: ${caption}` : "Tabel data"}
+      tabIndex={0}
+    >
       <table
         ref={ref}
         className={cn(

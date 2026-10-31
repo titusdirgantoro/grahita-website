@@ -4,6 +4,14 @@
   padding: 0 8px;
 }
 
+/* Pembungkus tabel dapat menerima fokus agar pengguna keyboard bisa menggulir
+   tabel yang lebih lebar dari kontainernya. Nama region berasal dari caption. */
+.tableWrap:focus-visible {
+  outline: 3px solid var(--brand-500);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
 .tbl {
   width: 100%;
   border-collapse: collapse;
