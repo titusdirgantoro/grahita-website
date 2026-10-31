@@ -169,7 +169,12 @@ const schemaDiagrams: SchemaDiagram[] = [
 
 function edgeLabelPosition(anchor: [number, number], other: [number, number]) {
   const direction = Math.sign(other[0] - anchor[0]);
-  return { x: anchor[0] + (direction * 17 || 10), y: anchor[1] - 8 };
+  const textAnchor: "end" | "start" = direction < 0 ? "end" : "start";
+  return {
+    x: anchor[0] + (direction * 10 || 10),
+    y: anchor[1] - 8,
+    textAnchor,
+  };
 }
 
 function DatabaseDiagram({ diagram }: { diagram: SchemaDiagram }) {
@@ -186,8 +191,8 @@ function DatabaseDiagram({ diagram }: { diagram: SchemaDiagram }) {
               const endLabel = edgeLabelPosition(relation.toAnchor, relation.fromAnchor);
               return <g key={`${relation.from}-${relation.to}`}>
                 {relation.path ? <path d={relation.path} /> : <line x1={relation.fromAnchor[0]} y1={relation.fromAnchor[1]} x2={relation.toAnchor[0]} y2={relation.toAnchor[1]} />}
-                <text x={startLabel.x} y={startLabel.y}>{relation.fromCardinality}</text>
-                <text x={endLabel.x} y={endLabel.y}>{relation.toCardinality}</text>
+                <text x={startLabel.x} y={startLabel.y} textAnchor={startLabel.textAnchor}>{relation.fromCardinality}</text>
+                <text x={endLabel.x} y={endLabel.y} textAnchor={endLabel.textAnchor}>{relation.toCardinality}</text>
               </g>;
             })}
           </g>
