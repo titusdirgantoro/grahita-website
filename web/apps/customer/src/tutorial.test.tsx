@@ -81,7 +81,7 @@ describe("Customer Portal — Tutorial (F1-19)", () => {
       "Pilih cara pembayaran yang tersedia untuk cabang Anda: Transfer di muka, Deposit (Cash & Carry), atau Tempo.",
       "Tekan “Kirim pesanan”. Invoice tersedia setelah pesanan disetujui dan dokumen terbit.",
       // Bukti transfer (PRD §3.5 CP-ORD-04, §3.7 CP-CNC-02)
-      "Satu berkas maksimal 5 MB, dan bisa lebih dari satu berkas untuk pembayaran terpisah.",
+      "Batas ukuran dan jumlah berkas mengikuti validasi yang ditampilkan sistem; beberapa bukti dapat dilampirkan bila pembayaran terpisah.",
       "Nominal seluruh bukti dijumlahkan saat verifikasi Pusat.",
       "Bukti saat mengirim pesanan wajib untuk Transfer di muka. Deposit memerlukan bukti bila saldo kurang; Tempo tidak memerlukan bukti di muka.",
       // Sertifikat (PRD §3.6)
@@ -96,6 +96,10 @@ describe("Customer Portal — Tutorial (F1-19)", () => {
     }
     // Isi panduan adalah teks biasa: bisa dibaca pembaca layar tanpa gambar.
     expect(screen.getByText(/Panduan ini bisa dibaca di ponsel maupun desktop/)).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Buat pesanan per instansi dan produk" })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Jika memilih Tempo dan melunasi tagihan" })).toBeDefined();
+    expect(screen.getAllByRole("img").length).toBeGreaterThanOrEqual(8);
+    expect(screen.getAllByRole("navigation", { name: "Daftar isi tutorial" })).toHaveLength(1);
   });
 });
 

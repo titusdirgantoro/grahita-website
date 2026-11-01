@@ -135,6 +135,7 @@ function TetapanTutorial() {
   return (
     <Card>
       <CardHead title="Tutorial portal cabang" />
+      <p className="muted small">Topik di bawah muncul sebagai “Panduan tambahan dari Pusat”. Panduan utama bertahap dan tangkapan layar pada portal cabang mengikuti rilis aplikasi.</p>
       {memuat ? <SkeletonList rows={4} /> : (
         <Form>
           {galat ? <Notice tone="danger">{galat}</Notice> : null}

@@ -1,0 +1,255 @@
+.guide {
+  max-width: 1120px;
+  display: grid;
+  gap: 20px;
+  padding-bottom: 32px;
+}
+
+.intro,
+.contents,
+.section {
+  border: 1px solid var(--line, #e7e5eb);
+  border-radius: 20px;
+  background: var(--surface, #fff);
+}
+
+.intro {
+  padding: clamp(20px, 3vw, 32px);
+  background: linear-gradient(130deg, var(--brand-50, #f7f5fa), #fff 72%);
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: var(--brand-900, #332945);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.intro h2 {
+  margin: 0 0 10px;
+  color: var(--ink, #1b1723);
+  font-size: clamp(22px, 3vw, 30px);
+  line-height: 1.2;
+}
+
+.intro > p:last-child {
+  max-width: 76ch;
+  margin: 0;
+  color: var(--text-muted, #625d69);
+  line-height: 1.6;
+}
+
+.contents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 14px;
+}
+
+.contents a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  color: var(--ink, #1b1723);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.contents a:hover,
+.contents a:focus-visible {
+  background: var(--brand-50, #f7f5fa);
+}
+
+.contents a span,
+.index {
+  color: var(--brand-900, #332945);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.section {
+  padding: clamp(18px, 3vw, 28px);
+  scroll-margin-top: 20px;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.index {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--brand-50, #f7f5fa);
+}
+
+.sectionHead h3 {
+  margin: 0 0 4px;
+  color: var(--ink, #1b1723);
+  font-size: clamp(18px, 2.3vw, 22px);
+  line-height: 1.3;
+}
+
+.sectionHead p {
+  margin: 0;
+  color: var(--text-muted, #625d69);
+  line-height: 1.5;
+}
+
+.steps {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0 22px;
+  padding-left: 26px;
+  line-height: 1.65;
+}
+
+.steps li {
+  padding-left: 5px;
+}
+
+.steps li::marker {
+  color: var(--brand-900, #332945);
+  font-weight: 800;
+}
+
+.figure {
+  margin: 20px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--line, #e7e5eb);
+  border-radius: 16px;
+}
+
+.frame {
+  position: relative;
+  width: 100%;
+  line-height: 0;
+  background: #f4f3f5;
+}
+
+.frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.marker {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid #ffcb05;
+  border-radius: 9px;
+  background: rgb(255 203 5 / 10%);
+  box-shadow: 0 0 0 2px #191123, 0 3px 12px rgb(0 0 0 / 20%);
+}
+
+.marker > span {
+  position: absolute;
+  top: -15px;
+  left: -15px;
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #17101e;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 1px 5px rgb(0 0 0 / 25%);
+}
+
+.figure figcaption {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  color: var(--text-muted, #625d69);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.figure figcaption b {
+  color: var(--ink, #1b1723);
+}
+
+.fullImage {
+  width: fit-content;
+  min-height: 32px;
+  color: var(--brand-900, #332945);
+  font-weight: 700;
+}
+
+.fullImage:focus-visible {
+  outline: 3px solid #ffcb05;
+  outline-offset: 2px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.legend li span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #17101e;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin-top: 16px;
+  padding: 8px 14px;
+  border: 1px solid var(--line, #e7e5eb);
+  border-radius: 10px;
+  color: var(--brand-900, #332945);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.link:hover,
+.link:focus-visible {
+  background: var(--brand-50, #f7f5fa);
+}
+
+.contents a:focus-visible,
+.link:focus-visible {
+  outline: 3px solid #ffcb05;
+  outline-offset: 2px;
+}
+
+@media (max-width: 680px) {
+  .contents { grid-template-columns: 1fr; }
+  .sectionHead { gap: 10px; }
+  .index { flex-basis: 38px; height: 38px; }
+  .steps { padding-left: 21px; }
+  .marker { border-width: 2px; border-radius: 4px; }
+  .marker > span { top: -11px; left: -11px; width: 23px; height: 23px; font-size: 11px; }
+}

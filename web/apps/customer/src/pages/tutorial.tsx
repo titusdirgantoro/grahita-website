@@ -3,6 +3,7 @@ import { type ReactElement, type ReactNode } from "react";
 import { Accordion, Card, CardHead, PageHead } from "@grahita/ui";
 
 import { useApi } from "../useApi";
+import { PanduanLengkap } from "./tutorial-guide";
 import styles from "./tutorial.module.css";
 
 /**
@@ -59,7 +60,7 @@ const TOPIK_BUKTI: TopikApi = {
   ringkas: "Bukti yang jelas mempercepat verifikasi Pusat.",
   langkah: [
     "Gunakan foto atau tangkapan layar yang jelas: JPG, PNG, atau PDF.",
-    "Satu berkas maksimal 5 MB, dan bisa lebih dari satu berkas untuk pembayaran terpisah.",
+    "Batas ukuran dan jumlah berkas mengikuti validasi yang ditampilkan sistem; beberapa bukti dapat dilampirkan bila pembayaran terpisah.",
     "Bukti saat mengirim pesanan wajib untuk Transfer di muka. Deposit memerlukan bukti bila saldo kurang; Tempo tidak memerlukan bukti di muka.",
     "Untuk Transfer atau Deposit yang masih menunggu verifikasi, bukti tambahan dapat diunggah dari detail pesanan.",
     "Nominal seluruh bukti dijumlahkan saat verifikasi Pusat.",
@@ -210,7 +211,10 @@ export function TutorialPage() {
 
   return (
     <>
-      <PageHead title="Tutorial" sub="Panduan singkat pemakaian portal cabang" />
+      <PageHead title="Tutorial" sub="Panduan langkah demi langkah untuk seluruh alur portal cabang" />
+      <PanduanLengkap />
+      <h2 className={styles.tambahanTitle}>Panduan tambahan dari Pusat</h2>
+      <p className={styles.tambahanIntro}>Topik berikut dapat diperbarui oleh Superadmin dan melengkapi panduan langkah demi langkah di atas.</p>
       <div className={styles.topikList}>
         {topik.map((t, i) => {
           const Gambar = ilustrasiTopik(t.ikon);
