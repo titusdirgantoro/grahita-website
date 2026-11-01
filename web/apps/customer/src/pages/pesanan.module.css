@@ -77,26 +77,48 @@
 .linesHead,
 .line {
   display: grid;
-  grid-template-columns: 44px 128px minmax(180px, 1.5fr) 130px 110px minmax(170px, 1.2fr) 120px 120px 100px 110px 110px 130px minmax(150px, 1fr);
-  gap: 10px;
+  grid-template-columns: 40px 136px minmax(200px, 1.4fr) 150px 124px minmax(190px, 1.2fr) 120px 125px 105px 160px 120px 150px minmax(170px, 1fr);
+  gap: 16px;
   align-items: center;
-  min-width: 1780px;
+  min-width: 2080px;
+  box-sizing: border-box;
 }
 
 .linesHead {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-muted);
-  padding: 0 0 10px;
+  padding: 0 52px 12px 0;
   border-bottom: 1px solid var(--line);
 }
 
 .line {
-  padding: 10px 0;
+  padding: 16px 52px 16px 0;
   border-bottom: 1px solid var(--line);
   position: relative;
-  padding-right: 48px;
 }
+
+.expressChoice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 44px;
+  width: 100%;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.expressChoice input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--brand-500);
+  flex: none;
+}
+
+.expressChoice span { white-space: nowrap; }
+.expressChoice:focus-within { outline: 2px solid var(--brand-500); outline-offset: 2px; border-radius: 6px; }
 
 .stepper {
   display: inline-flex;
@@ -267,10 +289,18 @@
   .line {
     grid-template-columns: 1fr 1fr;
     min-width: 0;
-    gap: 8px 12px;
-    padding: 14px 0;
+    gap: 12px 16px;
+    padding: 16px;
+    margin: 0 0 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
     position: relative;
   }
+
+  .lNo { grid-column: 1 / -1; font-weight: 700; }
+
+  .linePack { background: var(--surface-2, var(--surface)); }
 
   .lProd {
     grid-column: 1 / -1;
@@ -288,8 +318,8 @@
 
   .lDel {
     position: absolute;
-    right: 0;
-    top: 14px;
+    right: 12px;
+    top: 8px;
   }
 
   .mLbl {
@@ -306,6 +336,8 @@
   .lSub {
     text-align: left;
   }
+
+  .expressChoice { justify-content: flex-start; }
 }
 
 /* Bar total menempel di atas bottom-nav selama bottom-nav tampil (< 900px). */

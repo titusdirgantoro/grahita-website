@@ -93,6 +93,21 @@ func TestSiapkanSubmitMemakaiHargaTerbaru(t *testing.T) {
 	}
 }
 
+func TestSiapkanSubmitMengikutiPilihanExpresDenganTarifTerbaru(t *testing.T) {
+	base := SubmitLine{LineNo: 1, Jenis: JenisProduct, NamaInstansi: "TK A", Qty: 2,
+		ProdukAda: true, ProdukAktif: true, ProdukJenis: catalog.JenisReguler,
+		HargaCabang: 116000, ExpressPerPcs: 3500, AdaHargaCabang: true}
+	tanpa, err := SiapkanSubmit([]SubmitLine{base}, 3000)
+	if err != nil || tanpa[0].HargaSatuan != 112500 || tanpa[0].ExpressPerPcs != 0 {
+		t.Fatalf("tanpa Expres: snapshot=%+v err=%v", tanpa, err)
+	}
+	base.UseExpress = true
+	dengan, err := SiapkanSubmit([]SubmitLine{base}, 3000)
+	if err != nil || dengan[0].HargaSatuan != 116000 || dengan[0].ExpressPerPcs != 3500 {
+		t.Fatalf("dengan Expres: snapshot=%+v err=%v", dengan, err)
+	}
+}
+
 // TestSiapkanSubmitMenolakProdukTakLagiDijual memverifikasi produk nonaktif
 // maupun produk yang baris harga cabangnya hilang ditolak saat submit
 // (harga_default bukan cadangan, PRD CP-KAT-02).

@@ -43,6 +43,7 @@ interface Produk {
   jenis: string;
   deskripsi?: string;
   harga: number;
+  express_per_pcs?: number;
   /** Hanya pada produk Sertifikat: biaya packaging per pesanan (CP-KAT-04). */
   biaya_packaging?: number;
 }
@@ -74,6 +75,7 @@ export function KatalogPage() {
   return (
     <>
       <PageHead title="Katalog" sub="Produk aktif dengan harga khusus cabang Anda" />
+      <div className={styles.stack}>
       <Card>
         <div className={styles.catSearch}>
           <Field label="Cari produk" htmlFor="cari-produk">
@@ -107,8 +109,11 @@ export function KatalogPage() {
                 <span className={styles.nm}>{p.nama}</span>
                 {p.jenis === "sertifikat" ? <Badge tone="info">Sertifikat</Badge> : null}
               </div>
-              <span className={styles.price}>{rupiah.format(p.harga)}</span>
+              <span className={styles.price}>{rupiah.format(p.harga - (p.express_per_pcs ?? 0))}</span>
               <span className={styles.desc}>
+                {(p.express_per_pcs ?? 0) > 0 && p.jenis !== "sertifikat"
+                  ? `Harga tanpa Expres. Tambahan Expres ${rupiah.format(p.express_per_pcs ?? 0)} per pcs jika dipilih. `
+                  : ""}
                 {p.deskripsi ?? "Produk katalog cabang"}
                 {p.jenis === "sertifikat" && p.biaya_packaging !== undefined
                   ? ` Biaya packaging ${rupiah.format(p.biaya_packaging)} ditambahkan otomatis per pesanan.`
@@ -134,6 +139,7 @@ export function KatalogPage() {
           )}
         </Card>
       )}
+      </div>
     </>
   );
 }

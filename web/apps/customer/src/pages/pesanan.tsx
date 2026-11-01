@@ -61,6 +61,7 @@ export interface BarisPesanan {
   pi_ratio?: string;
   pi_per_pcs?: number;
   express_per_pcs?: number;
+  use_express?: boolean;
   spv_per_pcs?: number;
   produksi?: number;
   pi?: number;
@@ -470,10 +471,11 @@ export function PesananDetailPage({ id }: { id: string }) {
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={12}>Total</td>
+                  <td colSpan={11}>Total</td>
                   <td className="num">
                     <b>{rupiah.format(data.total)}</b>
                   </td>
+                  <td />
                 </tr>
               </tfoot>
             </Table>
@@ -987,6 +989,7 @@ interface BarisEditor {
   qty: number;
   namaInstansi: string;
   keterangan: string;
+  useExpress: boolean;
 }
 
 /**
@@ -1003,7 +1006,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
   // Draft hanya dimuat saat mengubah pesanan yang sudah ada.
   const pesanan = useApi<Pesanan>(id ? `/orders/${id}` : "/orders", Boolean(id));
 
-  const [baris, setBaris] = useState<BarisEditor[]>([{ kunci: 1, productId: "", qty: 1, namaInstansi: "", keterangan: "" }]);
+  const [baris, setBaris] = useState<BarisEditor[]>([{ kunci: 1, productId: "", qty: 1, namaInstansi: "", keterangan: "", useExpress: false }]);
   const [catatan, setCatatan] = useState("");
   const [galat, setGalat] = useState<string | null>(null);
   const [menyimpan, setMenyimpan] = useState(false);
@@ -1014,8 +1017,8 @@ export function PesananEditorPage({ id }: { id?: string }) {
     if (!id || !pesanan.data || siap) return;
     const barisAwal = (pesanan.data.lines ?? [])
       .filter((l) => l.jenis === "product" && l.product_id)
-      .map((l, i) => ({ kunci: i + 1, productId: l.product_id as string, qty: l.qty, namaInstansi: l.nama_instansi ?? "", keterangan: l.keterangan ?? "" }));
-    setBaris(barisAwal.length > 0 ? barisAwal : [{ kunci: 1, productId: "", qty: 1, namaInstansi: "", keterangan: "" }]);
+      .map((l, i) => ({ kunci: i + 1, productId: l.product_id as string, qty: l.qty, namaInstansi: l.nama_instansi ?? "", keterangan: l.keterangan ?? "", useExpress: l.use_express ?? Boolean(l.express_per_pcs) }));
+    setBaris(barisAwal.length > 0 ? barisAwal : [{ kunci: 1, productId: "", qty: 1, namaInstansi: "", keterangan: "", useExpress: false }]);
     setCatatan(pesanan.data.catatan ?? "");
     setSiap(true);
   }, [id, pesanan.data, siap]);
@@ -1037,7 +1040,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
   const total =
     baris.reduce((s, b) => {
       const p = perId.get(b.productId);
-      return s + (p ? p.harga * (Number(b.qty) || 0) : 0);
+      return s + (p ? (p.harga - (b.useExpress ? 0 : (p.express_per_pcs ?? 0))) * (Number(b.qty) || 0) : 0);
     }, 0) + biayaPackaging;
 
   const bolehTambah = baris.length < 100;
@@ -1047,7 +1050,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
   }, []);
 
   const tambahBaris = useCallback(() => {
-    setBaris((lama) => [...lama, { kunci: Math.max(...lama.map((b) => b.kunci)) + 1, productId: "", qty: 1, namaInstansi: "", keterangan: "" }]);
+    setBaris((lama) => [...lama, { kunci: Math.max(...lama.map((b) => b.kunci)) + 1, productId: "", qty: 1, namaInstansi: "", keterangan: "", useExpress: false }]);
   }, []);
 
   const hapusBaris = useCallback((kunci: number) => {
@@ -1078,7 +1081,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
     try {
       const body = {
         catatan,
-        lines: dipakai.map((b) => ({ product_id: b.productId, qty: Number(b.qty), nama_instansi: b.namaInstansi.trim(), keterangan: b.keterangan.trim() })),
+        lines: dipakai.map((b) => ({ product_id: b.productId, qty: Number(b.qty), nama_instansi: b.namaInstansi.trim(), keterangan: b.keterangan.trim(), use_express: b.useExpress })),
       };
       const hasil = id
         ? await api.put<Pesanan>(`/orders/${id}`, body)
@@ -1130,7 +1133,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
       <div className={styles.stack}>
         <Card>
           <CardHead title="Item pesanan" />
-          <p className="muted small">Satu baris untuk satu instansi dan produk. Nama Instansi maksimal 160 karakter. Nomor serial dibuat otomatis saat pesanan dikirim.</p>
+          <p className="muted small">Satu baris untuk satu instansi dan produk. Nama Instansi maksimal 160 karakter. Nomor serial dibuat otomatis saat pesanan dikirim. Expres dapat dipilih terpisah untuk setiap baris.</p>
           {katalog.galat ? <Notice tone="danger">{katalog.galat}</Notice> : null}
           {adaSertifikat ? (
             <Notice tone="info">
@@ -1194,7 +1197,7 @@ export function PesananEditorPage({ id }: { id?: string }) {
                         <Select
                           id={`produk-${b.kunci}`}
                           value={b.productId}
-                          onChange={(e) => ubahBaris(b.kunci, { productId: e.target.value })}
+                          onChange={(e) => ubahBaris(b.kunci, { productId: e.target.value, useExpress: false })}
                         >
                           <option value="">Pilih produk</option>
                           {produk.map((opt) => {
@@ -1215,9 +1218,17 @@ export function PesananEditorPage({ id }: { id?: string }) {
                       </div>
                       <div className={`${styles.lProduksi} num`}><span className={styles.mLbl}>Produksi</span>{p ? rupiah.format((p.harga_dasar ?? p.harga) * qty) : "—"}</div>
                       <div className={`${styles.lPI} num`}><span className={styles.mLbl}>PI</span>{p && p.pi_per_pcs ? rupiah.format(p.pi_per_pcs * qty) : "—"}</div>
-                      <div className={`${styles.lExpress} num`}><span className={styles.mLbl}>Expres</span>{p && p.express_per_pcs ? rupiah.format(p.express_per_pcs * qty) : "—"}</div>
+                      <div className={styles.lExpress}>
+                        <span className={styles.mLbl}>Expres</span>
+                        {p && p.jenis !== "sertifikat" && (p.express_per_pcs ?? 0) > 0 ? (
+                          <label className={styles.expressChoice}>
+                            <input type="checkbox" checked={b.useExpress} onChange={(e) => ubahBaris(b.kunci, { useExpress: e.target.checked })} aria-label={`Gunakan Expres baris ${i + 1}`} />
+                            <span>{b.useExpress ? rupiah.format((p.express_per_pcs ?? 0) * qty) : `+${rupiah.format((p.express_per_pcs ?? 0) * qty)}`}</span>
+                          </label>
+                        ) : "—"}
+                      </div>
                       <div className={`${styles.lSPV} num`}><span className={styles.mLbl}>Bea SPV</span>{p && p.spv_per_pcs ? rupiah.format(p.spv_per_pcs * qty) : "—"}</div>
-                      <div className={`${styles.lSub} num`}><span className={styles.mLbl}>Total Tagihan</span><b>{p ? rupiah.format(p.harga * qty) : "—"}</b></div>
+                      <div className={`${styles.lSub} num`}><span className={styles.mLbl}>Total Tagihan</span><b>{p ? rupiah.format((p.harga - (b.useExpress ? 0 : (p.express_per_pcs ?? 0))) * qty) : "—"}</b></div>
                       <div className={styles.lKet}><label className={styles.mLbl} htmlFor={`ket-${b.kunci}`}>Ket</label>
                         <Input id={`ket-${b.kunci}`} aria-label={`Keterangan baris ${i + 1}`} value={b.keterangan}
                           placeholder="Opsional" onChange={(e) => ubahBaris(b.kunci, { keterangan: Array.from(e.target.value).slice(0, 250).join("") })} />

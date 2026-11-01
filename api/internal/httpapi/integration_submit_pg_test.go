@@ -629,7 +629,7 @@ func TestPGSubmitMenyimpanSnapshotKomponen(t *testing.T) {
 
 	cookies, csrf := pgLogin(t, f.srv, "a@example.test", "rahasia123")
 	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
-		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"TK Komponen","qty":2,"keterangan":"Kirim pagi"}]}`, produk), cookies, csrf)
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"TK Komponen","qty":2,"keterangan":"Kirim pagi","use_express":true}]}`, produk), cookies, csrf)
 	if status != http.StatusCreated {
 		t.Fatalf("buat draft: %d (%v)", status, body)
 	}
@@ -666,6 +666,29 @@ func TestPGSubmitMenyimpanSnapshotKomponen(t *testing.T) {
 	}
 	if dasar != 100000 || pi != 10000 || expres != 1500 || spv != 2500 || harga != 114000 || ket != "Kirim pagi" {
 		t.Fatalf("snapshot DB salah: dasar=%d pi=%d expres=%d spv=%d harga=%d ket=%q", dasar, pi, expres, spv, harga, ket)
+	}
+
+	// Draft berikutnya memakai produk/tarif yang sama tanpa pilihan Expres.
+	// Server harus menghapus biaya itu dari total, termasuk saat submit ulang
+	// snapshot dari master harga cabang.
+	status, body, _ = apiReq(t, http.DefaultClient, http.MethodPost, f.srv.URL+"/api/v1/orders",
+		fmt.Sprintf(`{"lines":[{"product_id":%q,"nama_instansi":"TK Tanpa Expres","qty":2}]}`, produk), cookies, csrf)
+	if status != http.StatusCreated {
+		t.Fatalf("buat draft tanpa Expres: %d (%v)", status, body)
+	}
+	tanpaID := dataMap(t, body)["id"].(string)
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO payment_proofs (order_id, branch_id, storage_key, nama_file, mime_type, ukuran_byte, sha256, uploaded_by_kind)
+		 VALUES ($1,(SELECT branch_id FROM orders WHERE id=$1), 'snapshot-tanpa-express', 'c.jpg', 'image/jpeg', 10, '\x02', 'branch')`, tanpaID); err != nil {
+		t.Fatalf("seed bukti tanpa Expres: %v", err)
+	}
+	resp, submitted = multipartSubmit(t, f.srv.URL+"/api/v1/orders/"+tanpaID+"/submit", cookies, csrf, nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("submit tanpa Expres: %d (%v)", resp.StatusCode, submitted)
+	}
+	tanpaBaris := dataMap(t, submitted)["lines"].([]any)[0].(map[string]any)
+	if tanpaBaris["use_express"] != false || tanpaBaris["harga_satuan"] != float64(112500) || tanpaBaris["express_per_pcs"] != float64(0) || dataMap(t, submitted)["total"] != float64(225000) {
+		t.Fatalf("snapshot tanpa Expres salah: order=%v baris=%v", dataMap(t, submitted), tanpaBaris)
 	}
 }
 

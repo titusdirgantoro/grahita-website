@@ -1092,6 +1092,15 @@ type InvoiceRevision struct {
 	TempoPreviousPaid             pgtype.Int8                   `json:"tempo_previous_paid"`
 }
 
+type InvoiceRevisionRequest struct {
+	AdminID            string    `json:"admin_id"`
+	IdempotencyKeyHash []byte    `json:"idempotency_key_hash"`
+	OrderID            string    `json:"order_id"`
+	RequestFingerprint []byte    `json:"request_fingerprint"`
+	Result             []byte    `json:"result"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
 type MasterImportApplyChange struct {
 	ID               string `json:"id"`
 	ApplyRunID       string `json:"apply_run_id"`
@@ -1246,6 +1255,7 @@ type OrderLine struct {
 	PiPerPcs       int64          `json:"pi_per_pcs"`
 	ExpressPerPcs  int64          `json:"express_per_pcs"`
 	SpvPerPcs      int64          `json:"spv_per_pcs"`
+	UseExpress     bool           `json:"use_express"`
 }
 
 type PasswordResetToken struct {

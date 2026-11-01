@@ -44,7 +44,7 @@ const TOPIK_MEMESAN: TopikApi = {
   ringkas: "Dari memilih produk sampai pesanan terkirim ke Pusat.",
   langkah: [
     "Buka menu Pesanan lalu pilih “Buat pesanan”.",
-    "Pilih produk dan isi qty; harga satuan terisi otomatis dari harga khusus cabang Anda.",
+    "Isi Nama Instansi, jumlah pcs, dan produk di tiap baris. Centang Expres hanya pada baris yang membutuhkannya; total diperbarui otomatis.",
     "Pilih “Simpan draft” bila belum siap dikirim — draft bisa diubah atau dihapus.",
     "Pilih cara pembayaran yang tersedia untuk cabang Anda: Transfer di muka, Deposit (Cash & Carry), atau Tempo.",
     "Untuk Transfer, unggah bukti pembayaran. Untuk Deposit, gunakan saldo dan unggah bukti bila saldo kurang. Tempo tidak perlu bukti di muka.",

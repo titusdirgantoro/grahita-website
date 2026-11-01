@@ -116,7 +116,7 @@ Ringkasan untuk cabang: jumlah pesanan periode berjalan, pesanan menunggu verifi
 | ID | Kebutuhan | Prioritas |
 |---|---|---|
 | CP-ORD-01 | List pesanan menampilkan nomor, tanggal, jumlah item, total, status, penanda C&C; dapat difilter per status. | Must |
-| CP-ORD-02 | Editor pesanan memakai urutan kolom **No → Serial Number → Nama Instansi → Cabang → Jml Pcs → Produk → Harga/Pcs → Produksi → PI → Expres → Bea SPV → Total Tagihan → Ket**. Nama instansi wajib dan Ket opsional maksimal 250 karakter pada setiap baris; produk yang sama boleh muncul beberapa kali untuk instansi berbeda. Harga dan komponen dihitung otomatis dengan total live. | Must |
+| CP-ORD-02 | Editor pesanan memakai urutan kolom **No → Serial Number → Nama Instansi → Cabang → Jml Pcs → Produk → Harga/Pcs → Produksi → PI → Expres → Bea SPV → Total Tagihan → Ket**. Nama instansi wajib dan Ket opsional maksimal 250 karakter pada setiap baris; produk yang sama boleh muncul beberapa kali untuk instansi berbeda. Expres adalah pilihan per baris yang secara bawaan mati pada pesanan baru; bila aktif, biaya Expres per pcs ditambahkan. Harga dan komponen dihitung otomatis dengan total live. | Must |
 | CP-ORD-03 | **Save** → status Draft; draft bisa diubah dan dihapus. | Must |
 | CP-ORD-04 | **Submit** → modal unggah bukti transfer (≥1 file, maks `max_file` file × `max_mb` MB, JPG/PNG/PDF). | Must |
 | CP-ORD-05 | Saat submit: nomor invoice dan serial number per order line ter-generate, status → Submitted, pesanan terkunci. | Must |
@@ -216,7 +216,7 @@ Field: Nama Cabang, Nama Kepala Cabang, Email Cabang, Telepon, **Cara pembayaran
 | AP-KAT-02 | Tab **Matriks harga**: grid Produk × Cabang, pencarian cabang. Setiap sel diisi komponen **HJM, P1 (%), Expres, dan SPV**; tarif master dihitung server = HJM + (HJM × P1) + Expres + SPV dan tidak diketik langsung. Expres dan SPV adalah nominal Rupiah per pcs. P1 hanya masuk harga efektif bila flag PI cabang aktif. | Must |
 | AP-KAT-03 | Sel kosong = produk tidak dijual ke cabang itu (tidak tampil di portal cabang). | Must |
 | AP-KAT-04 | Aksi "salin harga" dari satu cabang ke cabang lain / ke semua cabang. | Should |
-| AP-KAT-05 | Perubahan harga, komponen, atau flag PI cabang tidak mengubah pesanan yang sudah dikirim; HJM, rasio PI, PI/Expres/SPV per pcs, harga final, dan Ket di-snapshot pada order line saat submit. | Must |
+| AP-KAT-05 | Perubahan harga, komponen, atau flag PI cabang tidak mengubah pesanan yang sudah dikirim; HJM, rasio PI, PI/Expres/SPV per pcs, pilihan Expres per baris, harga final, dan Ket di-snapshot pada order line saat submit. | Must |
 | AP-KAT-06 | Riwayat perubahan harga tercatat di audit log. | Should |
 
 ### 4.6 Rekening bank (Superadmin)

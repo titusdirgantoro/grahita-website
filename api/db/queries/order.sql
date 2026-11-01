@@ -98,12 +98,12 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- subtotal TIDAK diisi: kolomnya GENERATED ALWAYS (qty * harga_satuan).
 -- harga_satuan sudah diambil server dari branch_prices cabang sesi.
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, keterangan,
-                         qty, harga_satuan, harga_dasar, pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs)
+                         qty, harga_satuan, harga_dasar, pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, use_express)
 VALUES (sqlc.arg(order_id), sqlc.arg(line_no), 'product', sqlc.arg(product_id),
         sqlc.arg(nama_snapshot), sqlc.arg(nama_instansi), sqlc.arg(keterangan),
         sqlc.arg(qty), sqlc.arg(harga_satuan), sqlc.arg(harga_dasar),
         (sqlc.arg(pi_ratio)::text)::numeric, sqlc.arg(pi_per_pcs),
-        sqlc.arg(express_per_pcs), sqlc.arg(spv_per_pcs));
+        sqlc.arg(express_per_pcs), sqlc.arg(spv_per_pcs), sqlc.arg(use_express));
 
 -- name: InsertOrderLinePackaging :exec
 -- Baris biaya packaging pesanan sertifikat (PRD CP-SER-02): tanpa product_id,
@@ -119,7 +119,7 @@ SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instan
        qty, harga_satuan,
        CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
             THEN harga_satuan ELSE harga_dasar END::bigint AS harga_dasar,
-       pi_ratio::text AS pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs,
+       pi_ratio::text AS pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, use_express,
        (qty * CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
                    THEN harga_satuan ELSE harga_dasar END)::bigint AS produksi,
        (qty * pi_per_pcs)::bigint AS pi,
@@ -161,6 +161,7 @@ SELECT o.status::text AS status
 -- master sesudah draft disimpan ikut terpakai.
 SELECT l.line_no,
        l.jenis::text          AS jenis,
+       l.use_express,
        l.nama_snapshot,
        l.nama_instansi,
        l.keterangan,

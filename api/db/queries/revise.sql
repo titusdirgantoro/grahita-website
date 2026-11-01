@@ -116,11 +116,11 @@ DELETE FROM order_lines WHERE order_id = $1;
 -- counter dengan periode tanggal pesanan asli.
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
                          nama_instansi, keterangan, qty, harga_satuan, harga_dasar,
-                         pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, serial_number)
+                         pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, serial_number, use_express)
 VALUES (sqlc.arg(order_id), sqlc.arg(line_no), 'product', sqlc.arg(product_id), sqlc.arg(nama_snapshot),
         sqlc.arg(nama_instansi), sqlc.arg(keterangan), sqlc.arg(qty), sqlc.arg(harga_satuan), sqlc.arg(harga_dasar),
         (sqlc.arg(pi_ratio)::text)::numeric, sqlc.arg(pi_per_pcs), sqlc.arg(express_per_pcs),
-        sqlc.arg(spv_per_pcs), sqlc.arg(serial_number));
+        sqlc.arg(spv_per_pcs), sqlc.arg(serial_number), sqlc.arg(express_per_pcs) > 0);
 
 -- name: SetOrderVersi :execrows
 -- Menaikkan versi pesanan SATU langkah (0 -> 1, 1 -> 2, ...); nomor invoice

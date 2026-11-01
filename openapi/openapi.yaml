@@ -4747,7 +4747,7 @@ components:
         mime_type: { type: string }
     OrderLine:
       type: object
-      required: [line_no, jenis, nama, nama_instansi, keterangan, qty, harga_satuan, harga_dasar, produksi, pi, express, bea_spv, subtotal]
+      required: [line_no, jenis, nama, nama_instansi, keterangan, qty, harga_satuan, harga_dasar, produksi, pi, express, bea_spv, subtotal, use_express]
       properties:
         line_no: { type: integer }
         jenis:
@@ -4775,12 +4775,13 @@ components:
           format: int64
           minimum: 0
           description: |
-            Harga khusus cabang yang diambil server dari branch_prices. Untuk
-            produk Sertifikat nilainya selalu 0 berapa pun qty-nya (CP-SER-01).
+            Harga khusus cabang setelah pilihan Expres per baris diterapkan.
+            Untuk produk Sertifikat nilainya selalu 0 berapa pun qty-nya (CP-SER-01).
         harga_dasar: { type: integer, format: int64, minimum: 0, description: HJM atau Harga/Pcs yang disnapshot. }
         pi_ratio: { type: string, description: Rasio PI yang disnapshot; 0 bila flag PI cabang tidak aktif. }
         pi_per_pcs: { type: integer, format: int64, minimum: 0 }
         express_per_pcs: { type: integer, format: int64, minimum: 0 }
+        use_express: { type: boolean, description: Pilihan Expres per baris; false untuk draft baru kecuali diaktifkan cabang. }
         spv_per_pcs: { type: integer, format: int64, minimum: 0 }
         produksi: { type: integer, format: int64, minimum: 0 }
         pi: { type: integer, format: int64, minimum: 0 }
@@ -4829,7 +4830,8 @@ components:
     OrderDraftLineInput:
       type: object
       description: |
-        Satu baris editor pesanan. Product_id, qty, dan nama_instansi diterima:
+        Satu baris editor pesanan. Product_id, qty, nama_instansi, dan
+        use_express diterima:
         harga satuan, subtotal, dan total dihitung server, dan field lain
         (mis. "harga" atau "total") ditolak `400` oleh dekoder JSON.
       required: [product_id, qty, nama_instansi]
@@ -4842,6 +4844,7 @@ components:
         qty: { type: integer, minimum: 1 }
         nama_instansi: { type: string, minLength: 1, maxLength: 160, description: Nama instansi untuk baris produk. }
         keterangan: { type: string, maxLength: 250, description: Keterangan opsional per baris. }
+        use_express: { type: boolean, default: false, description: Aktifkan biaya Expres per pcs hanya untuk baris ini; tidak tersedia untuk Sertifikat. }
 
     OrderDraftInput:
       type: object
@@ -5723,7 +5726,7 @@ components:
         nama: { type: string }
         jenis: { type: string, enum: [reguler, sertifikat] }
         deskripsi: { type: string }
-        harga: { type: integer, format: int64, minimum: 0 }
+        harga: { type: integer, format: int64, minimum: 0, description: Tarif katalog termasuk Expres; kurangi express_per_pcs untuk harga tanpa Expres. }
         harga_dasar: { type: integer, format: int64, minimum: 0 }
         p1: { type: string }
         pi_per_pcs: { type: integer, format: int64, minimum: 0 }

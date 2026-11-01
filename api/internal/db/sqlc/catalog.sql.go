@@ -336,7 +336,7 @@ type ListBranchPricesRow struct {
 // Sel matriks yang BERISI harga. Sel kosong tidak punya baris dan berarti
 // produk tidak dijual ke cabang tersebut (PRD AP-KAT-03).
 //
-// Komponen HJM/P1/SPV diambil dari versi tarif aktif varian utama produk,
+// Komponen HJM/P1/Expres/SPV diambil dari versi tarif aktif varian utama produk,
 // hanya bila tarif finalnya sama dengan harga sel (komponen benar-benar
 // menjelaskan harga). Sel harga lama tanpa versi yang cocok mengembalikan
 // komponen NULL dan source_kind kosong.
@@ -577,7 +577,7 @@ SELECT id
 
 // ---------- Versi tarif manual dari matriks harga ----------
 //
-// Edit matriks menulis komponen HJM/P1/SPV sebagai versi tarif append-only
+// Edit matriks menulis komponen HJM/P1/Expres/SPV sebagai versi tarif append-only
 // (source_kind 'manual'), lalu memproyeksikan tarif finalnya ke branch_prices
 // yang dibaca katalog dan order (docs/design/master-impact-import.md §5.3).
 // Varian utama (bukan turunan) tempat tarif produk disimpan.

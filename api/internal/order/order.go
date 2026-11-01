@@ -153,6 +153,7 @@ type Line struct {
 	PIRatio       string `json:"pi_ratio"`
 	PIPerPcs      int64  `json:"pi_per_pcs"`
 	ExpressPerPcs int64  `json:"express_per_pcs"`
+	UseExpress    bool   `json:"use_express"`
 	SPVPerPcs     int64  `json:"spv_per_pcs"`
 	Produksi      int64  `json:"produksi"`
 	PI            int64  `json:"pi"`
@@ -199,6 +200,7 @@ type LineInput struct {
 	Qty          int
 	NamaInstansi string
 	Keterangan   string
+	UseExpress   bool
 }
 
 // DraftInput adalah isi draft yang dikirim klien.
@@ -452,6 +454,13 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 
 		harga := p.Harga
 		hargaDasar, piPerPcs, expressPerPcs, spvPerPcs, piRatio := p.HargaDasar, p.PI, p.Express, p.SPV, p.P1
+		if !baris.UseExpress {
+			harga -= expressPerPcs
+			expressPerPcs = 0
+		}
+		if harga < 0 {
+			return "", nil, fmt.Errorf("%w: tarif Expres baris %d melebihi harga", ErrInvalidData, i+1)
+		}
 		if hargaDasar == 0 && harga > 0 && piPerPcs == 0 && expressPerPcs == 0 && spvPerPcs == 0 {
 			hargaDasar = harga
 		}
@@ -459,6 +468,9 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 			piRatio = "0"
 		}
 		if p.Jenis == catalog.JenisSertifikat {
+			if baris.UseExpress {
+				return "", nil, fmt.Errorf("%w: Expres tidak tersedia untuk Sertifikat", ErrInvalidData)
+			}
 			// CP-SER-01/BR-06: harga Sertifikat SELALU 0 berapa pun qty.
 			harga = 0
 			hargaDasar, piPerPcs, expressPerPcs, spvPerPcs, piRatio = 0, 0, 0, 0, "0"
@@ -480,6 +492,7 @@ func (s *Service) buildLines(ctx context.Context, branchID string, in DraftInput
 			PIRatio:       piRatio,
 			PIPerPcs:      piPerPcs,
 			ExpressPerPcs: expressPerPcs,
+			UseExpress:    baris.UseExpress,
 			SPVPerPcs:     spvPerPcs,
 			Produksi:      int64(baris.Qty) * hargaDasar,
 			PI:            int64(baris.Qty) * piPerPcs,

@@ -202,12 +202,12 @@ func (q *Queries) InsertOrderLinePackaging(ctx context.Context, arg InsertOrderL
 
 const insertOrderLineProduct = `-- name: InsertOrderLineProduct :exec
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot, nama_instansi, keterangan,
-                         qty, harga_satuan, harga_dasar, pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs)
+                         qty, harga_satuan, harga_dasar, pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, use_express)
 VALUES ($1, $2, 'product', $3,
         $4, $5, $6,
         $7, $8, $9,
         ($10::text)::numeric, $11,
-        $12, $13)
+        $12, $13, $14)
 `
 
 type InsertOrderLineProductParams struct {
@@ -224,6 +224,7 @@ type InsertOrderLineProductParams struct {
 	PiPerPcs      int64       `json:"pi_per_pcs"`
 	ExpressPerPcs int64       `json:"express_per_pcs"`
 	SpvPerPcs     int64       `json:"spv_per_pcs"`
+	UseExpress    bool        `json:"use_express"`
 }
 
 // subtotal TIDAK diisi: kolomnya GENERATED ALWAYS (qty * harga_satuan).
@@ -243,6 +244,7 @@ func (q *Queries) InsertOrderLineProduct(ctx context.Context, arg InsertOrderLin
 		arg.PiPerPcs,
 		arg.ExpressPerPcs,
 		arg.SpvPerPcs,
+		arg.UseExpress,
 	)
 	return err
 }
@@ -252,7 +254,7 @@ SELECT id, line_no, jenis::text AS jenis, product_id, nama_snapshot, nama_instan
        qty, harga_satuan,
        CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
             THEN harga_satuan ELSE harga_dasar END::bigint AS harga_dasar,
-       pi_ratio::text AS pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs,
+       pi_ratio::text AS pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, use_express,
        (qty * CASE WHEN harga_dasar=0 AND harga_satuan>0 AND pi_per_pcs=0 AND express_per_pcs=0 AND spv_per_pcs=0
                    THEN harga_satuan ELSE harga_dasar END)::bigint AS produksi,
        (qty * pi_per_pcs)::bigint AS pi,
@@ -279,6 +281,7 @@ type ListOrderLinesRow struct {
 	PiPerPcs      int64       `json:"pi_per_pcs"`
 	ExpressPerPcs int64       `json:"express_per_pcs"`
 	SpvPerPcs     int64       `json:"spv_per_pcs"`
+	UseExpress    bool        `json:"use_express"`
 	Produksi      int64       `json:"produksi"`
 	Pi            int64       `json:"pi"`
 	Express       int64       `json:"express"`
@@ -311,6 +314,7 @@ func (q *Queries) ListOrderLines(ctx context.Context, orderID string) ([]ListOrd
 			&i.PiPerPcs,
 			&i.ExpressPerPcs,
 			&i.SpvPerPcs,
+			&i.UseExpress,
 			&i.Produksi,
 			&i.Pi,
 			&i.Express,
@@ -331,6 +335,7 @@ func (q *Queries) ListOrderLines(ctx context.Context, orderID string) ([]ListOrd
 const listOrderLinesForSubmit = `-- name: ListOrderLinesForSubmit :many
 SELECT l.line_no,
        l.jenis::text          AS jenis,
+       l.use_express,
        l.nama_snapshot,
        l.nama_instansi,
        l.keterangan,
@@ -381,6 +386,7 @@ type ListOrderLinesForSubmitParams struct {
 type ListOrderLinesForSubmitRow struct {
 	LineNo         int32  `json:"line_no"`
 	Jenis          string `json:"jenis"`
+	UseExpress     bool   `json:"use_express"`
 	NamaSnapshot   string `json:"nama_snapshot"`
 	NamaInstansi   string `json:"nama_instansi"`
 	Keterangan     string `json:"keterangan"`
@@ -415,6 +421,7 @@ func (q *Queries) ListOrderLinesForSubmit(ctx context.Context, arg ListOrderLine
 		if err := rows.Scan(
 			&i.LineNo,
 			&i.Jenis,
+			&i.UseExpress,
 			&i.NamaSnapshot,
 			&i.NamaInstansi,
 			&i.Keterangan,

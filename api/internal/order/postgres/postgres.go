@@ -214,6 +214,7 @@ func insertLines(ctx context.Context, q *sqlc.Queries, orderID string, lines []o
 			PiRatio:       l.PIRatio,
 			PiPerPcs:      l.PIPerPcs,
 			ExpressPerPcs: l.ExpressPerPcs,
+			UseExpress:    l.UseExpress,
 			SpvPerPcs:     l.SPVPerPcs,
 		}); err != nil {
 			return fmt.Errorf("query InsertOrderLineProduct: %w", err)
@@ -364,6 +365,7 @@ WHERE branch_id=$1 AND ends_on >= $2::date)`, req.BranchID, req.Tanggal).Scan(&g
 			PIRatio:        row.PiRatio,
 			PIPerPcs:       row.PiPerPcs,
 			ExpressPerPcs:  row.ExpressPerPcs,
+			UseExpress:     row.UseExpress,
 			SPVPerPcs:      row.SpvPerPcs,
 			AdaHargaCabang: row.AdaHargaCabang,
 		})
@@ -658,6 +660,7 @@ func loadOrder(ctx context.Context, q *sqlc.Queries, id, branchID string) (order
 			PIRatio:       l.PiRatio,
 			PIPerPcs:      l.PiPerPcs,
 			ExpressPerPcs: l.ExpressPerPcs,
+			UseExpress:    l.UseExpress,
 			SPVPerPcs:     l.SpvPerPcs,
 			Produksi:      l.Produksi,
 			PI:            l.Pi,

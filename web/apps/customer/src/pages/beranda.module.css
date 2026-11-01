@@ -3,6 +3,8 @@
   gap: 16px;
 }
 
+.holdNotice { margin-bottom: 16px; }
+
 .kpis {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -183,11 +183,11 @@ func (q *Queries) InsertInvoiceRevision(ctx context.Context, arg InsertInvoiceRe
 const insertOrderLineProductWithSerial = `-- name: InsertOrderLineProductWithSerial :exec
 INSERT INTO order_lines (order_id, line_no, jenis, product_id, nama_snapshot,
                          nama_instansi, keterangan, qty, harga_satuan, harga_dasar,
-                         pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, serial_number)
+                         pi_ratio, pi_per_pcs, express_per_pcs, spv_per_pcs, serial_number, use_express)
 VALUES ($1, $2, 'product', $3, $4,
         $5, $6, $7, $8, $9,
         ($10::text)::numeric, $11, $12,
-        $13, $14)
+        $13, $14, $12 > 0)
 `
 
 type InsertOrderLineProductWithSerialParams struct {

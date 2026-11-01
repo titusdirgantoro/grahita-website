@@ -177,6 +177,7 @@ type SubmitLine struct {
 	PIRatio        string
 	PIPerPcs       int64
 	ExpressPerPcs  int64
+	UseExpress     bool
 	SPVPerPcs      int64
 	AdaHargaCabang bool
 }
@@ -253,8 +254,17 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 				return nil, fmt.Errorf("%w: baris %d", ErrProductNotSold, i+1)
 			}
 			harga := l.HargaCabang
+			expressPerPcs := l.ExpressPerPcs
+			if !l.UseExpress {
+				harga -= expressPerPcs
+				expressPerPcs = 0
+			}
+			if harga < 0 {
+				return nil, fmt.Errorf("%w: tarif Expres baris %d melebihi harga", ErrInvalidData, i+1)
+			}
 			if l.ProdukJenis == catalog.JenisSertifikat {
 				harga = 0
+				expressPerPcs = 0
 				sertifikat++
 			} else {
 				reguler++
@@ -272,7 +282,7 @@ func SiapkanSubmit(lines []SubmitLine, biayaPackaging int64) ([]SnapshotSubmit, 
 				HargaDasar:    l.HargaDasar,
 				PIRatio:       l.PIRatio,
 				PIPerPcs:      l.PIPerPcs,
-				ExpressPerPcs: l.ExpressPerPcs,
+				ExpressPerPcs: expressPerPcs,
 				SPVPerPcs:     l.SPVPerPcs,
 			})
 		default:

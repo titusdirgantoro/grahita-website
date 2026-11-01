@@ -137,6 +137,23 @@ func TestBuatDraftMemakaiHargaCabangDanTotalServer(t *testing.T) {
 	}
 }
 
+func TestExpresDipilihPerBarisDanTidakMengubahTarifMaster(t *testing.T) {
+	cat := fakeCatalog{perBranch: map[string][]catalog.BranchProduct{
+		"br-a": {{ID: "p1", Nama: "Produk Uji", Jenis: catalog.JenisReguler, Harga: 114000, HargaDasar: 100000, PI: 10000, Express: 1500, SPV: 2500}},
+	}}
+	svc := NewService(NewMemory(), cat, cfgUji())
+	o, err := svc.CreateDraft(context.Background(), aktorCabang("br-a"), DraftInput{Lines: []LineInput{
+		{ProductID: "p1", Qty: 2, NamaInstansi: "TK A"},
+		{ProductID: "p1", Qty: 3, NamaInstansi: "SD B", UseExpress: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(o.Lines) != 2 || o.Lines[0].UseExpress || o.Lines[0].HargaSatuan != 112500 || o.Lines[0].ExpressPerPcs != 0 || !o.Lines[1].UseExpress || o.Lines[1].HargaSatuan != 114000 || o.Lines[1].ExpressPerPcs != 1500 || o.Total != 567000 {
+		t.Fatalf("pilihan Expres harus terpisah untuk tiap baris: %+v", o)
+	}
+}
+
 // TestHargaDariCabangSesiBukanCabangLain memastikan branch_id pemilik data
 // diambil dari sesi: cabang B tidak melihat harga cabang A.
 func TestHargaDariCabangSesiBukanCabangLain(t *testing.T) {

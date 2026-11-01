@@ -29,6 +29,7 @@ const penggunaCabang = {
 
 const katalog = [
   { id: "p1", nama: "Bio Magnetik", jenis: "reguler", harga: 100000 },
+  { id: "p2", nama: "Produk dengan Expres", jenis: "reguler", harga: 114000, harga_dasar: 100000, pi_per_pcs: 10000, express_per_pcs: 1500, spv_per_pcs: 2500 },
   {
     id: "p7",
     nama: "Sertifikat Psikotes",
@@ -401,6 +402,26 @@ describe("Customer Portal — detail pesanan (F1-11)", () => {
 });
 
 describe("Customer Portal — editor pesanan (F1-11)", () => {
+  it("memilih Expres per baris dan memperbarui total sesuai qty", async () => {
+    const panggilan = fetchPesanan();
+    render(<RouterProvider router={buatRouter("/pesanan/baru")} />);
+    fireEvent.change(await screen.findByLabelText("Produk baris 1"), { target: { value: "p2" } });
+    fireEvent.change(screen.getByLabelText("Nama Instansi baris 1"), { target: { value: "TK A" } });
+    expect(screen.getByTestId("total-draft").textContent).toMatch(/112\.500/);
+    const expres = screen.getByRole("checkbox", { name: "Gunakan Expres baris 1" });
+    fireEvent.click(expres);
+    expect(screen.getByTestId("total-draft").textContent).toMatch(/114\.000/);
+    fireEvent.click(screen.getByRole("button", { name: "Tambah baris" }));
+    fireEvent.change(screen.getByLabelText("Produk baris 2"), { target: { value: "p2" } });
+    fireEvent.change(screen.getByLabelText("Nama Instansi baris 2"), { target: { value: "SD B" } });
+    expect((screen.getByRole("checkbox", { name: "Gunakan Expres baris 2" }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByTestId("total-draft").textContent).toMatch(/226\.500/);
+    fireEvent.click(screen.getByRole("button", { name: "Simpan draft" }));
+    await waitFor(() => {
+      const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders"));
+      expect(JSON.parse(String(kirim?.init?.body)).lines.map((l: { use_express: boolean }) => l.use_express)).toEqual([true, false]);
+    });
+  });
   it("menghitung subtotal & total live dari harga cabang lalu menyimpan draft", async () => {
     const panggilan = fetchPesanan();
 
@@ -429,7 +450,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
       // Harga/total dihitung server; nama instansi melekat pada baris.
       expect(JSON.parse(String(kirim?.init?.body))).toEqual({
         catatan: "dikirim pagi",
-        lines: [{ product_id: "p1", qty: 2, nama_instansi: "TK A", keterangan: "" }],
+        lines: [{ product_id: "p1", qty: 2, nama_instansi: "TK A", keterangan: "", use_express: false }],
       });
     });
   });
@@ -461,8 +482,8 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
       const kirim = panggilan.find((p) => p.init?.method === "POST" && p.url.endsWith("/orders"));
       expect(kirim).toBeDefined();
       expect(JSON.parse(String(kirim?.init?.body)).lines).toEqual([
-        { product_id: "p1", qty: 1, nama_instansi: "TK A", keterangan: "" },
-        { product_id: "p1", qty: 1, nama_instansi: "SD B", keterangan: "" },
+        { product_id: "p1", qty: 1, nama_instansi: "TK A", keterangan: "", use_express: false },
+        { product_id: "p1", qty: 1, nama_instansi: "SD B", keterangan: "", use_express: false },
       ]);
     });
   });
@@ -499,7 +520,7 @@ describe("Customer Portal — editor pesanan (F1-11)", () => {
       expect(kirim?.url.endsWith("/orders/o1")).toBe(true);
       expect(JSON.parse(String(kirim?.init?.body))).toEqual({
         catatan: "dikirim pagi",
-        lines: [{ product_id: "p1", qty: 4, nama_instansi: "TK A", keterangan: "" }],
+        lines: [{ product_id: "p1", qty: 4, nama_instansi: "TK A", keterangan: "", use_express: false }],
       });
     });
   });

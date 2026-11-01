@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { api, ApiClientError } from "@grahita/api-client";
 import { Badge, Button, Card, CardHead, EmptyState, Field, Input, Notice, PageHead, Select, SkeletonList, Table } from "@grahita/ui";
 import { useApi } from "../useApi";
+import styles from "./customer-pages.module.css";
 
 const uang = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
 interface Saldo { period_month: string; due_date: string; total: number; paid: number; remaining: number; status: string }
@@ -44,6 +45,7 @@ export function TagihanPage() {
   }
   return <>
     <PageHead title="Tagihan" sub="Piutang Tempo, surat tagihan, dan bukti pelunasan" />
+    <div className={styles.stack}>
     {galat ? <Notice tone="danger">{galat}</Notice> : null}
     {sukses ? <Notice tone="success">{sukses}</Notice> : null}
     {ringkasan.memuat ? <Card><SkeletonList rows={2}/></Card> : ringkasan.galat ? <Notice tone="danger">{ringkasan.galat}</Notice> : ringkasan.data ? <>
@@ -55,7 +57,7 @@ export function TagihanPage() {
     </> : null}
     <Card><CardHead title="Surat Tagihan"/><p>Butuh invoice per pesanan? <Link to="/invoice">Buka Riwayat invoice</Link>.</p>{surat.memuat ? <SkeletonList rows={2}/> : surat.galat ? <Notice tone="danger">{surat.galat}</Notice> : !surat.data?.length ? <p>Surat Tagihan terbit tanggal 1 bulan berikutnya.</p> : <Table stack="narrow" caption="Surat tagihan"><thead><tr><th>Periode</th><th>Versi</th><th>Total</th><th>Status</th><th>Dokumen</th></tr></thead><tbody>{surat.data.map(s=><tr key={s.id}><td>{s.period_month.slice(0,7)}</td><td>{s.version}</td><td>{uang.format(s.total)}</td><td>{label[s.status]??s.status}</td><td><Button variant="secondary" disabled={!s.ready} onClick={()=>void buka(`/tempo/statements/${s.id}/download`)}>Unduh PDF</Button></td></tr>)}</tbody></Table>}</Card>
     <Card><CardHead title="Unggah bukti pelunasan"/><p>Nominal yang diverifikasi dialokasikan ke invoice terlama. Kelebihan pembayaran menjadi saldo Tempo setelah persetujuan Superadmin.</p>
-      <form onSubmit={(e)=>void kirim(e)}>
+      <form onSubmit={(e)=>void kirim(e)} className={styles.stack}>
         <Field label="Nominal yang ditransfer (Rp)" htmlFor="tempo-amount"><Input id="tempo-amount" type="number" min="1" step="1" value={nominal} onChange={e=>setNominal(e.target.value)}/></Field>
         <Field label="Rekening tujuan" htmlFor="tempo-bank"><Select id="tempo-bank" value={rekeningID} onChange={e=>setRekeningID(e.target.value)} required><option value="">Pilih rekening</option>{(rekening.data??[]).map(r=><option key={r.id} value={r.id}>{r.bank} · {r.nomor} · {r.nama_pemilik}</option>)}</Select></Field>
         {rekening.galat ? <Notice tone="danger">{rekening.galat}</Notice> : null}
@@ -64,5 +66,6 @@ export function TagihanPage() {
       </form>
     </Card>
     <Card><CardHead title="Riwayat pelunasan"/>{pelunasan.memuat ? <SkeletonList rows={2}/> : pelunasan.galat ? <Notice tone="danger">{pelunasan.galat}</Notice> : !pelunasan.data?.length ? <p>Belum ada bukti pelunasan.</p> : <Table stack="narrow" caption="Riwayat bukti pelunasan"><thead><tr><th>Tanggal</th><th>Nominal</th><th>Status</th><th>Bukti</th></tr></thead><tbody>{pelunasan.data.map(p=><tr key={p.id}><td>{new Date(p.submitted_at).toLocaleString("id-ID",{timeZone:"Asia/Jakarta"})}</td><td>{uang.format(p.verified_amount??p.declared_amount)}</td><td>{label[p.status]??p.status}</td><td><Button variant="secondary" onClick={()=>void buka(`/tempo/repayments/${p.id}/proof`)}>Lihat</Button></td></tr>)}</tbody></Table>}</Card>
+    </div>
   </>;
 }
