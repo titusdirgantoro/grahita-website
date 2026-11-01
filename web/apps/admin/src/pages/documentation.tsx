@@ -5,6 +5,7 @@ import { Card, PageHead } from "@grahita/ui";
 
 import catalog from "./documentation-scenarios.json";
 import { DatabaseUmlDiagrams, GuideFlowDiagram, OverviewFlowDiagram } from "./documentation-diagrams";
+import { ScenarioFlowToggle } from "./documentation-scenario-flowchart";
 import styles from "./documentation.module.css";
 
 type Section = "panduan" | "teknis";
@@ -158,6 +159,7 @@ function ScenarioCatalog() {
                     <div className={styles.scenarioMeta}><strong>{item.id}</strong><span>{item.priority} · {item.layer}</span></div>
                     <p>{item.action.replaceAll("`", "")}</p>
                     {item.expected ? <p className={styles.expected}><b>Hasil:</b> {item.expected.replaceAll("`", "")}</p> : null}
+                    <ScenarioFlowToggle id={item.id} action={item.action} expected={item.expected} />
                   </li>
                 ))}
               </ol>

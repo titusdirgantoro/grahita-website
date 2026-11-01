@@ -26,8 +26,13 @@ describe("Dokumentasi portal admin", () => {
     render(<RouterProvider router={router("/dokumentasi")} />);
     expect(await screen.findByRole("heading", { name: "Katalog 162 skenario end to end" }, { timeout: 15000 })).toBeDefined();
     expect(screen.getByRole("status").textContent).toContain("162 dari 162");
+    expect(screen.getAllByRole("button", { name: /^Lihat diagram alur / })).toHaveLength(162);
     expect(screen.getAllByRole("figure", { name: /Diagram alur/ })).toHaveLength(10);
     expect(screen.getByRole("img", { name: /Mulai, siapkan master/ })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Lihat diagram alur E2E-04" }));
+    const e2eFlow = screen.getByRole("img", { name: /E2E-04: mulai;/ });
+    expect(e2eFlow.getAttribute("aria-label")).toContain("Manager menyetujui");
+    expect(e2eFlow.getAttribute("aria-label")).toContain("setelah pelunasan order done");
     const tempoFlow = screen.getByRole("figure", { name: "Diagram alur 6. Jalur Tempo dan pelunasan" });
     expect(tempoFlow.querySelectorAll("ellipse")).toHaveLength(2);
     expect(tempoFlow.querySelectorAll("polygon").length).toBeGreaterThan(1);
@@ -36,6 +41,12 @@ describe("Dokumentasi portal admin", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Cari skenario" }), { target: { value: "TMP-22" } });
     expect(screen.getByRole("status").textContent).toContain("1 dari 162");
     expect(screen.getByText("TMP-22")).toBeDefined();
+    const flowButton = screen.getByRole("button", { name: "Lihat diagram alur TMP-22" });
+    expect(flowButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(flowButton);
+    expect(screen.getByRole("figure", { name: "Diagram alur skenario TMP-22" })).toBeDefined();
+    expect(screen.getByRole("img", { name: /TMP-22: mulai;/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sembunyikan diagram alur TMP-22" }).getAttribute("aria-expanded")).toBe("true");
   });
 
   it("menyediakan diagram arsitektur dan relasi data pada rute teknis", async () => {
