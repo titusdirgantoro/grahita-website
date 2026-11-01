@@ -164,15 +164,14 @@ describe("Customer Portal — shell & navigasi", () => {
     expect(within(screen.getByRole("complementary")).queryByRole("link", { name: /Tagihan/ })).toBeNull();
   });
 
-  it("rute /tutorial merender shell dan empat topik panduan", async () => {
+  it("rute /tutorial merender shell dan panduan tunggal", async () => {
     fetchAndalan();
 
     render(<RouterProvider router={buatRouter("/tutorial")} />);
 
-    // Judul topik muncul sebagai judul kartu (h2) dan ringkasan accordion.
-    await screen.findByRole("heading", { name: "Cara memesan" });
-    expect(screen.getAllByText("Aturan produk Sertifikat").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Pesanan Cash & Carry").length).toBeGreaterThanOrEqual(1);
+    await screen.findByRole("heading", { name: "Alur penggunaan dari awal sampai selesai" });
+    expect(screen.getByRole("heading", { name: "Buat pesanan per instansi dan produk" })).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Panduan tambahan dari Pusat" })).toBeNull();
     expect(screen.getByRole("complementary")).toBeDefined();
   });
 

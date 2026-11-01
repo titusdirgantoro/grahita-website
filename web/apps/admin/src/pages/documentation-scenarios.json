@@ -1078,8 +1078,8 @@
         "id": "ADM-05",
         "priority": "P1",
         "layer": "UI+API",
-        "action": "Edit tutorial per topik sebagai Superadmin, buka ulang portal cabang tanpa deploy; Manager/cabang coba menulis.",
-        "expected": "Konten terbaru tampil, input disanitasi, role lain 403."
+        "action": "Buka Tutorial cabang dan Pengaturan Superadmin; periksa panduan lengkap, tangkapan layar, serta tidak adanya editor topik lama. Uji akses tulis API tutorial lama sebagai Manager/cabang.",
+        "expected": "Panduan tampil satu kali tanpa topik duplikat; editor topik lama tidak tampil; API lama tetap menolak penulisan oleh role lain (403)."
       },
       {
         "id": "ADM-06",

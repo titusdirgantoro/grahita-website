@@ -120,7 +120,7 @@ const guide = [
     steps: [
       "Dashboard dan Riwayat pemesanan menampilkan order, status verifikasi, filter, dan item yang perlu tindakan. Deposit cabang menampilkan top-up, sedangkan Tagihan cabang menampilkan piutang, umur piutang, pelunasan, dan Surat Tagihan.",
       "Superadmin memakai Reporting untuk melihat satu baris per order line serta membuat ekspor XLSX. Ekspor piutang tersedia di Tagihan cabang.",
-      "User management mengelola akun cabang/admin sesuai peran. Pengaturan juga memuat tutorial cabang, status OCR, dan operasi cadangan. Audit log memuat aktor, waktu, perubahan, dan alasan.",
+      "User management mengelola akun cabang/admin sesuai peran. Pengaturan memuat status OCR dan operasi cadangan. Tutorial cabang kini satu panduan lengkap yang mengikuti rilis aplikasi. Audit log memuat aktor, waktu, perubahan, dan alasan.",
       "Untuk masalah akses, periksa status akun, peran, sesi, dan rekening yang ditugaskan. Untuk masalah transaksi, periksa timeline, verifikasi, job, dokumen, dan audit sebelum mengulang aksi.",
     ],
     note: "Backup lokal terenkripsi dan restore lokal telah diuji. Salinan offsite dan restore dari offsite masih perlu disediakan agar pemulihan dari kegagalan VPS lengkap.",

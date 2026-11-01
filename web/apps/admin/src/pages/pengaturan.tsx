@@ -15,7 +15,6 @@ import {
   SkeletonList,
   SwitchRow,
   Table,
-  Textarea,
 } from "@grahita/ui";
 
 import { PenjagaSuperadmin } from "./shell-pages";
@@ -77,98 +76,6 @@ interface FormPengaturan {
   managerRevisi: boolean;
   aiAktif: boolean;
   ai: Record<string, string>;
-}
-
-interface TopikTutorial {
-  id?: string;
-  ikon: string;
-  judul: string;
-  ringkas: string;
-  langkah: string[];
-}
-
-interface TutorialResponse {
-  topik: TopikTutorial[];
-}
-
-/**
- * TetapanTutorial menyediakan permukaan tulis yang selama ini hanya tersedia
- * di API. Langkah diedit satu per baris agar payload tetap berupa array teks;
- * server tetap menjadi batas sanitasi dan validasi terakhir.
- */
-function TetapanTutorial() {
-  const [topik, setTopik] = useState<TopikTutorial[]>([]);
-  const [memuat, setMemuat] = useState(true);
-  const [sibuk, setSibuk] = useState(false);
-  const [galat, setGalat] = useState<string | null>(null);
-  const [sukses, setSukses] = useState<string | null>(null);
-
-  useEffect(() => {
-    let hidup = true;
-    void api.get<TutorialResponse>("/admin/tutorial")
-      .then((hasil) => { if (hidup) setTopik(hasil.topik); })
-      .catch((err: unknown) => { if (hidup) setGalat(pesanGalat(err)); })
-      .finally(() => { if (hidup) setMemuat(false); });
-    return () => { hidup = false; };
-  }, []);
-
-  function ubah(index: number, perubahan: Partial<TopikTutorial>) {
-    setTopik((lama) => lama.map((item, i) => i === index ? { ...item, ...perubahan } : item));
-    setSukses(null);
-  }
-
-  async function simpanTutorial() {
-    setSibuk(true);
-    setGalat(null);
-    setSukses(null);
-    try {
-      const hasil = await api.put<TutorialResponse>("/admin/tutorial", { topik });
-      setTopik(hasil.topik);
-      setSukses("Tutorial tersimpan dan langsung tersedia di portal cabang.");
-    } catch (err) {
-      setGalat(pesanGalat(err));
-    } finally {
-      setSibuk(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHead title="Tutorial portal cabang" />
-      <p className="muted small">Topik di bawah muncul sebagai “Panduan tambahan dari Pusat”. Panduan utama bertahap dan tangkapan layar pada portal cabang mengikuti rilis aplikasi.</p>
-      {memuat ? <SkeletonList rows={4} /> : (
-        <Form>
-          {galat ? <Notice tone="danger">{galat}</Notice> : null}
-          {sukses ? <Notice tone="success">{sukses}</Notice> : null}
-          {topik.length === 0 ? <EmptyState icon="book-open">Belum ada topik tutorial.</EmptyState> : topik.map((item, index) => (
-            <Card key={item.id ?? `tutorial-${index}`}>
-              <CardHead title={`Topik ${index + 1}`} />
-              <Field label="Ikon" htmlFor={`tutorial-${index}-ikon`}>
-                <Input id={`tutorial-${index}-ikon`} value={item.ikon}
-                  onChange={(e) => ubah(index, { ikon: e.target.value })} />
-              </Field>
-              <Field label="Judul" htmlFor={`tutorial-${index}-judul`}>
-                <Input id={`tutorial-${index}-judul`} value={item.judul}
-                  onChange={(e) => ubah(index, { judul: e.target.value })} />
-              </Field>
-              <Field label="Ringkasan" htmlFor={`tutorial-${index}-ringkas`}>
-                <Textarea id={`tutorial-${index}-ringkas`} rows={2} value={item.ringkas}
-                  onChange={(e) => ubah(index, { ringkas: e.target.value })} />
-              </Field>
-              <Field label="Langkah (satu per baris)" htmlFor={`tutorial-${index}-langkah`}>
-                <Textarea id={`tutorial-${index}-langkah`} rows={5} value={item.langkah.join("\n")}
-                  onChange={(e) => ubah(index, { langkah: e.target.value.split("\n") })} />
-              </Field>
-            </Card>
-          ))}
-          <Button variant="primary" disabled={sibuk || memuat || topik.length === 0}
-            onClick={() => void simpanTutorial()}>
-            {sibuk ? "Menyimpan…" : "Simpan tutorial"}
-          </Button>
-        </Form>
-      )}
-    </Card>
-  );
 }
 
 function dariApi(nilai: NilaiPengaturan): FormPengaturan {
@@ -513,7 +420,6 @@ function PengaturanContent() {
       <div className={styles.stack}>
         <TetapanBackup />
         {ocrStatus?.provider === "gemini" ? <TetapanGemini status={ocrStatus} refresh={muatStatusOCR} /> : null}
-        <TetapanTutorial />
         <Card>
           <CardHead title="Nilai tersimpan" />
           {memuat ? (
