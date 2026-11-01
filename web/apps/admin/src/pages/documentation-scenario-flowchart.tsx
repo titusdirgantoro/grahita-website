@@ -81,7 +81,7 @@ function ScenarioFlow({ id, action, expected }: ScenarioFlowProps) {
   return <figure className={styles.sectionFlow} aria-label={`Diagram alur skenario ${id}`}>
     <figcaption>Diagram alur · {id}</figcaption>
     <p className={styles.flowLegend}>Ikuti langkah dari atas. Cabang “Sesuai” menunjukkan hasil yang diharapkan; cabang “Berbeda” menunjukkan cara mencatat temuan. Diagram ini bukan hasil pengujian.</p>
-    <p className={styles.flowScrollHint}>Geser diagram ke kanan untuk melihat kedua cabang hasil →</p>
+    <p className={styles.flowScrollHint}>Jika sisi kanan terpotong, usap area diagram ke kiri untuk melihatnya. Usap ke kanan untuk kembali; gulir halaman ke bawah untuk mengikuti alur.</p>
     <div className={styles.flowChartViewport} tabIndex={0} aria-label={`Diagram skenario ${id}. Geser secara horizontal pada layar kecil untuk melihat seluruh alur.`}>
       <svg className={styles.scenarioFlowSvg} width="840" height={height} viewBox={`0 0 840 ${height}`} role="img" aria-label={`${id}: mulai; ${steps.join("; ")}; apakah hasil sesuai; sesuai: ${result}; berbeda: catat temuan.`}>
         <defs><marker id={arrowId} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path className={styles.flowArrowHead} d="M0 0 L8 4 L0 8 Z" /></marker></defs>

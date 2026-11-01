@@ -118,7 +118,7 @@ function DatabaseDiagram({ diagram }: { diagram: SchemaDiagram }) {
     <figure className={styles.umlFigure}>
       <figcaption>{diagram.title}</figcaption>
       <p>{diagram.description}</p>
-      <p className={styles.umlScrollHint}>Geser diagram ke kanan untuk melihat seluruh tabel dan relasinya →</p>
+      <p className={styles.umlScrollHint}>Jika tabel di sisi kanan terpotong, usap area diagram ke kiri untuk melihatnya. Usap ke kanan untuk kembali.</p>
       <div className={styles.umlViewport} tabIndex={0} aria-label={`Diagram UML database: ${diagram.title}. Geser horizontal untuk melihat seluruh tabel.`}>
         <svg viewBox="0 0 920 420" width="920" height="420" role="img" aria-label={`Diagram UML database ${diagram.title}: tabel, kolom kunci, dan kardinalitas relasinya`}>
           <g className={styles.umlEdges}>

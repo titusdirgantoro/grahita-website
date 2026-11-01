@@ -162,7 +162,7 @@ export function GuideFlowDiagram({ sectionId, title }: { sectionId: string; titl
   return <figure className={styles.sectionFlow} aria-label={`Diagram alur ${title}`}>
     <figcaption>Diagram alur · {title}</figcaption>
     <p className={styles.flowLegend}>Oval: mulai/selesai · Jajaran genjang: masukan · Belah ketupat: keputusan · Kotak: proses</p>
-    <p className={styles.flowScrollHint}>Geser diagram ke kanan untuk melihat seluruh alur →</p>
+    <p className={styles.flowScrollHint}>Jika sisi kanan terpotong, usap area diagram ke kiri untuk melihatnya. Usap ke kanan untuk kembali; gulir halaman ke bawah untuk mengikuti alur.</p>
     <div className={styles.flowChartViewport} tabIndex={0} aria-label={`Flowchart ${title}. Geser secara horizontal pada layar kecil untuk melihat seluruh alur.`}>
       <Flowchart flow={flow} sectionId={sectionId} title={title} />
     </div>
@@ -181,7 +181,7 @@ export function OverviewFlowDiagram() {
   return <figure className={styles.sectionFlow} aria-label="Diagram alur utama pesanan">
     <figcaption>Diagram alur · dari master hingga laporan</figcaption>
     <p className={styles.flowLegend}>Oval: mulai/selesai · Jajaran genjang: masukan · Belah ketupat: pilihan pembayaran · Kotak: proses</p>
-    <p className={styles.flowScrollHint}>Geser diagram ke kanan untuk melihat seluruh alur →</p>
+    <p className={styles.flowScrollHint}>Jika sisi kanan terpotong, usap area diagram ke kiri untuk melihatnya. Usap ke kanan untuk kembali; gulir halaman ke bawah untuk mengikuti alur.</p>
     <div className={styles.flowChartViewport} tabIndex={0} aria-label="Flowchart alur utama. Geser secara horizontal pada layar kecil untuk melihat ketiga jalur pembayaran.">
       <svg className={styles.flowOverviewSvg} width="700" height="935" viewBox="0 0 700 935" role="img" aria-label="Mulai, siapkan master, buat draft, pilih Transfer atau Deposit atau Tempo, selesaikan pembayaran sesuai mode, lalu lihat dokumen, riwayat, dan laporan.">
         <defs><marker id={arrowId} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path className={styles.flowArrowHead} d="M0 0 L8 4 L0 8 Z" /></marker></defs>
