@@ -260,17 +260,14 @@ func run(ctx context.Context, mode string, cfg config.Config, logger *slog.Logge
 
 		// Pembacaan bukti transfer AI/OCR (F2-26) dijalankan di worker: baca
 		// setiap bukti lewat provider di balik PaymentReader, simpan hasilnya,
-		// lalu putuskan verifikasi lewat jalur MarkVerified yang sama dengan
-		// verifikasi manual (metode `ai`). Penjadwal River ikut dipasang di
-		// sini karena persetujuan otomatis menitipkan pekerjaan dokumen+email.
+		// lalu catat penilaian AI. Keputusan akhir tetap milik admin.
 		jobQueue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
 		if err != nil {
 			return fmt.Errorf("siapkan penjadwal pekerjaan: %w", err)
 		}
 		paymentRepo := paymentpg.New(pool, paymentpg.WithJobQueue(jobQueue))
 		ocrSvc := payment.NewOCRService(paymentRepo, buildReader(cfg, logger, ocrKeys), store,
-			bank.NewService(bankpg.New(pool)), settings.NewService(settingspg.New(pool)),
-			payment.NewVerificationService(paymentRepo))
+			bank.NewService(bankpg.New(pool)), settings.NewService(settingspg.New(pool)))
 
 		// Service cadangan hanya dijalankan bila tujuan dikonfigurasi; tanpa
 		// itu tidak ada job jadwal cadangan yang didaftarkan sama sekali

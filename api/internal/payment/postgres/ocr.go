@@ -15,6 +15,7 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,22 +34,18 @@ var _ payment.OCRRepository = (*Repo)(nil)
 
 // OrderForOCR membaca konteks pesanan untuk penilaian otomatis.
 func (r *Repo) OrderForOCR(ctx context.Context, orderID string) (payment.OrderOCR, error) {
-	row, err := r.q.OrderForOCR(ctx, orderID)
+	var row payment.OrderOCR
+	err := r.pool.QueryRow(ctx, `SELECT id::text,branch_id::text,versi,status::text,total,tanggal,
+verif_status::text,COALESCE(alasan_review::text,'') FROM orders WHERE id=$1`, orderID).Scan(
+		&row.ID, &row.BranchID, &row.Versi, &row.Status, &row.Total, &row.Tanggal,
+		&row.VerifStatus, &row.AlasanReview)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return payment.OrderOCR{}, payment.ErrNotFound
 	}
 	if err != nil {
 		return payment.OrderOCR{}, fmt.Errorf("query OrderForOCR: %w", err)
 	}
-	return payment.OrderOCR{
-		ID:           row.ID,
-		BranchID:     row.BranchID,
-		Status:       row.Status,
-		Total:        row.Total,
-		Tanggal:      row.Tanggal,
-		VerifStatus:  row.VerifStatus,
-		AlasanReview: row.AlasanReview,
-	}, nil
+	return row, nil
 }
 
 // ListProofsForOCR mengembalikan seluruh bukti satu pesanan beserta hasil baca
@@ -117,8 +114,9 @@ func (r *Repo) SimpanBacaan(ctx context.Context, req payment.SimpanBacaanRequest
 // lama stale tanpa menghapus histori atau menulis attempt baru.
 func (r *Repo) SudahDinilaiAI(ctx context.Context, orderID string) (bool, error) {
 	var version int64
-	if err := r.pool.QueryRow(ctx, `SELECT b.bank_allowlist_version
-		FROM orders o JOIN branches b ON b.id=o.branch_id WHERE o.id=$1`, orderID).Scan(&version); err != nil {
+	var orderVersion int
+	if err := r.pool.QueryRow(ctx, `SELECT b.bank_allowlist_version,o.versi
+		FROM orders o JOIN branches b ON b.id=o.branch_id WHERE o.id=$1`, orderID).Scan(&version, &orderVersion); err != nil {
 		return false, fmt.Errorf("baca versi allowlist OCR: %w", err)
 	}
 	rows, err := r.pool.Query(ctx, `SELECT id::text, ocr_at FROM payment_proofs WHERE order_id=$1 ORDER BY id`, orderID)
@@ -149,11 +147,100 @@ func (r *Repo) SudahDinilaiAI(ctx context.Context, orderID string) (bool, error)
 	}
 	var sudah bool
 	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM verification_logs
-		WHERE order_id=$1 AND metode='ai'
-		  AND branch_allowlist_version=$2 AND proof_set_fingerprint=$3
-	)`, orderID, version, h.Sum(nil)).Scan(&sudah); err != nil {
+		SELECT 1 FROM payment_ai_assessments
+		WHERE order_id=$1 AND branch_allowlist_version=$2
+		  AND order_version=$3 AND proof_set_fingerprint=$4
+	)`, orderID, version, orderVersion, h.Sum(nil)).Scan(&sudah); err != nil {
 		return false, fmt.Errorf("periksa attempt AI terkini: %w", err)
 	}
 	return sudah, nil
+}
+
+// SimpanPenilaianAI menyimpan rekomendasi AI secara atomik tanpa menyentuh
+// orders.status/verif_status, settlement, dokumen, maupun antrean email.
+func (r *Repo) SimpanPenilaianAI(ctx context.Context, req payment.PenilaianAIRequest) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(22102, 2)`); err != nil {
+		return false, err
+	}
+	var status string
+	var orderVersion int
+	var total, allowlistVersion int64
+	err = tx.QueryRow(ctx, `SELECT o.status::text,o.versi,o.total,b.bank_allowlist_version
+FROM orders o JOIN branches b ON b.id=o.branch_id WHERE o.id=$1 FOR SHARE OF b FOR UPDATE OF o`, req.OrderID).
+		Scan(&status, &orderVersion, &total, &allowlistVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, payment.ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if status != payment.StatusSubmitted {
+		return false, payment.ErrOCRSnapshotStale
+	}
+	if orderVersion != req.OrderVersion || total != req.TotalPesanan || allowlistVersion != req.AllowlistVersion {
+		return false, payment.ErrOCRSnapshotStale
+	}
+	rows, err := tx.Query(ctx, `SELECT id::text,ocr_at FROM payment_proofs WHERE order_id=$1 ORDER BY id FOR SHARE`, req.OrderID)
+	if err != nil {
+		return false, err
+	}
+	h := sha256.New()
+	n := 0
+	for rows.Next() {
+		var id string
+		var at *time.Time
+		if err = rows.Scan(&id, &at); err != nil {
+			rows.Close()
+			return false, err
+		}
+		if at == nil {
+			rows.Close()
+			return false, payment.ErrOCRSnapshotStale
+		}
+		if n > 0 {
+			h.Write([]byte{0x1e})
+		}
+		h.Write([]byte(strings.ToLower(id)))
+		h.Write([]byte{0x1f})
+		h.Write([]byte(at.UTC().Format(time.RFC3339Nano)))
+		n++
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return false, err
+	}
+	rows.Close()
+	if n != req.Keputusan.JumlahBukti || hex.EncodeToString(h.Sum(nil)) != req.ProofSetFingerprint {
+		return false, payment.ErrOCRSnapshotStale
+	}
+	var totalRead *int64
+	if req.Keputusan.Alasan != payment.AlasanTidakTerbaca {
+		totalRead = &req.Keputusan.TotalTerbaca
+	}
+	var inserted string
+	err = tx.QueryRow(ctx, `INSERT INTO payment_ai_assessments
+(order_id,order_version,branch_allowlist_version,proof_set_fingerprint,result,reason,total_read,confidence,proof_count,note)
+VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10)
+ON CONFLICT (order_id,order_version,branch_allowlist_version,proof_set_fingerprint) DO NOTHING
+RETURNING id::text`, req.OrderID, req.OrderVersion, req.AllowlistVersion, h.Sum(nil),
+		req.Keputusan.Hasil, req.Keputusan.Alasan, totalRead, req.Keputusan.KeyakinanTerendah,
+		req.Keputusan.JumlahBukti, req.Keputusan.Catatan).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err = auditpg.Insert(ctx, tx, req.Audit); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }

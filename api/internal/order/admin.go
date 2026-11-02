@@ -183,6 +183,18 @@ type VerifikasiLog struct {
 	CreatedAt              string          `json:"created_at"`
 }
 
+// PemeriksaanAI adalah saran dari pembacaan bukti, bukan keputusan pelunasan.
+type PemeriksaanAI struct {
+	Status            string  `json:"status"`
+	Hasil             string  `json:"hasil,omitempty"`
+	Alasan            string  `json:"alasan,omitempty"`
+	Catatan           string  `json:"catatan,omitempty"`
+	TotalTerbaca      *int64  `json:"total_terbaca,omitempty"`
+	KeyakinanTerendah float64 `json:"keyakinan_terendah,omitempty"`
+	JumlahBukti       int     `json:"jumlah_bukti,omitempty"`
+	DiperiksaAt       string  `json:"diperiksa_at,omitempty"`
+}
+
 // AdminDetail adalah detail lengkap satu pesanan untuk admin (AP-ORD-04).
 // Bukti transfer dan riwayat email TIDAK diduplikasi di sini: keduanya sudah
 // punya endpoint sendiri (F1-13/F1-16) dan dipanggil terpisah oleh UI, sehingga
@@ -211,14 +223,15 @@ type AdminDetail struct {
 	UpdatedAt       string `json:"updated_at"`
 	Catatan         string `json:"catatan"`
 	// NoteAdmin adalah catatan internal — hanya ada di respons admin.
-	NoteAdmin  string          `json:"note_admin"`
-	Total      int64           `json:"total"`
-	JumlahItem int64           `json:"jumlah_item"`
-	EmailGagal bool            `json:"email_gagal"`
-	Lines      []Line          `json:"lines"`
-	Timeline   []Event         `json:"timeline"`
-	Dokumen    []Dokumen       `json:"dokumen"`
-	Verifikasi []VerifikasiLog `json:"verifikasi"`
+	NoteAdmin     string          `json:"note_admin"`
+	Total         int64           `json:"total"`
+	JumlahItem    int64           `json:"jumlah_item"`
+	EmailGagal    bool            `json:"email_gagal"`
+	Lines         []Line          `json:"lines"`
+	Timeline      []Event         `json:"timeline"`
+	Dokumen       []Dokumen       `json:"dokumen"`
+	Verifikasi    []VerifikasiLog `json:"verifikasi"`
+	PemeriksaanAI *PemeriksaanAI  `json:"pemeriksaan_ai,omitempty"`
 }
 
 // SumberEmailGagal menyajikan id pesanan yang punya email berstatus gagal

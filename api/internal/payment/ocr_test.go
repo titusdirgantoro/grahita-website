@@ -331,6 +331,8 @@ type ocrRepoPalsu struct {
 	ord          OrderOCR
 	proofs       []ProofOCR
 	simpan       []SimpanBacaanRequest
+	penilaian    []PenilaianAIRequest
+	errPenilaian error
 	sudahDinilai bool
 	errOrder     error
 }
@@ -367,11 +369,20 @@ func (r *ocrRepoPalsu) SudahDinilaiAI(context.Context, string) (bool, error) {
 	return r.sudahDinilai, nil
 }
 
+func (r *ocrRepoPalsu) SimpanPenilaianAI(_ context.Context, req PenilaianAIRequest) (bool, error) {
+	if r.errPenilaian != nil {
+		return false, r.errPenilaian
+	}
+	r.penilaian = append(r.penilaian, req)
+	return true, nil
+}
+
 // siapkanOCR menyusun layanan OCR beserta perkakas ujinya.
 func siapkanOCR(t *testing.T, repo *ocrRepoPalsu, reader PaymentReader, ai settings.AISettings, verifier Verifier) (*OCRService, *storage.Memory) {
 	t.Helper()
 	mem := storage.NewMemory("")
-	svc := NewOCRService(repo, reader, mem, rekeningPalsu{bankAktif()}, aiPalsu{setelan: ai}, NewVerificationService(verifier))
+	svc := NewOCRService(repo, reader, mem, rekeningPalsu{bankAktif()}, aiPalsu{setelan: ai})
+	_ = verifier
 	return svc, mem
 }
 
@@ -408,7 +419,7 @@ func TestOCSKipTidakMemanggilProviderDanTidakMenulis(t *testing.T) {
 	}
 }
 
-func TestOCRCocokMemverifikasiDenganMetodeAI(t *testing.T) {
+func TestOCRCocokHanyaMencatatPenilaianAI(t *testing.T) {
 	isi := []byte("bukti-cocok")
 	repo := &ocrRepoPalsu{
 		ord:    pesananOCR(300000),
@@ -432,21 +443,15 @@ func TestOCRCocokMemverifikasiDenganMetodeAI(t *testing.T) {
 	if hasil.Dilewati || hasil.Keputusan == nil || hasil.Keputusan.Hasil != VerifCocok {
 		t.Fatalf("harus memutuskan cocok, dapat %+v", hasil)
 	}
-	if verifier.dipanggil != 1 {
-		t.Fatalf("MarkVerified harus dipanggil sekali, dapat %d", verifier.dipanggil)
+	if verifier.dipanggil != 0 || len(repo.penilaian) != 1 {
+		t.Fatalf("AI tidak boleh memverifikasi final; penilaian harus sekali, verifikasi=%d penilaian=%d", verifier.dipanggil, len(repo.penilaian))
 	}
-	req := verifier.req
-	if req.Metode != MetodeAI {
-		t.Errorf("metode harus %q, dapat %q", MetodeAI, req.Metode)
+	req := repo.penilaian[0]
+	if req.Keputusan.TotalTerbaca != 300000 || req.Keputusan.Hasil != VerifCocok || req.Keputusan.Alasan != "" {
+		t.Errorf("penilaian AI salah: %+v", req.Keputusan)
 	}
-	if req.Actor.Kind != "system" {
-		t.Errorf("pelaku harus aktor sistem, dapat %q", req.Actor.Kind)
-	}
-	if req.TotalTerbaca == nil || *req.TotalTerbaca != 300000 {
-		t.Errorf("nominal terbaca harus 300000, dapat %v", req.TotalTerbaca)
-	}
-	if req.Hasil != VerifCocok || req.Alasan != "" {
-		t.Errorf("persetujuan tidak boleh membawa alasan, dapat %q/%q", req.Hasil, req.Alasan)
+	if req.Audit.Action != audit.ActionAIAssess || req.Audit.ActorKind != "system" {
+		t.Errorf("audit penilaian AI salah: %+v", req.Audit)
 	}
 	if len(repo.simpan) != 1 {
 		t.Fatalf("hasil baca harus disimpan sekali, dapat %d", len(repo.simpan))
@@ -487,12 +492,12 @@ func TestOCRPerluReviewKarenaBuktiKaburTidakMenyetujui(t *testing.T) {
 	if hasil.Keputusan == nil || hasil.Keputusan.Alasan != AlasanTidakTerbaca {
 		t.Fatalf("bukti kabur harus perlu review (tidak_terbaca), dapat %+v", hasil.Keputusan)
 	}
-	req := verifier.req
+	if verifier.dipanggil != 0 || len(repo.penilaian) != 1 {
+		t.Fatal("hasil AI tidak boleh menjadi keputusan admin")
+	}
+	req := repo.penilaian[0].Keputusan
 	if req.Hasil != VerifPerluReview || req.Alasan != AlasanTidakTerbaca {
 		t.Errorf("keputusan harus perlu_review/tidak_terbaca, dapat %q/%q", req.Hasil, req.Alasan)
-	}
-	if req.TotalTerbaca != nil {
-		t.Errorf("nominal tidak terbaca harus disimpan NULL, dapat %v", *req.TotalTerbaca)
 	}
 	if req.Catatan == "" {
 		t.Error("perlu review harus membawa catatan/alasan yang bisa dibaca admin")
@@ -515,9 +520,9 @@ func TestOCRIdempotenSaatDiulang(t *testing.T) {
 	if _, err := svc.Baca(context.Background(), orderUUID); err != nil {
 		t.Fatalf("Baca pertama gagal: %v", err)
 	}
-	if reader.JumlahPanggilan() != 1 || verifier.dipanggil != 1 {
-		t.Fatalf("jalan pertama harus membaca sekali + memutuskan sekali, dapat %d/%d",
-			reader.JumlahPanggilan(), verifier.dipanggil)
+	if reader.JumlahPanggilan() != 1 || len(repo.penilaian) != 1 || verifier.dipanggil != 0 {
+		t.Fatalf("jalan pertama harus membaca dan mencatat sekali tanpa approval, baca=%d penilaian=%d verifikasi=%d",
+			reader.JumlahPanggilan(), len(repo.penilaian), verifier.dipanggil)
 	}
 
 	// Pengulangan job River setelah keputusan tersimpan: penyimpanan sudah
@@ -530,8 +535,8 @@ func TestOCRIdempotenSaatDiulang(t *testing.T) {
 	if reader.JumlahPanggilan() != 1 {
 		t.Errorf("bukti yang sudah dibaca tidak boleh dipanggil ulang, dipanggil %d kali", reader.JumlahPanggilan())
 	}
-	if verifier.dipanggil != 1 {
-		t.Errorf("keputusan tidak boleh ditulis dua kali, MarkVerified dipanggil %d kali", verifier.dipanggil)
+	if len(repo.penilaian) != 1 {
+		t.Errorf("penilaian tidak boleh ditulis dua kali, dapat %d", len(repo.penilaian))
 	}
 	if !hasil.Dilewati {
 		t.Error("pengulangan tanpa bukti baru harus dilewati")
@@ -571,11 +576,11 @@ func TestOCRBuktiBaruMemicuPenilaianUlang(t *testing.T) {
 	if hasil.Dibaca != 1 || hasil.JumlahBukti != 2 {
 		t.Errorf("harus membaca 1 dari 2 bukti, dapat %d/%d", hasil.Dibaca, hasil.JumlahBukti)
 	}
-	if verifier.req.TotalTerbaca == nil || *verifier.req.TotalTerbaca != 300000 {
-		t.Errorf("nominal harus menjumlahkan bukti lama + baru (300000), dapat %v", verifier.req.TotalTerbaca)
+	if len(repo.penilaian) != 1 || repo.penilaian[0].Keputusan.TotalTerbaca != 300000 {
+		t.Errorf("nominal harus menjumlahkan bukti lama + baru (300000), dapat %+v", repo.penilaian)
 	}
-	if verifier.req.Hasil != VerifCocok {
-		t.Errorf("himpunan lengkap harus cocok, dapat %q/%q", verifier.req.Hasil, verifier.req.Alasan)
+	if len(repo.penilaian) == 1 && repo.penilaian[0].Keputusan.Hasil != VerifCocok {
+		t.Errorf("himpunan lengkap harus cocok, dapat %+v", repo.penilaian[0].Keputusan)
 	}
 }
 
@@ -644,7 +649,8 @@ func TestOCRMenghormatiPesananSudahSelesaiSaatKeputusan(t *testing.T) {
 	reader := NewMockReader(map[string]ReadResult{
 		MockKey(isi): {Nominal: ptrInt64(300000), Tanggal: tgl("2026-10-09"), RekAkhir: "1234567890", Confidence: 0.99},
 	})
-	verifier := &verifierPalsu{err: ErrAlreadyDone}
+	verifier := &verifierPalsu{}
+	repo.errPenilaian = ErrOCRSnapshotStale
 	svc, mem := siapkanOCR(t, repo, reader, aiAktif(), verifier)
 	simpanBukti(t, mem, "proofs/p1", isi)
 
@@ -662,7 +668,7 @@ func TestOCRBelumTerpasangGagalTerangTerangan(t *testing.T) {
 	if _, err := svc.Baca(context.Background(), orderUUID); !errors.Is(err, ErrOCRBelumTerpasang) {
 		t.Errorf("layanan kosong harus gagal jelas, dapat %v", err)
 	}
-	svc = NewOCRService(&ocrRepoPalsu{}, nil, nil, nil, nil, nil)
+	svc = NewOCRService(&ocrRepoPalsu{}, nil, nil, nil, nil)
 	if _, err := svc.Baca(context.Background(), orderUUID); !errors.Is(err, ErrOCRBelumTerpasang) {
 		t.Errorf("layanan setengah terpasang harus gagal jelas, dapat %v", err)
 	}

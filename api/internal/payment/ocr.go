@@ -19,11 +19,9 @@ package payment
 //     perlu review ("lainnya");
 //   - selisih di luar `ai.tol_kurang`/`ai.tol_lebih` → perlu review
 //     ("kurang_bayar"/"lebih_bayar");
-//   - cocok → `VerificationService.MarkVerified` dengan metode `ai` (satu
-//     pintu transisi Done; dokumen + email + timeline + audit mengikuti jalur
-//     yang sama dengan verifikasi manual);
-//   - AI TIDAK PERNAH menolak final: keputusan "perlu review" hanya menandai
-//     sub-status verifikasi, dan admin selalu bisa menimpanya lewat
+//   - cocok atau perlu review → simpan pada payment_ai_assessments sebagai
+//     pemeriksaan awal; orders.status dan orders.verif_status tetap sama;
+//   - AI TIDAK PERNAH memutuskan pembayaran final. Admin memutuskan lewat
 //     `POST /admin/orders/{id}/verify` (F1-18).
 //
 // Idempotensi (River at-least-once; job diulang/tergandakan):
@@ -33,11 +31,9 @@ package payment
 //  2. Kegagalan provider TIDAK menyimpan apa pun: pekerjaan dikembalikan
 //     sebagai galat dan River mengulanginya dari keadaan bersih.
 //  3. Keputusan untuk satu himpunan bukti yang sama tidak ditulis dua kali:
-//     bila sudah ada log verifikasi metode `ai` yang dibuat SESUDAH bukti
-//     terakhir dibaca, keputusan dilewati. Karena itu pengulangan job tidak
-//     pernah menambah baris `verification_logs`, peristiwa timeline, atau
-//     entri audit — sementara bukti BARU (yang ocr_at-nya lebih muda) selalu
-//     memicu penilaian ulang.
+//     bila sudah ada payment_ai_assessments dengan snapshot yang sama,
+//     keputusan dilewati. Bukti baru atau perubahan rekening memicu
+//     penilaian ulang tanpa menyentuh keputusan akhir admin.
 //  4. Pesanan yang sudah Done dijawab ErrAlreadyDone dan diperlakukan sebagai
 //     "tidak ada yang perlu dilakukan".
 
@@ -50,6 +46,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,6 +68,7 @@ var (
 type OrderOCR struct {
 	ID       string
 	BranchID string
+	Versi    int
 	// Status adalah status pesanan (hanya "submitted" yang dinilai).
 	Status string
 	// Total adalah total pesanan (Rupiah bulat).
@@ -123,6 +121,19 @@ type OCRRepository interface {
 	// SudahDinilaiAI melaporkan apakah sudah ada keputusan AI sesudah bukti
 	// terakhir dibaca (dipakai penjaga idempotensi).
 	SudahDinilaiAI(ctx context.Context, orderID string) (bool, error)
+	// SimpanPenilaianAI hanya mencatat saran AI untuk admin. Tidak mengubah
+	// status pesanan, settlement, atau menerbitkan dokumen.
+	SimpanPenilaianAI(ctx context.Context, req PenilaianAIRequest) (bool, error)
+}
+
+type PenilaianAIRequest struct {
+	OrderID             string
+	OrderVersion        int
+	TotalPesanan        int64
+	AllowlistVersion    int64
+	ProofSetFingerprint string
+	Keputusan           Keputusan
+	Audit               audit.Entry
 }
 
 // RekeningSource menyediakan rekening efektif cabang sebagai satu-satunya
@@ -177,18 +188,18 @@ type OCRHasil struct {
 	Dibaca int
 	// Keputusan terisi bila penilaian sampai dijalankan.
 	Keputusan *Keputusan
-	// Outcome terisi bila keputusan diteruskan ke MarkVerified.
+	// Outcome hanya dipertahankan demi kompatibilitas pemanggil lama; worker
+	// pemeriksaan AI tidak pernah mengisinya atau menyelesaikan pesanan.
 	Outcome *VerifyOutcome
 }
 
 // OCRService adalah logika bisnis pembacaan bukti + penilaian otomatis.
 type OCRService struct {
-	repo   OCRRepository
-	baca   PaymentReader
-	store  storage.Store
-	rek    RekeningSource
-	ai     AISettingsSource
-	verify *VerificationService
+	repo  OCRRepository
+	baca  PaymentReader
+	store storage.Store
+	rek   RekeningSource
+	ai    AISettingsSource
 	// sekarang adalah sumber waktu (bisa diganti pengujian).
 	sekarang func() time.Time
 }
@@ -196,13 +207,13 @@ type OCRService struct {
 // NewOCRService membuat layanan pembacaan bukti. Semua dependensi WAJIB ada:
 // layanan yang setengah terpasang akan diam-diam melewati pekerjaannya, dan
 // itu justru menyembunyikan masalah konfigurasi.
-func NewOCRService(repo OCRRepository, baca PaymentReader, store storage.Store, rek RekeningSource, ai AISettingsSource, verify *VerificationService) *OCRService {
-	return &OCRService{repo: repo, baca: baca, store: store, rek: rek, ai: ai, verify: verify, sekarang: func() time.Time { return time.Now().UTC() }}
+func NewOCRService(repo OCRRepository, baca PaymentReader, store storage.Store, rek RekeningSource, ai AISettingsSource) *OCRService {
+	return &OCRService{repo: repo, baca: baca, store: store, rek: rek, ai: ai, sekarang: func() time.Time { return time.Now().UTC() }}
 }
 
 // Tersedia melaporkan apakah layanan siap dipakai.
 func (s *OCRService) Tersedia() bool {
-	return s != nil && s.repo != nil && s.baca != nil && s.store != nil && s.rek != nil && s.ai != nil && s.verify != nil
+	return s != nil && s.repo != nil && s.baca != nil && s.store != nil && s.rek != nil && s.ai != nil
 }
 
 // Baca menjalankan satu siklus pembacaan + penilaian untuk satu pesanan.
@@ -293,6 +304,15 @@ func (s *OCRService) bacaDenganSnapshot(ctx context.Context, orderID string, exp
 		proofs[i].At = &at
 		out.Dibaca++
 	}
+	// Pakai timestamp OCR yang benar-benar dikomit PostgreSQL. Timestamp
+	// lokal worker tidak identik sampai nanodetik dan tidak boleh dipakai
+	// sebagai fingerprint snapshot bukti.
+	if out.Dibaca > 0 {
+		proofs, err = s.repo.ListProofsForOCR(ctx, orderID)
+		if err != nil {
+			return out, fmt.Errorf("baca ulang snapshot bukti: %w", err)
+		}
+	}
 
 	// 4. Penilaian: jumlahkan nominal, bandingkan rekening + tanggal +
 	//    toleransi (PRD §5).
@@ -330,42 +350,51 @@ func (s *OCRService) bacaDenganSnapshot(ctx context.Context, orderID string, exp
 		return out, nil
 	}
 
-	// 6. Keputusan diteruskan ke SATU pintu transisi Done (metode `ai`).
-	total := keputusan.TotalTerbaca
-	in := VerifyInput{
-		Hasil:             keputusan.Hasil,
-		Metode:            MetodeAI,
-		Alasan:            keputusan.Alasan,
-		Catatan:           keputusan.Catatan,
-		TotalTerbaca:      &total,
-		ProofDestinations: keputusan.ProofDestinations,
-	}
-	if expectedVersion > 0 || expectedFingerprint != "" {
-		in.ExpectedAllowlistVersion = expectedVersion
-		in.ExpectedProofFingerprint = expectedFingerprint
-	}
-	if keputusan.Hasil == VerifPerluReview && !keputusan.nominalDapatDipercaya() {
-		// Nominal belum bisa dipercaya sama sekali (ada bukti yang tidak
-		// terbaca): jangan mengaku "nominal terbaca 0" — simpan NULL supaya
-		// selisih tidak membohongi pembaca log (Database.md §4.5).
-		in.TotalTerbaca = nil
-	}
-	hasilVerif, err := s.verify.MarkVerified(ctx, SystemActor(), orderID, in)
+	// 6. Penilaian AI disimpan terpisah dari keputusan pembayaran. Hanya
+	// admin yang boleh memindahkan pesanan dari Submitted ke Done.
+	fingerprint := fingerprintBukti(proofs)
+	hasilAudit := map[string]any{"hasil": keputusan.Hasil, "alasan": keputusan.Alasan,
+		"total_terbaca": keputusan.TotalTerbaca, "order_version": ord.Versi,
+		"branch_allowlist_version": set.Version}
+	hasilVerif, err := s.repo.SimpanPenilaianAI(ctx, PenilaianAIRequest{
+		OrderID: orderID, OrderVersion: ord.Versi, TotalPesanan: ord.Total,
+		AllowlistVersion: set.Version, ProofSetFingerprint: fingerprint,
+		Keputusan: keputusan,
+		Audit: audit.NewEntry(ctx, SystemActor(), audit.EntityOrder, orderID,
+			audit.ActionAIAssess, nil, hasilAudit),
+	})
 	if err != nil {
 		if errors.Is(err, ErrOCRSnapshotStale) {
-			out.Dilewati, out.Sebab = true, "snapshot reevaluate berubah sebelum commit final"
+			out.Dilewati, out.Sebab = true, "snapshot AI berubah sebelum penilaian disimpan"
 			return out, nil
 		}
 		if errors.Is(err, ErrAlreadyDone) || errors.Is(err, ErrNotFound) {
-			// Pesanan sudah selesai/dihapus di antara pembacaan dan
-			// keputusan: tidak ada yang perlu dilakukan, bukan kegagalan.
 			out.Dilewati, out.Sebab = true, "pesanan sudah selesai diverifikasi"
 			return out, nil
 		}
 		return out, err
 	}
-	out.Outcome = &hasilVerif
+	if !hasilVerif {
+		out.Dilewati, out.Sebab = true, "penilaian AI untuk snapshot ini sudah ada"
+	}
 	return out, nil
+}
+
+func fingerprintBukti(proofs []ProofOCR) string {
+	ordered := append([]ProofOCR(nil), proofs...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	h := sha256.New()
+	for i, proof := range ordered {
+		if i > 0 {
+			h.Write([]byte{0x1e})
+		}
+		h.Write([]byte(strings.ToLower(proof.ID)))
+		h.Write([]byte{0x1f})
+		if proof.At != nil {
+			h.Write([]byte(proof.At.UTC().Format(time.RFC3339Nano)))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // bacaSatu membaca satu bukti dari object storage lalu menyerahkannya ke

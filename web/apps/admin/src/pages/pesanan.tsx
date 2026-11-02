@@ -183,6 +183,16 @@ export interface PesananDetail {
   timeline: EntriTimeline[];
   dokumen: DokumenPesanan[];
   verifikasi: LogVerifikasi[];
+  pemeriksaan_ai?: {
+    status: "belum_diperiksa" | "cocok" | "perlu_review" | "gagal_dibaca" | "perlu_diperiksa_ulang";
+    hasil?: string;
+    alasan?: string;
+    catatan?: string;
+    total_terbaca?: number;
+    keyakinan_terendah?: number;
+    jumlah_bukti?: number;
+    diperiksa_at?: string;
+  };
 }
 
 /**
@@ -310,6 +320,21 @@ const LABEL_ALASAN: Record<string, string> = {
   tidak_terbaca: "Bukti tidak terbaca",
   rekening_beda: "Rekening tidak sesuai",
   lainnya: "Lainnya",
+};
+
+const LABEL_AI: Record<string, string> = {
+  belum_diperiksa: "Belum diperiksa AI",
+  cocok: "Pemeriksaan AI: Cocok",
+  perlu_review: "Pemeriksaan AI: Perlu ditinjau",
+  gagal_dibaca: "Pemeriksaan AI: Gagal dibaca",
+  perlu_diperiksa_ulang: "Pemeriksaan AI: Perlu diperiksa ulang",
+};
+const TONE_AI: Record<string, BadgeTone> = {
+  belum_diperiksa: "neutral",
+  cocok: "success",
+  perlu_review: "warning",
+  gagal_dibaca: "warning",
+  perlu_diperiksa_ulang: "warning",
 };
 
 const LABEL_STATUS_REKENING: Record<string, string> = {
@@ -1314,11 +1339,7 @@ export function PesananDetailAdminPage() {
   const selisihVerif = (nominalTerbaca ?? 0) - data.total;
   const semuaOCRTersedia = (bukti?.length ?? 0) > 0 && (bukti ?? []).every((b) => Boolean(b.ocr_at));
   const logTerbaru = [...data.verifikasi].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-  const rekeningPerluDinilaiUlang =
-    logTerbaru?.metode === "ai" &&
-    logTerbaru.branch_allowlist_version !== undefined &&
-    rekeningOrder !== null &&
-    logTerbaru.branch_allowlist_version !== rekeningOrder.allowlist_version;
+  const rekeningPerluDinilaiUlang = data.pemeriksaan_ai?.status === "perlu_diperiksa_ulang";
   const rekeningDefault = rekeningOrder?.accounts?.length === 1 ? rekeningOrder.accounts[0]?.id ?? "" : "";
   const semuaTujuanTerpilih =
     (bukti?.length ?? 0) > 0 && (bukti ?? []).every((b) => Boolean(tujuanBukti[b.id] ?? rekeningDefault));
@@ -1522,6 +1543,35 @@ export function PesananDetailAdminPage() {
               </Table>
             )}
           </Card>
+
+          {data.status === "submitted" && !data.is_tempo ? (
+            <Card>
+              <CardHead title="Pemeriksaan bukti oleh AI" />
+              <div className={styles.row} style={{ alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <Badge tone={TONE_AI[data.pemeriksaan_ai?.status ?? "belum_diperiksa"]}>
+                  {data.pemeriksaan_ai?.status === "belum_diperiksa" && rekeningOrder?.ai_active === false
+                    ? "AI nonaktif — periksa manual"
+                    : LABEL_AI[data.pemeriksaan_ai?.status ?? "belum_diperiksa"]}
+                </Badge>
+                {data.pemeriksaan_ai?.diperiksa_at ? (
+                  <span className="muted small">{formatWaktu(data.pemeriksaan_ai.diperiksa_at)}</span>
+                ) : null}
+              </div>
+              <p className="muted small" style={{ marginTop: 12 }}>
+                Hasil AI adalah pemeriksaan awal bukti. Pesanan tetap menunggu verifikasi sampai admin menyetujui pembayaran.
+              </p>
+              {data.pemeriksaan_ai?.hasil ? (
+                <div className={styles.metaGrid} style={{ marginTop: 12 }}>
+                  <div><div className="muted small">Nominal terbaca</div><strong>{data.pemeriksaan_ai.total_terbaca == null ? "Tidak terbaca" : rupiah.format(data.pemeriksaan_ai.total_terbaca)}</strong></div>
+                  <div><div className="muted small">Bukti diperiksa</div><strong>{data.pemeriksaan_ai.jumlah_bukti ?? 0}</strong></div>
+                  <div><div className="muted small">Keyakinan terendah</div><strong>{Math.round((data.pemeriksaan_ai.keyakinan_terendah ?? 0) * 100)}%</strong></div>
+                  {data.pemeriksaan_ai.alasan ? <div><div className="muted small">Perlu ditinjau</div><strong>{LABEL_ALASAN[data.pemeriksaan_ai.alasan] ?? data.pemeriksaan_ai.alasan}</strong></div> : null}
+                </div>
+              ) : null}
+              {data.pemeriksaan_ai?.catatan ? <p className="small" style={{ marginTop: 12 }}>{data.pemeriksaan_ai.catatan}</p> : null}
+              {rekeningPerluDinilaiUlang ? <Notice tone="warning">Hasil AI sebelumnya tidak lagi berlaku karena data bukti, pesanan, atau rekening berubah. Periksa ulang sebelum mengambil keputusan.</Notice> : null}
+            </Card>
+          ) : null}
         </div>
 
         <div className={styles.stack}>

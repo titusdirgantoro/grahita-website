@@ -8,13 +8,12 @@ package httpapi
 //
 //   - hasil baca tersimpan pada kolom `payment_proofs.ocr_*` beserta entri
 //     audit raw yang SUDAH dibersihkan dari nilai rahasia;
-//   - keputusan "cocok" memakai `payment.MarkVerified` yang sama dengan
-//     verifikasi manual (metode `ai`, `admin_id` NULL, timeline oleh sistem,
-//     dan pekerjaan dokumen dititipkan) — AI tidak menulis status sendiri;
+//   - keputusan "cocok" hanya membuat payment_ai_assessments; status akhir,
+//     log persetujuan, dan dokumen tetap menunggu keputusan admin;
 //   - multi-bukti dijumlahkan sebelum dibandingkan dengan total pesanan;
 //   - bukti kabur / rekening salah / tanggal terlalu tua / kurang bayar /
 //     lebih bayar jatuh ke `perlu_review` dengan alasan yang tepat, dan pesanan
-//     TETAP submitted (AI tidak menolak final);
+//     TETAP submitted tanpa mengubah substatus verifikasi admin;
 //   - `ai.aktif=false` tidak memanggil provider sama sekali;
 //   - pekerjaan yang diulang (River at-least-once) TIDAK menggandakan log
 //     verifikasi, timeline, audit, maupun dokumen — dan bukti BARU tetap
@@ -114,8 +113,7 @@ func unggahBuktiHTTP(t *testing.T, url string, cookies []*http.Cookie, csrf stri
 func ocrPipeline(t *testing.T, f *pgFixture, reader payment.PaymentReader) *payment.OCRService {
 	t.Helper()
 	return payment.NewOCRService(f.paymentsRepo, reader, f.objek,
-		f.bank, settings.NewService(settingspg.New(f.pool)),
-		payment.NewVerificationService(f.paymentsRepo))
+		f.bank, settings.NewService(settingspg.New(f.pool)))
 }
 
 // seedBuktiOCR menyemai satu bukti transfer: isinya masuk object storage
@@ -187,10 +185,8 @@ func hasilBacaCocok(total int64, tanggalPesanan time.Time) payment.ReadResult {
 	}
 }
 
-// TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama menjalankan alur utama:
-// satu bukti cocok -> Done lewat MarkVerified (metode ai), hasil baca tersimpan,
-// audit raw bersih, dan pekerjaan dokumen dititipkan.
-func TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama(t *testing.T) {
+// AI yang cocok hanya menyimpan pemeriksaan awal; admin tetap pemutus akhir.
+func TestPGOCRCocokMenungguPersetujuanAdmin(t *testing.T) {
 	f := newPGFixture(t)
 	ctx := context.Background()
 	id, total := seedPesananSubmitted(t, f, f.branchA, nomorUji(t, f, 1))
@@ -215,36 +211,32 @@ func TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama(t *testing.T) {
 	}
 
 	status, verif, alasan, doneAt := statusPesanan(t, f, id)
-	if status != "done" || verif != "cocok" || alasan != "" {
-		t.Errorf("pesanan harus done/cocok tanpa alasan, dapat %s/%s/%q", status, verif, alasan)
+	if status != "submitted" || verif != "belum" || alasan != "" {
+		t.Errorf("AI tidak boleh menyelesaikan pesanan, dapat %s/%s/%q", status, verif, alasan)
 	}
-	if doneAt == nil {
-		t.Error("done_at harus terisi untuk pesanan done")
+	if doneAt != nil {
+		t.Error("done_at harus kosong sebelum admin menyetujui")
 	}
 
-	// Log verifikasi: SATU baris, metode ai, tanpa pemeriksa manusia.
-	var metode, hasilLog, catatan string
+	// Penilaian AI tersimpan terpisah dari keputusan akhir.
+	var hasilLog, catatan string
 	var totalTerbaca *int64
-	var adminID *string
 	if err := f.pool.QueryRow(ctx,
-		`SELECT metode::text, hasil::text, COALESCE(total_terbaca, -1), admin_id::text, COALESCE(catatan,'')
-		   FROM verification_logs WHERE order_id = $1`, id).Scan(&metode, &hasilLog, &totalTerbaca, &adminID, &catatan); err != nil {
-		t.Fatalf("baca log verifikasi: %v", err)
+		`SELECT result,total_read,note FROM payment_ai_assessments WHERE order_id = $1`, id).
+		Scan(&hasilLog, &totalTerbaca, &catatan); err != nil {
+		t.Fatalf("baca penilaian AI: %v", err)
 	}
-	if metode != "ai" || hasilLog != "cocok" {
-		t.Errorf("log harus ai/cocok, dapat %s/%s", metode, hasilLog)
+	if hasilLog != "cocok" {
+		t.Errorf("penilaian AI harus cocok, dapat %s", hasilLog)
 	}
 	if totalTerbaca == nil || *totalTerbaca != total {
 		t.Errorf("total terbaca harus %d, dapat %v", total, totalTerbaca)
 	}
-	if adminID != nil {
-		t.Errorf("verifikasi AI tidak boleh punya pemeriksa manusia (admin_id NULL), dapat %v", *adminID)
-	}
 	if !strings.Contains(catatan, "AI/OCR") {
 		t.Errorf("catatan log harus menjelaskan pembacaan AI: %q", catatan)
 	}
-	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id = $1`, id); n != 1 {
-		t.Errorf("harus tepat 1 log verifikasi, dapat %d", n)
+	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id = $1`, id); n != 0 {
+		t.Errorf("AI tidak boleh membuat verifikasi akhir, dapat %d", n)
 	}
 
 	// Hasil baca tersimpan lengkap; jawaban mentah disensor.
@@ -274,15 +266,8 @@ func TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama(t *testing.T) {
 		t.Errorf("ocr_raw tidak boleh memuat nilai rahasia: %s", raw)
 	}
 
-	// Timeline: oleh SISTEM, bukan mengaku admin.
-	var actorKind, teks string
-	if err := f.pool.QueryRow(ctx,
-		`SELECT actor_kind::text, teks FROM order_events WHERE order_id = $1 AND icon = 'selesai'`, id).
-		Scan(&actorKind, &teks); err != nil {
-		t.Fatalf("baca timeline: %v", err)
-	}
-	if actorKind != "system" || !strings.Contains(teks, "sistem (AI)") {
-		t.Errorf("timeline harus mencatat pelaku sistem, dapat %s/%q", actorKind, teks)
+	if n := hitungKuery(t, f, `SELECT count(*) FROM order_events WHERE order_id=$1 AND icon='selesai'`, id); n != 0 {
+		t.Errorf("AI tidak boleh menulis timeline selesai, dapat %d", n)
 	}
 
 	// Audit raw tanpa kebocoran: entri pembacaan + entri verifikasi.
@@ -305,13 +290,12 @@ func TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama(t *testing.T) {
 	if strings.Contains(auditAfter, "sk-f2-26-rahasia") {
 		t.Errorf("audit tidak boleh membocorkan nilai rahasia: %s", auditAfter)
 	}
-	if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity = 'order' AND entity_id = $1 AND action = 'verify'`, id); n != 1 {
-		t.Errorf("harus 1 entri audit verifikasi, dapat %d", n)
+	if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity = 'order' AND entity_id = $1 AND action = 'ai_assess'`, id); n != 1 {
+		t.Errorf("harus 1 entri audit penilaian AI, dapat %d", n)
 	}
 
-	// Pekerjaan dokumen dititipkan oleh jalur verifikasi yang sama.
-	if n := pekerjaanDokumen(t, f, id); n != 1 {
-		t.Errorf("harus 1 job render dokumen, dapat %d", n)
+	if n := pekerjaanDokumen(t, f, id); n != 0 {
+		t.Errorf("AI tidak boleh membuat dokumen, dapat %d", n)
 	}
 	if n := jobOCR(t, f, id); n != 0 {
 		t.Errorf("pembacaan tidak boleh menitipkan job OCR lagi, dapat %d", n)
@@ -327,25 +311,52 @@ func TestPGOCRCocokMenyetujuiLewatJalurVerifikasiYangSama(t *testing.T) {
 		t.Fatalf("attempt AI harus stale setelah versi allowlist berubah: current=%v err=%v", current, err)
 	}
 
-	// PENGULANGAN job River: tidak ada efek samping kedua.
+	// Perubahan rekening memerlukan penilaian baru tanpa membaca ulang berkas.
 	ulang, err := svc.Baca(ctx, id)
 	if err != nil {
 		t.Fatalf("Baca ulang gagal: %v", err)
 	}
-	if !ulang.Dilewati {
-		t.Error("pengulangan harus dilewati")
+	if ulang.Dilewati {
+		t.Error("kebijakan rekening baru harus menghasilkan penilaian baru")
 	}
 	if reader.JumlahPanggilan() != 1 {
 		t.Errorf("pengulangan tidak boleh memanggil provider lagi, dapat %d", reader.JumlahPanggilan())
 	}
-	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id = $1`, id); n != 1 {
-		t.Errorf("pengulangan tidak boleh menambah log verifikasi, dapat %d", n)
+	if n := hitungKuery(t, f, `SELECT count(*) FROM payment_ai_assessments WHERE order_id = $1`, id); n != 2 {
+		t.Errorf("perubahan policy harus membuat penilaian baru, dapat %d", n)
 	}
-	if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity_id = $1`, id); n != 2 {
-		t.Errorf("pengulangan tidak boleh menambah audit, dapat %d", n)
+	if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity_id = $1`, id); n != 3 {
+		t.Errorf("penilaian ulang harus menambah satu audit, dapat %d", n)
+	}
+	if n := pekerjaanDokumen(t, f, id); n != 0 {
+		t.Errorf("pengulangan tidak boleh menambah job dokumen, dapat %d", n)
+	}
+	// Hanya keputusan Manager melalui endpoint manual yang menyelesaikan
+	// pesanan dan memicu dokumen.
+	cookies, csrf := pgLogin(t, f.srv, "budi@example.test", "rahasia123")
+	detailStatus, detailBody, _ := apiReq(t, http.DefaultClient, http.MethodGet,
+		f.srv.URL+"/api/v1/admin/orders/"+id, "", cookies, "")
+	if detailStatus != http.StatusOK {
+		t.Fatalf("detail admin gagal: %d %v", detailStatus, detailBody)
+	}
+	detailData, _ := detailBody["data"].(map[string]any)
+	aiData, _ := detailData["pemeriksaan_ai"].(map[string]any)
+	if detailData["status"] != "submitted" || aiData["status"] != "cocok" {
+		t.Fatalf("detail admin harus memisahkan status pesanan dan AI: %v", detailData)
+	}
+	httpStatus, body := verifyHTTP(t, f, cookies, csrf, id, bodyVerifikasiCocok(t, f, id, &total, "Bukti diperiksa admin"))
+	if httpStatus != http.StatusOK {
+		t.Fatalf("persetujuan admin gagal: %d %v", httpStatus, body)
+	}
+	status, verif, _, doneAt = statusPesanan(t, f, id)
+	if status != "done" || verif != "cocok" || doneAt == nil {
+		t.Fatalf("persetujuan admin harus menyelesaikan pesanan: %s/%s done=%v", status, verif, doneAt)
+	}
+	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1 AND metode='manual'`, id); n != 1 {
+		t.Fatalf("keputusan akhir harus tercatat manual, dapat %d", n)
 	}
 	if n := pekerjaanDokumen(t, f, id); n != 1 {
-		t.Errorf("pengulangan tidak boleh menambah job dokumen, dapat %d", n)
+		t.Fatalf("dokumen harus lahir setelah persetujuan admin, dapat %d", n)
 	}
 }
 
@@ -374,8 +385,11 @@ func TestPGOCRBuktiBaruMenilaiUlang(t *testing.T) {
 		t.Fatalf("Baca pertama gagal: %v", err)
 	}
 	status, verif, alasan, doneAt := statusPesanan(t, f, id)
-	if status != "submitted" || verif != "perlu_review" || alasan != payment.AlasanKurangBayar {
-		t.Fatalf("harus perlu_review/kurang_bayar, dapat %s/%s/%q", status, verif, alasan)
+	if status != "submitted" || verif != "belum" || alasan != "" {
+		t.Fatalf("AI tidak boleh mengubah status pesanan, dapat %s/%s/%q", status, verif, alasan)
+	}
+	if n := hitungKuery(t, f, `SELECT count(*) FROM payment_ai_assessments WHERE order_id=$1 AND result='perlu_review' AND reason='kurang_bayar'`, id); n != 1 {
+		t.Fatalf("penilaian AI kurang bayar harus tersimpan, dapat %d", n)
 	}
 	if doneAt != nil {
 		t.Error("perlu review tidak boleh mengisi done_at")
@@ -384,7 +398,7 @@ func TestPGOCRBuktiBaruMenilaiUlang(t *testing.T) {
 		t.Errorf("perlu review tidak boleh menitipkan job dokumen, dapat %d", n)
 	}
 
-	// Bukti kedua melengkapi nominal -> pembacaan ulang menyetujui.
+	// Bukti kedua melengkapi nominal -> penilaian AI berubah menjadi cocok.
 	isi2 := berkasJPEGUji("f2-26-bukti-2")
 	seedBuktiOCR(t, f, id, "b.jpg", isi2)
 	sisa := total - separuh
@@ -403,15 +417,15 @@ func TestPGOCRBuktiBaruMenilaiUlang(t *testing.T) {
 		t.Fatalf("penjumlahan bukti harus menyetujui, dapat %+v", hasil.Keputusan)
 	}
 	status, verif, _, _ = statusPesanan(t, f, id)
-	if status != "done" || verif != "cocok" {
-		t.Errorf("pesanan harus done setelah bukti lengkap, dapat %s/%s", status, verif)
+	if status != "submitted" || verif != "belum" {
+		t.Errorf("pesanan harus menunggu admin setelah bukti lengkap, dapat %s/%s", status, verif)
 	}
-	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id = $1`, id); n != 2 {
-		t.Errorf("harus 2 log (perlu_review lalu cocok), dapat %d", n)
+	if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id = $1`, id); n != 0 {
+		t.Errorf("AI tidak boleh menyetujui final, dapat %d log", n)
 	}
 	if n := hitungKuery(t, f,
-		`SELECT count(*) FROM verification_logs WHERE order_id = $1 AND metode = 'ai' AND admin_id IS NULL`, id); n != 2 {
-		t.Errorf("kedua log harus dari AI tanpa pemeriksa, dapat %d", n)
+		`SELECT count(*) FROM payment_ai_assessments WHERE order_id = $1`, id); n != 2 {
+		t.Errorf("dua penilaian AI harus tersimpan, dapat %d", n)
 	}
 }
 
@@ -479,9 +493,9 @@ func TestPGOCRAlasanReviewSesuaiAturanPRD(t *testing.T) {
 				t.Fatalf("harus %s, dapat %+v", k.mauAlasan, out.Keputusan)
 			}
 			status, verif, alasan, doneAt := statusPesanan(t, f, id)
-			if status != "submitted" || verif != "perlu_review" || alasan != k.mauAlasan {
-				t.Errorf("pesanan harus tetap submitted/perlu_review/%s, dapat %s/%s/%q",
-					k.mauAlasan, status, verif, alasan)
+			if status != "submitted" || verif != "belum" || alasan != "" {
+				t.Errorf("pesanan harus tetap submitted/belum, dapat %s/%s/%q",
+					status, verif, alasan)
 			}
 			if doneAt != nil {
 				t.Error("perlu review tidak boleh mengisi done_at")
@@ -492,7 +506,7 @@ func TestPGOCRAlasanReviewSesuaiAturanPRD(t *testing.T) {
 			// Bukti yang tidak terbaca disimpan tanpa nominal (NULL), bukan 0.
 			var totalTerbaca *int64
 			if err := f.pool.QueryRow(ctx,
-				`SELECT total_terbaca FROM verification_logs WHERE order_id = $1`, id).Scan(&totalTerbaca); err != nil {
+				`SELECT total_read FROM payment_ai_assessments WHERE order_id = $1`, id).Scan(&totalTerbaca); err != nil {
 				t.Fatalf("baca log: %v", err)
 			}
 			if k.mauAlasan == payment.AlasanTidakTerbaca && totalTerbaca != nil {
@@ -501,16 +515,8 @@ func TestPGOCRAlasanReviewSesuaiAturanPRD(t *testing.T) {
 			if k.mauAlasan != payment.AlasanTidakTerbaca && totalTerbaca == nil {
 				t.Error("nominal yang terbaca harus tersimpan pada log")
 			}
-			var destinationJSON []byte
-			if err := f.pool.QueryRow(ctx, `SELECT destination_results FROM verification_logs WHERE order_id=$1`, id).Scan(&destinationJSON); err != nil {
-				t.Fatalf("baca destination_results: %v", err)
-			}
-			var destinations []payment.DestinationResult
-			if err := json.Unmarshal(destinationJSON, &destinations); err != nil {
-				t.Fatalf("urai destination_results: %v", err)
-			}
-			if len(destinations) != 1 || destinations[0].Status != k.mauDestinasi {
-				t.Fatalf("attempt review harus punya satu hasil tujuan %s: %+v", k.mauDestinasi, destinations)
+			if n := hitungKuery(t, f, `SELECT count(*) FROM payment_ai_assessments WHERE order_id=$1 AND result='perlu_review' AND reason=$2`, id, k.mauAlasan); n != 1 {
+				t.Fatalf("alasan penilaian AI %s harus tersimpan, dapat %d", k.mauAlasan, n)
 			}
 		})
 	}

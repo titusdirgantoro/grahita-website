@@ -440,6 +440,21 @@ describe("Riwayat pemesanan admin (F1-15)", () => {
     expect(screen.getByText("Invoice")).toBeDefined();
   });
 
+  it("hasil AI cocok ditampilkan terpisah saat pesanan masih menunggu verifikasi admin", async () => {
+    stubPesanan({ detail: {
+      ...DETAIL_UJI, verif_status: "belum", alasan_review: undefined,
+      pemeriksaan_ai: {
+        status: "cocok", hasil: "cocok", total_terbaca: 200000,
+        keyakinan_terendah: 0.97, jumlah_bukti: 1,
+        catatan: "AI/OCR: bukti sesuai", diperiksa_at: "2026-10-01T04:00:00Z",
+      },
+    } });
+    render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
+    expect(await screen.findByText("Pemeriksaan AI: Cocok")).toBeDefined();
+    expect(screen.getByText("Menunggu verifikasi")).toBeDefined();
+    expect(screen.getByText(/Pesanan tetap menunggu verifikasi sampai admin menyetujui/)).toBeDefined();
+  });
+
   it("admin mengunggah bukti tambahan sebagai multipart lalu menyegarkan bukti dan timeline", async () => {
     const { posts, panggilan } = stubPesanan({ proofs: [] });
     render(<RouterProvider router={buatRouter(`/pesanan/${DETAIL_ID}`)} />);
@@ -843,10 +858,10 @@ describe("Verifikasi pembayaran manual admin (F1-18, PRD §4.2 AP-ORD-07)", () =
     const sebelum = panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length;
     fireEvent.click(screen.getByRole("button", { name: "Setujui & selesaikan" }));
 
-    expect(await screen.findByText(/sudah selesai diverifikasi\. Tampilan dimuat ulang\./)).toBeDefined();
     await waitFor(() => {
       expect(panggilan.filter((u) => u.endsWith(`/admin/orders/${DETAIL_ID}`)).length).toBeGreaterThan(sebelum);
     });
+    expect(await screen.findByText(/sudah selesai diverifikasi\. Tampilan dimuat ulang\./)).toBeDefined();
   });
 
   it("mencegah klik ganda: tombol terkunci selama permintaan berjalan", async () => {

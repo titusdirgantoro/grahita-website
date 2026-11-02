@@ -310,6 +310,23 @@ CREATE TABLE verification_logs (
     created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX verification_logs_order ON verification_logs (order_id, created_at DESC);
+
+-- Pemeriksaan awal AI terpisah dari keputusan akhir pada verification_logs.
+CREATE TABLE payment_ai_assessments (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    order_version int NOT NULL,
+    branch_allowlist_version bigint NOT NULL,
+    proof_set_fingerprint bytea NOT NULL,
+    result text NOT NULL CHECK (result IN ('cocok','perlu_review')),
+    reason text,
+    total_read bigint,
+    confidence numeric(4,3) NOT NULL,
+    proof_count int NOT NULL,
+    note text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (order_id,order_version,branch_allowlist_version,proof_set_fingerprint)
+);
 ```
 
 ### 4.6 Dokumen, revisi, timeline

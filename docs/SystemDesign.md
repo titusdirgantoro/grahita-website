@@ -187,11 +187,19 @@ submit / unggah ────┤
          tanggal ≥ tanggal pesanan − ai.mundur
                     │                                        │
                     ▼                                        ▼
-            status → done                        verif → perlu_review (+ alasan)
-            enqueue dokumen & email                 muncul di chip dashboard admin
+      pemeriksaan_ai → cocok               pemeriksaan_ai → perlu_review
+      pesanan tetap submitted               pesanan tetap submitted
+                    └───────────────┬───────────────────────┘
+                                    ▼
+                     admin memeriksa bukti dan memutuskan
+                                    │
+                setuju ─────────────┴──────────── perlu review
+                  │                                   │
+            status → done                    verif → perlu_review
+            enqueue dokumen & email         tanpa dokumen
 ```
 
-Transisi ke `done` dilakukan satu service (`payment.MarkVerified`) baik dari AI maupun manual, sehingga efek sampingnya (dokumen + email + timeline + audit) selalu identik.
+Penilaian AI disimpan pada `payment_ai_assessments` dan tidak mengubah status pesanan, settlement, atau dokumen. Transisi ke `done` dilakukan setelah persetujuan admin melalui `payment.MarkVerified`. Hasil yang sudah kedaluwarsa karena bukti, rekening, atau versi pesanan berubah ditandai untuk pemeriksaan ulang.
 
 ### 4.4 Setelah pesanan Done
 

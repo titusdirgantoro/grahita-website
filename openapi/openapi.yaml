@@ -1562,7 +1562,7 @@ paths:
     get:
       tags: [admin]
       operationId: getAdminOCRStatus
-      summary: Status pilihan verifikasi AI atau manual (Superadmin)
+      summary: Status pemeriksaan awal bukti oleh AI (Superadmin)
       description: |
         Menunjukkan apakah AI aktif, provider dan model, serta status API key
         Gemini tanpa mengekspos nilainya. Untuk Gemini, provider_ready hanya
@@ -2375,9 +2375,9 @@ paths:
         * `hasil: perlu_review` — pesanan TETAP `submitted` (sub-status
           verifikasi `perlu_review`) dan `alasan` WAJIB diisi.
 
-        Metode verifikasi ditetapkan server (`manual`); jalur AI/OCR (Fase 2)
-        memakai service yang sama dengan metode `ai` dan tidak lewat endpoint
-        ini. Verifikasi kedua pada pesanan yang sudah `done` dijawab `409`
+        Metode verifikasi ditetapkan server (`manual`). Hasil AI/OCR tersimpan
+        terpisah sebagai pemeriksaan awal dan tidak memindahkan pesanan ke
+        `done`. Verifikasi kedua pada pesanan yang sudah `done` dijawab `409`
         tanpa efek samping; idempotensi efek samping dijaga kunci baris
         pesanan.
       parameters:
@@ -5416,6 +5416,24 @@ components:
         verifikasi:
           type: array
           items: { $ref: "#/components/schemas/VerificationLog" }
+        pemeriksaan_ai:
+          $ref: "#/components/schemas/PaymentAIAssessment"
+
+    PaymentAIAssessment:
+      type: object
+      description: Pemeriksaan awal AI untuk pesanan submitted; keputusan akhir tetap milik admin.
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [belum_diperiksa, cocok, perlu_review, gagal_dibaca, perlu_diperiksa_ulang]
+        hasil: { type: string, enum: [cocok, perlu_review] }
+        alasan: { type: string }
+        catatan: { type: string }
+        total_terbaca: { type: integer, format: int64 }
+        keyakinan_terendah: { type: number, minimum: 0, maximum: 1 }
+        jumlah_bukti: { type: integer, minimum: 1 }
+        diperiksa_at: { type: string, format: date-time }
 
     ErrorEnvelope:
       type: object

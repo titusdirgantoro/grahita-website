@@ -95,7 +95,7 @@ describe("Admin Portal — pilihan verifikasi OCR", () => {
     const calls = stubFetch(false);
     renderPengaturan();
 
-    const toggle = await screen.findByRole("switch", { name: "Verifikasi otomatis dengan AI" });
+    const toggle = await screen.findByRole("switch", { name: "Pemeriksaan awal bukti dengan AI" });
     expect((toggle as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/AI belum tersedia karena provider belum dikonfigurasi/)).toBeDefined();
     expect(screen.queryByLabelText("Ambang keyakinan OCR (0–1)")).toBeNull();
@@ -106,7 +106,7 @@ describe("Admin Portal — pilihan verifikasi OCR", () => {
     stubFetch(null);
     renderPengaturan();
 
-    const toggle = await screen.findByRole("switch", { name: "Verifikasi otomatis dengan AI" });
+    const toggle = await screen.findByRole("switch", { name: "Pemeriksaan awal bukti dengan AI" });
     expect((toggle as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/Status provider AI belum dapat diperiksa/)).toBeDefined();
   });
@@ -115,7 +115,7 @@ describe("Admin Portal — pilihan verifikasi OCR", () => {
     const calls = stubFetch(true);
     renderPengaturan();
 
-    const toggle = await screen.findByRole("switch", { name: "Verifikasi otomatis dengan AI" });
+    const toggle = await screen.findByRole("switch", { name: "Pemeriksaan awal bukti dengan AI" });
     expect((toggle as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(toggle);
     expect(screen.getByLabelText("Ambang keyakinan OCR (0–1)")).toBeDefined();
@@ -136,7 +136,7 @@ describe("Admin Portal — pilihan verifikasi OCR", () => {
     const calls = stubFetch(false, true);
     renderPengaturan();
 
-    const toggle = await screen.findByRole("switch", { name: "Verifikasi otomatis dengan AI" });
+    const toggle = await screen.findByRole("switch", { name: "Pemeriksaan awal bukti dengan AI" });
     expect((toggle as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole("button", { name: "Simpan pengaturan" }));
@@ -152,7 +152,7 @@ describe("Admin Portal — pilihan verifikasi OCR", () => {
     renderPengaturan();
     const input = await screen.findByLabelText("API key Gemini") as HTMLInputElement;
     expect(input.type).toBe("password");
-    const toggle = screen.getByRole("switch", { name: "Verifikasi otomatis dengan AI" }) as HTMLButtonElement;
+    const toggle = screen.getByRole("switch", { name: "Pemeriksaan awal bukti dengan AI" }) as HTMLButtonElement;
     expect(toggle.disabled).toBe(true);
 
     fireEvent.change(input, { target: { value: "AIza-kunci-rahasia-pengujian" } });

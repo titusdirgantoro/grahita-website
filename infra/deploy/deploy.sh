@@ -66,6 +66,16 @@ echo '-- checkout $IMAGE_TAG --'
 git fetch --prune --tags origin
 git checkout --force '$IMAGE_TAG'
 
+# Host yang memakai Nginx di depan Compose menyimpan overlay lokal untuk
+# port loopback dan direktori cadangan. Berkas ini tidak ikut checkout Git.
+HOST_COMPOSE=''
+if [ '$LINGKUNGAN' = production ]; then
+    export COMPOSE_PROJECT_NAME=grahita-prod
+    if [ -f docker-compose.host.yml ]; then
+        HOST_COMPOSE='-f docker-compose.host.yml'
+    fi
+fi
+
 echo '-- login registry --'
 printf '%s' '$GHCR_TOKEN' | docker login '$REGISTRY' -u '$GHCR_USER' --password-stdin
 
@@ -73,16 +83,16 @@ export IMAGE_TAG='$IMAGE_TAG'
 export IMAGE_PREFIX='$IMAGE_PREFIX'
 
 echo '-- tarik image --'
-docker compose $COMPOSE_FILES pull api worker web
+docker compose $COMPOSE_FILES \$HOST_COMPOSE pull api worker web
 
 echo '-- migrasi (kompatibel mundur) --'
-docker compose $COMPOSE_FILES run --rm migrate
+docker compose $COMPOSE_FILES \$HOST_COMPOSE run --rm migrate
 
 echo '-- naikkan layanan --'
-docker compose $COMPOSE_FILES up -d --no-deps --remove-orphans api worker web
+docker compose $COMPOSE_FILES \$HOST_COMPOSE up -d --no-deps --remove-orphans api worker web
 
 echo '-- status --'
-docker compose $COMPOSE_FILES ps
+docker compose $COMPOSE_FILES \$HOST_COMPOSE ps
 REMOTE
 )
 

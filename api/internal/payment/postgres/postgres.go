@@ -65,9 +65,10 @@ func (r *Repo) EnqueueDestinationReevaluation(ctx context.Context, orderID strin
 
 	var status string
 	var version int64
-	if err := tx.QueryRow(ctx, `SELECT o.status::text,b.bank_allowlist_version
+	var orderVersion int
+	if err := tx.QueryRow(ctx, `SELECT o.status::text,b.bank_allowlist_version,o.versi
  FROM orders o JOIN branches b ON b.id=o.branch_id
- WHERE o.id=$1 FOR SHARE OF o,b`, orderID).Scan(&status, &version); err != nil {
+ WHERE o.id=$1 FOR SHARE OF o,b`, orderID).Scan(&status, &version, &orderVersion); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return payment.ReevaluateResult{}, payment.ErrNotFound
 		}
@@ -113,9 +114,9 @@ func (r *Repo) EnqueueDestinationReevaluation(ctx context.Context, orderID strin
 	fingerprint := h.Sum(nil)
 
 	var attempted bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM verification_logs
- WHERE order_id=$1 AND metode='ai' AND branch_allowlist_version=$2 AND proof_set_fingerprint=$3)`,
-		orderID, version, fingerprint).Scan(&attempted); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM payment_ai_assessments
+ WHERE order_id=$1 AND branch_allowlist_version=$2 AND order_version=$3 AND proof_set_fingerprint=$4)`,
+		orderID, version, orderVersion, fingerprint).Scan(&attempted); err != nil {
 		return payment.ReevaluateResult{}, err
 	}
 	if attempted {

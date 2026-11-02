@@ -254,8 +254,8 @@ Field: Bank (BCA / BRI), Nama di rekening, Nomor rekening, Aktif. Rekening aktif
 | `max_mb` / `max_file` | 5 / 5 | Batas unggah bukti transfer |
 | `digit_invoice` | 2 | Jumlah digit urut pada nomor invoice |
 | `manager_boleh_revisi` | true | Izin Manager merevisi invoice |
-| `ai.aktif` | false | Mengaktifkan verifikasi bukti transfer otomatis |
-| `ai.min_keyakinan` | 0.90 | Ambang keyakinan OCR untuk auto-approve |
+| `ai.aktif` | false | Mengaktifkan pemeriksaan awal bukti transfer oleh AI |
+| `ai.min_keyakinan` | 0.90 | Ambang keyakinan pembacaan bukti oleh AI |
 | `ai.tol_kurang` / `ai.tol_lebih` | 0 / 0 | Toleransi selisih nominal (Rupiah) |
 | `ai.digit_rek` | 4 | Jumlah digit akhir rekening yang dicocokkan |
 | `ai.mundur` | 1 | Toleransi mundur tanggal transfer (hari) |
@@ -273,18 +273,18 @@ Tiga mode, dapat berjalan berdampingan:
 | Mode | Cara kerja | Status |
 |---|---|---|
 | **Manual** | Admin membandingkan total pesanan dan nominal pada bukti, lalu klik Verifikasi. | Fase 1 — wajib ada |
-| **AI / OCR** | Sistem membaca nominal, tanggal, bank, dan 4 digit akhir rekening tujuan dari gambar. Cocok + keyakinan ≥ ambang → otomatis Done. Selain itu → masuk antrean "perlu review" dengan alasan. | Fase 2 |
-
-Provider OCR yang dipilih adalah **Gemini 2.5 Flash-Lite**. Superadmin mengisi API key di halaman Pengaturan; nilainya tidak dapat dibaca kembali dari portal dan disimpan terenkripsi di database. Tombol uji koneksi harus berhasil sebelum sakelar verifikasi otomatis dapat diaktifkan. Jika AI nonaktif atau pembacaan gagal, admin tetap dapat memverifikasi pembayaran secara manual.
+| **AI / OCR** | Sistem membaca nominal, tanggal, bank, dan digit akhir rekening tujuan. Hasilnya disimpan sebagai pemeriksaan awal terpisah: Cocok, Perlu ditinjau, Gagal dibaca, atau Belum diperiksa. Pesanan tetap Menunggu verifikasi hingga admin memutuskan. | Fase 2 |
 | **Virtual Account** | Callback bank menandai pembayaran lunas tanpa unggah bukti. | Fase 3 (R&D BCA, BRI TBD) |
+
+Provider OCR yang dipilih adalah **Gemini 2.5 Flash-Lite**. Superadmin mengisi API key di halaman Pengaturan; nilainya tidak dapat dibaca kembali dari portal dan disimpan terenkripsi di database. Tombol uji koneksi harus berhasil sebelum pemeriksaan AI dapat diaktifkan. Jika AI nonaktif atau pembacaan gagal, admin tetap dapat memverifikasi pembayaran secara manual. Hanya persetujuan admin yang mengubah pesanan Transfer menjadi Selesai dan memicu penerbitan dokumen.
 
 Aturan AI:
 - Multi-bukti → nominal dijumlahkan sebelum dibandingkan.
 - Selisih di luar `tol_kurang`/`tol_lebih` → perlu review (alasan: kurang bayar / lebih bayar).
 - Rekening tujuan tidak cocok dengan rekening aktif → perlu review.
 - Tanggal transfer lebih tua dari `tanggal pesanan − ai.mundur` hari → perlu review.
-- Semua hasil (nominal terbaca, keyakinan, alasan) disimpan untuk audit, dan admin selalu bisa menimpa keputusan AI.
-- AI tidak pernah menolak pesanan secara final; keputusan akhir selalu bisa dilakukan manusia.
+- Semua hasil (nominal terbaca, keyakinan, alasan) disimpan untuk audit; penilaian AI tidak menjadi persetujuan pembayaran.
+- AI tidak pernah menolak atau menyelesaikan pesanan secara final; keputusan akhir dilakukan admin.
 
 ---
 

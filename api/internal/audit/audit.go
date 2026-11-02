@@ -77,6 +77,9 @@ const (
 	// hasil per bukti (nominal, tanggal, bank, rekening, keyakinan) beserta
 	// jawaban mentah provider yang SUDAH dibersihkan dari nilai rahasia.
 	ActionBacaBukti = "baca_bukti"
+	// ActionAIAssess mencatat hasil pemeriksaan awal AI yang menunggu
+	// keputusan pembayaran oleh admin.
+	ActionAIAssess = "ai_assess"
 	// EntityTutorial mencatat perubahan konten halaman tutorial portal cabang
 	// (F2-27, PRD §3.8) oleh Superadmin: EntityID-nya adalah id topik
 	// (kosong saat dibuat), snapshot Before/After memuat ikon/judul/ringkas/

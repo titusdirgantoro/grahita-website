@@ -285,13 +285,13 @@ type PembacaBuktiAI interface {
 
 // OCRBuktiWorker menjalankan job "ocr_bukti": membaca bukti transfer lewat
 // provider di balik `payment.PaymentReader`, menyimpan hasilnya, dan
-// meneruskan keputusan ke `payment.MarkVerified` dengan metode `ai`
+// mencatat hasil pemeriksaan awal untuk keputusan manual admin
 // (SystemDesign.md §4.3, PRD §5).
 //
 // Sifatnya IDEMPOTEN: bukti yang sudah dibaca tidak dipanggil ulang ke
 // provider, dan keputusan untuk himpunan bukti yang sama tidak ditulis dua
 // kali. Karena itu job yang terlewat/tergandakan (River at-least-once) tidak
-// pernah menggandakan log verifikasi, dokumen, atau email.
+// pernah menggandakan penilaian AI, dokumen, atau email.
 //
 // Kegagalan provider dikembalikan sebagai galat supaya River mengulanginya;
 // setelan `ai.aktif` diperiksa ULANG di sini (bukan hanya saat enqueue),

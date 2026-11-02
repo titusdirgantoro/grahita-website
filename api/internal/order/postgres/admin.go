@@ -14,8 +14,11 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -278,6 +281,86 @@ func (r *Repo) GetAdmin(ctx context.Context, id string, emailGagalIDs []string) 
 			DestinationResults:     v.DestinationResults,
 			CreatedAt:              v.CreatedAt.UTC().Format(rfc3339),
 		})
+	}
+	if out.Status == "submitted" && !out.IsTempo {
+		out.PemeriksaanAI, err = r.pemeriksaanAI(ctx, out.ID, out.Versi)
+		if err != nil {
+			return order.AdminDetail{}, fmt.Errorf("baca pemeriksaan AI: %w", err)
+		}
+	}
+	return out, nil
+}
+
+func (r *Repo) pemeriksaanAI(ctx context.Context, orderID string, orderVersion int) (*order.PemeriksaanAI, error) {
+	out := &order.PemeriksaanAI{Status: "belum_diperiksa"}
+	var version int64
+	if err := r.pool.QueryRow(ctx, `SELECT b.bank_allowlist_version FROM orders o
+JOIN branches b ON b.id=o.branch_id WHERE o.id=$1`, orderID).Scan(&version); err != nil {
+		return nil, err
+	}
+	var result, reason, note string
+	var total *int64
+	var confidence float64
+	var proofCount, assessedOrderVersion int
+	var assessedVersion int64
+	var assessedFingerprint []byte
+	var createdAt time.Time
+	err := r.pool.QueryRow(ctx, `SELECT result,COALESCE(reason,''),note,total_read,confidence,proof_count,
+order_version,branch_allowlist_version,proof_set_fingerprint,created_at
+FROM payment_ai_assessments WHERE order_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1`, orderID).Scan(
+		&result, &reason, &note, &total, &confidence, &proofCount, &assessedOrderVersion,
+		&assessedVersion, &assessedFingerprint, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out.Hasil, out.Alasan, out.Catatan = result, reason, note
+	out.TotalTerbaca, out.KeyakinanTerendah, out.JumlahBukti = total, confidence, proofCount
+	out.DiperiksaAt = createdAt.UTC().Format(rfc3339)
+	if assessedOrderVersion != orderVersion || assessedVersion != version {
+		out.Status = "perlu_diperiksa_ulang"
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `SELECT id::text,ocr_at FROM payment_proofs WHERE order_id=$1 ORDER BY id`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	n := 0
+	stale := false
+	for rows.Next() {
+		var id string
+		var at *time.Time
+		if err = rows.Scan(&id, &at); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if at == nil {
+			stale = true
+		}
+		if n > 0 {
+			h.Write([]byte{0x1e})
+		}
+		h.Write([]byte(strings.ToLower(id)))
+		h.Write([]byte{0x1f})
+		if at != nil {
+			h.Write([]byte(at.UTC().Format(time.RFC3339Nano)))
+		}
+		n++
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if stale || n != proofCount || hex.EncodeToString(h.Sum(nil)) != hex.EncodeToString(assessedFingerprint) {
+		out.Status = "perlu_diperiksa_ulang"
+	} else if reason == "tidak_terbaca" {
+		out.Status = "gagal_dibaca"
+	} else {
+		out.Status = result
 	}
 	return out, nil
 }

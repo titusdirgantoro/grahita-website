@@ -71,7 +71,7 @@ const guide = [
     steps: [
       "Cabang memilih Transfer di muka dan mengunggah bukti ke rekening efektif sebelum submit.",
       "Manager atau Superadmin membuka Riwayat pemesanan, meninjau bukti dan rekening, lalu menetapkan nominal yang benar. Bukti yang kurang, kabur, atau tidak cocok masuk Perlu review beserta alasan.",
-      "OCR Gemini dapat membantu membaca bukti bila Superadmin mengaktifkannya dan kunci telah diverifikasi. Keputusan dapat tetap ditinjau manual; kegagalan OCR tidak menyelesaikan pembayaran.",
+      "Bila AI aktif, Gemini membaca bukti dan menampilkan Pemeriksaan AI: Cocok, Perlu ditinjau, Gagal dibaca, atau Belum diperiksa. Ini hanya pemeriksaan awal; pesanan tetap Menunggu verifikasi. Admin memeriksa bukti lalu memutuskan pembayaran.",
       "Setelah nilai pembayaran memenuhi total, pesanan menjadi Selesai. Worker menerbitkan invoice dan surat jalan serta mengirim email sesuai flag penerima.",
     ],
     note: "Bukti berlebih yang dialihkan ke Deposit memerlukan keputusan Superadmin. Verifikasi berulang tidak boleh membuat pembayaran ganda.",

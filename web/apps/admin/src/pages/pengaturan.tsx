@@ -481,8 +481,8 @@ function PengaturanContent() {
               <SwitchRow
                 checked={form.aiAktif}
                 onChange={(v) => setForm({ ...form, aiAktif: v })}
-                label="Verifikasi otomatis dengan AI"
-                hint="Nonaktif: bukti pembayaran pesanan diperiksa admin. Aktif: AI hanya menyetujui pesanan bila semua syarat cocok; sisanya masuk antrean admin. Top-up Deposit dan pelunasan Tempo tetap diverifikasi admin."
+				label="Pemeriksaan awal bukti dengan AI"
+				hint="AI aktif membaca dan mencocokkan bukti Transfer/Deposit, lalu menampilkan hasil untuk admin. Pesanan tetap Menunggu verifikasi sampai admin menyetujui. Top-up Deposit dan pelunasan Tempo tetap diperiksa admin."
                 disabled={!form.aiAktif && !ocrStatus?.provider_ready}
               />
 

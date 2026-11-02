@@ -56,7 +56,7 @@ func TestPGReevaluateSetelahPolicyDanBuktiBerubahMenulisJejakAkhir(t *testing.T)
 		}
 		var versiLama int64
 		var sidikLama []byte
-		if err := f.pool.QueryRow(t.Context(), `SELECT branch_allowlist_version,proof_set_fingerprint FROM verification_logs
+		if err := f.pool.QueryRow(t.Context(), `SELECT branch_allowlist_version,proof_set_fingerprint FROM payment_ai_assessments
 			WHERE order_id=$1 ORDER BY created_at LIMIT 1`, orderID).Scan(&versiLama, &sidikLama); err != nil {
 			t.Fatal(err)
 		}
@@ -75,22 +75,22 @@ func TestPGReevaluateSetelahPolicyDanBuktiBerubahMenulisJejakAkhir(t *testing.T)
 		}
 
 		kedua := jalankanReevaluateTerbaru(t, f, orderID)
-		if kedua.Keputusan.Hasil != payment.VerifCocok || kedua.Outcome == nil || kedua.Outcome.Order.Status != payment.StatusDone {
-			t.Fatalf("policy baru yang mengizinkan rekening harus menyelesaikan order: %+v", kedua)
+		if kedua.Keputusan.Hasil != payment.VerifCocok || kedua.Outcome != nil {
+			t.Fatalf("policy baru harus cocok tanpa menyelesaikan order: %+v", kedua)
 		}
 		var versiBaru int64
 		var sidikBaru []byte
-		if err := f.pool.QueryRow(t.Context(), `SELECT branch_allowlist_version,proof_set_fingerprint FROM verification_logs
+		if err := f.pool.QueryRow(t.Context(), `SELECT branch_allowlist_version,proof_set_fingerprint FROM payment_ai_assessments
 			WHERE order_id=$1 ORDER BY created_at DESC LIMIT 1`, orderID).Scan(&versiBaru, &sidikBaru); err != nil {
 			t.Fatal(err)
 		}
 		if versiBaru <= versiLama || string(sidikBaru) != string(sidikLama) {
 			t.Fatalf("policy harus berganti versi dengan fingerprint bukti tetap: version %d→%d fingerprint sama=%v", versiLama, versiBaru, string(sidikBaru) == string(sidikLama))
 		}
-		if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, orderID); n != 2 {
+		if n := hitungKuery(t, f, `SELECT count(*) FROM payment_ai_assessments WHERE order_id=$1`, orderID); n != 2 {
 			t.Fatalf("harus ada dua log keputusan historis, dapat %d", n)
 		}
-		if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity='order' AND entity_id=$1 AND action='verify'`, orderID); n != 2 {
+		if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity='order' AND entity_id=$1 AND action='ai_assess'`, orderID); n != 2 {
 			t.Fatalf("kedua keputusan harus punya audit, dapat %d", n)
 		}
 	})
@@ -111,7 +111,7 @@ func TestPGReevaluateSetelahPolicyDanBuktiBerubahMenulisJejakAkhir(t *testing.T)
 			t.Fatalf("bukti pertama harus kurang bayar: %+v", pertama.Keputusan)
 		}
 		var sidikLama []byte
-		if err := f.pool.QueryRow(t.Context(), `SELECT proof_set_fingerprint FROM verification_logs WHERE order_id=$1`, orderID).Scan(&sidikLama); err != nil {
+		if err := f.pool.QueryRow(t.Context(), `SELECT proof_set_fingerprint FROM payment_ai_assessments WHERE order_id=$1`, orderID).Scan(&sidikLama); err != nil {
 			t.Fatal(err)
 		}
 
@@ -121,21 +121,21 @@ func TestPGReevaluateSetelahPolicyDanBuktiBerubahMenulisJejakAkhir(t *testing.T)
 			t.Fatal(err)
 		}
 		kedua := jalankanReevaluateTerbaru(t, f, orderID)
-		if kedua.Keputusan.Hasil != payment.VerifCocok || kedua.Outcome == nil || kedua.Outcome.Order.Status != payment.StatusDone {
-			t.Fatalf("dua bukti terbaru harus melunasi order: %+v", kedua)
+		if kedua.Keputusan.Hasil != payment.VerifCocok || kedua.Outcome != nil {
+			t.Fatalf("dua bukti harus cocok dan menunggu admin: %+v", kedua)
 		}
 		var sidikBaru []byte
-		if err := f.pool.QueryRow(t.Context(), `SELECT proof_set_fingerprint FROM verification_logs
+		if err := f.pool.QueryRow(t.Context(), `SELECT proof_set_fingerprint FROM payment_ai_assessments
 			WHERE order_id=$1 ORDER BY created_at DESC LIMIT 1`, orderID).Scan(&sidikBaru); err != nil {
 			t.Fatal(err)
 		}
 		if string(sidikBaru) == string(sidikLama) {
 			t.Fatal("penambahan bukti harus menghasilkan fingerprint snapshot baru")
 		}
-		if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, orderID); n != 2 {
+		if n := hitungKuery(t, f, `SELECT count(*) FROM payment_ai_assessments WHERE order_id=$1`, orderID); n != 2 {
 			t.Fatalf("harus ada log sebelum dan sesudah bukti berubah, dapat %d", n)
 		}
-		if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity='order' AND entity_id=$1 AND action='verify'`, orderID); n != 2 {
+		if n := hitungKuery(t, f, `SELECT count(*) FROM audit_logs WHERE entity='order' AND entity_id=$1 AND action='ai_assess'`, orderID); n != 2 {
 			t.Fatalf("kedua keputusan harus punya audit, dapat %d", n)
 		}
 	})
@@ -220,7 +220,7 @@ func TestPGReevaluateJobTertundaTidakMembacaBuktiAtauPolicyBaru(t *testing.T) {
 		if err != nil || !hasil.Dilewati || reader.JumlahPanggilan() != 0 {
 			t.Fatalf("job lama harus skip tanpa provider: hasil=%+v calls=%d err=%v", hasil, reader.JumlahPanggilan(), err)
 		}
-		if n := hitungKuery(t, f, `SELECT count(*) FROM verification_logs WHERE order_id=$1`, orderID); n != 0 {
+		if n := hitungKuery(t, f, `SELECT count(*) FROM payment_ai_assessments WHERE order_id=$1`, orderID); n != 0 {
 			t.Fatalf("job stale tidak boleh menulis attempt, dapat %d", n)
 		}
 	}

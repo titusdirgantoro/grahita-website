@@ -494,14 +494,14 @@
         "priority": "P0",
         "layer": "Job+DB",
         "action": "AI diaktifkan, bukti jelas dengan nominal, tanggal, bank, rekening dan keyakinan melewati ambang.",
-        "expected": "Job OCR hanya untuk order Transfer/Deposit, hasil dan bukti keputusan terekam; auto-approve hanya bila seluruh syarat terpenuhi."
+        "expected": "Job OCR hanya untuk order Transfer/Deposit. Hasil AI Cocok terekam terpisah; pesanan tetap Menunggu verifikasi sampai admin menyetujui, lalu dokumen terbit."
       },
       {
         "id": "VER-09",
         "priority": "P0",
         "layer": "Job+DB",
         "action": "AI: nominal kurang/lebih, bukti kabur, tanggal terlalu tua, rekening tidak cocok, keyakinan rendah, multi-bukti tidak cocok.",
-        "expected": "Masuk `perlu_review` dengan alasan; AI tidak menolak final dan admin bisa mengambil keputusan."
+        "expected": "Pemeriksaan AI menjadi Perlu ditinjau atau Gagal dibaca beserta alasan; status pesanan tidak berubah dan admin bisa mengambil keputusan."
       },
       {
         "id": "VER-10",
