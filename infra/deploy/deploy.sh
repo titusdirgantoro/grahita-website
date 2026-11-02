@@ -40,7 +40,11 @@ esac
 
 # Berkas Compose yang dipakai di host. Overlay observability selalu ikut supaya
 # metrik/alarm tetap hidup selama rilis.
-COMPOSE_FILES="-f docker-compose.yml -f docker-compose.${LINGKUNGAN}.yml -f docker-compose.observability.yml"
+COMPOSE_ENV_FILE=$LINGKUNGAN
+if [ "$LINGKUNGAN" = production ]; then
+    COMPOSE_ENV_FILE=prod
+fi
+COMPOSE_FILES="-f docker-compose.yml -f docker-compose.${COMPOSE_ENV_FILE}.yml -f docker-compose.observability.yml"
 
 KUNCI=$(mktemp)
 chmod 600 "$KUNCI"
