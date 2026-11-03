@@ -23,6 +23,7 @@ function stubFetch(providerReady: boolean | null, aiActive = false, gemini = fal
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   let keyConfigured = false;
   let keyVerified = false;
+  let aiSettings = { aktif: aiActive, min_keyakinan: 0.9, tol_kurang: 0, tol_lebih: 0, digit_rek: 4, mundur: 1 };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -64,11 +65,16 @@ function stubFetch(providerReady: boolean | null, aiActive = false, gemini = fal
             max_file: 5,
             digit_invoice: 2,
             manager_boleh_revisi: false,
-            ai: { aktif: aiActive, min_keyakinan: 0.9, tol_kurang: 0, tol_lebih: 0, digit_rek: 4, mundur: 1 },
+            ai: aiSettings,
           },
         });
       }
       if (input.endsWith("/admin/settings") && init?.method === "PUT") {
+        const values = JSON.parse(String(init.body)).values as { ai?: typeof aiSettings };
+        if (values.ai) {
+          aiSettings = values.ai;
+          aiActive = values.ai.aktif;
+        }
         return json({ data: { values: {} } });
       }
       if (input.endsWith("/admin/backup-runs")) {
@@ -130,6 +136,26 @@ describe("Admin Portal — pilihan verifikasi OCR", () => {
         },
       });
     });
+  });
+
+  it("perubahan toleransi tersimpan dan konfirmasi muncul dekat tombol Simpan", async () => {
+    const calls = stubFetch(true, true);
+    renderPengaturan();
+
+    const kurang = await screen.findByLabelText("Toleransi kurang bayar (Rp)") as HTMLInputElement;
+    const lebih = screen.getByLabelText("Toleransi lebih bayar (Rp)") as HTMLInputElement;
+    fireEvent.change(kurang, { target: { value: "1000" } });
+    fireEvent.change(lebih, { target: { value: "1000" } });
+    const simpan = screen.getByRole("button", { name: "Simpan pengaturan" });
+    fireEvent.click(simpan);
+
+    const konfirmasi = await screen.findByText("Pengaturan tersimpan.");
+    expect(simpan.compareDocumentPosition(konfirmasi) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect((screen.getByLabelText("Toleransi kurang bayar (Rp)") as HTMLInputElement).value).toBe("1000");
+    expect((screen.getByLabelText("Toleransi lebih bayar (Rp)") as HTMLInputElement).value).toBe("1000");
+    const put = calls.find((c) => c.url.endsWith("/admin/settings") && c.init?.method === "PUT");
+    expect(JSON.parse(String(put?.init?.body)).values.ai.tol_kurang).toBe(1000);
+    expect(JSON.parse(String(put?.init?.body)).values.ai.tol_lebih).toBe(1000);
   });
 
   it("AI aktif tetapi provider hilang: Superadmin masih dapat mematikan AI", async () => {

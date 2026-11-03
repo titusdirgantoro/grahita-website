@@ -391,6 +391,13 @@ function PengaturanContent() {
     return out;
   }
 
+  function ubahForm(berikutnya: FormPengaturan) {
+    setForm(berikutnya);
+    setSukses(null);
+    setGalatForm(null);
+    setErrorFields({});
+  }
+
   async function simpan() {
     const values = changes();
     if (Object.keys(values).length === 0) {
@@ -454,9 +461,6 @@ function PengaturanContent() {
           <Card>
             <CardHead title="Ubah pengaturan" />
             <Form>
-              {galatForm ? <Notice tone="danger">{galatForm}</Notice> : null}
-              {sukses ? <Notice tone="success">{sukses}</Notice> : null}
-
               {KUNCI_ANGKA.map((k) => (
                 <Field key={k} label={label(k)} htmlFor={`set-${k}`} error={errorFields[k]}>
                   <Input
@@ -464,23 +468,21 @@ function PengaturanContent() {
                     type="number"
                     min={0}
                     value={form.angka[k] ?? ""}
-                    onChange={(e) =>
-                      setForm({ ...form, angka: { ...form.angka, [k]: e.target.value } })
-                    }
+                    onChange={(e) => ubahForm({ ...form, angka: { ...form.angka, [k]: e.target.value } })}
                   />
                 </Field>
               ))}
 
               <SwitchRow
                 checked={form.managerRevisi}
-                onChange={(v) => setForm({ ...form, managerRevisi: v })}
+                onChange={(v) => ubahForm({ ...form, managerRevisi: v })}
                 label="Manager boleh merevisi invoice"
                 hint="Kunci manager_boleh_revisi"
               />
 
               <SwitchRow
                 checked={form.aiAktif}
-                onChange={(v) => setForm({ ...form, aiAktif: v })}
+                onChange={(v) => ubahForm({ ...form, aiAktif: v })}
 				label="Pemeriksaan awal bukti dengan AI"
 				hint="AI aktif membaca dan mencocokkan bukti Transfer/Deposit, lalu menampilkan hasil untuk admin. Pesanan tetap Menunggu verifikasi sampai admin menyetujui. Top-up Deposit dan pelunasan Tempo tetap diperiksa admin."
                 disabled={!form.aiAktif && !ocrStatus?.provider_ready}
@@ -508,16 +510,14 @@ function PengaturanContent() {
                     step={step}
                     min={0}
                     value={form.ai[k] ?? ""}
-                    onChange={(e) =>
-                      setForm({ ...form, ai: { ...form.ai, [k]: e.target.value } })
-                    }
+                    onChange={(e) => ubahForm({ ...form, ai: { ...form.ai, [k]: e.target.value } })}
                   />
                 </Field>
               ))}
 
               <div className={styles.row}>
                 <Button variant="primary" disabled={sibuk} onClick={() => void simpan()}>
-                  Simpan pengaturan
+                  {sibuk ? "Menyimpan..." : "Simpan pengaturan"}
                 </Button>
                 <Button
                   variant="secondary"
@@ -532,6 +532,8 @@ function PengaturanContent() {
                   Kembalikan
                 </Button>
               </div>
+              {galatForm ? <Notice tone="danger">{galatForm}</Notice> : null}
+              {sukses ? <Notice tone="success">{sukses}</Notice> : null}
               <p className="muted small">
                 Perubahan biaya packaging berlaku untuk pesanan baru; pesanan lama menyimpan harga
                 saat submit.
